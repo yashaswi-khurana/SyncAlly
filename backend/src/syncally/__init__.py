@@ -1,0 +1,1 @@
+"""SyncAlly application package."""

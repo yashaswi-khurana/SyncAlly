@@ -94,7 +94,7 @@ Every wait needs a deadline and escalation policy. A timeout never implies accep
 
 ## Initial deployment direction
 
-The proposed local development environment uses Docker Compose. For production, the design favors managed PostgreSQL and Temporal where practical, with the API and Temporal workers running as separate processes from the same repository. These environments and processes have not been created yet.
+The proposed local development environment uses Docker Compose. For production, the design favors managed PostgreSQL and Temporal where practical, with the API and Temporal workers running as separate processes from the same repository. Only the API shell exists so far; the Temporal worker and local infrastructure definitions remain future work.
 
 ## Scope and open gates
 

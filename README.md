@@ -1,0 +1,3 @@
+# SyncAlly
+
+Initial repository bootstrap.

@@ -2,7 +2,7 @@
 
 SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
 
-> **Project status:** Architecture baseline. This repository currently contains design documents only; the application, infrastructure, and local run commands have not been implemented yet.
+> **Project status:** Initial scaffold. The repository contains a minimal FastAPI health endpoint and a React/TypeScript frontend shell. Business workflows, persistence, infrastructure, and external integrations are not implemented yet.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the system overview and [docs/archite
 | Document storage | S3-compatible object storage |
 | Observability | OpenTelemetry with redacted application and agent traces |
 
-This is a proposed baseline, not evidence that these components have been installed or integrated. The architecture records explain the alternatives and conditions for revisiting these choices.
+The API and React client now have starter shells. The other components in this table remain planned and are not yet integrated. The architecture records explain the alternatives and conditions for revisiting these choices.
 
 ## MVP boundary
 
@@ -43,22 +43,57 @@ The reference design proposes one buyer, one seller, one supported currency and 
 
 ```text
 .
-├── README.md
+├── backend/
+│   ├── pyproject.toml
+│   └── src/syncally/
+│       ├── api/                 # HTTP boundary and route registration
+│       ├── application/         # Use cases and command orchestration
+│       ├── domain/              # Framework-independent business rules
+│       ├── infrastructure/      # Persistence and provider adapters
+│       └── workflows/           # Durable workflow definitions and activities
+├── frontend/
+│   ├── package.json
+│   └── src/                     # React application
+├── infra/                       # Local and deployment infrastructure (future)
+├── docs/architecture/           # Domain, workflow, payment, and ADR documents
 ├── ARCHITECTURE.md
 ├── LICENSE
-├── .gitignore
-└── docs/
-    └── architecture/
-        ├── README.md
-        ├── 01-commercial-domain-model.md
-        ├── 02-temporal-deal-workflow-contract.md
-        ├── 03-paypal-payment-intent-lifecycle.md
-        └── 04-architecture-decision-record.md
+└── README.md
 ```
 
 ## Development
 
-There is no runnable application or development environment in the repository yet. Setup instructions will be added with the first implementation so that documented commands can be verified against working code.
+### Backend
+
+Requires Python 3.12 or newer.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .\backend
+python -m uvicorn syncally.api.main:app --reload --app-dir backend\src
+```
+
+The API currently exposes `GET /health`. It does not yet check database, workflow-worker, or provider availability.
+
+### Frontend
+
+Requires Node.js 22.12 or newer and npm.
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend is a placeholder shell and is not connected to the API yet.
+
+### Implementation boundaries
+
+- Keep business rules in `backend/src/syncally/domain`; this package must not depend on FastAPI, Temporal, LangGraph, or provider SDKs.
+- Keep use cases in `application` and external system integrations in `infrastructure`.
+- Keep the API and workflow worker as separate process entry points over shared application and domain code.
+- Add infrastructure definitions only alongside verified local setup instructions.
 
 ## License
 

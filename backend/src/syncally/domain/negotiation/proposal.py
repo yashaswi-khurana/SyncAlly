@@ -22,6 +22,11 @@ class ProposalStatus(StrEnum):
     EXPIRED = "EXPIRED"
 
 
+class NegotiationSubmissionOutcome(StrEnum):
+    SUBMITTED = "SUBMITTED"
+    ESCALATION_REQUIRED = "ESCALATION_REQUIRED"
+
+
 @dataclass(slots=True)
 class Proposal:
     id: ProposalId
@@ -43,7 +48,8 @@ class Proposal:
     def terms_hash(self) -> str:
         return self.terms.terms_hash
 
-    def accept_as_candidate(self) -> None:
+    def accept_as_candidate(self, *, now: datetime) -> None:
+        self._ensure_not_expired(now)
         self._transition(ProposalStatus.ACCEPTED_AS_CANDIDATE)
 
     def reject(self) -> None:
@@ -56,6 +62,10 @@ class Proposal:
         if self.status is not ProposalStatus.SUBMITTED:
             raise InvalidTransition(f"Cannot move proposal from {self.status} to {target}")
         self.status = target
+
+    def _ensure_not_expired(self, now: datetime) -> None:
+        if self.expires_at is not None and self.expires_at <= now:
+            raise InvalidTransition("Expired proposal cannot advance negotiation")
 
 
 @dataclass(slots=True)
@@ -71,17 +81,34 @@ class NegotiationSession:
         if self.max_rounds < 1:
             raise InvariantViolation("Negotiation max_rounds must be positive")
 
-    def submit(self, proposal: Proposal) -> None:
+    def submit(
+        self,
+        proposal: Proposal,
+        *,
+        now: datetime,
+        current_proposal: Proposal | None = None,
+    ) -> NegotiationSubmissionOutcome:
         if proposal.status is not ProposalStatus.SUBMITTED:
             raise InvalidTransition("Only a submitted proposal can advance negotiation")
         if proposal.deal_id != self.deal_id:
             raise InvariantViolation("Proposal belongs to a different deal")
         if proposal.based_on_proposal_id != self.current_proposal_id:
             raise InvariantViolation("Proposal predecessor is not the current proposal")
+        if self.current_proposal_id is None:
+            if current_proposal is not None:
+                raise InvariantViolation("Negotiation has no current proposal to supersede")
+        elif current_proposal is None or current_proposal.id != self.current_proposal_id:
+            raise InvariantViolation("Current proposal is required to submit its successor")
+        elif current_proposal.deal_id != self.deal_id:
+            raise InvariantViolation("Current proposal belongs to a different deal")
+        proposal._ensure_not_expired(now)
         if self.escalated:
             raise InvalidTransition("Negotiation is escalated for human review")
         if self.round_count >= self.max_rounds:
             self.escalated = True
-            raise InvalidTransition("Maximum negotiation rounds reached")
+            return NegotiationSubmissionOutcome.ESCALATION_REQUIRED
+        if current_proposal is not None:
+            current_proposal.supersede()
         self.round_count += 1
         self.current_proposal_id = proposal.id
+        return NegotiationSubmissionOutcome.SUBMITTED

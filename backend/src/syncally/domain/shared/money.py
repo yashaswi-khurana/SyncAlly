@@ -32,6 +32,29 @@ class Money:
 
     def canonical_amount(self) -> str:
         """Return a stable non-exponent decimal string for hashing/serialization."""
-        normalized = self.amount.normalize()
-        return "0" if normalized.is_zero() else format(normalized, "f")
+        return canonical_decimal(self.amount)
+
+
+def canonical_decimal(value: Decimal) -> str:
+    """Return a context-independent, non-exponent Decimal representation."""
+    sign, digits, exponent = value.as_tuple()
+    if not any(digits):
+        return "0"
+
+    digits = list(digits)
+    while digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+
+    coefficient = "".join(str(digit) for digit in digits)
+    if exponent >= 0:
+        result = coefficient + ("0" * exponent)
+    else:
+        decimal_point = len(coefficient) + exponent
+        if decimal_point > 0:
+            result = f"{coefficient[:decimal_point]}.{coefficient[decimal_point:]}"
+        else:
+            result = f"0.{('0' * -decimal_point)}{coefficient}"
+
+    return f"-{result}" if sign else result
 

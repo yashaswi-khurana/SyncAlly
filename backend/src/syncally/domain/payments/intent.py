@@ -107,6 +107,11 @@ class PaymentIntent:
             raise InvariantViolation("Reconciled payment currency differs from the milestone")
         if paid_amount.amount < 0 or paid_amount.amount > self.milestone.amount.amount:
             raise InvariantViolation("Reconciled payment amount is outside the milestone amount")
+        if (
+            self.reconciled_amount is not None
+            and paid_amount.amount < self.reconciled_amount.amount
+        ):
+            raise InvalidTransition("Reconciliation cannot reduce recorded payment progress")
         self.provider_reference = provider_reference or self.provider_reference
         self.reconciled_amount = paid_amount
         if paid_amount.amount == self.milestone.amount.amount:

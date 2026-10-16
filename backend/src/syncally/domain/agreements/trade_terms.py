@@ -9,7 +9,7 @@ from typing import Any
 
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
-from syncally.domain.shared.money import Money
+from syncally.domain.shared.money import Money, canonical_decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +25,8 @@ class TradeLineItem:
             raise InvariantViolation("Line item description and unit are required")
         if not self.quantity.is_finite() or self.quantity <= 0:
             raise InvariantViolation("Line item quantity must be finite and positive")
+        if self.unit_price.amount < 0:
+            raise InvariantViolation("Line item unit price cannot be negative")
 
     @property
     def total(self) -> Money:
@@ -70,6 +72,10 @@ class TradeTerms:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "line_items", tuple(self.line_items))
+        object.__setattr__(self, "shipments", tuple(self.shipments))
+        object.__setattr__(self, "payment_terms", tuple(self.payment_terms))
+
         if self.buyer_id == self.seller_id:
             raise InvariantViolation("Buyer and seller must be different organizations")
         if not self.line_items:
@@ -156,8 +162,7 @@ class TradeTerms:
 
 
 def _decimal(value: Decimal) -> str:
-    normalized = value.normalize()
-    return "0" if normalized.is_zero() else format(normalized, "f")
+    return canonical_decimal(value)
 
 
 def _money(value: Money) -> dict[str, str]:

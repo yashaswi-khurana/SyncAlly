@@ -16,6 +16,8 @@ commercial domain, Temporal orchestration, and PayPal payment execution.
     operational controls.
 4.  `04-architecture-decision-record.md` --- the architecture decision
     tying the documents together.
+5.  `05-domain-layer.md` --- implemented domain model boundaries, rules,
+    and the remaining application and persistence work.
 
 ## Architecture at a glance
 

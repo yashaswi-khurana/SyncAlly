@@ -2,13 +2,15 @@
 
 SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
 
-> **Project status:** Initial scaffold. The repository contains a minimal FastAPI health endpoint and a React/TypeScript frontend shell. Business workflows, persistence, infrastructure, and external integrations are not implemented yet.
+> **Project status:** Early implementation. The repository contains a minimal FastAPI health endpoint, a React/TypeScript frontend shell, and framework-independent domain foundations for deal negotiation, agreements, and payment intents. Application workflows, persistence, infrastructure, and external integrations are not implemented yet.
 
 ## Architecture
 
 The proposed first release is a constrained vertical slice built as a Python modular monolith with a React and TypeScript frontend. FastAPI exposes the application API, PostgreSQL stores authoritative business state, and Temporal coordinates long-running deal workflows. AI may help extract requirements and draft proposals, while domain services remain responsible for validation, authorization, and commercial decisions.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the system overview and [docs/architecture/](docs/architecture/README.md) for the detailed domain, workflow, payment, and decision records.
+
+The current domain code and its exact implementation boundary are described in [the domain layer architecture](docs/architecture/05-domain-layer.md).
 
 ## Core rules
 

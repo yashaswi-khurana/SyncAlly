@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
-from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 from uuid import UUID, uuid4
@@ -15,10 +13,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext, resolve_actor
+from syncally.application.passwords import verify_password as _verify_password
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import RefreshToken, User
@@ -82,38 +80,6 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _hash_password(password: str) -> str:
-    salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
-    )
-    return "scrypt$" + "$".join(
-        (
-            urlsafe_b64encode(salt).decode("ascii"),
-            urlsafe_b64encode(digest).decode("ascii"),
-        )
-    )
-
-
-def _verify_password(password: str, encoded_hash: str | None) -> bool:
-    if encoded_hash is None:
-        return False
-    try:
-        scheme, encoded_salt, encoded_digest = encoded_hash.split("$")
-        if scheme != "scrypt":
-            return False
-        salt = urlsafe_b64decode(encoded_salt.encode("ascii"))
-        expected_digest = urlsafe_b64decode(encoded_digest.encode("ascii"))
-    except (ValueError, UnicodeDecodeError):
-        return False
-    if len(salt) != 16 or len(expected_digest) != 32:
-        return False
-    actual_digest = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
-    )
-    return hmac.compare_digest(actual_digest, expected_digest)
-
-
 def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None) -> str:
     """Create and persist a refresh token for a completed sign-in flow."""
     if not settings.jwt_secret:
@@ -158,10 +124,6 @@ class CredentialsRequest(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
-class RegistrationRequest(CredentialsRequest):
-    display_name: str = Field(min_length=1, max_length=200)
-
-
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -173,35 +135,6 @@ def _issue_tokens(db: Session, user_id: UUID, now: datetime) -> TokenResponse:
         access_token=_encode_access_token(user_id, now),
         refresh_token=create_refresh_token(db, user_id, now),
     )
-
-
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    """Create an account and issue its initial credentials."""
-    email = payload.email.strip().lower()
-    display_name = payload.display_name.strip()
-    if not display_name:
-        raise HTTPException(status_code=422, detail="Display name must not be blank")
-    if db.scalar(select(User).where(User.email == email)) is not None:
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
-
-    user = User(
-        email=email,
-        display_name=display_name,
-        password_hash=_hash_password(payload.password),
-    )
-    db.add(user)
-    try:
-        # Detect unique-email races before issuing the refresh token. If the
-        # insert loses a race, leave no user or token state behind.
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="An account with this email already exists",
-        ) from exc
-    return _issue_tokens(db, user.id, datetime.now(UTC))
 
 
 @router.post("/login", response_model=TokenResponse)

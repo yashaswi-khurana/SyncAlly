@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from syncally.infrastructure.models.base import UUID_TYPE, Base
@@ -32,7 +32,10 @@ class User(TimestampMixin, Base):
 
 class OrganizationMember(TimestampMixin, Base):
     __tablename__ = "organization_members"
-    __table_args__ = (UniqueConstraint("organization_id", "user_id"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "user_id"),
+        Index("ix_organization_members_user_id", "user_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -49,6 +52,7 @@ class RefreshToken(Base):
     """Rotatable refresh-token metadata; the raw token is never persisted."""
 
     __tablename__ = "refresh_tokens"
+    __table_args__ = (Index("ix_refresh_tokens_family_id", "family_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(

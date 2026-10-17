@@ -16,7 +16,11 @@ from syncally.infrastructure.models.mixins import TimestampMixin
 
 class PaymentMilestone(TimestampMixin, Base):
     __tablename__ = "payment_milestones"
-    __table_args__ = (UniqueConstraint("agreement_version_id", "sequence_number"), CheckConstraint("amount > 0", name="ck_payment_milestone_amount_positive"))
+    __table_args__ = (
+        UniqueConstraint("agreement_version_id", "sequence_number"),
+        CheckConstraint("sequence_number > 0", name="ck_payment_milestone_sequence_positive"),
+        CheckConstraint("amount > 0", name="ck_payment_milestone_amount_positive"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id", ondelete="CASCADE"), nullable=False)

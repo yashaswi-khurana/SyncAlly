@@ -53,6 +53,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint("organization_id", "user_id"),
     )
+    op.create_index("ix_organization_members_user_id", "organization_members", ["user_id"])
     op.create_table(
         "deals",
         sa.Column("id", UUID, primary_key=True, nullable=False),
@@ -83,7 +84,11 @@ def upgrade() -> None:
         sa.Column("visibility", sa.String(32), nullable=False),
         sa.Column("source_type", sa.String(32), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.CheckConstraint("NOT (author_user_id IS NULL AND author_agent_id IS NULL)", name="ck_message_has_author"),
+        sa.CheckConstraint(
+            "(author_user_id IS NOT NULL AND author_agent_id IS NULL) "
+            "OR (author_user_id IS NULL AND author_agent_id IS NOT NULL)",
+            name="ck_message_has_author",
+        ),
     )
     op.create_table(
         "negotiation_sessions",
@@ -192,6 +197,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint("agreement_version_id", "sequence_number"),
+        sa.CheckConstraint("sequence_number > 0", name="ck_payment_milestone_sequence_positive"),
         sa.CheckConstraint("amount > 0", name="ck_payment_milestone_amount_positive"),
     )
     op.create_table(

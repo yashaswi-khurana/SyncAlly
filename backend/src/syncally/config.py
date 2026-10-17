@@ -18,7 +18,7 @@ _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    app_env: str = "production"
+    app_env: str = "development"
     debug: bool = False
     database_url: str = ""
     jwt_secret: str = ""

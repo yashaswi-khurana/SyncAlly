@@ -8,6 +8,7 @@ from uuid import uuid4
 import jwt
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -48,6 +49,8 @@ class IdentityBoundaryTests(unittest.TestCase):
         _revoke_family(db, uuid4(), datetime.now(UTC))
 
         self.assertTrue(getattr(db.statements[0], "is_select", False))
+        select_sql = str(db.statements[0].compile(dialect=postgresql.dialect()))
+        self.assertIn("FOR UPDATE", select_sql)
         self.assertTrue(getattr(db.statements[1], "is_update", False))
         self.assertTrue(db.committed)
 
@@ -100,21 +103,26 @@ class IdentityBoundaryTests(unittest.TestCase):
     def test_development_identity_is_rejected_outside_local_environments(self) -> None:
         with self.assertRaises(ValidationError):
             Settings(
+                _env_file=None,
                 app_env="production",
+                database_url="postgresql+psycopg://configured.example/syncally",
                 jwt_secret="a" * 32,
                 dev_auth_user_id=str(uuid4()),
             )
 
     def test_production_requires_a_configured_secret(self) -> None:
         with self.assertRaises(ValidationError):
-            Settings(app_env="production")
+            Settings(
+                _env_file=None,
+                app_env="production",
+                database_url="postgresql+psycopg://configured.example/syncally",
+            )
 
-    def test_omitting_app_env_keeps_production_authentication_defaults(self) -> None:
-        with self.assertRaises(ValidationError):
-            Settings(_env_file=None, jwt_secret="s" * 32, dev_auth_user_id=str(uuid4()))
+    def test_clean_checkout_settings_use_local_defaults(self) -> None:
+        local_settings = Settings(_env_file=None)
 
-        with self.assertRaises(ValidationError):
-            Settings(_env_file=None, jwt_secret="weak")
+        self.assertEqual(local_settings.app_env, "development")
+        self.assertEqual(local_settings.database_url, "postgresql+psycopg://localhost:5432/syncally")
 
     def test_production_requires_an_explicit_database_url(self) -> None:
         with self.assertRaises(ValidationError):
@@ -243,6 +251,9 @@ class IdentityBoundaryTests(unittest.TestCase):
         replacement_rows: list[object] = []
 
         class FakeSession:
+            def __init__(self) -> None:
+                self.committed = False
+
             def scalar(self, _query: object) -> SimpleNamespace:
                 return stored
 
@@ -253,8 +264,9 @@ class IdentityBoundaryTests(unittest.TestCase):
                 replacement_rows[0].id = uuid4()  # type: ignore[attr-defined]
 
             def commit(self) -> None:
-                pass
+                self.committed = True
 
+        db = FakeSession()
         with (
             patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
             patch("syncally.api.auth.datetime") as mocked_datetime,
@@ -263,12 +275,13 @@ class IdentityBoundaryTests(unittest.TestCase):
             try:
                 settings.jwt_secret = "t" * 32
                 mocked_datetime.now.return_value = now
-                result = refresh_access_token(RefreshRequest(refresh_token="o" * 64), FakeSession())
+                result = refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
                 expected = _derive_rotated_refresh_token(token_id)
             finally:
                 settings.jwt_secret = original_secret
 
         self.assertEqual(result.refresh_token, expected)
+        self.assertTrue(db.committed)
         self.assertIsNotNone(stored.revoked_at)
         self.assertEqual(len(replacement_rows), 1)
         self.assertEqual(stored.replaced_by_id, replacement_rows[0].id)

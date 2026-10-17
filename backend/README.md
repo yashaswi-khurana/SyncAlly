@@ -10,6 +10,8 @@ development/test), and optionally `JWT_ISSUER` and `JWT_AUDIENCE`.
 Access tokens expire after `ACCESS_TOKEN_TTL_MINUTES` (default 15 minutes).
 Refresh tokens expire after `REFRESH_TOKEN_TTL_DAYS` (default 30 days).
 
+`POST /auth/dev-login` issues initial credentials for the configured local development
+identity when `DEV_AUTH_USER_ID` and the matching `X-Dev-User-Id` header are supplied.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
 Replaying any already-rotated token is treated as reuse of a leaked token and

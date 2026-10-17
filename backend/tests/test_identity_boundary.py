@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,15 +20,90 @@ from syncally.api.auth import (
     _encode_access_token,
     _hash_refresh_token,
     _revoke_family,
+    development_login,
     get_current_actor,
     refresh_access_token,
 )
+from syncally.api.main import MAX_REQUEST_BODY_BYTES, RequestBodyLimitMiddleware
 from syncally.application.identity import ActorContext
 from syncally.config import Settings, settings
 from syncally.infrastructure.models import Deal
 
 
 class IdentityBoundaryTests(unittest.TestCase):
+    def test_development_login_issues_initial_credentials(self) -> None:
+        user_id = uuid4()
+        request = Request(
+            {
+                "type": "http",
+                "headers": [(b"x-dev-user-id", str(user_id).encode())],
+            }
+        )
+        db = object()
+
+        with (
+            patch("syncally.api.auth.settings.app_env", "development"),
+            patch("syncally.api.auth.settings.dev_auth_user_id", str(user_id)),
+            patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
+            patch("syncally.api.auth._encode_access_token", return_value="access-token"),
+            patch("syncally.api.auth.create_refresh_token", return_value="refresh-token"),
+        ):
+            result = development_login(request, db)  # type: ignore[arg-type]
+
+        self.assertEqual(result.access_token, "access-token")
+        self.assertEqual(result.refresh_token, "refresh-token")
+
+    def test_development_login_is_rejected_outside_local_environments(self) -> None:
+        user_id = uuid4()
+        request = Request(
+            {
+                "type": "http",
+                "headers": [(b"x-dev-user-id", str(user_id).encode())],
+            }
+        )
+
+        with (
+            patch("syncally.api.auth.settings.app_env", "production"),
+            patch("syncally.api.auth.settings.dev_auth_user_id", str(user_id)),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                development_login(request, object())  # type: ignore[arg-type]
+
+        self.assertEqual(raised.exception.status_code, 401)
+
+    def test_request_body_limit_rejects_chunked_payload_before_endpoint(self) -> None:
+        endpoint_called = False
+        responses: list[dict[str, object]] = []
+        messages = iter(
+            (
+                {"type": "http.request", "body": b"x" * MAX_REQUEST_BODY_BYTES},
+                {"type": "http.request", "body": b"x", "more_body": False},
+            )
+        )
+
+        async def endpoint(_scope: object, _receive: object, _send: object) -> None:
+            nonlocal endpoint_called
+            endpoint_called = True
+
+        async def receive() -> dict[str, object]:
+            return next(messages)
+
+        async def send(message: dict[str, object]) -> None:
+            responses.append(message)
+
+        asyncio.run(
+            RequestBodyLimitMiddleware(endpoint, MAX_REQUEST_BODY_BYTES)(
+                {"type": "http", "headers": []}, receive, send
+            )
+        )
+
+        self.assertFalse(endpoint_called)
+        self.assertEqual(responses[0]["status"], 413)
+
+    def test_refresh_request_rejects_tokens_longer_than_issued_tokens(self) -> None:
+        with self.assertRaises(ValidationError):
+            RefreshRequest(refresh_token="o" * 65)
+
     def test_settings_load_backend_env_independent_of_working_directory(self) -> None:
         configured_env_file = Path(Settings.model_config["env_file"])
 
@@ -68,6 +144,7 @@ class IdentityBoundaryTests(unittest.TestCase):
             {
                 "sub": str(user_id),
                 "exp": datetime.now(UTC) + timedelta(minutes=5),
+                "typ": "access",
                 "organization_ids": [str(uuid4())],
                 "role": "ADMIN",
             },
@@ -81,6 +158,28 @@ class IdentityBoundaryTests(unittest.TestCase):
             self.assertEqual(_decode_token(token), user_id)
         finally:
             settings.jwt_secret = original_secret
+
+    def test_non_access_token_type_is_rejected(self) -> None:
+        user_id = uuid4()
+        token = jwt.encode(
+            {
+                "sub": str(user_id),
+                "exp": datetime.now(UTC) + timedelta(minutes=5),
+                "typ": "refresh",
+            },
+            "t" * 32,
+            algorithm="HS256",
+        )
+
+        original_secret = settings.jwt_secret
+        try:
+            settings.jwt_secret = "t" * 32
+            with self.assertRaises(HTTPException) as raised:
+                _decode_token(token)
+        finally:
+            settings.jwt_secret = original_secret
+
+        self.assertEqual(raised.exception.status_code, 401)
 
     def test_actor_can_access_only_a_deal_party(self) -> None:
         member_org = uuid4()
@@ -117,6 +216,35 @@ class IdentityBoundaryTests(unittest.TestCase):
                 app_env="production",
                 database_url="postgresql+psycopg://configured.example/syncally",
             )
+
+    def test_production_rejects_predictable_signing_secrets(self) -> None:
+        predictable_secrets = (
+            "replace-with-a-random-secret",
+            "a" * 64,
+            "development-secret-" * 4,
+        )
+
+        for jwt_secret in predictable_secrets:
+            with self.subTest(jwt_secret=jwt_secret):
+                with self.assertRaises(ValidationError):
+                    Settings(
+                        _env_file=None,
+                        app_env="production",
+                        database_url="postgresql+psycopg://configured.example/syncally",
+                        jwt_secret=jwt_secret,
+                    )
+
+    def test_production_accepts_a_32_byte_encoded_signing_secret(self) -> None:
+        secret = "SBLsd2xA2yUll_ixIwVOvnukFtR4o8MwjZKlIWyG4_8"
+
+        configured = Settings(
+            _env_file=None,
+            app_env="production",
+            database_url="postgresql+psycopg://configured.example/syncally",
+            jwt_secret=secret,
+        )
+
+        self.assertEqual(configured.jwt_secret, secret)
 
     def test_clean_checkout_settings_use_local_defaults(self) -> None:
         local_settings = Settings(_env_file=None)
@@ -234,6 +362,51 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.detail, "Refresh token reuse detected")
         self.assertTrue(db.family_revocation_attempted)
+
+    def test_replay_returns_active_replacement_without_revoking_family(self) -> None:
+        user_id = uuid4()
+        now = datetime.now(UTC)
+        token_id = uuid4()
+        stored = SimpleNamespace(
+            id=token_id,
+            user_id=user_id,
+            family_id=uuid4(),
+            replaced_by_id=uuid4(),
+            revoked_at=now - timedelta(seconds=1),
+            expires_at=now + timedelta(days=1),
+        )
+        replacement = SimpleNamespace(revoked_at=None)
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.scalar_calls = 0
+                self.family_revocation_attempted = False
+
+            def scalar(self, _query: object) -> SimpleNamespace:
+                self.scalar_calls += 1
+                return stored if self.scalar_calls == 1 else replacement
+
+            def execute(self, _query: object) -> None:
+                self.family_revocation_attempted = True
+
+            def commit(self) -> None:
+                pass
+
+        db = FakeSession()
+        with (
+            patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
+            patch("syncally.api.auth.datetime") as mocked_datetime,
+        ):
+            original_secret = settings.jwt_secret
+            try:
+                settings.jwt_secret = "t" * 32
+                mocked_datetime.now.return_value = now
+                result = refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+            finally:
+                settings.jwt_secret = original_secret
+
+        self.assertEqual(result.refresh_token, _derive_rotated_refresh_token(token_id))
+        self.assertFalse(db.family_revocation_attempted)
 
     def test_refresh_rotates_token_and_revokes_previous_token(self) -> None:
         user_id = uuid4()

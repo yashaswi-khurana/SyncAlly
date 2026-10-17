@@ -38,7 +38,7 @@ def _decode_token(token: str) -> UUID:
 
     decode_kwargs: dict[str, object] = {
         "algorithms": [settings.jwt_algorithm],
-        "options": {"require": ["sub", "exp"]},
+        "options": {"require": ["sub", "exp", "typ"]},
     }
     if settings.jwt_issuer:
         decode_kwargs["issuer"] = settings.jwt_issuer
@@ -46,6 +46,8 @@ def _decode_token(token: str) -> UUID:
         decode_kwargs["audience"] = settings.jwt_audience
     try:
         claims = jwt.decode(token, settings.jwt_secret, **decode_kwargs)
+        if claims.get("typ") != "access":
+            raise jwt.InvalidTokenError("Token type is not valid for access authentication")
         return UUID(str(claims["sub"]))
     except (jwt.InvalidTokenError, KeyError, TypeError, ValueError) as exc:
         raise _unauthorized("Invalid authentication token") from exc
@@ -76,9 +78,8 @@ def _derive_rotated_refresh_token(token_id: UUID) -> str:
     A rotation can be presented more than once around the same commit, either
     because two requests race with the same refresh token or because the
     rotation succeeded but its response was lost and the client retried.
-    The replacement is derived once during rotation and persisted with its hash.
-    This helper is retained for creating new replacements; replay returns the
-    persisted value so secret or code changes cannot alter an earlier rotation.
+    The replacement is derived from the original token ID and persisted with
+    its hash, so replay can reconstruct the same raw value.
     """
     key = settings.jwt_secret.encode("utf-8")
     message = f"refresh-rotation:{token_id}".encode()
@@ -120,7 +121,7 @@ def _revoke_family(db: Session, family_id: UUID, now: datetime) -> None:
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str = Field(min_length=32)
+    refresh_token: str = Field(min_length=32, max_length=64)
 
 
 class TokenResponse(BaseModel):
@@ -129,8 +130,43 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+@router.post("/dev-login", response_model=TokenResponse)
+def development_login(request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+    """Issue initial credentials for the configured local development identity."""
+    user_id = _development_actor(request)
+    if user_id is None:
+        raise _unauthorized("Development authentication is not configured")
+
+    now = datetime.now(UTC)
+    actor = resolve_actor(db, user_id)
+    if actor is None:
+        raise _unauthorized("User is inactive or does not exist")
+    return TokenResponse(
+        access_token=_encode_access_token(actor.user_id, now),
+        refresh_token=create_refresh_token(db, actor.user_id, now),
+    )
+
+
 def _replay_rotation(stored: RefreshToken, now: datetime, db: Session) -> TokenResponse:
-    """Treat every replay of a rotated token as reuse of a leaked credential."""
+    """Return an active replacement for a legitimate retry.
+
+    A rotated token is only treated as credential reuse when its replacement is
+    missing or has already been revoked. An active replacement indicates a
+    concurrent request or a client retry after losing the original response.
+    """
+    replacement = None
+    if stored.replaced_by_id is not None:
+        replacement = db.scalar(
+            select(RefreshToken).where(RefreshToken.id == stored.replaced_by_id)
+        )
+    if replacement is not None and replacement.revoked_at is None:
+        actor = resolve_actor(db, stored.user_id)
+        if actor is not None:
+            return TokenResponse(
+                access_token=_encode_access_token(actor.user_id, now),
+                refresh_token=_derive_rotated_refresh_token(stored.id),
+            )
+
     _revoke_family(db, stored.family_id, now)
     raise _unauthorized("Refresh token reuse detected")
 

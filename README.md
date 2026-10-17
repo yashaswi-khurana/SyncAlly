@@ -105,7 +105,7 @@ or provider availability.
 
 ### Frontend
 
-Requires Node.js 22.12 or newer and npm.
+Requires Node.js 22.13 or newer on the 22.x line, or Node.js 24 or newer, and npm.
 
 ```powershell
 cd frontend

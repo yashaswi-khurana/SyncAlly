@@ -1,6 +1,6 @@
 # SyncAlly web app
 
-React and TypeScript client scaffold using Vite. The current page is a placeholder and is not connected to the API.
+React and TypeScript client scaffold using Vite. The current page is a placeholder and is not connected to the API. Requires Node.js 22.13 or newer on the 22.x line, or Node.js 24 or newer.
 
 From this directory, install the locked dependencies and run the app:
 

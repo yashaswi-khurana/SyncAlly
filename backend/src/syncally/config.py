@@ -34,6 +34,7 @@ _KNOWN_WEAK_JWT_FRAGMENTS = (
     "development-secret",
     "jwt-secret",
     "replace-with",
+    "static-production-secret",
     "secret-key",
     "test-secret",
     "your-secret",

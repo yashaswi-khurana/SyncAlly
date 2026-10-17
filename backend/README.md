@@ -27,7 +27,10 @@ first active admin. `GET /organizations` lists only the caller's active membersh
 For existing accounts, an organization admin can use
 `POST /organizations/{organization_id}/members` with an existing active user's email to
 add that account as a regular member. The endpoint does not create accounts or allow callers
-to choose another user's role.
+to choose another user's role. The only in-app account provisioning currently available is
+the trusted operator's seed command for the two fixed demo identities; users cannot claim an
+email through public registration. A future invitation flow must verify the invited address
+before granting membership.
 Product onboarding for new counterparties through an organization invitation and acceptance
 flow is not implemented yet; the demo seed command is a separate local provisioning path.
 Organization creation is limited to five active organizations per user by default. Set

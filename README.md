@@ -76,7 +76,18 @@ python -m pip install -e .\backend
 python -m uvicorn syncally.api.main:app --reload --app-dir backend\src
 ```
 
-The API currently exposes `GET /health`. It does not yet check database, workflow-worker, or provider availability.
+To create or update the local PostgreSQL schema, copy
+`backend/.env.example` to `backend/.env`, set `DATABASE_URL`, then run the migration
+command from the backend directory:
+
+```powershell
+cd backend
+alembic upgrade head
+```
+
+The API exposes `GET /health` for process health and `GET /health/database` to verify
+that it can acquire and use a database connection. It does not yet check workflow-worker
+or provider availability.
 
 ### Frontend
 

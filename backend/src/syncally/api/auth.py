@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -69,6 +70,21 @@ def _hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _derive_rotated_refresh_token(token_id: UUID) -> str:
+    """Derive the replacement token for a rotation deterministically.
+
+    A rotation can be presented more than once around the same commit, either
+    because two requests race with the same refresh token or because the
+    rotation succeeded but its response was lost and the client retried.
+    The replacement is derived once during rotation and persisted with its hash.
+    This helper is retained for creating new replacements; replay returns the
+    persisted value so secret or code changes cannot alter an earlier rotation.
+    """
+    key = settings.jwt_secret.encode("utf-8")
+    message = f"refresh-rotation:{token_id}".encode()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
 def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None) -> str:
     """Create and persist a refresh token for a completed sign-in flow."""
     if not settings.jwt_secret:
@@ -91,6 +107,11 @@ def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None
 
 def _revoke_family(db: Session, family_id: UUID, now: datetime) -> None:
     db.execute(
+        select(RefreshToken.id)
+        .where(RefreshToken.family_id == family_id)
+        .with_for_update()
+    )
+    db.execute(
         update(RefreshToken)
         .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=now)
@@ -108,22 +129,25 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+def _replay_rotation(stored: RefreshToken, now: datetime, db: Session) -> TokenResponse:
+    """Treat every replay of a rotated token as reuse of a leaked credential."""
+    _revoke_family(db, stored.family_id, now)
+    raise _unauthorized("Refresh token reuse detected")
+
+
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenResponse:
     """Rotate a refresh token and issue a short-lived access token."""
-    now = datetime.now(UTC)
     stored = db.scalar(
         select(RefreshToken)
         .where(RefreshToken.token_hash == _hash_refresh_token(payload.refresh_token))
         .with_for_update()
     )
+    now = datetime.now(UTC)
     if stored is None:
         raise _unauthorized("Invalid refresh token")
     if stored.revoked_at is not None:
-        if stored.replaced_by_id is None:
-            _revoke_family(db, stored.family_id, now)
-            raise _unauthorized("Refresh token reuse detected")
-        raise _unauthorized("Refresh token already rotated")
+        return _replay_rotation(stored, now, db)
     if stored.expires_at <= now:
         raise _unauthorized("Invalid refresh token")
 
@@ -133,11 +157,11 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
         db.commit()
         raise _unauthorized("User is inactive or does not exist")
 
-    replacement = secrets.token_urlsafe(48)
     # Encode the access token before persisting the rotation so that an invalid
     # JWT algorithm or key configuration cannot revoke a usable refresh token
     # without producing its replacement.
     access_token = _encode_access_token(actor.user_id, now)
+    replacement = _derive_rotated_refresh_token(stored.id)
     replacement_row = RefreshToken(
         user_id=stored.user_id,
         family_id=stored.family_id,

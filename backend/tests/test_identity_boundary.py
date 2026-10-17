@@ -1,5 +1,6 @@
 import unittest
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -13,8 +14,10 @@ from starlette.requests import Request
 from syncally.api.auth import (
     RefreshRequest,
     _decode_token,
+    _derive_rotated_refresh_token,
     _encode_access_token,
     _hash_refresh_token,
+    _revoke_family,
     get_current_actor,
     refresh_access_token,
 )
@@ -24,6 +27,30 @@ from syncally.infrastructure.models import Deal
 
 
 class IdentityBoundaryTests(unittest.TestCase):
+    def test_settings_load_backend_env_independent_of_working_directory(self) -> None:
+        configured_env_file = Path(Settings.model_config["env_file"])
+
+        self.assertEqual(configured_env_file, Path(__file__).resolve().parents[1] / ".env")
+
+    def test_family_revocation_locks_rows_before_updating_them(self) -> None:
+        class FakeSession:
+            def __init__(self) -> None:
+                self.statements: list[object] = []
+                self.committed = False
+
+            def execute(self, statement: object) -> None:
+                self.statements.append(statement)
+
+            def commit(self) -> None:
+                self.committed = True
+
+        db = FakeSession()
+        _revoke_family(db, uuid4(), datetime.now(UTC))
+
+        self.assertTrue(getattr(db.statements[0], "is_select", False))
+        self.assertTrue(getattr(db.statements[1], "is_update", False))
+        self.assertTrue(db.committed)
+
     def test_deal_requests_require_authentication(self) -> None:
         request = Request({"type": "http", "headers": []})
 
@@ -161,35 +188,51 @@ class IdentityBoundaryTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail, "Refresh token reuse detected")
         self.assertTrue(db.family_revocation_attempted)
 
-    def test_rotated_refresh_token_replay_preserves_its_replacement(self) -> None:
+    def test_replay_with_future_revocation_timestamp_is_rejected(self) -> None:
+        now = datetime.now(UTC)
         stored = SimpleNamespace(
+            id=uuid4(),
+            user_id=uuid4(),
             family_id=uuid4(),
             replaced_by_id=uuid4(),
-            revoked_at=datetime.now(UTC),
-            expires_at=datetime.now(UTC) + timedelta(days=1),
+            revoked_at=now + timedelta(seconds=1),
+            expires_at=now + timedelta(days=1),
+        )
+        replacement = SimpleNamespace(
+            family_id=stored.family_id,
+            revoked_at=now,
         )
 
         class FakeSession:
             def __init__(self) -> None:
                 self.family_revocation_attempted = False
+                self.scalar_calls = 0
 
             def scalar(self, _query: object) -> SimpleNamespace:
-                return stored
+                self.scalar_calls += 1
+                return stored if self.scalar_calls == 1 else replacement
 
             def execute(self, _query: object) -> None:
                 self.family_revocation_attempted = True
 
-        db = FakeSession()
-        with self.assertRaises(HTTPException) as raised:
-            refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+            def commit(self) -> None:
+                pass
 
-        self.assertEqual(raised.exception.detail, "Refresh token already rotated")
-        self.assertFalse(db.family_revocation_attempted)
+        db = FakeSession()
+        with patch("syncally.api.auth.datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = now
+            with self.assertRaises(HTTPException) as raised:
+                refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+
+        self.assertEqual(raised.exception.detail, "Refresh token reuse detected")
+        self.assertTrue(db.family_revocation_attempted)
 
     def test_refresh_rotates_token_and_revokes_previous_token(self) -> None:
         user_id = uuid4()
         now = datetime.now(UTC)
+        token_id = uuid4()
         stored = SimpleNamespace(
+            id=token_id,
             user_id=user_id,
             family_id=uuid4(),
             token_hash=None,
@@ -214,7 +257,6 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         with (
             patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
-            patch("syncally.api.auth.secrets.token_urlsafe", return_value="r" * 64),
             patch("syncally.api.auth.datetime") as mocked_datetime,
         ):
             original_secret = settings.jwt_secret
@@ -222,13 +264,18 @@ class IdentityBoundaryTests(unittest.TestCase):
                 settings.jwt_secret = "t" * 32
                 mocked_datetime.now.return_value = now
                 result = refresh_access_token(RefreshRequest(refresh_token="o" * 64), FakeSession())
+                expected = _derive_rotated_refresh_token(token_id)
             finally:
                 settings.jwt_secret = original_secret
 
-        self.assertEqual(result.refresh_token, "r" * 64)
+        self.assertEqual(result.refresh_token, expected)
         self.assertIsNotNone(stored.revoked_at)
         self.assertEqual(len(replacement_rows), 1)
         self.assertEqual(stored.replaced_by_id, replacement_rows[0].id)
+        self.assertEqual(
+            replacement_rows[0].token_hash,  # type: ignore[attr-defined]
+            _hash_refresh_token(result.refresh_token),
+        )
 
     def test_failed_access_token_encoding_does_not_rotate_refresh_token(self) -> None:
         user_id = uuid4()

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
-from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
+from typing import NoReturn
 from uuid import UUID, uuid4
 
 import jwt
@@ -17,6 +16,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext, resolve_actor
+from syncally.application.passwords import verify_password as _verify_password
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import RefreshToken, User
@@ -73,50 +73,11 @@ def _hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _hash_password(password: str) -> str:
-    salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
-    )
-    return "scrypt$" + "$".join(
-        (
-            urlsafe_b64encode(salt).decode("ascii"),
-            urlsafe_b64encode(digest).decode("ascii"),
-        )
-    )
-
-
-def _verify_password(password: str, encoded_hash: str | None) -> bool:
-    if encoded_hash is None:
-        return False
-    try:
-        scheme, encoded_salt, encoded_digest = encoded_hash.split("$")
-        if scheme != "scrypt":
-            return False
-        salt = urlsafe_b64decode(encoded_salt.encode("ascii"))
-        expected_digest = urlsafe_b64decode(encoded_digest.encode("ascii"))
-    except (ValueError, UnicodeDecodeError):
-        return False
-    if len(salt) != 16 or len(expected_digest) != 32:
-        return False
-    actual_digest = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
-    )
-    return hmac.compare_digest(actual_digest, expected_digest)
-
-
-def _derive_rotated_refresh_token(token_id: UUID) -> str:
-    """Derive the replacement token for a rotation deterministically.
-
-    A rotation can be presented more than once around the same commit, either
-    because two requests race with the same refresh token or because the
-    rotation succeeded but its response was lost and the client retried.
-    The replacement is derived from the original token ID and persisted with
-    its hash, so replay can reconstruct the same raw value.
-    """
-    key = settings.jwt_secret.encode("utf-8")
-    message = f"refresh-rotation:{token_id}".encode()
-    return hmac.new(key, message, hashlib.sha256).hexdigest()
+def _as_utc(value: datetime) -> datetime:
+    """Treat naive database timestamps as UTC and normalize aware timestamps."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None) -> str:
@@ -143,6 +104,7 @@ def _revoke_family(db: Session, family_id: UUID, now: datetime) -> None:
     db.execute(
         select(RefreshToken.id)
         .where(RefreshToken.family_id == family_id)
+        .order_by(RefreshToken.id)
         .with_for_update()
     )
     db.execute(
@@ -162,10 +124,6 @@ class CredentialsRequest(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
-class RegistrationRequest(CredentialsRequest):
-    display_name: str = Field(min_length=1, max_length=200)
-
-
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -177,25 +135,6 @@ def _issue_tokens(db: Session, user_id: UUID, now: datetime) -> TokenResponse:
         access_token=_encode_access_token(user_id, now),
         refresh_token=create_refresh_token(db, user_id, now),
     )
-
-
-@router.post("/register", response_model=TokenResponse, status_code=201)
-def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    email = payload.email.strip().lower()
-    display_name = payload.display_name.strip()
-    if not display_name:
-        raise HTTPException(status_code=422, detail="Display name must not be blank")
-    if db.scalar(select(User).where(User.email == email)) is not None:
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
-
-    user = User(
-        email=email,
-        display_name=display_name,
-        password_hash=_hash_password(payload.password),
-    )
-    db.add(user)
-    db.flush()
-    return _issue_tokens(db, user.id, datetime.now(UTC))
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -221,26 +160,8 @@ def development_login(request: Request, db: Session = Depends(get_db)) -> TokenR
     return _issue_tokens(db, actor.user_id, now)
 
 
-def _replay_rotation(stored: RefreshToken, now: datetime, db: Session) -> TokenResponse:
-    """Return an active replacement for a legitimate retry.
-
-    A rotated token is only treated as credential reuse when its replacement is
-    missing or has already been revoked. An active replacement indicates a
-    concurrent request or a client retry after losing the original response.
-    """
-    replacement = None
-    if stored.replaced_by_id is not None:
-        replacement = db.scalar(
-            select(RefreshToken).where(RefreshToken.id == stored.replaced_by_id)
-        )
-    if replacement is not None and replacement.revoked_at is None:
-        actor = resolve_actor(db, stored.user_id)
-        if actor is not None:
-            return TokenResponse(
-                access_token=_encode_access_token(actor.user_id, now),
-                refresh_token=_derive_rotated_refresh_token(stored.id),
-            )
-
+def _replay_rotation(stored: RefreshToken, now: datetime, db: Session) -> NoReturn:
+    """Treat every reuse of a rotated token as credential reuse."""
     _revoke_family(db, stored.family_id, now)
     raise _unauthorized("Refresh token reuse detected")
 
@@ -251,14 +172,30 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
     stored = db.scalar(
         select(RefreshToken)
         .where(RefreshToken.token_hash == _hash_refresh_token(payload.refresh_token))
-        .with_for_update()
     )
     now = datetime.now(UTC)
     if stored is None:
         raise _unauthorized("Invalid refresh token")
+
+    # Every refresh operation locks the family in the same order before it
+    # locks an individual token, preventing cross-token lock cycles.
+    db.execute(
+        select(RefreshToken.id)
+        .where(RefreshToken.family_id == stored.family_id)
+        .order_by(RefreshToken.id)
+        .with_for_update()
+    )
+    stored = db.scalar(
+        select(RefreshToken)
+        .where(RefreshToken.id == stored.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if stored is None:
+        raise _unauthorized("Invalid refresh token")
     if stored.revoked_at is not None:
         return _replay_rotation(stored, now, db)
-    if stored.expires_at <= now:
+    if _as_utc(stored.expires_at) <= now:
         raise _unauthorized("Invalid refresh token")
 
     actor = resolve_actor(db, stored.user_id)
@@ -271,7 +208,7 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
     # JWT algorithm or key configuration cannot revoke a usable refresh token
     # without producing its replacement.
     access_token = _encode_access_token(actor.user_id, now)
-    replacement = _derive_rotated_refresh_token(stored.id)
+    replacement = secrets.token_urlsafe(48)
     replacement_row = RefreshToken(
         user_id=stored.user_id,
         family_id=stored.family_id,

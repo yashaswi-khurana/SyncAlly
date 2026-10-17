@@ -35,6 +35,15 @@ This does not include production payments, multiple payment providers, escrow, o
 - **Immutable:** cannot be edited after commit; make a new version to change it.
 - **Private context:** information visible only to the organization that supplied it.
 
+## Identity and Onboarding Status
+
+Email/password login, verified-token identity, database-backed memberships, organization
+creation, and admin membership for existing users are implemented. Public self-registration
+is disabled to match the demo contract. From `backend/`, run
+`python -m syncally.cli.seed_demo` after migrations to provision the demo buyer and seller;
+the command prompts for passwords and hashes them in the app. Product onboarding through an
+organization admin invitation, invite acceptance, and password setup remains planned work.
+
 ## Before Coding: Agree on Four Things
 
 Have one short meeting. Write down the answers, and have one person edit the shared contract notes:
@@ -108,6 +117,11 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 **Why:** Later API calls must know which user is making a request and which organizations they can act for.
 
 **What to build:** Implement the sign-in/authentication choice agreed by the team. Add a backend ActorContext that gives application code the verified user and organization memberships. Any shortcut for local development must be disabled outside development/test settings.
+
+For the first demo, operator provisioning is performed by the development/test-only
+`python -m syncally.cli.seed_demo` command. Do not expose public self-registration. The
+separate product onboarding flow (invite by email, accept invite, set password, activate
+membership) remains planned.
 
 **Done when:**
 - Protected requests fail when the user is not signed in.

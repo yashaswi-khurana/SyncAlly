@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     jwt_audience: str | None = None
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
+    refresh_token_reuse_grace_seconds: int = 30
     dev_auth_user_id: str | None = None
 
     @model_validator(mode="after")
@@ -51,6 +52,8 @@ class Settings(BaseSettings):
             raise ValueError("DEV_AUTH_USER_ID is only allowed in development/test")
         if self.access_token_ttl_minutes <= 0 or self.refresh_token_ttl_days <= 0:
             raise ValueError("Token lifetimes must be positive")
+        if self.refresh_token_reuse_grace_seconds < 0:
+            raise ValueError("Refresh token reuse grace period cannot be negative")
         return self
 
     model_config = SettingsConfigDict(

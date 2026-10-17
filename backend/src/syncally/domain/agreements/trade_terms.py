@@ -1,0 +1,170 @@
+"""Immutable canonical commercial terms shared by proposals and agreements."""
+
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+from syncally.domain.shared.errors import InvariantViolation
+from syncally.domain.shared.identifiers import OrganizationId
+from syncally.domain.shared.money import Money, canonical_decimal
+
+
+@dataclass(frozen=True, slots=True)
+class TradeLineItem:
+    description: str
+    quantity: Decimal
+    unit: str
+    unit_price: Money
+    sku: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.description.strip() or not self.unit.strip():
+            raise InvariantViolation("Line item description and unit are required")
+        if not self.quantity.is_finite() or self.quantity <= 0:
+            raise InvariantViolation("Line item quantity must be finite and positive")
+        if self.unit_price.amount < 0:
+            raise InvariantViolation("Line item unit price cannot be negative")
+
+    @property
+    def total(self) -> Money:
+        return self.unit_price.multiply(self.quantity)
+
+
+@dataclass(frozen=True, slots=True)
+class ShipmentTerm:
+    quantity: Decimal
+    destination: str
+    target_date: date | None = None
+
+    def __post_init__(self) -> None:
+        if not self.quantity.is_finite() or self.quantity <= 0:
+            raise InvariantViolation("Shipment quantity must be finite and positive")
+        if not self.destination.strip():
+            raise InvariantViolation("Shipment destination is required")
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentTerm:
+    amount: Money
+    trigger: str
+    due_condition: str
+
+    def __post_init__(self) -> None:
+        if self.amount.amount <= 0:
+            raise InvariantViolation("Payment term amount must be positive")
+        if not self.trigger.strip() or not self.due_condition.strip():
+            raise InvariantViolation("Payment trigger and due condition are required")
+
+
+@dataclass(frozen=True, slots=True)
+class TradeTerms:
+    buyer_id: OrganizationId
+    seller_id: OrganizationId
+    line_items: tuple[TradeLineItem, ...]
+    shipments: tuple[ShipmentTerm, ...]
+    payment_terms: tuple[PaymentTerm, ...]
+    delivery_location: str
+    incoterm: str | None = None
+    cancellation_terms: str = ""
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "line_items", tuple(self.line_items))
+        object.__setattr__(self, "shipments", tuple(self.shipments))
+        object.__setattr__(self, "payment_terms", tuple(self.payment_terms))
+
+        if self.buyer_id == self.seller_id:
+            raise InvariantViolation("Buyer and seller must be different organizations")
+        if not self.line_items:
+            raise InvariantViolation("At least one line item is required")
+        if not self.shipments:
+            raise InvariantViolation("At least one shipment term is required")
+        if not self.payment_terms:
+            raise InvariantViolation("At least one payment term is required")
+        if not self.delivery_location.strip():
+            raise InvariantViolation("Delivery location is required")
+        if self.schema_version < 1:
+            raise InvariantViolation("Schema version must be positive")
+
+        currencies = {item.unit_price.currency for item in self.line_items}
+        currencies.update(term.amount.currency for term in self.payment_terms)
+        if len(currencies) != 1:
+            raise InvariantViolation("All line items and payment terms must use one currency")
+        line_total = self.total
+        payment_total = self.payment_total
+        if line_total != payment_total:
+            raise InvariantViolation("Payment terms must sum to the line item total")
+
+    @property
+    def currency(self) -> str:
+        return self.line_items[0].unit_price.currency
+
+    @property
+    def total(self) -> Money:
+        total = Money(Decimal("0"), self.line_items[0].unit_price.currency)
+        for item in self.line_items:
+            total = total.add(item.total)
+        return total
+
+    @property
+    def payment_total(self) -> Money:
+        total = Money(Decimal("0"), self.payment_terms[0].amount.currency)
+        for term in self.payment_terms:
+            total = total.add(term.amount)
+        return total
+
+    def canonical_json(self) -> str:
+        """Serialize every commitment-relevant field with deterministic ordering."""
+        payload: dict[str, Any] = {
+            "schema_version": self.schema_version,
+            "buyer_id": str(self.buyer_id),
+            "seller_id": str(self.seller_id),
+            "line_items": [
+                {
+                    "description": item.description,
+                    "sku": item.sku,
+                    "quantity": _decimal(item.quantity),
+                    "unit": item.unit,
+                    "unit_price": _money(item.unit_price),
+                }
+                for item in self.line_items
+            ],
+            "shipments": [
+                {
+                    "quantity": _decimal(shipment.quantity),
+                    "destination": shipment.destination,
+                    "target_date": shipment.target_date.isoformat()
+                    if shipment.target_date
+                    else None,
+                }
+                for shipment in self.shipments
+            ],
+            "payment_terms": [
+                {
+                    "amount": _money(term.amount),
+                    "trigger": term.trigger,
+                    "due_condition": term.due_condition,
+                }
+                for term in self.payment_terms
+            ],
+            "delivery_location": self.delivery_location,
+            "incoterm": self.incoterm,
+            "cancellation_terms": self.cancellation_terms,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    @property
+    def terms_hash(self) -> str:
+        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+
+
+def _decimal(value: Decimal) -> str:
+    return canonical_decimal(value)
+
+
+def _money(value: Money) -> dict[str, str]:
+    return {"amount": value.canonical_amount(), "currency": value.currency}
+

@@ -11,14 +11,9 @@ Access tokens expire after `ACCESS_TOKEN_TTL_MINUTES` (default 15 minutes).
 Refresh tokens expire after `REFRESH_TOKEN_TTL_DAYS` (default 30 days).
 
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
-token and refresh token. Refresh tokens are opaque and stored only as hashes. A
-replacement is derived deterministically from the rotated row and the server
-secret, so replaying a token whose rotation already committed returns the same
-replacement instead of issuing a second one. Replays within
-`REFRESH_TOKEN_REUSE_GRACE_SECONDS` (default 30) are treated as retries of a
-concurrent request or a lost response. Replays outside that window, or of a token
-revoked without a replacement, are treated as reuse of a leaked token and revoke
-the whole family.
+token and refresh token. Refresh tokens are opaque and stored only as hashes.
+Replaying any already-rotated token is treated as reuse of a leaked token and
+revokes the whole family.
 
 For local development/test only, `DEV_AUTH_USER_ID` may be configured and sent as
 `X-Dev-User-Id`; this shortcut is rejected by configuration outside those environments.

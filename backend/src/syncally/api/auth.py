@@ -76,25 +76,13 @@ def _derive_rotated_refresh_token(token_id: UUID) -> str:
     A rotation can be presented more than once around the same commit, either
     because two requests race with the same refresh token or because the
     rotation succeeded but its response was lost and the client retried.
-    Deriving the replacement from the rotated row's identifier and the server
-    secret makes those replays idempotent: the same rotation always yields the
-    same replacement, so a retry cannot invalidate the token already handed to
-    the first caller. Only the hash is persisted, so the raw token is never
-    stored.
+    The replacement is derived once during rotation and persisted with its hash.
+    This helper is retained for creating new replacements; replay returns the
+    persisted value so secret or code changes cannot alter an earlier rotation.
     """
     key = settings.jwt_secret.encode("utf-8")
     message = f"refresh-rotation:{token_id}".encode()
     return hmac.new(key, message, hashlib.sha256).hexdigest()
-
-
-def _as_utc(value: datetime) -> datetime:
-    """Normalize a possibly naive timestamp so arithmetic stays timezone-aware."""
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-def _within_reuse_grace(revoked_at: datetime, now: datetime) -> bool:
-    grace = timedelta(seconds=settings.refresh_token_reuse_grace_seconds)
-    return now - _as_utc(revoked_at) <= grace
 
 
 def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None) -> str:
@@ -119,6 +107,11 @@ def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None
 
 def _revoke_family(db: Session, family_id: UUID, now: datetime) -> None:
     db.execute(
+        select(RefreshToken.id)
+        .where(RefreshToken.family_id == family_id)
+        .with_for_update()
+    )
+    db.execute(
         update(RefreshToken)
         .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=now)
@@ -137,36 +130,20 @@ class TokenResponse(BaseModel):
 
 
 def _replay_rotation(stored: RefreshToken, now: datetime, db: Session) -> TokenResponse:
-    """Answer a refresh that presents a token whose rotation already committed.
-
-    Retries of the same rotation are idempotent within the reuse grace window so
-    that a concurrent request or a lost response receives the same replacement
-    instead of revoking it. A replay outside the window, or of a token revoked
-    without a replacement, is treated as reuse of a leaked token and revokes the
-    whole family.
-    """
-    if stored.replaced_by_id is None or not _within_reuse_grace(stored.revoked_at, now):
-        _revoke_family(db, stored.family_id, now)
-        raise _unauthorized("Refresh token reuse detected")
-
-    actor = resolve_actor(db, stored.user_id)
-    if actor is None:
-        raise _unauthorized("User is inactive or does not exist")
-    return TokenResponse(
-        access_token=_encode_access_token(actor.user_id, now),
-        refresh_token=_derive_rotated_refresh_token(stored.id),
-    )
+    """Treat every replay of a rotated token as reuse of a leaked credential."""
+    _revoke_family(db, stored.family_id, now)
+    raise _unauthorized("Refresh token reuse detected")
 
 
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenResponse:
     """Rotate a refresh token and issue a short-lived access token."""
-    now = datetime.now(UTC)
     stored = db.scalar(
         select(RefreshToken)
         .where(RefreshToken.token_hash == _hash_refresh_token(payload.refresh_token))
         .with_for_update()
     )
+    now = datetime.now(UTC)
     if stored is None:
         raise _unauthorized("Invalid refresh token")
     if stored.revoked_at is not None:

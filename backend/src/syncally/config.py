@@ -1,5 +1,7 @@
 """Application configuration via environment variables."""
 
+from pathlib import Path
+
 from jwt.algorithms import HMACAlgorithm, get_default_algorithms
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +14,7 @@ _SYMMETRIC_JWT_ALGORITHMS = frozenset(
     for name, algorithm in _DEFAULT_JWT_ALGORITHMS.items()
     if isinstance(algorithm, HMACAlgorithm)
 )
+_BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
@@ -24,7 +27,6 @@ class Settings(BaseSettings):
     jwt_audience: str | None = None
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
-    refresh_token_reuse_grace_seconds: int = 30
     dev_auth_user_id: str | None = None
 
     @model_validator(mode="after")
@@ -52,12 +54,10 @@ class Settings(BaseSettings):
             raise ValueError("DEV_AUTH_USER_ID is only allowed in development/test")
         if self.access_token_ttl_minutes <= 0 or self.refresh_token_ttl_days <= 0:
             raise ValueError("Token lifetimes must be positive")
-        if self.refresh_token_reuse_grace_seconds < 0:
-            raise ValueError("Refresh token reuse grace period cannot be negative")
         return self
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_BACKEND_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )

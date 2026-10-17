@@ -171,6 +171,14 @@ class OrganizationOnboardingTests(unittest.TestCase):
     def test_unprovisioned_user_and_duplicate_membership_are_rejected(self) -> None:
         admin = self._user("admin@example.com")
         member = self._user("member@example.com")
+        unprovisioned = User(
+            email="unprovisioned@example.com",
+            display_name="Unprovisioned",
+            password_hash=None,
+            status="ACTIVE",
+        )
+        self.db.add(unprovisioned)
+        self.db.commit()
         organization = self._organization(admin)
         actor = ActorContext(user_id=admin.id, organization_ids=frozenset({organization.id}))
 
@@ -182,6 +190,15 @@ class OrganizationOnboardingTests(unittest.TestCase):
                 self.db,
             )
         self.assertEqual(missing.exception.status_code, 404)
+
+        with self.assertRaises(HTTPException) as unprovisioned_account:
+            add_organization_member(
+                organization.id,
+                AddOrganizationMemberRequest(email=unprovisioned.email),
+                actor,
+                self.db,
+            )
+        self.assertEqual(unprovisioned_account.exception.status_code, 404)
 
         add_organization_member(
             organization.id,

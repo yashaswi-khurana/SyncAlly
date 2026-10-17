@@ -66,7 +66,7 @@ def _encode_access_token(user_id: UUID, now: datetime | None = None) -> str:
 
 
 def _hash_refresh_token(token: str) -> str:
-    return hashlib.sha256(token.encode("ascii")).hexdigest()
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None) -> str:

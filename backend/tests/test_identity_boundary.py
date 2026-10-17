@@ -14,6 +14,7 @@ from syncally.api.auth import (
     RefreshRequest,
     _decode_token,
     _encode_access_token,
+    _hash_refresh_token,
     get_current_actor,
     refresh_access_token,
 )
@@ -81,6 +82,17 @@ class IdentityBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Settings(app_env="production")
 
+    def test_omitting_app_env_keeps_production_authentication_defaults(self) -> None:
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None, jwt_secret="s" * 32, dev_auth_user_id=str(uuid4()))
+
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None, jwt_secret="weak")
+
+    def test_production_requires_an_explicit_database_url(self) -> None:
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None, app_env="production", jwt_secret="s" * 32)
+
     def test_access_token_contains_access_type_and_expiry(self) -> None:
         original_secret = settings.jwt_secret
         try:
@@ -92,6 +104,11 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         self.assertEqual(claims["typ"], "access")
         self.assertIn("exp", claims)
+
+    def test_refresh_token_hash_accepts_non_ascii_input(self) -> None:
+        token_hash = _hash_refresh_token("refresh-token-✓")
+
+        self.assertEqual(len(token_hash), 64)
 
     def test_refresh_rotates_token_and_revokes_previous_token(self) -> None:
         user_id = uuid4()

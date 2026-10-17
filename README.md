@@ -76,6 +76,15 @@ python -m pip install -e .\backend
 python -m uvicorn syncally.api.main:app --reload --app-dir backend\src
 ```
 
+To create or update the local PostgreSQL schema, copy
+`backend/.env.example` to `backend/.env`, set `DATABASE_URL`, then run the migration
+command from the backend directory:
+
+```powershell
+cd backend
+alembic upgrade head
+```
+
 The API currently exposes `GET /health`. It does not yet check database, workflow-worker, or provider availability.
 
 ### Frontend

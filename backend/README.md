@@ -11,19 +11,23 @@ secret containing at least 32 random bytes outside development/test, and optiona
 Access tokens expire after `ACCESS_TOKEN_TTL_MINUTES` (default 15 minutes).
 Refresh tokens expire after `REFRESH_TOKEN_TTL_DAYS` (default 30 days).
 
-Demo accounts are provisioned by an operator; public self-registration is not part of this
-slice. `POST /auth/login` accepts `{ "email": "...", "password": "..." }` and returns
-an access token and refresh token for an active account. Passwords are stored as scrypt
-hashes. Invalid credentials and inactive or missing accounts receive the same `401`
-response. `POST /auth/dev-login` is an optional shortcut for the configured local
-development identity when `DEV_AUTH_USER_ID` and the matching `X-Dev-User-Id` header are
-supplied.
+`POST /auth/register` publicly creates an account from `{ "email": "...", "password": "...",
+"display_name": "..." }` and returns the initial access/refresh token pair. Passwords are
+stored as scrypt hashes; email is trimmed and lowercased. A duplicate email returns `409`.
+Email ownership is not verified in this demo.
+Registration creates no organization membership by itself: the new user can create an
+organization or an existing organization's admin can add them as a regular member.
+`POST /auth/login` accepts `{ "email": "...", "password": "..." }` and returns an access
+token and refresh token for an active account. Invalid credentials and inactive or missing
+accounts receive the same `401` response. `POST /auth/dev-login` is an optional shortcut for
+the configured local development identity when `DEV_AUTH_USER_ID` and the matching
+`X-Dev-User-Id` header are supplied.
 After signing in, `POST /organizations` creates an organization and makes the caller its
 first active admin. `GET /organizations` lists only the caller's active memberships.
 An organization admin can use
 `POST /organizations/{organization_id}/members` with an existing active user's email to
-add that account as a regular member. Accounts must be provisioned by an operator first;
-the endpoint does not create accounts or allow callers to choose another user's role.
+add that account as a regular member. The endpoint does not create accounts or allow callers
+to choose another user's role.
 Organization creation is limited to five active organizations per user by default. Set
 `MAX_ORGANIZATIONS_PER_USER` to a positive integer to change the limit.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access

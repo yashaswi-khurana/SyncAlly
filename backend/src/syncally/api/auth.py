@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext, resolve_actor
@@ -157,6 +158,10 @@ class CredentialsRequest(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
+class RegistrationRequest(CredentialsRequest):
+    display_name: str = Field(min_length=1, max_length=200)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -168,6 +173,35 @@ def _issue_tokens(db: Session, user_id: UUID, now: datetime) -> TokenResponse:
         access_token=_encode_access_token(user_id, now),
         refresh_token=create_refresh_token(db, user_id, now),
     )
+
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    """Create an account and issue its initial credentials."""
+    email = payload.email.strip().lower()
+    display_name = payload.display_name.strip()
+    if not display_name:
+        raise HTTPException(status_code=422, detail="Display name must not be blank")
+    if db.scalar(select(User).where(User.email == email)) is not None:
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+    user = User(
+        email=email,
+        display_name=display_name,
+        password_hash=_hash_password(payload.password),
+    )
+    db.add(user)
+    try:
+        # Detect unique-email races before issuing the refresh token. If the
+        # insert loses a race, leave no user or token state behind.
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email already exists",
+        ) from exc
+    return _issue_tokens(db, user.id, datetime.now(UTC))
 
 
 @router.post("/login", response_model=TokenResponse)

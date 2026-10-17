@@ -9,7 +9,12 @@ description = "SyncAlly API and workflow application"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.13,<2.0",
     "fastapi>=0.115,<1.0",
+    "PyJWT>=2.9,<3.0",
+    "psycopg[binary]>=3.1,<4.0",
+    "pydantic-settings>=2.0,<3.0",
+    "sqlalchemy>=2.0,<3.0",
     "uvicorn[standard]>=0.30,<1.0",
 ]
 

@@ -117,11 +117,15 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
         .where(RefreshToken.token_hash == _hash_refresh_token(payload.refresh_token))
         .with_for_update()
     )
-    if stored is None or stored.expires_at <= now:
+    if stored is None:
         raise _unauthorized("Invalid refresh token")
     if stored.revoked_at is not None:
-        _revoke_family(db, stored.family_id, now)
-        raise _unauthorized("Refresh token reuse detected")
+        if stored.replaced_by_id is None:
+            _revoke_family(db, stored.family_id, now)
+            raise _unauthorized("Refresh token reuse detected")
+        raise _unauthorized("Refresh token already rotated")
+    if stored.expires_at <= now:
+        raise _unauthorized("Invalid refresh token")
 
     actor = resolve_actor(db, stored.user_id)
     if actor is None:
@@ -130,6 +134,10 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
         raise _unauthorized("User is inactive or does not exist")
 
     replacement = secrets.token_urlsafe(48)
+    # Encode the access token before persisting the rotation so that an invalid
+    # JWT algorithm or key configuration cannot revoke a usable refresh token
+    # without producing its replacement.
+    access_token = _encode_access_token(actor.user_id, now)
     replacement_row = RefreshToken(
         user_id=stored.user_id,
         family_id=stored.family_id,
@@ -142,7 +150,7 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
     stored.replaced_by_id = replacement_row.id
     db.commit()
     return TokenResponse(
-        access_token=_encode_access_token(actor.user_id, now),
+        access_token=access_token,
         refresh_token=replacement,
     )
 

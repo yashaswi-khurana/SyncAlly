@@ -40,7 +40,11 @@ class Conversation(Base):
 class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (
-        CheckConstraint("NOT (author_user_id IS NULL AND author_agent_id IS NULL)", name="ck_message_has_author"),
+        CheckConstraint(
+            "(author_user_id IS NOT NULL AND author_agent_id IS NULL) "
+            "OR (author_user_id IS NULL AND author_agent_id IS NOT NULL)",
+            name="ck_message_has_author",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)

@@ -2,15 +2,18 @@ import unittest
 from uuid import uuid4
 
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from syncally.infrastructure.models import (
     Base,
     Deal,
+    Message,
     Organization,
     OrganizationMember,
     OutboxEvent,
+    PaymentMilestone,
     User,
 )
 
@@ -107,3 +110,68 @@ class DatabasePersistenceTests(unittest.TestCase):
 
         self.assertEqual(deal_count, 0)
         self.assertEqual(event_count, 0)
+
+    def test_message_requires_exactly_one_author(self) -> None:
+        valid_messages = [
+            Message(
+                conversation_id=uuid4(),
+                author_user_id=uuid4(),
+                body="user message",
+                visibility="INTERNAL",
+                source_type="USER",
+            ),
+            Message(
+                conversation_id=uuid4(),
+                author_agent_id="agent-1",
+                body="agent message",
+                visibility="INTERNAL",
+                source_type="AGENT",
+            ),
+        ]
+        with Session(self.engine) as session:
+            session.add_all(valid_messages)
+            session.commit()
+
+        with self.assertRaises(IntegrityError):
+            with Session(self.engine) as session:
+                session.add(
+                    Message(
+                        conversation_id=uuid4(),
+                        author_user_id=uuid4(),
+                        author_agent_id="agent-1",
+                        body="ambiguous message",
+                        visibility="INTERNAL",
+                        source_type="USER",
+                    )
+                )
+                session.commit()
+
+    def test_payment_milestone_requires_positive_sequence(self) -> None:
+        milestone_values = {
+            "deal_id": uuid4(),
+            "agreement_version_id": uuid4(),
+            "payer_organization_id": uuid4(),
+            "amount": 100,
+            "currency": "USD",
+            "trigger_type": "DELIVERY",
+            "due_condition": "delivery confirmed",
+        }
+        with Session(self.engine) as session:
+            session.add(PaymentMilestone(sequence_number=1, **milestone_values))
+            session.commit()
+
+        for sequence_number in (0, -1):
+            with self.assertRaises(IntegrityError):
+                with Session(self.engine) as session:
+                    session.add(PaymentMilestone(sequence_number=sequence_number, **milestone_values))
+                    session.commit()
+
+    def test_identity_lookup_indexes_exist(self) -> None:
+        index_names = {
+            index.name
+            for table_name in ("organization_members", "refresh_tokens")
+            for index in Base.metadata.tables[table_name].indexes
+        }
+
+        self.assertIn("ix_organization_members_user_id", index_names)
+        self.assertIn("ix_refresh_tokens_family_id", index_names)

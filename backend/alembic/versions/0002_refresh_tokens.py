@@ -29,7 +29,9 @@ def upgrade() -> None:
         sa.Column("replaced_by_id", UUID, sa.ForeignKey("refresh_tokens.id"), nullable=True),
         sa.UniqueConstraint("token_hash"),
     )
+    op.create_index("ix_refresh_tokens_family_id", "refresh_tokens", ["family_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_refresh_tokens_family_id", table_name="refresh_tokens")
     op.drop_table("refresh_tokens")

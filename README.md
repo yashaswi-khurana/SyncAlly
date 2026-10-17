@@ -85,7 +85,9 @@ cd backend
 alembic upgrade head
 ```
 
-The API currently exposes `GET /health`. It does not yet check database, workflow-worker, or provider availability.
+The API exposes `GET /health` for process health and `GET /health/database` to verify
+that it can acquire and use a database connection. It does not yet check workflow-worker
+or provider availability.
 
 ### Frontend
 

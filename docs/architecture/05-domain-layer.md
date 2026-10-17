@@ -1,9 +1,9 @@
 # Domain Layer
 
-**Status:** Implemented foundation; persistence and application workflows remain proposed
+**Status:** Implemented domain foundation; commercial workflow persistence and transaction handlers remain incomplete
 **Scope:** Framework-independent commercial models in `backend/src/syncally/domain`
 
-This document distinguishes code that exists from the larger architecture in the reference design. The current slice implements shared money and identifiers, deal lifecycle, negotiation proposals, canonical trade terms, bilateral agreement approval, and payment-intent state. It does not implement repositories, database transactions, organization membership/authorization, outbox delivery, execution plans, documents, or provider adapters.
+This document distinguishes code that exists from the larger architecture in the reference design. The current slice implements shared money and identifiers, organization and membership domain records, deal lifecycle, negotiation proposals, canonical trade terms, bilateral agreement approval, and payment-intent state. The domain package does not perform persistence, database transactions, actor authorization, outbox delivery, execution plans, document storage, or provider calls. The application and infrastructure layers resolve persisted memberships, apply request authorization, and save business state.
 
 ## Dependency direction
 
@@ -25,6 +25,8 @@ The domain owns deterministic commercial invariants. Application handlers will l
 
 ```mermaid
 flowchart TD
+    Organization[Organization<br/>legal identity and status]
+    Membership[OrganizationMember<br/>user, organization, role, status]
     Deal[Deal aggregate<br/>parties and coarse lifecycle]
     Session[NegotiationSession<br/>round count and current proposal]
     Proposal[Proposal<br/>submitted terms snapshot]
@@ -32,6 +34,8 @@ flowchart TD
     Agreement[Agreement version<br/>approvals and commitment]
     Milestone[PaymentMilestone<br/>amount and payer]
     Intent[PaymentIntent<br/>authorized provider operation]
+    Membership --> Organization
+    Deal --> Organization
     Deal --> Session
     Session --> Proposal
     Proposal --> Terms
@@ -48,6 +52,8 @@ The diagram shows references and business flow, not object ownership. These are 
 | Model | Enforced by domain code |
 | --- | --- |
 | `Money` | Decimal-only finite amount, normalized three-letter currency, same-currency addition |
+| `Organization` | Required legal name, two-letter country code, explicit active status |
+| `OrganizationMember` | Typed organization/user IDs, explicit role and membership status; only `ACTIVE` is active |
 | `TradeTerms` | Distinct buyer and seller; non-empty items, shipments, and payment terms; one currency; payment schedule equals line-item total; deterministic JSON and SHA-256 terms hash |
 | `Proposal` | Submitted proposal has a single lifecycle path; negotiation checks deal and predecessor references and maximum rounds |
 | `Deal` | Buyer differs from seller; explicit transitions and current agreement version check |
@@ -56,6 +62,8 @@ The diagram shows references and business flow, not object ownership. These are 
 | `PaymentIntent` | Stable idempotency key; payer matches milestone; an ambiguous create cannot retry until reconciled; only reconciled full amount becomes `PAID` |
 
 The application layer must still verify that `authorized_by` is an active member with the required permission. Domain checks cannot establish identity or tenant membership by themselves.
+
+The implemented deal transitions cover negotiation through execution: `DRAFT` → `NEGOTIATING` → `PENDING_APPROVALS` → `AGREED` → `EXECUTING`. `cancel()` and `expire()` may close a deal only before agreement (`DRAFT`, `NEGOTIATING`, or `PENDING_APPROVALS`). The application must authorize cancellation, and the caller must confirm the relevant deadline elapsed before expiring; the domain guards that a committed or executing deal cannot use these shortcuts. `COMPLETED` remains without a transition until fulfillment and payment conditions are defined and verified. `DISPUTED` remains without a transition because issue #8 explicitly defers disputes. Rejecting one proposal uses `ProposalStatus.REJECTED`; that alone does not close the deal, since the parties may continue negotiating.
 
 ## Key flows
 
@@ -85,6 +93,7 @@ The model does not claim exactly-once provider execution. Unique idempotency key
 ```text
 backend/src/syncally/domain/
 ├── shared/          # IDs, Money, domain errors
+├── organizations/   # Organization and organization membership records
 ├── deals/           # Deal state machine
 ├── negotiation/     # Proposals and negotiation session
 ├── agreements/      # TradeTerms, approvals, commitment
@@ -95,6 +104,6 @@ Keep framework imports, persistence mappings, external SDKs, actor authenticatio
 
 ## Deliberate next steps
 
-The current code is a domain foundation, not an end-to-end vertical slice. Before claiming production behavior, add focused domain tests, then implement application ports and transaction handlers. Remaining domain work includes organization membership and constraints, execution obligations and amendment history, document snapshots, and richer currency/quantity/tax/trade-term policies. Persistence work must add optimistic concurrency, uniqueness for idempotency keys and commitments, transactional outbox records, and migrations. Provider integration must verify callbacks and reconcile outcomes before treating payments as complete.
+The current code is a domain foundation, not an end-to-end vertical slice. Before claiming production behavior, add focused domain tests, then implement application ports and transaction handlers. Remaining domain work includes constraints, execution obligations and amendment history, document snapshots, and richer currency/quantity/tax/trade-term policies. Persistence work must add optimistic concurrency, uniqueness for idempotency keys and commitments, transactional outbox records, and migrations. Provider integration must verify callbacks and reconcile outcomes before treating payments as complete.
 
 The initial `TradeTerms` schema supports one currency and requires payment terms to sum to the line-item total. Taxes, discounts, fees, exchange rates, multi-currency deals, per-item shipment allocation, and Incoterms validation are intentionally not inferred or implemented here.

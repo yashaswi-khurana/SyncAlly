@@ -1,7 +1,17 @@
 """Application configuration via environment variables."""
 
+from jwt.algorithms import HMACAlgorithm, get_default_algorithms
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_JWT_ALGORITHMS = get_default_algorithms()
+_SUPPORTED_JWT_ALGORITHMS = frozenset(_DEFAULT_JWT_ALGORITHMS)
+# Only shared-secret (HMAC) algorithms can be used with the configured JWT_SECRET.
+_SYMMETRIC_JWT_ALGORITHMS = frozenset(
+    name
+    for name, algorithm in _DEFAULT_JWT_ALGORITHMS.items()
+    if isinstance(algorithm, HMACAlgorithm)
+)
 
 
 class Settings(BaseSettings):
@@ -28,6 +38,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "JWT_SECRET must contain at least 32 characters outside development/test"
             )
+        if self.jwt_algorithm in _SYMMETRIC_JWT_ALGORITHMS:
+            pass
+        elif self.jwt_algorithm in _SUPPORTED_JWT_ALGORITHMS:
+            raise ValueError(
+                "JWT_ALGORITHM must be a symmetric algorithm (HS256, HS384, or HS512) "
+                "when only a shared JWT_SECRET is configured"
+            )
+        else:
+            raise ValueError(f"JWT_ALGORITHM {self.jwt_algorithm!r} is not supported")
         if self.dev_auth_user_id and not local_environment:
             raise ValueError("DEV_AUTH_USER_ID is only allowed in development/test")
         if self.access_token_ttl_minutes <= 0 or self.refresh_token_ttl_days <= 0:

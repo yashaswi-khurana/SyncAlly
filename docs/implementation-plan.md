@@ -6,13 +6,14 @@ This plan tracks the constrained first demo from the shared [demo contract in is
 
 ## Current Implementation Status
 
-### Merged foundation
+### Implemented foundation
 
 - Backend API health endpoints, JWT authentication, refresh-token storage/rotation, and deal reads authorized through database-backed organization membership.
 - PostgreSQL models, Alembic migrations, database configuration, persistence/rollback coverage, and migration instructions (PRs [#41](https://github.com/yashaswi-khurana/SyncAlly/pull/41) and [#42](https://github.com/yashaswi-khurana/SyncAlly/pull/42)).
 - Framework-independent domain foundations for deals, trade terms, negotiation, bilateral agreements, and payment intents.
 - React/TypeScript Vite shell.
 - Backend test/lint commands, a health-route test, and frontend test/build/lint checks are defined in the project READMEs and verified by this story.
+- Development/test demo seeding creates buyer/seller accounts, organizations, and admin memberships; public self-registration is disabled.
 
 ### Still planned
 
@@ -20,6 +21,7 @@ This plan tracks the constrained first demo from the shared [demo contract in is
 - Message/fact review, proposal creation and negotiation workflows, bilateral approval, and committed agreement persistence.
 - Temporal orchestration and PayPal Sandbox invoice creation/reconciliation.
 - Frontend connection to the API and user-facing product flows.
+- Product onboarding through organization invitations, acceptance, and password setup.
 
 See [README](../README.md), [system architecture](../ARCHITECTURE.md), and the [architecture decision record](architecture/04-architecture-decision-record.md) for more detail. Architecture documents describe intended behavior where the implementation status above says work is still planned.
 

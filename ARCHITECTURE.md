@@ -1,9 +1,11 @@
 # SyncAlly Architecture
 
-**Status:** Proposed implementation baseline  
+**Status:** Proposed system architecture; commercial domain foundation implemented
 **Source:** Adapted from the architecture documents supplied for the project on 2026-10-13.
 
 This document summarizes the intended system shape. Detailed contracts and the original decision record are in [`docs/architecture/`](docs/architecture/README.md). Nothing here implies that the design has been implemented or deployed.
+
+The current domain code covers deal and negotiation foundations, canonical trade terms, bilateral agreement approval, and payment-intent state. The API, persistence, authorization handlers, outbox, Temporal workers, and provider adapters remain unimplemented. See [the domain layer implementation boundary](docs/architecture/05-domain-layer.md).
 
 ## System shape
 

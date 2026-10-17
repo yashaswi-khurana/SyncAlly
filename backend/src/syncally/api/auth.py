@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session
 from syncally.application.identity import ActorContext, resolve_actor
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
-from syncally.infrastructure.models import RefreshToken
+from syncally.infrastructure.models import RefreshToken, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -70,6 +71,38 @@ def _encode_access_token(user_id: UUID, now: datetime | None = None) -> str:
 
 def _hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
+    )
+    return "scrypt$" + "$".join(
+        (
+            urlsafe_b64encode(salt).decode("ascii"),
+            urlsafe_b64encode(digest).decode("ascii"),
+        )
+    )
+
+
+def _verify_password(password: str, encoded_hash: str | None) -> bool:
+    if encoded_hash is None:
+        return False
+    try:
+        scheme, encoded_salt, encoded_digest = encoded_hash.split("$")
+        if scheme != "scrypt":
+            return False
+        salt = urlsafe_b64decode(encoded_salt.encode("ascii"))
+        expected_digest = urlsafe_b64decode(encoded_digest.encode("ascii"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if len(salt) != 16 or len(expected_digest) != 32:
+        return False
+    actual_digest = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
+    )
+    return hmac.compare_digest(actual_digest, expected_digest)
 
 
 def _derive_rotated_refresh_token(token_id: UUID) -> str:
@@ -124,10 +157,54 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=32, max_length=64)
 
 
+class CredentialsRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=128)
+
+
+class RegistrationRequest(CredentialsRequest):
+    display_name: str = Field(min_length=1, max_length=200)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+def _issue_tokens(db: Session, user_id: UUID, now: datetime) -> TokenResponse:
+    return TokenResponse(
+        access_token=_encode_access_token(user_id, now),
+        refresh_token=create_refresh_token(db, user_id, now),
+    )
+
+
+@router.post("/register", response_model=TokenResponse, status_code=201)
+def register(payload: RegistrationRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    email = payload.email.strip().lower()
+    display_name = payload.display_name.strip()
+    if not display_name:
+        raise HTTPException(status_code=422, detail="Display name must not be blank")
+    if db.scalar(select(User).where(User.email == email)) is not None:
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+    user = User(
+        email=email,
+        display_name=display_name,
+        password_hash=_hash_password(payload.password),
+    )
+    db.add(user)
+    db.flush()
+    return _issue_tokens(db, user.id, datetime.now(UTC))
+
+
+@router.post("/login", response_model=TokenResponse)
+def login(payload: CredentialsRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    email = payload.email.strip().lower()
+    user = db.scalar(select(User).where(User.email == email, User.status == "ACTIVE"))
+    if user is None or not _verify_password(payload.password, user.password_hash):
+        raise _unauthorized("Invalid email or password")
+    return _issue_tokens(db, user.id, datetime.now(UTC))
 
 
 @router.post("/dev-login", response_model=TokenResponse)
@@ -141,10 +218,7 @@ def development_login(request: Request, db: Session = Depends(get_db)) -> TokenR
     actor = resolve_actor(db, user_id)
     if actor is None:
         raise _unauthorized("User is inactive or does not exist")
-    return TokenResponse(
-        access_token=_encode_access_token(actor.user_id, now),
-        refresh_token=create_refresh_token(db, actor.user_id, now),
-    )
+    return _issue_tokens(db, actor.user_id, now)
 
 
 def _replay_rotation(stored: RefreshToken, now: datetime, db: Session) -> TokenResponse:

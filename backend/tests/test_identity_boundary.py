@@ -15,13 +15,17 @@ from starlette.requests import Request
 
 from syncally.api.auth import (
     RefreshRequest,
+    CredentialsRequest,
     _decode_token,
     _derive_rotated_refresh_token,
     _encode_access_token,
+    _hash_password,
     _hash_refresh_token,
     _revoke_family,
+    _verify_password,
     development_login,
     get_current_actor,
+    login,
     refresh_access_token,
 )
 from syncally.api.main import MAX_REQUEST_BODY_BYTES, RequestBodyLimitMiddleware
@@ -31,6 +35,37 @@ from syncally.infrastructure.models import Deal
 
 
 class IdentityBoundaryTests(unittest.TestCase):
+    def test_password_hash_round_trip(self) -> None:
+        password_hash = _hash_password("correct horse battery staple")
+
+        self.assertTrue(_verify_password("correct horse battery staple", password_hash))
+        self.assertFalse(_verify_password("wrong password", password_hash))
+
+    def test_login_issues_initial_credentials_for_active_user(self) -> None:
+        user_id = uuid4()
+        user = SimpleNamespace(
+            id=user_id,
+            password_hash=_hash_password("correct horse battery staple"),
+        )
+
+        class FakeSession:
+            def scalar(self, _query: object) -> SimpleNamespace:
+                return user
+
+        with patch(
+            "syncally.api.auth._issue_tokens", return_value=SimpleNamespace()
+        ) as issue_tokens:
+            result = login(
+                CredentialsRequest(
+                    email="user@example.com",
+                    password="correct horse battery staple",
+                ),
+                FakeSession(),
+            )
+
+        issue_tokens.assert_called_once()
+        self.assertIs(result, issue_tokens.return_value)
+
     def test_development_login_issues_initial_credentials(self) -> None:
         user_id = uuid4()
         request = Request(
@@ -222,6 +257,7 @@ class IdentityBoundaryTests(unittest.TestCase):
             "replace-with-a-random-secret",
             "a" * 64,
             "development-secret-" * 4,
+            "this-is-a-static-production-secret-1234567890abcdef",
         )
 
         for jwt_secret in predictable_secrets:

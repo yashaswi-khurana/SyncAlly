@@ -5,13 +5,16 @@ Python package for the HTTP API, application use cases, domain rules, adapters, 
 The API exposes public health endpoints and protected deal reads. Protected requests use
 HS256 bearer JWTs: the `sub` claim identifies the user, while active organization
 memberships are loaded from the database for authorization. Organization or role claims
-supplied by the browser are not trusted. Set `JWT_SECRET` (at least 32 characters outside
-development/test), and optionally `JWT_ISSUER` and `JWT_AUDIENCE`.
+supplied by the browser are not trusted. Set `JWT_SECRET` to a cryptographically generated
+secret containing at least 32 random bytes outside development/test, and optionally
+`JWT_ISSUER` and `JWT_AUDIENCE`.
 Access tokens expire after `ACCESS_TOKEN_TTL_MINUTES` (default 15 minutes).
 Refresh tokens expire after `REFRESH_TOKEN_TTL_DAYS` (default 30 days).
 
-`POST /auth/dev-login` issues initial credentials for the configured local development
-identity when `DEV_AUTH_USER_ID` and the matching `X-Dev-User-Id` header are supplied.
+`POST /auth/register` creates an account and issues initial credentials. `POST /auth/login`
+authenticates an existing account with its email and password. `POST /auth/dev-login`
+issues credentials for the configured local development identity when `DEV_AUTH_USER_ID`
+and the matching `X-Dev-User-Id` header are supplied.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
 Replaying any already-rotated token is treated as reuse of a leaked token and

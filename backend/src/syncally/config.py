@@ -28,13 +28,27 @@ _KNOWN_WEAK_JWT_SECRETS = frozenset(
         "your-secret-key",
     }
 )
+_KNOWN_WEAK_JWT_FRAGMENTS = (
+    "change-me",
+    "dev-secret",
+    "development-secret",
+    "jwt-secret",
+    "replace-with",
+    "secret-key",
+    "test-secret",
+    "your-secret",
+)
 
 
 def _is_weak_jwt_secret(secret: str) -> bool:
     normalized = secret.strip().lower()
-    if normalized in _KNOWN_WEAK_JWT_SECRETS or len(set(normalized)) < 8:
+    if (
+        normalized in _KNOWN_WEAK_JWT_SECRETS
+        or any(fragment in normalized for fragment in _KNOWN_WEAK_JWT_FRAGMENTS)
+        or len(set(normalized)) < 8
+    ):
         return True
-    return re.fullmatch(r"(.{1,8})\1+", normalized) is not None
+    return re.fullmatch(r"(.{1,64})\1+", normalized) is not None
 
 
 class Settings(BaseSettings):

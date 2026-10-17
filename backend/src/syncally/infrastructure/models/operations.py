@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from syncally.infrastructure.models.base import Base, JSON_TYPE, UUID_TYPE
+from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE, Base
 
 
 class OutboxEvent(Base):

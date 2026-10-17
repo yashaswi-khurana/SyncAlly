@@ -1,10 +1,10 @@
 """FastAPI application entry point."""
 
 from fastapi import Depends, FastAPI
-from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from syncally.api.auth import router as auth_router
 from syncally.api.deals import read_deal

@@ -49,7 +49,18 @@ For local development/test only, `DEV_AUTH_USER_ID` may be configured and sent a
 The domain package contains framework-independent foundations for deals, negotiation,
 canonical trade terms, bilateral agreement approval, and payment intent state.
 
-Install from the repository root with `python -m pip install -e ./backend`.
+From the backend directory, install the application and its test/lint tools with:
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+Run the backend tests and lint checks from the backend directory:
+
+```powershell
+python -m unittest discover -s tests -v
+python -m ruff check src tests
+```
 
 For a local PostgreSQL database, copy `.env.example` to `.env`, set `DATABASE_URL`, and
 apply the schema from this directory:
@@ -57,5 +68,8 @@ apply the schema from this directory:
 ```text
 alembic upgrade head
 ```
+
+This applies all migrations to the PostgreSQL database configured by `DATABASE_URL`.
+The same command upgrades an existing database as well as creating a fresh schema.
 
 See [the domain architecture](../docs/architecture/05-domain-layer.md) for implemented invariants, package boundaries, and remaining work. The domain types do not perform persistence, authenticated authorization, or external provider calls.

@@ -243,9 +243,10 @@ class DealDomainTests(unittest.TestCase):
             deal.cancel()
 
         agreement.commit(agreement.terms_hash, datetime.now(UTC))
+        deal.mark_agreed(agreement.version_id)
 
         self.assertEqual(agreement.status, AgreementStatus.COMMITTED)
-        self.assertEqual(deal.status, DealStatus.PENDING_APPROVALS)
+        self.assertEqual(deal.status, DealStatus.AGREED)
 
     def test_cancel_and_expire_reject_committed_or_executing_deals(self) -> None:
         for method_name in ("cancel", "expire"):
@@ -302,6 +303,40 @@ class DealDomainTests(unittest.TestCase):
 
         self.assertEqual(deal.status, DealStatus.EXECUTING)
         self.assertEqual(deal.version, 4)
+
+    def test_deal_completes_execution_and_increments_version_once(self) -> None:
+        deal = make_deal()
+        deal.start_negotiation()
+        agreement_version_id = AgreementVersionId(uuid4())
+        deal.request_approval(agreement_version_id)
+        deal.mark_agreed(agreement_version_id)
+        deal.begin_execution()
+        version_before_completion = deal.version
+
+        deal.complete()
+
+        self.assertEqual(deal.status, DealStatus.COMPLETED)
+        self.assertEqual(deal.version, version_before_completion + 1)
+
+    def test_deal_completion_rejects_other_states_without_mutation(self) -> None:
+        for status in DealStatus:
+            if status is DealStatus.EXECUTING:
+                continue
+            with self.subTest(status=status):
+                deal = Deal(
+                    id=DealId(uuid4()),
+                    buyer_organization_id=OrganizationId(uuid4()),
+                    seller_organization_id=OrganizationId(uuid4()),
+                    created_at=datetime.now(UTC),
+                    status=status,
+                    version=3,
+                )
+
+                with self.assertRaises(InvalidTransition):
+                    deal.complete()
+
+                self.assertEqual(deal.status, status)
+                self.assertEqual(deal.version, 3)
 
 
 class DomainDependencyTests(unittest.TestCase):

@@ -28,4 +28,11 @@ canonical trade terms, bilateral agreement approval, and payment intent state.
 
 Install from the repository root with `python -m pip install -e ./backend`.
 
+For a local PostgreSQL database, copy `.env.example` to `.env`, set `DATABASE_URL`, and
+apply the schema from this directory:
+
+```text
+alembic upgrade head
+```
+
 See [the domain architecture](../docs/architecture/05-domain-layer.md) for implemented invariants, package boundaries, and remaining work. The domain types do not perform persistence, authenticated authorization, or external provider calls.

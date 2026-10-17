@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import secrets
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -19,8 +18,10 @@ from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
 
 from syncally.api.auth import (
-    RefreshRequest,
     CredentialsRequest,
+    RefreshRequest,
+    RegistrationRequest,
+    TokenResponse,
     _decode_token,
     _encode_access_token,
     _hash_password,
@@ -31,6 +32,9 @@ from syncally.api.auth import (
     get_current_actor,
     login,
     refresh_access_token,
+    register,
+)
+from syncally.api.auth import (
     router as auth_router,
 )
 from syncally.api.main import MAX_REQUEST_BODY_BYTES, RequestBodyLimitMiddleware
@@ -109,11 +113,96 @@ class IdentityBoundaryTests(unittest.TestCase):
         self.assertEqual(wrong_password.exception.status_code, 401)
         self.assertEqual(wrong_password.exception.detail, "Invalid email or password")
 
-    def test_public_self_registration_is_not_exposed(self) -> None:
-        paths = {route.path for route in auth_router.routes}
+    def test_public_self_registration_creates_user_and_issues_token_pair(self) -> None:
+        class RegistrationSession:
+            def __init__(self) -> None:
+                self.added_user: User | None = None
 
-        self.assertNotIn("/auth/register", paths)
-        self.assertIn("/auth/login", paths)
+            def scalar(self, _query: object) -> None:
+                return None
+
+            def add(self, user: User) -> None:
+                user.id = uuid4()
+                self.added_user = user
+
+            def flush(self) -> None:
+                return None
+
+        db = RegistrationSession()
+        token_response = TokenResponse(
+            access_token="access-token",
+            refresh_token="refresh-token",
+        )
+        with patch("syncally.api.auth._issue_tokens", return_value=token_response) as issue:
+            result = register(
+                RegistrationRequest(
+                    email="  New.User@Example.com ",
+                    password="correct horse battery staple",
+                    display_name="  New User  ",
+                ),
+                db,  # type: ignore[arg-type]
+            )
+
+        self.assertIsNotNone(db.added_user)
+        assert db.added_user is not None
+        self.assertEqual(db.added_user.email, "new.user@example.com")
+        self.assertEqual(db.added_user.display_name, "New User")
+        self.assertTrue(
+            _verify_password("correct horse battery staple", db.added_user.password_hash)
+        )
+        issue.assert_called_once()
+        self.assertEqual(result, token_response)
+        register_route = next(
+            route for route in auth_router.routes if route.path == "/auth/register"
+        )
+        self.assertEqual(register_route.status_code, 201)
+
+    def test_registration_duplicate_email_is_conflict(self) -> None:
+        class ExistingUserSession:
+            def scalar(self, _query: object) -> SimpleNamespace:
+                return SimpleNamespace(id=uuid4())
+
+        with self.assertRaises(HTTPException) as duplicate:
+            register(
+                RegistrationRequest(
+                    email="user@example.com",
+                    password="correct horse battery staple",
+                    display_name="New User",
+                ),
+                ExistingUserSession(),  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(duplicate.exception.status_code, 409)
+
+    def test_registration_duplicate_email_race_rolls_back(self) -> None:
+        class RacingSession:
+            rolled_back = False
+
+            def scalar(self, _query: object) -> None:
+                return None
+
+            def add(self, _user: User) -> None:
+                return None
+
+            def flush(self) -> None:
+                raise IntegrityError("insert", {}, Exception("duplicate email"))
+
+            def rollback(self) -> None:
+                self.rolled_back = True
+
+        db = RacingSession()
+        with self.assertRaises(HTTPException) as duplicate:
+            register(
+                RegistrationRequest(
+                    email="user@example.com",
+                    password="correct horse battery staple",
+                    display_name="New User",
+                ),
+                db,  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(duplicate.exception.status_code, 409)
+        self.assertTrue(db.rolled_back)
 
     def test_login_refresh_and_replay_revoke_persisted_token_family(self) -> None:
         engine = create_engine(

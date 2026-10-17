@@ -23,8 +23,9 @@ revokes the whole family.
 For local development/test only, `DEV_AUTH_USER_ID` may be configured and sent as
 `X-Dev-User-Id`; this shortcut is rejected by configuration outside those environments.
 
-The domain package contains framework-independent foundations for deals, negotiation,
-canonical trade terms, bilateral agreement approval, and payment intent state.
+The domain package contains framework-independent organization and membership records,
+deal lifecycle rules, negotiation, canonical trade terms, bilateral agreement approval,
+and payment intent state.
 
 Install from the repository root with `python -m pip install -e ./backend`.
 

@@ -1,5 +1,6 @@
 """Application configuration via environment variables."""
 
+import re
 from pathlib import Path
 
 from jwt.algorithms import HMACAlgorithm, get_default_algorithms
@@ -15,6 +16,25 @@ _SYMMETRIC_JWT_ALGORITHMS = frozenset(
     if isinstance(algorithm, HMACAlgorithm)
 )
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_MIN_JWT_SECRET_LENGTH = 43  # 32 random bytes encoded with URL-safe base64.
+_KNOWN_WEAK_JWT_SECRETS = frozenset(
+    {
+        "change-me",
+        "dev-secret",
+        "development-secret",
+        "replace-with-a-random-secret",
+        "secret",
+        "test-secret",
+        "your-secret-key",
+    }
+)
+
+
+def _is_weak_jwt_secret(secret: str) -> bool:
+    normalized = secret.strip().lower()
+    if normalized in _KNOWN_WEAK_JWT_SECRETS or len(set(normalized)) < 8:
+        return True
+    return re.fullmatch(r"(.{1,8})\1+", normalized) is not None
 
 
 class Settings(BaseSettings):
@@ -37,10 +57,15 @@ class Settings(BaseSettings):
                 self.database_url = "postgresql+psycopg://localhost:5432/syncally"
             else:
                 raise ValueError("DATABASE_URL must be configured outside development/test")
-        if not local_environment and len(self.jwt_secret) < 32:
-            raise ValueError(
-                "JWT_SECRET must contain at least 32 characters outside development/test"
-            )
+        if not local_environment:
+            if (
+                len(self.jwt_secret) < _MIN_JWT_SECRET_LENGTH
+                or _is_weak_jwt_secret(self.jwt_secret)
+            ):
+                raise ValueError(
+                    "JWT_SECRET must be a cryptographically generated secret containing "
+                    "at least 32 random bytes outside development/test"
+                )
         if self.jwt_algorithm in _SYMMETRIC_JWT_ALGORITHMS:
             pass
         elif self.jwt_algorithm in _SUPPORTED_JWT_ALGORITHMS:

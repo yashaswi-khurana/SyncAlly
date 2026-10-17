@@ -10,7 +10,9 @@ from syncally.config import settings
 engine = create_engine(
     settings.database_url,
     echo=settings.debug,
+    connect_args={"connect_timeout": 10},
     pool_pre_ping=True,
+    pool_timeout=30,
 )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

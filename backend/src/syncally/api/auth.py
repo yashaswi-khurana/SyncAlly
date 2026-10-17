@@ -137,6 +137,7 @@ def _revoke_family(db: Session, family_id: UUID, now: datetime) -> None:
     db.execute(
         select(RefreshToken.id)
         .where(RefreshToken.family_id == family_id)
+        .order_by(RefreshToken.id)
         .with_for_update()
     )
     db.execute(
@@ -204,9 +205,25 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
     stored = db.scalar(
         select(RefreshToken)
         .where(RefreshToken.token_hash == _hash_refresh_token(payload.refresh_token))
-        .with_for_update()
     )
     now = datetime.now(UTC)
+    if stored is None:
+        raise _unauthorized("Invalid refresh token")
+
+    # Every refresh operation locks the family in the same order before it
+    # locks an individual token, preventing cross-token lock cycles.
+    db.execute(
+        select(RefreshToken.id)
+        .where(RefreshToken.family_id == stored.family_id)
+        .order_by(RefreshToken.id)
+        .with_for_update()
+    )
+    stored = db.scalar(
+        select(RefreshToken)
+        .where(RefreshToken.id == stored.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if stored is None:
         raise _unauthorized("Invalid refresh token")
     if stored.revoked_at is not None:

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import secrets
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,6 +13,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
@@ -31,6 +34,7 @@ from syncally.api.auth import (
     router as auth_router,
 )
 from syncally.api.main import MAX_REQUEST_BODY_BYTES, RequestBodyLimitMiddleware
+from syncally.api.organizations import _is_duplicate_membership_error
 from syncally.application.identity import ActorContext
 from syncally.config import Settings, settings
 from syncally.infrastructure.models import Base, Deal, RefreshToken, User
@@ -270,8 +274,68 @@ class IdentityBoundaryTests(unittest.TestCase):
         self.assertTrue(getattr(db.statements[0], "is_select", False))
         select_sql = str(db.statements[0].compile(dialect=postgresql.dialect()))
         self.assertIn("FOR UPDATE", select_sql)
+        self.assertIn("ORDER BY refresh_tokens.id", select_sql)
         self.assertTrue(getattr(db.statements[1], "is_update", False))
         self.assertTrue(db.committed)
+
+    def test_refresh_locks_family_in_order_before_rechecking_token_row(self) -> None:
+        user_id = uuid4()
+        now = datetime.now(UTC)
+        stored = SimpleNamespace(
+            id=uuid4(),
+            user_id=user_id,
+            family_id=uuid4(),
+            token_hash=None,
+            expires_at=now + timedelta(days=1),
+            revoked_at=None,
+            replaced_by_id=None,
+        )
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.scalar_statements: list[object] = []
+                self.executed_statements: list[object] = []
+
+            def scalar(self, query: object) -> SimpleNamespace:
+                self.scalar_statements.append(query)
+                return stored
+
+            def execute(self, query: object) -> None:
+                self.executed_statements.append(query)
+
+            def add(self, row: object) -> None:
+                self.replacement = row
+
+            def flush(self) -> None:
+                self.replacement.id = uuid4()  # type: ignore[attr-defined]
+
+            def commit(self) -> None:
+                pass
+
+        db = FakeSession()
+        original_secret = settings.jwt_secret
+        try:
+            settings.jwt_secret = "r" * 32
+            with (
+                patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
+                patch("syncally.api.auth.datetime") as mocked_datetime,
+                patch("syncally.api.auth._encode_access_token", return_value="access"),
+            ):
+                mocked_datetime.now.return_value = now
+                refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+        finally:
+            settings.jwt_secret = original_secret
+
+        family_lock_sql = str(
+            db.executed_statements[0].compile(dialect=postgresql.dialect())
+        )
+        token_lock_sql = str(
+            db.scalar_statements[1].compile(dialect=postgresql.dialect())
+        )
+        self.assertIn("ORDER BY refresh_tokens.id", family_lock_sql)
+        self.assertIn("FOR UPDATE", family_lock_sql)
+        self.assertIn("WHERE refresh_tokens.id", token_lock_sql)
+        self.assertIn("FOR UPDATE", token_lock_sql)
 
     def test_deal_requests_require_authentication(self) -> None:
         request = Request({"type": "http", "headers": []})
@@ -442,6 +506,8 @@ class IdentityBoundaryTests(unittest.TestCase):
     def test_expired_refresh_token_reuse_revokes_its_family(self) -> None:
         now = datetime.now(UTC)
         stored = SimpleNamespace(
+            id=uuid4(),
+            user_id=uuid4(),
             family_id=uuid4(),
             expires_at=now - timedelta(seconds=1),
             revoked_at=now - timedelta(seconds=2),
@@ -478,11 +544,6 @@ class IdentityBoundaryTests(unittest.TestCase):
             revoked_at=now + timedelta(seconds=1),
             expires_at=now + timedelta(days=1),
         )
-        replacement = SimpleNamespace(
-            family_id=stored.family_id,
-            revoked_at=now,
-        )
-
         class FakeSession:
             def __init__(self) -> None:
                 self.family_revocation_attempted = False
@@ -490,7 +551,7 @@ class IdentityBoundaryTests(unittest.TestCase):
 
             def scalar(self, _query: object) -> SimpleNamespace:
                 self.scalar_calls += 1
-                return stored if self.scalar_calls == 1 else replacement
+                return stored
 
             def execute(self, _query: object) -> None:
                 self.family_revocation_attempted = True
@@ -581,6 +642,7 @@ class IdentityBoundaryTests(unittest.TestCase):
         with (
             patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
             patch("syncally.api.auth.datetime") as mocked_datetime,
+            patch("syncally.api.auth.secrets.token_urlsafe", wraps=secrets.token_urlsafe) as random_token,
         ):
             original_secret = settings.jwt_secret
             try:
@@ -591,6 +653,7 @@ class IdentityBoundaryTests(unittest.TestCase):
                 settings.jwt_secret = original_secret
 
         self.assertEqual(len(result.refresh_token), 64)
+        random_token.assert_called_once_with(48)
         self.assertTrue(db.committed)
         self.assertIsNotNone(stored.revoked_at)
         self.assertEqual(len(replacement_rows), 1)
@@ -613,6 +676,7 @@ class IdentityBoundaryTests(unittest.TestCase):
         user_id = uuid4()
         now = datetime.now(UTC)
         stored = SimpleNamespace(
+            id=uuid4(),
             user_id=user_id,
             family_id=uuid4(),
             token_hash=None,
@@ -627,6 +691,9 @@ class IdentityBoundaryTests(unittest.TestCase):
 
             def scalar(self, _query: object) -> SimpleNamespace:
                 return stored
+
+            def execute(self, _query: object) -> None:
+                pass
 
             def add(self, _row: object) -> None:
                 pass
@@ -653,3 +720,120 @@ class IdentityBoundaryTests(unittest.TestCase):
         self.assertFalse(db.committed)
         self.assertIsNone(stored.revoked_at)
         self.assertIsNone(stored.replaced_by_id)
+
+    def test_replaying_parent_with_active_replacement_revokes_the_whole_family(self) -> None:
+        engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        now = datetime.now(UTC)
+        user_id, family_id, parent_id, child_id = uuid4(), uuid4(), uuid4(), uuid4()
+        raw_parent = "parent-refresh-token-" + "p" * 40
+        raw_child = "child-refresh-token-" + "c" * 40
+        try:
+            with Session(engine) as db:
+                db.add(
+                    User(
+                        id=user_id,
+                        email="refresh@example.com",
+                        display_name="Refresh",
+                        status="ACTIVE",
+                    )
+                )
+                db.add_all(
+                    [
+                        RefreshToken(
+                            id=parent_id,
+                            user_id=user_id,
+                            family_id=family_id,
+                            token_hash=_hash_refresh_token(raw_parent),
+                            expires_at=now + timedelta(days=1),
+                            revoked_at=now - timedelta(seconds=1),
+                            replaced_by_id=child_id,
+                        ),
+                        RefreshToken(
+                            id=child_id,
+                            user_id=user_id,
+                            family_id=family_id,
+                            token_hash=_hash_refresh_token(raw_child),
+                            expires_at=now + timedelta(days=1),
+                        ),
+                    ]
+                )
+                db.commit()
+
+                with self.assertRaises(HTTPException) as raised:
+                    refresh_access_token(RefreshRequest(refresh_token=raw_parent), db)
+
+                family = list(
+                    db.scalars(select(RefreshToken).where(RefreshToken.family_id == family_id))
+                )
+                self.assertEqual(raised.exception.status_code, 401)
+                self.assertEqual(len(family), 2)
+                self.assertTrue(all(token.revoked_at is not None for token in family))
+        finally:
+            Base.metadata.drop_all(engine)
+            engine.dispose()
+
+    def test_successive_refreshes_use_distinct_cryptographically_random_tokens(self) -> None:
+        engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        now = datetime.now(UTC)
+        user_id, family_id, token_id = uuid4(), uuid4(), uuid4()
+        first_raw = "initial-refresh-token-" + "i" * 40
+        original_secret = settings.jwt_secret
+        try:
+            settings.jwt_secret = "r" * 32
+            with Session(engine) as db:
+                db.add(
+                    User(
+                        id=user_id,
+                        email="rotate@example.com",
+                        display_name="Rotate",
+                        status="ACTIVE",
+                    )
+                )
+                db.add(
+                    RefreshToken(
+                        id=token_id,
+                        user_id=user_id,
+                        family_id=family_id,
+                        token_hash=_hash_refresh_token(first_raw),
+                        expires_at=now + timedelta(days=1),
+                    )
+                )
+                db.commit()
+                with patch(
+                    "syncally.api.auth.secrets.token_urlsafe",
+                    wraps=secrets.token_urlsafe,
+                ) as random_token:
+                    first_rotation = refresh_access_token(RefreshRequest(refresh_token=first_raw), db)
+                    second_rotation = refresh_access_token(
+                        RefreshRequest(refresh_token=first_rotation.refresh_token), db
+                    )
+
+            self.assertNotEqual(first_rotation.refresh_token, second_rotation.refresh_token)
+            self.assertEqual(random_token.call_count, 2)
+            self.assertEqual([call.args for call in random_token.call_args_list], [(48,), (48,)])
+        finally:
+            settings.jwt_secret = original_secret
+            Base.metadata.drop_all(engine)
+            engine.dispose()
+
+    def test_membership_integrity_classification_only_maps_duplicate_constraint(self) -> None:
+        duplicate = IntegrityError(
+            "insert", {}, Exception(
+                "UNIQUE constraint failed: organization_members.organization_id, "
+                "organization_members.user_id"
+            )
+        )
+        unrelated = IntegrityError("insert", {}, Exception("FOREIGN KEY constraint failed"))
+
+        self.assertTrue(_is_duplicate_membership_error(duplicate))
+        self.assertFalse(_is_duplicate_membership_error(unrelated))

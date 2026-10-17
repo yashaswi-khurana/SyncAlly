@@ -4,12 +4,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
 from syncally.application.identity import ActorContext
+from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import Organization, OrganizationMember, User
 
@@ -72,6 +73,24 @@ def create_organization(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     """Create an organization and make its creator the first active admin."""
+    # Serialize organization creation for this account so concurrent requests
+    # cannot both pass the quota check.
+    db.scalar(select(User.id).where(User.id == actor.user_id).with_for_update())
+    active_organization_count = db.scalar(
+        select(func.count(OrganizationMember.id))
+        .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .where(
+            OrganizationMember.user_id == actor.user_id,
+            OrganizationMember.status == "ACTIVE",
+            Organization.status == "ACTIVE",
+        )
+    )
+    if active_organization_count >= settings.max_organizations_per_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organization limit reached for this account",
+        )
+
     organization = Organization(
         legal_name=payload.legal_name,
         country_code=payload.country_code,
@@ -152,7 +171,12 @@ def add_organization_member(
         )
     )
     if existing_membership is not None:
-        raise HTTPException(status_code=409, detail="User already has a membership record")
+        if existing_membership.status == "ACTIVE":
+            raise HTTPException(status_code=409, detail="User already has an active membership")
+        existing_membership.role = "MEMBER"
+        existing_membership.status = "ACTIVE"
+        db.commit()
+        return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role}
 
     membership = OrganizationMember(
         organization_id=organization_id,
@@ -165,6 +189,26 @@ def add_organization_member(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="User already has a membership record") from exc
+        if _is_duplicate_membership_error(exc):
+            raise HTTPException(status_code=409, detail="User already has an active membership") from exc
+        raise
 
     return {"user_id": str(user.id), "email": user.email, "role": membership.role}
+
+
+def _is_duplicate_membership_error(error: IntegrityError) -> bool:
+    """Recognize only the organization/user unique constraint across supported DBs."""
+    original = error.orig
+    diagnostic = getattr(original, "diag", None)
+    constraint_name = getattr(diagnostic, "constraint_name", None)
+    if constraint_name is not None:
+        return constraint_name == "organization_members_organization_id_user_id_key"
+
+    # SQLite reports the constrained columns in the exception text instead of
+    # exposing a PostgreSQL-style constraint name.
+    message = str(original).lower()
+    return (
+        "unique constraint failed" in message
+        and "organization_members.organization_id" in message
+        and "organization_members.user_id" in message
+    )

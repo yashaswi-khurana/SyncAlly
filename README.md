@@ -89,6 +89,16 @@ cd backend
 alembic upgrade head
 ```
 
+In development/test, create the local demo buyer and seller accounts after migrating:
+
+```powershell
+python -m syncally.cli.seed_demo
+```
+
+The command asks for each password without displaying it. Use `buyer@syncally.demo` or
+`seller@syncally.demo` to sign in. It is disabled outside development/test; public
+self-registration and organization invitations are not available yet.
+
 The API exposes `GET /health` for process health and `GET /health/database` to verify
 that it can acquire and use a database connection. It does not yet check workflow-worker
 or provider availability.

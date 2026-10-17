@@ -9,6 +9,18 @@ from syncally.infrastructure.migration_config import MigrationSettings
 
 
 class MigrationConfigTests(unittest.TestCase):
+    def test_user_password_hash_upgrade_migration_exists(self) -> None:
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "alembic"
+            / "versions"
+            / "0003_user_password_hash.py"
+        )
+        source = migration.read_text(encoding="utf-8")
+
+        self.assertIn('down_revision = "0002_refresh_tokens"', source)
+        self.assertIn('op.add_column("users", sa.Column("password_hash"', source)
+
     def test_production_migrations_do_not_require_jwt_secret(self) -> None:
         with patch.dict(
             os.environ,

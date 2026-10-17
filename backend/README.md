@@ -24,6 +24,8 @@ An organization admin can use
 `POST /organizations/{organization_id}/members` with an existing active user's email to
 add that account as a regular member. Accounts must be provisioned by an operator first;
 the endpoint does not create accounts or allow callers to choose another user's role.
+Organization creation is limited to five active organizations per user by default. Set
+`MAX_ORGANIZATIONS_PER_USER` to a positive integer to change the limit.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
 Each refresh token can be used once. Replaying any rotated token, including a concurrent
@@ -31,6 +33,9 @@ or delayed retry, is treated as reuse of a leaked credential: the whole token fa
 revoked and the request receives `401`. Clients should serialize refresh requests and
 sign in again if a refresh response is lost. Rotation state is committed together, so a
 failed rotation does not leave a replacement token partially saved.
+When rolling out the random refresh-token replacement behavior, drain older API instances
+before enabling new instances: older versions may return a deterministically derived
+refresh token after a retry, which cannot match replacements created by this version.
 
 For local development/test only, `DEV_AUTH_USER_ID` may be configured and sent as
 `X-Dev-User-Id`; this shortcut is rejected by configuration outside those environments.

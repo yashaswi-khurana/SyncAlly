@@ -15,6 +15,7 @@ from syncally.api.organizations import (
     list_my_organizations,
 )
 from syncally.application.identity import ActorContext, resolve_actor
+from syncally.config import settings
 from syncally.infrastructure.models import Base, Organization, OrganizationMember, User
 
 
@@ -89,6 +90,28 @@ class OrganizationOnboardingTests(unittest.TestCase):
         self.assertIsNotNone(membership)
         self.assertEqual(membership.role, "ADMIN")
         self.assertEqual(membership.status, "ACTIVE")
+
+    def test_organization_creation_respects_per_user_limit(self) -> None:
+        user = self._user("owner@example.com")
+        actor = ActorContext(user_id=user.id, organization_ids=frozenset())
+        original_limit = settings.max_organizations_per_user
+        try:
+            settings.max_organizations_per_user = 1
+            create_organization(
+                CreateOrganizationRequest(legal_name="First Co", country_code="US"),
+                actor,
+                self.db,
+            )
+            with self.assertRaises(HTTPException) as raised:
+                create_organization(
+                    CreateOrganizationRequest(legal_name="Second Co", country_code="US"),
+                    actor,
+                    self.db,
+                )
+        finally:
+            settings.max_organizations_per_user = original_limit
+
+        self.assertEqual(raised.exception.status_code, 409)
 
     def test_admin_can_add_an_existing_active_user_as_member(self) -> None:
         admin = self._user("admin@example.com")
@@ -174,6 +197,40 @@ class OrganizationOnboardingTests(unittest.TestCase):
                 self.db,
             )
         self.assertEqual(duplicate.exception.status_code, 409)
+
+    def test_inactive_membership_is_reactivated_as_regular_member(self) -> None:
+        admin = self._user("admin@example.com")
+        member = self._user("member@example.com")
+        organization = self._organization(admin)
+        old_membership = OrganizationMember(
+            organization_id=organization.id,
+            user_id=member.id,
+            role="ADMIN",
+            status="INACTIVE",
+        )
+        self.db.add(old_membership)
+        self.db.commit()
+        actor = ActorContext(user_id=admin.id, organization_ids=frozenset({organization.id}))
+
+        result = add_organization_member(
+            organization.id,
+            AddOrganizationMemberRequest(email=member.email),
+            actor,
+            self.db,
+        )
+
+        self.assertEqual(result["role"], "MEMBER")
+        self.assertEqual(old_membership.status, "ACTIVE")
+        self.assertEqual(old_membership.role, "MEMBER")
+        self.assertEqual(
+            self.db.scalar(
+                select(OrganizationMember).where(
+                    OrganizationMember.organization_id == organization.id,
+                    OrganizationMember.user_id == member.id,
+                )
+            ).id,
+            old_membership.id,
+        )
 
 
 if __name__ == "__main__":

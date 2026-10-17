@@ -4,8 +4,21 @@ import subprocess
 import sys
 import unittest
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid4
 
+from syncally.domain.agreements.agreement import (
+    Agreement,
+    AgreementStatus,
+    Approval,
+    ApprovalDecision,
+)
+from syncally.domain.agreements.trade_terms import (
+    PaymentTerm,
+    ShipmentTerm,
+    TradeLineItem,
+    TradeTerms,
+)
 from syncally.domain.deals.deal import Deal, DealStatus
 from syncally.domain.organizations import (
     Organization,
@@ -16,11 +29,13 @@ from syncally.domain.organizations import (
 )
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import (
+    AgreementId,
     AgreementVersionId,
     DealId,
     OrganizationId,
     UserId,
 )
+from syncally.domain.shared.money import Money
 
 
 def make_deal(
@@ -118,6 +133,40 @@ class DealDomainTests(unittest.TestCase):
 
         self.assertEqual(deal.status, DealStatus.DRAFT)
 
+    def test_deal_constructor_preserves_status_keyword_and_positional_arguments(self) -> None:
+        keyword_deal = Deal(
+            DealId(uuid4()),
+            OrganizationId(uuid4()),
+            OrganizationId(uuid4()),
+            datetime.now(UTC),
+            status=DealStatus.NEGOTIATING,
+        )
+        positional_deal = Deal(
+            DealId(uuid4()),
+            OrganizationId(uuid4()),
+            OrganizationId(uuid4()),
+            datetime.now(UTC),
+            DealStatus.NEGOTIATING,
+        )
+        agreement_version_id = AgreementVersionId(uuid4())
+        fully_positional_deal = Deal(
+            DealId(uuid4()),
+            OrganizationId(uuid4()),
+            OrganizationId(uuid4()),
+            datetime.now(UTC),
+            DealStatus.PENDING_APPROVALS,
+            agreement_version_id,
+            7,
+        )
+
+        self.assertEqual(keyword_deal.status, DealStatus.NEGOTIATING)
+        self.assertEqual(positional_deal.status, DealStatus.NEGOTIATING)
+        self.assertEqual(fully_positional_deal.status, DealStatus.PENDING_APPROVALS)
+        self.assertEqual(fully_positional_deal.current_agreement_version_id, agreement_version_id)
+        self.assertEqual(fully_positional_deal.version, 7)
+        with self.assertRaises(AttributeError):
+            keyword_deal.status = DealStatus.EXECUTING
+
     def test_cancel_closes_deal_before_agreement_and_increments_version(self) -> None:
         deal = make_deal()
         deal.start_negotiation()
@@ -133,6 +182,70 @@ class DealDomainTests(unittest.TestCase):
 
         self.assertEqual(deal.status, DealStatus.EXPIRED)
         self.assertEqual(deal.version, 2)
+
+    def test_cancel_and_expire_reject_pending_approvals_without_mutation(self) -> None:
+        for method_name, expected_status in (
+            ("cancel", DealStatus.CANCELLED),
+            ("expire", DealStatus.EXPIRED),
+        ):
+            with self.subTest(method=method_name):
+                deal = make_deal()
+                deal.start_negotiation()
+                agreement_version_id = AgreementVersionId(uuid4())
+                deal.request_approval(agreement_version_id)
+                before = (deal.status, deal.version, deal.current_agreement_version_id)
+
+                with self.assertRaises(InvalidTransition):
+                    getattr(deal, method_name)()
+
+                self.assertEqual(deal.status, before[0])
+                self.assertEqual(deal.version, before[1])
+                self.assertEqual(deal.current_agreement_version_id, before[2])
+                self.assertNotEqual(deal.status, expected_status)
+
+    def test_rejected_closure_keeps_approved_agreement_committable(self) -> None:
+        deal = make_deal()
+        deal.start_negotiation()
+        agreement_version_id = AgreementVersionId(uuid4())
+        deal.request_approval(agreement_version_id)
+        terms = TradeTerms(
+            buyer_id=deal.buyer_organization_id,
+            seller_id=deal.seller_organization_id,
+            line_items=(
+                TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "USD")),
+            ),
+            shipments=(ShipmentTerm(Decimal("1"), "Toronto"),),
+            payment_terms=(
+                PaymentTerm(Money(Decimal("10"), "USD"), "order", "on order"),
+            ),
+            delivery_location="Toronto",
+        )
+        agreement = Agreement(
+            id=AgreementId(uuid4()),
+            version_id=agreement_version_id,
+            deal_id=deal.id,
+            version_number=1,
+            terms=terms,
+            created_at=datetime.now(UTC),
+        )
+        for organization_id in (deal.buyer_organization_id, deal.seller_organization_id):
+            agreement.record_approval(
+                Approval(
+                    organization_id=organization_id,
+                    user_id=UserId(uuid4()),
+                    decision=ApprovalDecision.APPROVE,
+                    terms_hash=agreement.terms_hash,
+                    created_at=datetime.now(UTC),
+                )
+            )
+
+        with self.assertRaises(InvalidTransition):
+            deal.cancel()
+
+        agreement.commit(agreement.terms_hash, datetime.now(UTC))
+
+        self.assertEqual(agreement.status, AgreementStatus.COMMITTED)
+        self.assertEqual(deal.status, DealStatus.PENDING_APPROVALS)
 
     def test_cancel_and_expire_reject_committed_or_executing_deals(self) -> None:
         for method_name in ("cancel", "expire"):

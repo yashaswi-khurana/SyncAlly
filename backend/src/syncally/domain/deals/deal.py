@@ -20,7 +20,7 @@ class DealStatus(StrEnum):
     DISPUTED = "DISPUTED"
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class Deal:
     id: DealId
     buyer_organization_id: OrganizationId
@@ -29,6 +29,25 @@ class Deal:
     _status: DealStatus = field(default=DealStatus.DRAFT, init=False, repr=False)
     current_agreement_version_id: AgreementVersionId | None = None
     version: int = 0
+
+    def __init__(
+        self,
+        id: DealId,
+        buyer_organization_id: OrganizationId,
+        seller_organization_id: OrganizationId,
+        created_at: datetime,
+        status: DealStatus = DealStatus.DRAFT,
+        current_agreement_version_id: AgreementVersionId | None = None,
+        version: int = 0,
+    ) -> None:
+        self.id = id
+        self.buyer_organization_id = buyer_organization_id
+        self.seller_organization_id = seller_organization_id
+        self.created_at = created_at
+        self._status = status
+        self.current_agreement_version_id = current_agreement_version_id
+        self.version = version
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if self.buyer_organization_id == self.seller_organization_id:
@@ -67,7 +86,6 @@ class Deal:
         if self.status not in {
             DealStatus.DRAFT,
             DealStatus.NEGOTIATING,
-            DealStatus.PENDING_APPROVALS,
         }:
             raise InvalidTransition(f"Cannot move deal from {self.status} to {target}")
         self._transition(self.status, target)

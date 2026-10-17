@@ -13,6 +13,7 @@ from starlette.requests import Request
 from syncally.api.auth import (
     RefreshRequest,
     _decode_token,
+    _derive_rotated_refresh_token,
     _encode_access_token,
     _hash_refresh_token,
     get_current_actor,
@@ -115,6 +116,17 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         self.assertIn("JWT_ALGORITHM", str(raised.exception))
 
+    def test_negative_refresh_reuse_grace_is_rejected(self) -> None:
+        with self.assertRaises(ValidationError) as raised:
+            Settings(
+                _env_file=None,
+                app_env="development",
+                jwt_secret="s" * 32,
+                refresh_token_reuse_grace_seconds=-1,
+            )
+
+        self.assertIn("grace", str(raised.exception))
+
     def test_access_token_contains_access_type_and_expiry(self) -> None:
         original_secret = settings.jwt_secret
         try:
@@ -161,12 +173,60 @@ class IdentityBoundaryTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail, "Refresh token reuse detected")
         self.assertTrue(db.family_revocation_attempted)
 
-    def test_rotated_refresh_token_replay_preserves_its_replacement(self) -> None:
+    def test_rotated_refresh_token_replay_is_idempotent_within_grace(self) -> None:
+        now = datetime.now(UTC)
+        token_id = uuid4()
+        user_id = uuid4()
         stored = SimpleNamespace(
+            id=token_id,
+            user_id=user_id,
             family_id=uuid4(),
             replaced_by_id=uuid4(),
-            revoked_at=datetime.now(UTC),
-            expires_at=datetime.now(UTC) + timedelta(days=1),
+            revoked_at=now - timedelta(seconds=1),
+            expires_at=now + timedelta(days=1),
+        )
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.family_revocation_attempted = False
+                self.commits = 0
+
+            def scalar(self, _query: object) -> SimpleNamespace:
+                return stored
+
+            def execute(self, _query: object) -> None:
+                self.family_revocation_attempted = True
+
+            def commit(self) -> None:
+                self.commits += 1
+
+        db = FakeSession()
+        with (
+            patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
+            patch("syncally.api.auth.datetime") as mocked_datetime,
+        ):
+            original_secret = settings.jwt_secret
+            try:
+                settings.jwt_secret = "t" * 32
+                mocked_datetime.now.return_value = now
+                result = refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+                expected = _derive_rotated_refresh_token(token_id)
+            finally:
+                settings.jwt_secret = original_secret
+
+        self.assertEqual(result.refresh_token, expected)
+        self.assertFalse(db.family_revocation_attempted)
+        self.assertEqual(db.commits, 0)
+
+    def test_rotated_refresh_token_replay_after_grace_revokes_family(self) -> None:
+        now = datetime.now(UTC)
+        stored = SimpleNamespace(
+            id=uuid4(),
+            user_id=uuid4(),
+            family_id=uuid4(),
+            replaced_by_id=uuid4(),
+            revoked_at=now - timedelta(seconds=settings.refresh_token_reuse_grace_seconds + 5),
+            expires_at=now + timedelta(days=1),
         )
 
         class FakeSession:
@@ -179,17 +239,24 @@ class IdentityBoundaryTests(unittest.TestCase):
             def execute(self, _query: object) -> None:
                 self.family_revocation_attempted = True
 
-        db = FakeSession()
-        with self.assertRaises(HTTPException) as raised:
-            refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+            def commit(self) -> None:
+                pass
 
-        self.assertEqual(raised.exception.detail, "Refresh token already rotated")
-        self.assertFalse(db.family_revocation_attempted)
+        db = FakeSession()
+        with patch("syncally.api.auth.datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = now
+            with self.assertRaises(HTTPException) as raised:
+                refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+
+        self.assertEqual(raised.exception.detail, "Refresh token reuse detected")
+        self.assertTrue(db.family_revocation_attempted)
 
     def test_refresh_rotates_token_and_revokes_previous_token(self) -> None:
         user_id = uuid4()
         now = datetime.now(UTC)
+        token_id = uuid4()
         stored = SimpleNamespace(
+            id=token_id,
             user_id=user_id,
             family_id=uuid4(),
             token_hash=None,
@@ -214,7 +281,6 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         with (
             patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
-            patch("syncally.api.auth.secrets.token_urlsafe", return_value="r" * 64),
             patch("syncally.api.auth.datetime") as mocked_datetime,
         ):
             original_secret = settings.jwt_secret
@@ -222,13 +288,69 @@ class IdentityBoundaryTests(unittest.TestCase):
                 settings.jwt_secret = "t" * 32
                 mocked_datetime.now.return_value = now
                 result = refresh_access_token(RefreshRequest(refresh_token="o" * 64), FakeSession())
+                expected = _derive_rotated_refresh_token(token_id)
             finally:
                 settings.jwt_secret = original_secret
 
-        self.assertEqual(result.refresh_token, "r" * 64)
+        self.assertEqual(result.refresh_token, expected)
         self.assertIsNotNone(stored.revoked_at)
         self.assertEqual(len(replacement_rows), 1)
         self.assertEqual(stored.replaced_by_id, replacement_rows[0].id)
+        self.assertEqual(
+            replacement_rows[0].token_hash,  # type: ignore[attr-defined]
+            _hash_refresh_token(result.refresh_token),
+        )
+
+    def test_replaying_a_rotation_returns_the_same_replacement(self) -> None:
+        user_id = uuid4()
+        now = datetime.now(UTC)
+        stored = SimpleNamespace(
+            id=uuid4(),
+            user_id=user_id,
+            family_id=uuid4(),
+            token_hash=None,
+            expires_at=now + timedelta(days=1),
+            revoked_at=None,
+            replaced_by_id=None,
+        )
+        replacement_rows: list[object] = []
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.family_revocation_attempted = False
+
+            def scalar(self, _query: object) -> SimpleNamespace:
+                return stored
+
+            def add(self, row: object) -> None:
+                replacement_rows.append(row)
+
+            def flush(self) -> None:
+                replacement_rows[0].id = uuid4()  # type: ignore[attr-defined]
+
+            def execute(self, _query: object) -> None:
+                self.family_revocation_attempted = True
+
+            def commit(self) -> None:
+                pass
+
+        db = FakeSession()
+        with (
+            patch("syncally.api.auth.resolve_actor", return_value=SimpleNamespace(user_id=user_id)),
+            patch("syncally.api.auth.datetime") as mocked_datetime,
+        ):
+            original_secret = settings.jwt_secret
+            try:
+                settings.jwt_secret = "t" * 32
+                mocked_datetime.now.return_value = now
+                first = refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+                second = refresh_access_token(RefreshRequest(refresh_token="o" * 64), db)
+            finally:
+                settings.jwt_secret = original_secret
+
+        self.assertEqual(first.refresh_token, second.refresh_token)
+        self.assertEqual(len(replacement_rows), 1)
+        self.assertFalse(db.family_revocation_attempted)
 
     def test_failed_access_token_encoding_does_not_rotate_refresh_token(self) -> None:
         user_id = uuid4()

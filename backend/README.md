@@ -11,14 +11,26 @@ secret containing at least 32 random bytes outside development/test, and optiona
 Access tokens expire after `ACCESS_TOKEN_TTL_MINUTES` (default 15 minutes).
 Refresh tokens expire after `REFRESH_TOKEN_TTL_DAYS` (default 30 days).
 
-`POST /auth/register` creates an account and issues initial credentials. `POST /auth/login`
-authenticates an existing account with its email and password. `POST /auth/dev-login`
-issues credentials for the configured local development identity when `DEV_AUTH_USER_ID`
-and the matching `X-Dev-User-Id` header are supplied.
+Demo accounts are provisioned by an operator; public self-registration is not part of this
+slice. `POST /auth/login` accepts `{ "email": "...", "password": "..." }` and returns
+an access token and refresh token for an active account. Passwords are stored as scrypt
+hashes. Invalid credentials and inactive or missing accounts receive the same `401`
+response. `POST /auth/dev-login` is an optional shortcut for the configured local
+development identity when `DEV_AUTH_USER_ID` and the matching `X-Dev-User-Id` header are
+supplied.
+After signing in, `POST /organizations` creates an organization and makes the caller its
+first active admin. `GET /organizations` lists only the caller's active memberships.
+An organization admin can use
+`POST /organizations/{organization_id}/members` with an existing active user's email to
+add that account as a regular member. Accounts must be provisioned by an operator first;
+the endpoint does not create accounts or allow callers to choose another user's role.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
-Replaying any already-rotated token is treated as reuse of a leaked token and
-revokes the whole family.
+Each refresh token can be used once. Replaying any rotated token, including a concurrent
+or delayed retry, is treated as reuse of a leaked credential: the whole token family is
+revoked and the request receives `401`. Clients should serialize refresh requests and
+sign in again if a refresh response is lost. Rotation state is committed together, so a
+failed rotation does not leave a replacement token partially saved.
 
 For local development/test only, `DEV_AUTH_USER_ID` may be configured and sent as
 `X-Dev-User-Id`; this shortcut is rejected by configuration outside those environments.

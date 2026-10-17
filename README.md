@@ -2,7 +2,7 @@
 
 SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
 
-> **Project status:** Early implementation. The repository contains a minimal FastAPI health endpoint, a React/TypeScript frontend shell, and framework-independent domain foundations for deal negotiation, agreements, and payment intents. Application workflows, persistence, infrastructure, and external integrations are not implemented yet.
+> **Project status:** Early implementation. The repository contains a FastAPI API with health checks, email/password sign-in, refresh-token rotation, and protected deal reads; PostgreSQL persistence models and migrations; a React/TypeScript frontend shell; and framework-independent domain foundations for deal negotiation, agreements, and payment intents. Business application workflows and external integrations are not implemented yet.
 
 ## Architecture
 

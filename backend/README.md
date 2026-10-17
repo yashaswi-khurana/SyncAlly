@@ -11,12 +11,12 @@ secret containing at least 32 random bytes outside development/test, and optiona
 Access tokens expire after `ACCESS_TOKEN_TTL_MINUTES` (default 15 minutes).
 Refresh tokens expire after `REFRESH_TOKEN_TTL_DAYS` (default 30 days).
 
-`POST /auth/register` publicly creates an account from `{ "email": "...", "password": "...",
-"display_name": "..." }` and returns the initial access/refresh token pair. Passwords are
-stored as scrypt hashes; email is trimmed and lowercased. A duplicate email returns `409`.
-Email ownership is not verified in this demo.
-Registration creates no organization membership by itself: the new user can create an
-organization or an existing organization's admin can add them as a regular member.
+Public self-registration is disabled. For the local demo, run
+`python -m syncally.cli.seed_demo` from `backend/` after applying migrations. It creates the
+buyer and seller demo accounts, their organizations, and active admin memberships. The
+command prompts for passwords without echoing them, hashes them in the application, and is
+limited to development/test environments. Running it again preserves existing passwords.
+The fixed demo emails are `buyer@syncally.demo` and `seller@syncally.demo`.
 `POST /auth/login` accepts `{ "email": "...", "password": "..." }` and returns an access
 token and refresh token for an active account. Invalid credentials and inactive or missing
 accounts receive the same `401` response. `POST /auth/dev-login` is an optional shortcut for
@@ -24,10 +24,12 @@ the configured local development identity when `DEV_AUTH_USER_ID` and the matchi
 `X-Dev-User-Id` header are supplied.
 After signing in, `POST /organizations` creates an organization and makes the caller its
 first active admin. `GET /organizations` lists only the caller's active memberships.
-An organization admin can use
+For existing accounts, an organization admin can use
 `POST /organizations/{organization_id}/members` with an existing active user's email to
 add that account as a regular member. The endpoint does not create accounts or allow callers
 to choose another user's role.
+Product onboarding for new counterparties through an organization invitation and acceptance
+flow is not implemented yet; the demo seed command is a separate local provisioning path.
 Organization creation is limited to five active organizations per user by default. Set
 `MAX_ORGANIZATIONS_PER_USER` to a positive integer to change the limit.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access

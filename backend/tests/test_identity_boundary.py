@@ -20,42 +20,35 @@ from starlette.requests import Request
 from syncally.api.auth import (
     CredentialsRequest,
     RefreshRequest,
-    RegistrationRequest,
-    TokenResponse,
     _decode_token,
     _encode_access_token,
-    _hash_password,
     _hash_refresh_token,
     _revoke_family,
-    _verify_password,
     development_login,
     get_current_actor,
     login,
     refresh_access_token,
-    register,
-)
-from syncally.api.auth import (
-    router as auth_router,
 )
 from syncally.api.main import MAX_REQUEST_BODY_BYTES, RequestBodyLimitMiddleware
 from syncally.api.organizations import _is_duplicate_membership_error
 from syncally.application.identity import ActorContext
+from syncally.application.passwords import hash_password, verify_password
 from syncally.config import Settings, settings
 from syncally.infrastructure.models import Base, Deal, RefreshToken, User
 
 
 class IdentityBoundaryTests(unittest.TestCase):
     def test_password_hash_round_trip(self) -> None:
-        password_hash = _hash_password("correct horse battery staple")
+        password_hash = hash_password("correct horse battery staple")
 
-        self.assertTrue(_verify_password("correct horse battery staple", password_hash))
-        self.assertFalse(_verify_password("wrong password", password_hash))
+        self.assertTrue(verify_password("correct horse battery staple", password_hash))
+        self.assertFalse(verify_password("wrong password", password_hash))
 
     def test_login_issues_initial_token_pair_for_active_user(self) -> None:
         user_id = uuid4()
         user = SimpleNamespace(
             id=user_id,
-            password_hash=_hash_password("correct horse battery staple"),
+            password_hash=hash_password("correct horse battery staple"),
         )
 
         class FakeSession:
@@ -101,7 +94,7 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         wrong_password_user = SimpleNamespace(
             id=uuid4(),
-            password_hash=_hash_password("different horse battery staple"),
+            password_hash=hash_password("different horse battery staple"),
         )
 
         class WrongPasswordSession:
@@ -112,97 +105,6 @@ class IdentityBoundaryTests(unittest.TestCase):
             login(payload, WrongPasswordSession())  # type: ignore[arg-type]
         self.assertEqual(wrong_password.exception.status_code, 401)
         self.assertEqual(wrong_password.exception.detail, "Invalid email or password")
-
-    def test_public_self_registration_creates_user_and_issues_token_pair(self) -> None:
-        class RegistrationSession:
-            def __init__(self) -> None:
-                self.added_user: User | None = None
-
-            def scalar(self, _query: object) -> None:
-                return None
-
-            def add(self, user: User) -> None:
-                user.id = uuid4()
-                self.added_user = user
-
-            def flush(self) -> None:
-                return None
-
-        db = RegistrationSession()
-        token_response = TokenResponse(
-            access_token="access-token",
-            refresh_token="refresh-token",
-        )
-        with patch("syncally.api.auth._issue_tokens", return_value=token_response) as issue:
-            result = register(
-                RegistrationRequest(
-                    email="  New.User@Example.com ",
-                    password="correct horse battery staple",
-                    display_name="  New User  ",
-                ),
-                db,  # type: ignore[arg-type]
-            )
-
-        self.assertIsNotNone(db.added_user)
-        assert db.added_user is not None
-        self.assertEqual(db.added_user.email, "new.user@example.com")
-        self.assertEqual(db.added_user.display_name, "New User")
-        self.assertTrue(
-            _verify_password("correct horse battery staple", db.added_user.password_hash)
-        )
-        issue.assert_called_once()
-        self.assertEqual(result, token_response)
-        register_route = next(
-            route for route in auth_router.routes if route.path == "/auth/register"
-        )
-        self.assertEqual(register_route.status_code, 201)
-
-    def test_registration_duplicate_email_is_conflict(self) -> None:
-        class ExistingUserSession:
-            def scalar(self, _query: object) -> SimpleNamespace:
-                return SimpleNamespace(id=uuid4())
-
-        with self.assertRaises(HTTPException) as duplicate:
-            register(
-                RegistrationRequest(
-                    email="user@example.com",
-                    password="correct horse battery staple",
-                    display_name="New User",
-                ),
-                ExistingUserSession(),  # type: ignore[arg-type]
-            )
-
-        self.assertEqual(duplicate.exception.status_code, 409)
-
-    def test_registration_duplicate_email_race_rolls_back(self) -> None:
-        class RacingSession:
-            rolled_back = False
-
-            def scalar(self, _query: object) -> None:
-                return None
-
-            def add(self, _user: User) -> None:
-                return None
-
-            def flush(self) -> None:
-                raise IntegrityError("insert", {}, Exception("duplicate email"))
-
-            def rollback(self) -> None:
-                self.rolled_back = True
-
-        db = RacingSession()
-        with self.assertRaises(HTTPException) as duplicate:
-            register(
-                RegistrationRequest(
-                    email="user@example.com",
-                    password="correct horse battery staple",
-                    display_name="New User",
-                ),
-                db,  # type: ignore[arg-type]
-            )
-
-        self.assertEqual(duplicate.exception.status_code, 409)
-        self.assertTrue(db.rolled_back)
 
     def test_login_refresh_and_replay_revoke_persisted_token_family(self) -> None:
         engine = create_engine(
@@ -219,7 +121,7 @@ class IdentityBoundaryTests(unittest.TestCase):
                 user = User(
                     email="demo@example.com",
                     display_name="Demo User",
-                    password_hash=_hash_password("correct horse battery staple"),
+                    password_hash=hash_password("correct horse battery staple"),
                     status="ACTIVE",
                 )
                 db.add(user)

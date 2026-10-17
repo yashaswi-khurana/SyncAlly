@@ -1,0 +1,31 @@
+"""Deal HTTP endpoints."""
+
+from uuid import UUID
+
+from fastapi import Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from syncally.api.auth import get_current_actor
+from syncally.application.identity import ActorContext
+from syncally.infrastructure.database import get_db
+from syncally.infrastructure.models import Deal
+
+
+def get_authorized_deal(
+    deal_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> Deal:
+    """Load a deal only when the actor belongs to one of its organizations."""
+    deal = db.scalar(select(Deal).where(Deal.id == deal_id))
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    if not actor.can_access_deal(deal):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Deal access denied")
+    return deal
+
+
+def read_deal(deal: Deal = Depends(get_authorized_deal)) -> dict[str, str]:
+    """Return the public deal state after authorization."""
+    return {"id": str(deal.id), "status": deal.status}

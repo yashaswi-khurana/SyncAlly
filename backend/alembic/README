@@ -1,0 +1,10 @@
+# Alembic migrations
+
+Run from `backend/`:
+
+```text
+alembic upgrade head
+alembic downgrade base
+```
+
+Set `DATABASE_URL` when using a non-default database.

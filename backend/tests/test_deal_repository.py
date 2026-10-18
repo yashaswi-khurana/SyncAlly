@@ -4,7 +4,8 @@ import unittest
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -28,6 +29,11 @@ class DealRepositoryTests(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+
+        @event.listens_for(self.engine, "connect")
+        def enable_foreign_keys(connection, _record) -> None:
+            connection.execute("PRAGMA foreign_keys=ON")
+
         Base.metadata.create_all(self.engine)
         self.session = Session(self.engine)
 
@@ -87,6 +93,41 @@ class DealRepositoryTests(unittest.TestCase):
         self.assertTrue(repository.active_organization_exists(buyer.id))
         self.assertFalse(repository.active_organization_exists(inactive.id))
         self.assertFalse(repository.active_organization_exists(uuid4()))
+
+    def test_add_rejects_missing_buyer_or_seller_reference_without_partial_deal(self) -> None:
+        _, buyer, seller = self._seed_participants()
+        repository = SqlAlchemyDealRepository(self.session)
+
+        for deal in (
+            self._new_deal(uuid4(), seller.id),
+            self._new_deal(buyer.id, uuid4()),
+        ):
+            with self.subTest(deal=deal):
+                with self.assertRaises(IntegrityError):
+                    repository.add(deal)
+                self.session.rollback()
+                self.assertIsNone(self.session.get(Deal, deal.id))
+
+    def test_add_rejects_duplicate_deal_id_and_rollback_preserves_original(self) -> None:
+        _, buyer, seller = self._seed_participants()
+        repository = SqlAlchemyDealRepository(self.session)
+        original = self._new_deal(buyer.id, seller.id)
+        repository.add(original)
+        duplicate = DomainDeal(
+            id=original.id,
+            buyer_organization_id=original.buyer_organization_id,
+            seller_organization_id=original.seller_organization_id,
+            created_at=datetime.now(UTC),
+        )
+
+        with self.assertRaises(IntegrityError):
+            repository.add(duplicate)
+        self.session.rollback()
+
+        stored = self.session.get(Deal, original.id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.buyer_organization_id, buyer.id)
+        self.assertEqual(stored.seller_organization_id, seller.id)
 
     def test_get_for_participant_hides_deals_for_non_members(self) -> None:
         _, buyer, seller = self._seed_participants()

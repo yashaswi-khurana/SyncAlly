@@ -1,10 +1,11 @@
-"""Obligations derived from a committed agreement's trade terms."""
+"""Obligations and payment milestones derived from a committed agreement's trade terms."""
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.shared.identifiers import OrganizationId
+from syncally.domain.shared.money import Money
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +15,16 @@ class ObligationDraft:
     counterparty_organization_id: OrganizationId
     due_condition: str | None
     due_date: datetime | None
+    source_terms_reference: str
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentMilestoneDraft:
+    sequence_number: int
+    payer_organization_id: OrganizationId
+    amount: Money
+    trigger_type: str
+    due_condition: str
     source_terms_reference: str
 
 
@@ -50,3 +61,18 @@ def build_obligations(terms: TradeTerms) -> list[ObligationDraft]:
         for index, term in enumerate(terms.payment_terms)
     )
     return obligations
+
+
+def build_payment_milestones(terms: TradeTerms) -> list[PaymentMilestoneDraft]:
+    """One payment milestone per payment term, so payment intents have an amount to authorize."""
+    return [
+        PaymentMilestoneDraft(
+            sequence_number=index + 1,
+            payer_organization_id=terms.buyer_id,
+            amount=term.amount,
+            trigger_type=term.trigger,
+            due_condition=term.due_condition,
+            source_terms_reference=f"payment_terms[{index}]",
+        )
+        for index, term in enumerate(terms.payment_terms)
+    ]

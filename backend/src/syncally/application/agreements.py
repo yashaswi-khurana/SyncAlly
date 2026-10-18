@@ -15,7 +15,12 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
-from syncally.domain.agreements.obligations import ObligationDraft, build_obligations
+from syncally.domain.agreements.obligations import (
+    ObligationDraft,
+    PaymentMilestoneDraft,
+    build_obligations,
+    build_payment_milestones,
+)
 from syncally.domain.shared.errors import DomainError
 
 
@@ -97,15 +102,36 @@ class AgreementRepository(Protocol):
     def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> Approval:
         """Persist one organization's approval decision."""
 
-    def commit(self, command: CommitAgreementCommand, *, now: datetime) -> Agreement:
-        """Validate both approvals and commit the agreement version."""
+    def commit(self, command: CommitAgreementCommand, *, now: datetime) -> tuple[Agreement, bool]:
+        """Validate both approvals and commit the agreement version.
+
+        Returns ``(agreement, is_new_commit)``. ``is_new_commit`` is False when
+        this call is an idempotent replay of a request that already committed
+        this exact version - the caller must then skip re-deriving
+        obligations, payment milestones, and audit/outbox records.
+        """
 
 
 class ObligationRepository(Protocol):
     def add_all(
         self, deal_id: UUID, agreement_version_id: UUID, drafts: list[ObligationDraft]
+    ) -> dict[str, UUID]:
+        """Persist the obligations derived from a committed agreement.
+
+        Returns each obligation's id keyed by its ``source_terms_reference``,
+        so payment milestones can be linked back to their obligation.
+        """
+
+
+class PaymentMilestoneRepository(Protocol):
+    def add_all(
+        self,
+        deal_id: UUID,
+        agreement_version_id: UUID,
+        drafts: list[PaymentMilestoneDraft],
+        obligation_ids_by_reference: dict[str, UUID],
     ) -> None:
-        """Persist the obligations derived from a committed agreement."""
+        """Persist the payment milestones derived from a committed agreement."""
 
 
 class AuditRepository(Protocol):
@@ -132,27 +158,39 @@ def commit_agreement(
     command: CommitAgreementCommand,
     agreement_repository: AgreementRepository,
     obligation_repository: ObligationRepository,
+    payment_milestone_repository: PaymentMilestoneRepository,
     audit_repository: AuditRepository,
     outbox_repository: OutboxRepository,
     *,
     now: datetime | None = None,
     correlation_id: str | None = None,
 ) -> Agreement:
-    """Commit an agreement, then save its obligations, audit, and outbox rows.
+    """Commit an agreement, then save its obligations, payment milestones, audit, and outbox rows.
 
-    All four writes happen through ports bound to one transaction by the
-    caller; this function only orchestrates the order and payloads.
+    All writes happen through ports bound to one transaction by the caller;
+    this function only orchestrates the order and payloads. A retry that
+    replays an already-committed version (``is_new_commit`` False) returns
+    the same agreement without repeating those derived writes.
     """
     now = now or datetime.now(UTC)
-    agreement = agreement_repository.commit(command, now=now)
+    agreement, is_new_commit = agreement_repository.commit(command, now=now)
+    if not is_new_commit:
+        return agreement
 
     obligations = build_obligations(agreement.terms)
-    obligation_repository.add_all(command.deal_id, agreement.version_id, obligations)
+    obligation_ids_by_reference = obligation_repository.add_all(
+        command.deal_id, agreement.version_id, obligations
+    )
+
+    milestones = build_payment_milestones(agreement.terms)
+    payment_milestone_repository.add_all(
+        command.deal_id, agreement.version_id, milestones, obligation_ids_by_reference
+    )
 
     audit_repository.add(
         AuditEventDraft(
             aggregate_type="agreement",
-            aggregate_id=agreement.version_id,
+            aggregate_id=agreement.id,
             event_type="AGREEMENT_COMMITTED",
             actor_type="SYSTEM",
             actor_id="commit_agreement",
@@ -160,6 +198,7 @@ def commit_agreement(
             correlation_id=correlation_id,
             payload={
                 "deal_id": str(command.deal_id),
+                "agreement_version_id": str(agreement.version_id),
                 "version_number": agreement.version_number,
                 "terms_hash": agreement.terms_hash,
             },
@@ -168,7 +207,7 @@ def commit_agreement(
     outbox_repository.add(
         OutboxEventDraft(
             aggregate_type="agreement",
-            aggregate_id=agreement.version_id,
+            aggregate_id=agreement.id,
             event_type="AGREEMENT_COMMITTED",
             payload={
                 "deal_id": str(command.deal_id),

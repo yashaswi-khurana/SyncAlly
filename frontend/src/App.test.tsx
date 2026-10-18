@@ -12,15 +12,19 @@ vi.mock("./api/client", async (importOriginal) => {
     listDeals: vi.fn(),
     createDeal: vi.fn(),
     getDeal: vi.fn(),
+    listDealFacts: vi.fn(),
+    listDealMessages: vi.fn(),
   };
 });
 
-import { getDeal, listDeals, listOrganizations } from "./api/client";
+import { getDeal, listDealFacts, listDealMessages, listDeals, listOrganizations } from "./api/client";
 import { clearAccessToken, setAccessToken } from "./api/tokenStore";
 
 const mockedGetDeal = vi.mocked(getDeal);
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
+const mockedListDealFacts = vi.mocked(listDealFacts);
+const mockedListDealMessages = vi.mocked(listDealMessages);
 
 describe("App", () => {
   beforeEach(() => {
@@ -28,6 +32,8 @@ describe("App", () => {
     clearAccessToken();
     window.location.hash = "";
     mockedListDeals.mockResolvedValue([]);
+    mockedListDealFacts.mockResolvedValue([]);
+    mockedListDealMessages.mockResolvedValue([]);
     mockedListOrganizations.mockResolvedValue([
       {
         id: "11111111-1111-1111-1111-111111111111",
@@ -42,7 +48,7 @@ describe("App", () => {
     render(<App />);
 
     expect(
-      screen.getByRole("heading", { name: "Sign in to continue" }),
+      screen.getByRole("heading", { name: "Open your trade desk." }),
     ).toBeInTheDocument();
   });
 

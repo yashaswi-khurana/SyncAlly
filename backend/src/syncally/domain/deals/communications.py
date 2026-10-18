@@ -23,6 +23,7 @@ from syncally.domain.shared.identifiers import (
 class Visibility(StrEnum):
     PRIVATE = "PRIVATE"
     SHAREABLE = "SHAREABLE"
+    INTERNAL = "INTERNAL"
 
 
 class ConstraintKind(StrEnum):

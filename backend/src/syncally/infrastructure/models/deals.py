@@ -52,6 +52,10 @@ class Message(Base):
             "OR (author_user_id IS NULL AND author_agent_id IS NOT NULL)",
             name="ck_message_has_author",
         ),
+        CheckConstraint(
+            "visibility IN ('PRIVATE', 'SHAREABLE', 'INTERNAL')",
+            name="ck_message_visibility",
+        ),
         Index("ix_messages_conversation_visibility_created", "conversation_id", "visibility", "created_at"),
     )
 
@@ -69,6 +73,18 @@ class Message(Base):
 class Constraint(Base):
     __tablename__ = "constraints"
     __table_args__ = (
+        CheckConstraint(
+            "kind IN ('HARD_LIMIT', 'PREFERENCE', 'FLEXIBLE_OPTION', 'INFORMATIONAL')",
+            name="ck_constraint_kind",
+        ),
+        CheckConstraint(
+            "status IN ('EXTRACTED', 'NEEDS_CLARIFICATION', 'CONFIRMED', 'SUPERSEDED')",
+            name="ck_constraint_status",
+        ),
+        CheckConstraint(
+            "visibility IN ('PRIVATE', 'SHAREABLE', 'INTERNAL')",
+            name="ck_constraint_visibility",
+        ),
         Index(
             "ix_constraints_deal_owner_visibility_created",
             "deal_id",

@@ -6,6 +6,9 @@ import {
   listDealMessages,
   listOrganizations,
   reviewDealFact,
+  suggestDealFacts,
+  draftDealProposal,
+  correctDealFact,
 } from "../api/client";
 import type { Deal, DealFact, DealMessage, Organization } from "../api/types";
 import DealConversationReview from "./DealConversationReview";
@@ -18,6 +21,9 @@ vi.mock("../api/client", async (importOriginal) => {
     listDealMessages: vi.fn(),
     listOrganizations: vi.fn(),
     reviewDealFact: vi.fn(),
+    suggestDealFacts: vi.fn(),
+    draftDealProposal: vi.fn(),
+    correctDealFact: vi.fn(),
   };
 });
 
@@ -35,6 +41,9 @@ const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedReviewDealFact = vi.mocked(reviewDealFact);
+const mockedSuggestDealFacts = vi.mocked(suggestDealFacts);
+const mockedDraftDealProposal = vi.mocked(draftDealProposal);
+const mockedCorrectDealFact = vi.mocked(correctDealFact);
 
 function organization(id: string, legalName: string): Organization {
   return { id, legal_name: legalName, country_code: "US", role: "ADMIN" };
@@ -198,5 +207,122 @@ describe("DealConversationReview", () => {
     expect(screen.queryByText("Buyer confidential price")).not.toBeInTheDocument();
     expect(mockedListDealFacts).toHaveBeenLastCalledWith(DEAL.id, SELLER_ID);
     expect(mockedListDealMessages).toHaveBeenLastCalledWith(DEAL.id, SELLER_ID);
+  });
+
+  it("runs suggestions only on request, lets a person edit and review them, and keeps proposal terms as a private-safe draft", async () => {
+    const sharedDescription = fact({
+      id: "shared-description",
+      field: "item_description",
+      typed_value: "Organic cotton shirts",
+      visibility: "SHAREABLE",
+    });
+    const privatePrice = fact({
+      id: "private-price",
+      field: "unit_price",
+      typed_value: "1.00",
+      currency_or_unit: "USD",
+      visibility: "PRIVATE",
+    });
+    mockedListDealFacts.mockResolvedValue([sharedDescription, privatePrice]);
+    const suggested = fact({
+      id: "suggested-quantity",
+      field: "quantity",
+      typed_value: "12",
+      currency_or_unit: "boxes",
+      source_message_id: "message-1",
+      source_span: "12 boxes",
+    });
+    mockedSuggestDealFacts.mockResolvedValue({ status: "VALID", issues: [], facts: [suggested] });
+    mockedReviewDealFact.mockImplementation(async (_dealId, factId) => ({
+      ...suggested,
+      id: factId,
+      status: "CONFIRMED",
+      confirmed_by: "user-1",
+      version: 1,
+    }));
+    mockedDraftDealProposal.mockResolvedValue({
+      schema_version: 1,
+      description: "Organic cotton shirts",
+      quantity: "12",
+      unit: "boxes",
+      unit_price: "2.50",
+      currency: "USD",
+      delivery_destination: "Toronto",
+      delivery_date: "2026-12-01",
+      status: "DRAFT",
+    });
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    expect(await screen.findByText("We need delivery by November 1.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Fact suggestions for review")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Proposed terms draft")).not.toBeInTheDocument();
+    expect(mockedReviewDealFact).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+    const suggestion = await screen.findByRole("article", { name: "Fact suggestion: quantity" });
+    expect(mockedSuggestDealFacts).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
+    expect(within(suggestion).getByLabelText("Fact label")).toHaveValue("quantity");
+    expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("12");
+    expect(within(suggestion).getByRole("blockquote")).toHaveTextContent("12 boxes");
+
+    fireEvent.change(within(suggestion).getByLabelText("Suggested value"), {
+      target: { value: "24" },
+    });
+    expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("24");
+    mockedCorrectDealFact.mockResolvedValue({
+      replaced_fact: { ...suggested, status: "REJECTED", version: 1 },
+      corrected_fact: { ...suggested, id: "corrected-quantity", typed_value: "24" },
+    });
+    fireEvent.click(within(suggestion).getByRole("button", { name: "Save correction" }));
+    await vi.waitFor(() => expect(mockedCorrectDealFact).toHaveBeenCalled());
+    expect(mockedCorrectDealFact).toHaveBeenCalledWith(DEAL.id, suggested.id, {
+      expected_version: suggested.version,
+      field: "quantity",
+      typed_value: "24",
+      currency_or_unit: "boxes",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Draft proposed terms" }));
+    const proposal = await screen.findByLabelText("Proposed terms draft");
+    expect(within(proposal).getByText("DRAFT - NOT AN AGREEMENT")).toBeInTheDocument();
+    expect(within(proposal).getByLabelText("Item description")).toHaveValue("Organic cotton shirts");
+    expect(within(proposal).getByLabelText("Unit price")).toHaveValue("2.50");
+    expect(within(proposal).queryByText("1.00")).not.toBeInTheDocument();
+    expect(within(proposal).getByText(/does not create or approve an agreement/i)).toBeInTheDocument();
+    expect(mockedDraftDealProposal).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
+  });
+
+  it("clears local suggestion state when switching organizations", async () => {
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"),
+      organization(SELLER_ID, "Seller Co"),
+    ]);
+    mockedListDealMessages.mockImplementation(async (_dealId, organizationId) => [
+      message({ body: organizationId === BUYER_ID ? "Buyer-only note" : "Seller-only note" }),
+    ]);
+    mockedSuggestDealFacts.mockImplementation(async (_dealId, organizationId) => ({
+      status: "VALID",
+      issues: [],
+      facts: [fact({
+        id: `${organizationId}-candidate`,
+        owner_organization_id: organizationId,
+        field: "Conversation detail",
+        typed_value: organizationId === BUYER_ID ? "Buyer-only note" : "Seller-only note",
+        source_message_id: organizationId === BUYER_ID ? "message-1" : "seller-message",
+        source_span: organizationId === BUYER_ID ? "Buyer-only note" : "Seller-only note",
+      })],
+    }));
+
+    render(<DealConversationReview deal={DEAL} />);
+    const selector = await screen.findByLabelText("Viewing as");
+    fireEvent.change(selector, { target: { value: BUYER_ID } });
+    expect(await screen.findByText("Buyer-only note")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+    expect(await screen.findByLabelText("Suggested value")).toHaveValue("Buyer-only note");
+
+    fireEvent.change(selector, { target: { value: SELLER_ID } });
+    expect(await screen.findByText("Seller-only note")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Suggested value")).not.toBeInTheDocument();
+    expect(screen.queryByText("Buyer-only note", { selector: "blockquote" })).not.toBeInTheDocument();
   });
 });

@@ -6,9 +6,12 @@ import type {
   DealFact,
   DealMessage,
   DealSummary,
+  FactCorrectionResult,
+  FactSuggestionResult,
   FactReviewAction,
   Organization,
   OrganizationMember,
+  ProposalSuggestion,
   TokenResponse,
 } from "./types";
 
@@ -162,5 +165,41 @@ export function reviewDealFact(
   return apiRequest<DealFact>(
     `/deals/${encodeURIComponent(dealId)}/facts/${encodeURIComponent(factId)}/${action}`,
     { method: "POST" },
+  );
+}
+
+export function suggestDealFacts(
+  dealId: string,
+  organizationId: string,
+): Promise<FactSuggestionResult> {
+  return apiRequest<FactSuggestionResult>(`/deals/${encodeURIComponent(dealId)}/ai/facts`, {
+    method: "POST",
+    body: JSON.stringify({ organization_id: organizationId }),
+  });
+}
+
+export function draftDealProposal(
+  dealId: string,
+  organizationId: string,
+): Promise<ProposalSuggestion> {
+  return apiRequest<ProposalSuggestion>(`/deals/${encodeURIComponent(dealId)}/ai/proposal`, {
+    method: "POST",
+    body: JSON.stringify({ organization_id: organizationId }),
+  });
+}
+
+export function correctDealFact(
+  dealId: string,
+  factId: string,
+  input: {
+    expected_version: number;
+    field: string;
+    typed_value: string;
+    currency_or_unit: string | null;
+  },
+): Promise<FactCorrectionResult> {
+  return apiRequest<FactCorrectionResult>(
+    `/deals/${encodeURIComponent(dealId)}/facts/${encodeURIComponent(factId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
   );
 }

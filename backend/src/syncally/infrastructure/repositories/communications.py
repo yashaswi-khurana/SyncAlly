@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -512,7 +514,7 @@ class SqlAlchemyCommunicationRepository:
             )
             .execution_options(synchronize_session=False)
         )
-        if result.rowcount != 1:
+        if cast(CursorResult[Any], result).rowcount != 1:
             raise ConcurrentConstraintUpdate("Constraint was changed by another request")
 
         row = self._db.scalar(

@@ -190,6 +190,21 @@ class AiContextSelectionTests(unittest.TestCase):
         with self.assertRaises(OrganizationAccessDenied):
             select_ai_context(actor, self.deal.id, self.seller_id, self.repository)
 
+    def test_dual_member_actor_gets_one_deliberate_side_never_both(self) -> None:
+        """An actor in both orgs must pick a side explicitly; no silent merge of both privates."""
+        user_id = uuid4()
+        self._grant(self.buyer_id, user_id)
+        self._grant(self.seller_id, user_id)
+        actor = ActorContext(user_id, frozenset({self.buyer_id, self.seller_id}))
+
+        buyer_view = select_ai_context(actor, self.deal.id, self.buyer_id, self.repository)
+        seller_view = select_ai_context(actor, self.deal.id, self.seller_id, self.repository)
+
+        self.assertNotIn(self.seller_private_message, buyer_view.messages)
+        self.assertNotIn(self.seller_private_constraint, buyer_view.constraints)
+        self.assertNotIn(self.buyer_private_message, seller_view.messages)
+        self.assertNotIn(self.buyer_private_constraint, seller_view.constraints)
+
     def test_perspective_organization_not_a_party_to_deal_is_denied(self) -> None:
         user_id = uuid4()
         outsider_org = OrganizationId(uuid4())

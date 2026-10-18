@@ -212,9 +212,9 @@ membership) remains planned.
 
 **Why:** Later proposal work needs to know who said something and whether it can be shared.
 
-**What to build:** Add Conversation, Message, and Constraint types. Each has a deal and owner. Messages and facts have explicit private/shareable visibility. Extracted facts start unconfirmed.
+**What to build:** Add Conversation, Message, and Constraint types. A conversation uses `participant_organization_id`; messages and facts have explicit private/shareable visibility. Facts retain units and provenance, start unconfirmed, and advance by versioned review transitions.
 
-**Contract code:** Domain types and fake-backed authorization/confirmation checks are implemented. A message inherits deal/owner scope through its required conversation reference; a constraint stores its deal and owner directly. Persistence, API routes, and UI remain in S3-02 through S3-04.
+**Contract code:** Domain types and fake-backed authorization/confirmation checks are implemented. A message inherits deal/owner scope through its required conversation reference; a constraint stores its deal and owner directly. The repository port requires current owner membership, same-deal provenance, and an expected-version check in the save transaction. Persistence, API routes, and UI remain in S3-02 through S3-04.
 
 **Done when:**
 - Tests reject messages or facts without a deal owner and visibility.

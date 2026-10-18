@@ -3,7 +3,7 @@
 **Status:** Implemented domain foundation; commercial workflow persistence and transaction handlers remain incomplete
 **Scope:** Framework-independent commercial models in `backend/src/syncally/domain`
 
-This document distinguishes code that exists from the larger architecture in the reference design. The current slice implements shared money and identifiers, organization and membership domain records, deal lifecycle, conversations and messages, constraint review, negotiation proposals, canonical trade terms, bilateral agreement approval, and payment-intent state. The domain package does not perform persistence, database transactions, actor authorization, outbox delivery, execution plans, document storage, or provider calls. The application layer applies conversation visibility and confirmation authorization; persistence and API flows remain incomplete.
+This document distinguishes code that exists from the larger architecture in the reference design. The current slice implements shared money and identifiers, organization and membership domain records, deal lifecycle, conversations and messages, constraint review, negotiation proposals, canonical trade terms, bilateral agreement approval, and payment-intent state. The domain package does not perform persistence, database transactions, actor authorization, outbox delivery, execution plans, document storage, or provider calls. The application layer applies conversation visibility and confirmation authorization; persistence and API flows remain incomplete. The constraint repository port requires an adapter to atomically recheck owner membership and source-message scope and compare the stored version before saving; that adapter is not implemented yet.
 
 ## Dependency direction
 
@@ -60,9 +60,9 @@ The diagram shows references and business flow, not object ownership. These are 
 | `Money` | Decimal-only finite amount, normalized three-letter currency, same-currency addition |
 | `Organization` | Required legal name, two-letter country code, explicit active status |
 | `OrganizationMember` | Typed organization/user IDs, explicit role and membership status; only `ACTIVE` is active |
-| `Conversation` | Deal and owning organization are required; the owner must be a party when application policy is applied |
-| `Message` | Requires a conversation, exactly one user or agent author, a non-empty body, and explicit visibility; its deal and owner scope come from the conversation |
-| `Constraint` | Requires deal and owner scope, a typed kind and visibility, and provenance fields; starts `EXTRACTED`; confirmation records a user and time and advances its version |
+| `Conversation` | Deal and `participant_organization_id` are required; the participant must be a deal party when application policy is applied |
+| `Message` | Requires a conversation, exactly one user or agent author, a non-empty body, and explicit visibility; its deal and owner scope come from the conversation; legacy `INTERNAL` storage maps to `PRIVATE` |
+| `Constraint` | Requires deal and owner scope, a typed kind and visibility, and at least one provenance reference; visibility is immutable, and confirmation records a user and time and advances its version; reconstitution restores persisted review metadata and version |
 | `TradeTerms` | Distinct buyer and seller; non-empty items, shipments, and payment terms; one currency; payment schedule equals line-item total; deterministic JSON and SHA-256 terms hash |
 | `Proposal` | Submitted proposal has a single lifecycle path; negotiation checks deal and predecessor references and maximum rounds |
 | `Deal` | Buyer differs from seller; explicit transitions and current agreement version check |

@@ -1,5 +1,7 @@
 """Deal-scoped conversations, messages, and human-reviewed constraints."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -18,6 +20,11 @@ from syncally.domain.shared.identifiers import (
 class Visibility(StrEnum):
     PRIVATE = "PRIVATE"
     SHAREABLE = "SHAREABLE"
+
+    @classmethod
+    def from_storage(cls, value: str) -> Visibility:
+        """Translate the legacy database value into the domain contract."""
+        return cls.PRIVATE if value == "INTERNAL" else cls(value)
 
 
 class MessageSourceType(StrEnum):
@@ -42,16 +49,20 @@ class ConstraintStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Conversation:
-    """A container owned by one deal party; its owner scopes its messages."""
+    """A container owned by one deal party; its participant scopes its messages."""
 
     id: ConversationId
     deal_id: DealId
-    owner_organization_id: OrganizationId
+    participant_organization_id: OrganizationId
     created_at: datetime
 
     def __post_init__(self) -> None:
-        if self.id is None or self.deal_id is None or self.owner_organization_id is None:
-            raise InvariantViolation("Conversation requires an ID, deal, and owner")
+        if (
+            self.id is None
+            or self.deal_id is None
+            or self.participant_organization_id is None
+        ):
+            raise InvariantViolation("Conversation requires an ID, deal, and participant")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,12 +107,23 @@ class Constraint:
     kind: ConstraintKind
     visibility: Visibility
     created_at: datetime
+    currency_or_unit: str | None = None
     source_message_id: MessageId | None = None
     source_span: str | None = None
     _status: ConstraintStatus = field(default=ConstraintStatus.EXTRACTED, init=False, repr=False)
     _confirmed_by: UserId | None = field(default=None, init=False, repr=False)
     _confirmed_at: datetime | None = field(default=None, init=False, repr=False)
     version: int = field(default=0, init=False)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "visibility" and hasattr(self, "visibility"):
+            raise AttributeError("Constraint visibility is immutable")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name == "visibility":
+            raise AttributeError("Constraint visibility is immutable")
+        object.__delattr__(self, name)
 
     @property
     def status(self) -> ConstraintStatus:
@@ -129,8 +151,66 @@ class Constraint:
             raise InvariantViolation("Constraint requires a kind")
         if not isinstance(self.visibility, Visibility):
             raise InvariantViolation("Constraint requires private or shareable visibility")
+        if self.source_message_id is None and (
+            not isinstance(self.source_span, str) or not self.source_span.strip()
+        ):
+            raise InvariantViolation("Constraint requires a source message or source span")
+        if self.source_span is not None and (
+            not isinstance(self.source_span, str) or not self.source_span.strip()
+        ):
+            raise InvariantViolation("Constraint source span must not be empty")
         if self.version < 0:
             raise InvariantViolation("Constraint version cannot be negative")
+
+    @classmethod
+    def reconstitute(
+        cls,
+        *,
+        id: ConstraintId,
+        deal_id: DealId,
+        owner_organization_id: OrganizationId,
+        field: str,
+        typed_value: str,
+        kind: ConstraintKind,
+        visibility: Visibility,
+        created_at: datetime,
+        status: ConstraintStatus,
+        confirmed_by: UserId | None,
+        confirmed_at: datetime | None,
+        version: int,
+        currency_or_unit: str | None = None,
+        source_message_id: MessageId | None = None,
+        source_span: str | None = None,
+    ) -> Constraint:
+        """Restore persisted review state without replaying lifecycle transitions."""
+        if not isinstance(status, ConstraintStatus):
+            raise InvariantViolation("Constraint requires a valid persisted status")
+        if (confirmed_by is None) != (confirmed_at is None):
+            raise InvariantViolation("Persisted constraint confirmation metadata is incomplete")
+        has_confirmation = confirmed_by is not None
+        if (status in {ConstraintStatus.CONFIRMED, ConstraintStatus.SUPERSEDED}) != has_confirmation:
+            raise InvariantViolation("Persisted constraint confirmation metadata is inconsistent")
+
+        constraint = cls(
+            id=id,
+            deal_id=deal_id,
+            owner_organization_id=owner_organization_id,
+            field=field,
+            typed_value=typed_value,
+            kind=kind,
+            visibility=visibility,
+            created_at=created_at,
+            currency_or_unit=currency_or_unit,
+            source_message_id=source_message_id,
+            source_span=source_span,
+        )
+        constraint._status = status
+        constraint._confirmed_by = confirmed_by
+        constraint._confirmed_at = confirmed_at
+        constraint.version = version
+        if version < 0:
+            raise InvariantViolation("Constraint version cannot be negative")
+        return constraint
 
     def confirm(self, *, confirmed_by: UserId, confirmed_at: datetime) -> None:
         """Record a human confirmation; this does not approve or create deal terms."""

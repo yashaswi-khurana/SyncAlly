@@ -34,6 +34,7 @@ _KNOWN_WEAK_JWT_FRAGMENTS = (
     "development-secret",
     "jwt-secret",
     "replace-with",
+    "static-production-secret",
     "secret-key",
     "test-secret",
     "your-secret",
@@ -61,6 +62,7 @@ class Settings(BaseSettings):
     jwt_audience: str | None = None
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
+    max_organizations_per_user: int = 5
     dev_auth_user_id: str | None = None
 
     @model_validator(mode="after")
@@ -93,6 +95,8 @@ class Settings(BaseSettings):
             raise ValueError("DEV_AUTH_USER_ID is only allowed in development/test")
         if self.access_token_ttl_minutes <= 0 or self.refresh_token_ttl_days <= 0:
             raise ValueError("Token lifetimes must be positive")
+        if self.max_organizations_per_user <= 0:
+            raise ValueError("MAX_ORGANIZATIONS_PER_USER must be positive")
         return self
 
     model_config = SettingsConfigDict(

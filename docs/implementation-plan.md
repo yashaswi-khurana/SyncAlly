@@ -1,17 +1,29 @@
-# SyncAlly Developer Build Plan
+# SyncAlly Implementation Plan
 
-**Status:** Plan only. Most of this work is not in the repo yet.
-**Team:** Four developers. The driver changes from story to story.
+**Status:** Living plan. Completed foundations and remaining product work are listed separately below.
 
-This is a coding checklist. It says what to build, where it should go, and how to check it. Work from Stage 1 to Stage 8. Do not start a later stage until the current stage is merged and its exit check passes.
+This plan tracks the constrained first demo from the shared [demo contract in issue #8](https://github.com/yashaswi-khurana/SyncAlly/issues/8). The contract's working defaults are ready to implement. Update implementation status when work merges, and use the relevant issue/PR to propose a focused contract change when code reveals a concrete mismatch.
 
-## What Exists Today
+## Current Implementation Status
 
-- Backend: FastAPI app with `GET /health`.
-- Frontend: React/TypeScript placeholder page.
-- Not built yet: database, sign-in, deal features, tests, AI, Temporal workflows, and payments.
+### Implemented foundation
 
-The architecture documents describe the intended rules, not working code. See [README](../README.md), [system architecture](../ARCHITECTURE.md), and the [architecture decision record](architecture/04-architecture-decision-record.md).
+- Backend API health endpoints, JWT authentication, refresh-token storage/rotation, and deal reads authorized through database-backed organization membership.
+- PostgreSQL models, Alembic migrations, database configuration, persistence/rollback coverage, and migration instructions (PRs [#41](https://github.com/yashaswi-khurana/SyncAlly/pull/41) and [#42](https://github.com/yashaswi-khurana/SyncAlly/pull/42)).
+- Framework-independent domain foundations for deals, trade terms, negotiation, bilateral agreements, and payment intents.
+- React/TypeScript Vite shell.
+- Backend test/lint commands, a health-route test, and frontend test/build/lint checks are defined in the project READMEs and verified by this story.
+- Development/test demo seeding creates buyer/seller accounts, organizations, and admin memberships; public self-registration is disabled.
+
+### Still planned
+
+- Persisted deal creation and complete browser-to-API deal workflows.
+- Message/fact review, proposal creation and negotiation workflows, bilateral approval, and committed agreement persistence.
+- Temporal orchestration and PayPal Sandbox invoice creation/reconciliation.
+- Frontend connection to the API and user-facing product flows.
+- Product onboarding through organization invitations, acceptance, and password setup.
+
+See [README](../README.md), [system architecture](../ARCHITECTURE.md), and the [architecture decision record](architecture/04-architecture-decision-record.md) for more detail. Architecture documents describe intended behavior where the implementation status above says work is still planned.
 
 ## What We Are Building
 
@@ -35,25 +47,23 @@ This does not include production payments, multiple payment providers, escrow, o
 - **Immutable:** cannot be edited after commit; make a new version to change it.
 - **Private context:** information visible only to the organization that supplied it.
 
-## Before Coding: Agree on Four Things
+## Identity and Onboarding Status
 
-Have one short meeting. Write down the answers, and have one person edit the shared contract notes:
-
-1. Which trade type, currency, agreement fields, and payment milestone are in the first demo?
-2. How does a user sign in, and how do we know which organization they can act for?
-3. What are the first API request/response shapes and error responses?
-4. What commands run tests, lint, and the app locally?
-
-**Ready to code when:** all four answers are written down and all four developers have reviewed them. Do not guess on an open product or security decision.
+Email/password login, verified-token identity, database-backed memberships, organization
+creation, and admin membership for existing users are implemented. Public self-registration
+is disabled to match the demo contract. From `backend/`, run
+`python -m syncally.cli.seed_demo` after migrations to provision the demo buyer and seller;
+the command prompts for passwords and hashes them in the app. Product onboarding through an
+organization admin invitation, invite acceptance, and password setup remains planned work.
 
 ## Team Rules
 
-- Take one story per developer in a stage. The Driver column below is a suggested rotation; replace A-D with names.
 - Each story gets one branch and one PR. Put tests with the code they test.
-- Agree on shared types and API shapes before developers build against them in parallel.
+- Use issue #8 as the working product and API contract; work can proceed asynchronously against those defaults.
+- Agree on shared types and API shapes before building dependent pieces in parallel.
 - Do not edit the same file at the same time. If two stories need the same file, merge the shared change first or do those stories one after another.
 - Merge all stories in a stage before starting a later stage that changes the same interfaces.
-- The stage coordinator tracks progress and helps integrate; they do not own one subsystem for the whole project.
+- Update this plan when work merges so completed foundations remain distinct from planned flows.
 
 ## Rules Every Stage Must Follow
 
@@ -73,7 +83,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S1-01 - Add organization and deal types
 
-**Driver:** Dev A  
 **Code area:** `backend/src/syncally/domain/`
 
 **Why:** Other features need a common definition of a deal and its participants.
@@ -87,7 +96,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S1-02 - Set up the database
 
-**Driver:** Dev B  
 **Code area:** `backend/src/syncally/infrastructure/` and the chosen migrations folder.
 
 **Why:** Deals and user memberships must survive app restarts.
@@ -102,12 +110,16 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S1-03 - Add the user identity boundary
 
-**Driver:** Dev C  
 **Code area:** `backend/src/syncally/api/` and `application/`.
 
 **Why:** Later API calls must know which user is making a request and which organizations they can act for.
 
 **What to build:** Implement the sign-in/authentication choice agreed by the team. Add a backend ActorContext that gives application code the verified user and organization memberships. Any shortcut for local development must be disabled outside development/test settings.
+
+For the first demo, operator provisioning is performed by the development/test-only
+`python -m syncally.cli.seed_demo` command. Do not expose public self-registration. The
+separate product onboarding flow (invite by email, accept invite, set password, activate
+membership) remains planned.
 
 **Done when:**
 - Protected requests fail when the user is not signed in.
@@ -117,7 +129,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S1-04 - Add test and check commands
 
-**Driver:** Dev D  
 **Code area:** backend/frontend test configuration and READMEs.
 
 **Why:** Everyone needs the same quick way to check their changes.
@@ -129,7 +140,7 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 - A broken test makes its command fail.
 - The health route and basic frontend render are tested.
 
-**Stage check:** All four stories are merged. A clean checkout can run the documented checks and database migration.
+**Stage check:** The foundational stories are merged. A clean checkout can run the documented checks and database migration.
 
 ## Stage 2 - Create and View a Deal
 
@@ -137,7 +148,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S2-01 - Add deal use cases
 
-**Driver:** Dev A  
 **Code area:** `backend/src/syncally/application/`
 
 **Why:** The API and UI need one tested place to ask for deal creation and retrieval.
@@ -151,7 +161,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S2-02 - Save and load deals
 
-**Driver:** Dev B  
 **Code area:** `backend/src/syncally/infrastructure/`.
 
 **Why:** The use cases need a database implementation of their repository interface.
@@ -165,7 +174,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S2-03 - Add deal API routes
 
-**Driver:** Dev C  
 **Code area:** `backend/src/syncally/api/`.
 
 **Why:** The UI needs HTTP endpoints to create and view deals.
@@ -179,7 +187,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S2-04 - Connect the deal UI
 
-**Driver:** Dev D  
 **Code area:** `frontend/src/`.
 
 **Why:** This proves the backend and browser work together.
@@ -200,7 +207,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S3-01 - Define messages and facts
 
-**Driver:** Dev D  
 **Code area:** `backend/src/syncally/domain/` and `application/`.
 
 **Why:** Later proposal work needs to know who said something and whether it can be shared.
@@ -213,7 +219,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S3-02 - Save messages and facts
 
-**Driver:** Dev A  
 **Code area:** database migrations and `backend/src/syncally/infrastructure/`.
 
 **Why:** Messages and their source information must persist and remain correctly scoped.
@@ -227,7 +232,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S3-03 - Add message and fact API routes
 
-**Driver:** Dev B  
 **Code area:** `backend/src/syncally/api/` and `application/`.
 
 **Why:** The backend, not the browser, must decide which side can read or change a message or fact.
@@ -241,7 +245,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S3-04 - Build the message and fact review screens
 
-**Driver:** Dev C  
 **Code area:** `frontend/src/`.
 
 **Why:** People need to check extracted facts before the app uses them.
@@ -261,7 +264,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S4-01 - Define AI input and output types
 
-**Driver:** Dev A  
 **Code area:** `backend/src/syncally/domain/` or shared application schemas.
 
 **Why:** The app must reject malformed AI output instead of trusting free-form text.
@@ -275,7 +277,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S4-02 - Filter AI context by organization
 
-**Driver:** Dev B  
 **Code area:** `backend/src/syncally/application/`.
 
 **Why:** A prompt must not include the other side's private information.
@@ -289,7 +290,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S4-03 - Add an AI adapter and fake
 
-**Driver:** Dev D  
 **Code area:** `backend/src/syncally/infrastructure/` and `application/`.
 
 **Why:** The app needs to call an AI service without making business rules depend on its SDK.
@@ -304,7 +304,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S4-04 - Add the AI review UI
 
-**Driver:** Dev C  
 **Code area:** `frontend/src/`.
 
 **Why:** Users need to review suggestions before sharing or using them.
@@ -324,7 +323,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S5-01 - Make stable agreement versions
 
-**Driver:** Dev A  
 **Code area:** `backend/src/syncally/domain/` and `application/`.
 
 **Why:** Both approvals must refer to exactly the same terms.
@@ -339,7 +337,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S5-02 - Save approvals and commit in one transaction
 
-**Driver:** Dev C  
 **Code area:** `backend/src/syncally/infrastructure/` and `application/`.
 
 **Why:** Two simultaneous approval requests must not create two agreements or commit different terms.
@@ -353,7 +350,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S5-03 - Add approval API routes
 
-**Driver:** Dev B  
 **Code area:** `backend/src/syncally/api/`.
 
 **Why:** Approval must be a verified backend command, not a browser status change.
@@ -367,7 +363,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S5-04 - Add agreement review and approval screens
 
-**Driver:** Dev D  
 **Code area:** `frontend/src/`.
 
 **Why:** Both sides must review the same saved terms before approving.
@@ -387,7 +382,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S6-01 - Deliver outbox work to Temporal
 
-**Driver:** Dev A  
 **Code area:** `backend/src/syncally/infrastructure/` and worker entry point.
 
 **Why:** Saving a deal and starting Temporal are two separate operations. The outbox lets the app retry if Temporal is down.
@@ -401,7 +395,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S6-02 - Write the deal workflow
 
-**Driver:** Dev B  
 **Code area:** `backend/src/syncally/workflows/`.
 
 **Why:** Deals can wait hours or days; a normal API request cannot stay open that long.
@@ -416,7 +409,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S6-03 - Add workflow activities and worker process
 
-**Driver:** Dev C  
 **Code area:** `backend/src/syncally/workflows/` and `application/`.
 
 **Why:** Activities do external work; the API and workflow worker should be startable separately.
@@ -430,7 +422,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S6-04 - Add local services and restart test
 
-**Driver:** Dev D  
 **Code area:** `infra/` and local development docs.
 
 **Why:** All developers need a repeatable way to run PostgreSQL, Temporal, the API, and the worker.
@@ -450,7 +441,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S7-01 - Add PaymentIntent rules
 
-**Driver:** Dev B  
 **Code area:** `backend/src/syncally/domain/` and `application/`.
 
 **Why:** The app needs a saved, authorized payment operation before it contacts PayPal.
@@ -464,7 +454,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S7-02 - Save payment intents and payment outbox rows
 
-**Driver:** Dev D  
 **Code area:** database migrations and `backend/src/syncally/infrastructure/`.
 
 **Why:** The worker needs to resume a payment operation after a crash without creating another invoice.
@@ -478,7 +467,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S7-03 - Add PayPal Sandbox adapter and worker
 
-**Driver:** Dev A  
 **Code area:** `backend/src/syncally/infrastructure/` and payment worker.
 
 **Why:** PayPal-specific requests should be separate from deal rules and safe to retry.
@@ -493,7 +481,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S7-04 - Verify PayPal events and check payment status
 
-**Driver:** Dev C  
 **Code area:** `backend/src/syncally/api/` and payment reconciliation worker.
 
 **Why:** A webhook or browser redirect alone does not prove that the full amount was paid.
@@ -514,7 +501,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S8-01 - Generate draft commercial documents
 
-**Driver:** Dev A  
 **Code area:** `backend/src/syncally/application/` and document adapter if needed.
 
 **Why:** Users need a useful document based on the agreed terms, without creating another editable source of truth.
@@ -528,7 +514,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S8-02 - Finish payment and document screens
 
-**Driver:** Dev B  
 **Code area:** `frontend/src/`.
 
 **Why:** Users need to know whether a payment is waiting, partial, paid, or needs help.
@@ -542,7 +527,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S8-03 - Test the full flow and access boundaries
 
-**Driver:** Dev C  
 **Code area:** backend integration tests and frontend end-to-end tests.
 
 **Why:** Bugs often happen between components, especially around privacy, approval, retries, and payment.
@@ -557,7 +541,6 @@ Have one short meeting. Write down the answers, and have one person edit the sha
 
 ### S8-04 - Add safe logs and a recovery guide
 
-**Driver:** Dev D  
 **Code area:** logging/metrics setup and operations docs.
 
 **Why:** Developers need to find stuck work and recover it without exposing customer data or making duplicate payments.

@@ -2,13 +2,13 @@
 
 SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
 
-> **Project status:** Early implementation. The repository contains a minimal FastAPI health endpoint, a React/TypeScript frontend shell, and framework-independent domain foundations for deal negotiation, agreements, and payment intents. Application workflows, persistence, infrastructure, and external integrations are not implemented yet.
+> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. Public self-registration and product invitation/acceptance are not implemented; product invitations remain planned. The complete deal workflow, frontend/API integration, Temporal workflows, and external payment integration remain planned work.
 
 ## Architecture
 
 The proposed first release is a constrained vertical slice built as a Python modular monolith with a React and TypeScript frontend. FastAPI exposes the application API, PostgreSQL stores authoritative business state, and Temporal coordinates long-running deal workflows. AI may help extract requirements and draft proposals, while domain services remain responsible for validation, authorization, and commercial decisions.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the system overview, [docs/architecture/](docs/architecture/README.md) for the detailed domain, workflow, payment, and decision records, and [docs/implementation-plan.md](docs/implementation-plan.md) for the staged four-developer backlog.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the system overview, [docs/architecture/](docs/architecture/README.md) for the detailed domain, workflow, payment, and decision records, and [docs/implementation-plan.md](docs/implementation-plan.md) for the living plan separating implemented foundations from planned product flows.
 
 The current domain code and its exact implementation boundary are described in [the domain layer architecture](docs/architecture/05-domain-layer.md).
 
@@ -72,7 +72,11 @@ Requires Python 3.12 or newer.
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e .\backend
+cd backend
+python -m pip install -e ".[dev]"
+python -m unittest discover -s tests -v
+python -m ruff check src tests
+cd ..
 python -m uvicorn syncally.api.main:app --reload --app-dir backend\src
 ```
 
@@ -85,17 +89,30 @@ cd backend
 alembic upgrade head
 ```
 
+In development/test, create the local demo buyer and seller accounts after migrating:
+
+```powershell
+python -m syncally.cli.seed_demo
+```
+
+The command asks for each password without displaying it. Use `buyer@syncally.demo` or
+`seller@syncally.demo` to sign in. It is disabled outside development/test; public
+self-registration and organization invitations are not available yet.
+
 The API exposes `GET /health` for process health and `GET /health/database` to verify
 that it can acquire and use a database connection. It does not yet check workflow-worker
 or provider availability.
 
 ### Frontend
 
-Requires Node.js 22.12 or newer and npm.
+Requires Node.js 22.13 or newer on the 22.x line, or Node.js 24 or newer, and npm.
 
 ```powershell
 cd frontend
-npm install
+npm ci
+npm test
+npm run lint:check
+npm run build
 npm run dev
 ```
 

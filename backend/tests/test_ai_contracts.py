@@ -1,7 +1,7 @@
 """Validation and authority-boundary tests for versioned AI contracts."""
 
 import unittest
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from uuid import uuid4
 
 from syncally.domain.agreements.trade_terms import TRADE_TERMS_SCHEMA_VERSION
@@ -165,13 +165,20 @@ class AIContractTests(unittest.TestCase):
             ProposedTerms.from_mapping(self.terms_payload(payment_action="send"))
 
     def test_largest_supported_decimals_hash_to_a_bounded_representation(self) -> None:
+        quantity = Decimal("999999999999999999")
+        unit_price = Decimal("999999999.999999999")
+        with localcontext() as context:
+            context.prec = 50
+            expected_total = quantity * unit_price
+
         terms = ProposedTerms.from_mapping(
-            self.terms_payload(quantity="1e17", unit_price="1e17")
+            self.terms_payload(quantity=str(quantity), unit_price=str(unit_price))
         ).to_trade_terms(
             buyer_id=OrganizationId(uuid4()),
             seller_id=OrganizationId(uuid4()),
         )
-        self.assertEqual(terms.total.amount, Decimal("1e34"))
+        self.assertEqual(terms.total.amount, expected_total)
+        self.assertEqual(terms.payment_terms[0].amount.amount, expected_total)
         self.assertEqual(len(terms.terms_hash), 64)
 
     def test_terms_conversion_uses_trusted_parties_and_derives_single_full_payment(self) -> None:

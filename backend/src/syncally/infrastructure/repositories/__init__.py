@@ -1,5 +1,9 @@
 """Database repository adapters implementing application persistence ports."""
 
+from syncally.infrastructure.repositories.communications import (
+    CommunicationScopeError,
+    SqlAlchemyCommunicationRepository,
+)
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 from syncally.infrastructure.repositories.organizations import (
     SqlAlchemyOrganizationMemberRepository,
@@ -7,6 +11,8 @@ from syncally.infrastructure.repositories.organizations import (
 )
 
 __all__ = [
+    "CommunicationScopeError",
+    "SqlAlchemyCommunicationRepository",
     "SqlAlchemyDealRepository",
     "SqlAlchemyOrganizationMemberRepository",
     "SqlAlchemyOrganizationRepository",

@@ -73,10 +73,11 @@ class Message:
     conversation_id: ConversationId
     author_user_id: UserId | None
     author_agent_id: str | None
-    body: str
+    body: str = field(repr=False)
     visibility: Visibility
     source_type: MessageSourceType
     created_at: datetime
+    source_reference: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.id is None or self.conversation_id is None:
@@ -103,13 +104,13 @@ class Constraint:
     deal_id: DealId
     owner_organization_id: OrganizationId
     field: str
-    typed_value: str
+    typed_value: str = field(repr=False)
     kind: ConstraintKind
     visibility: Visibility
     created_at: datetime
     currency_or_unit: str | None = None
     source_message_id: MessageId | None = None
-    source_span: str | None = None
+    source_span: str | None = field(default=None, repr=False)
     _status: ConstraintStatus = field(default=ConstraintStatus.EXTRACTED, init=False, repr=False)
     _confirmed_by: UserId | None = field(default=None, init=False, repr=False)
     _confirmed_at: datetime | None = field(default=None, init=False, repr=False)

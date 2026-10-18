@@ -10,9 +10,9 @@ from syncally.config import settings
 
 
 def create_database_engine(database_url: str, *, echo: bool = False) -> Engine:
-    """Create the configured SQLAlchemy engine with SQLite integrity enabled."""
+    """Create an engine with safe parameter logging and SQLite FK enforcement."""
     is_sqlite = make_url(database_url).get_backend_name() == "sqlite"
-    engine_options = {"pool_pre_ping": True}
+    engine_options = {"pool_pre_ping": True, "hide_parameters": True}
     if not is_sqlite:
         engine_options["pool_timeout"] = 30
     db_engine = create_engine(

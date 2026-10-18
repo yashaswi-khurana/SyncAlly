@@ -6,12 +6,32 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Any
+from unicodedata import normalize
 
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.domain.shared.money import Money, canonical_decimal
 
 TRADE_TERMS_SCHEMA_VERSION = 1
+SUPPORTED_DEMO_CURRENCY = "USD"
+SUPPORTED_DEMO_PAYMENT_TRIGGER = "seller_invoice"
+SUPPORTED_DEMO_PAYMENT_DUE_CONDITION = "when seller invoices"
+
+
+def _normalized_text(value: str, field_name: str, *, required: bool = False) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    result = normalize("NFC", value.strip())
+    if required and not result:
+        raise InvariantViolation(f"{field_name} is required")
+    return result
+
+
+def _require_decimal(value: Decimal, field_name: str) -> None:
+    if not isinstance(value, Decimal):
+        raise TypeError(f"{field_name} must be Decimal")
+    if not value.is_finite():
+        raise InvariantViolation(f"{field_name} must be finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +43,15 @@ class TradeLineItem:
     sku: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.description.strip() or not self.unit.strip():
-            raise InvariantViolation("Line item description and unit are required")
-        if not self.quantity.is_finite() or self.quantity <= 0:
+        object.__setattr__(self, "description", _normalized_text(self.description, "Description", required=True))
+        object.__setattr__(self, "unit", _normalized_text(self.unit, "Unit", required=True))
+        if self.sku is not None:
+            sku = _normalized_text(self.sku, "SKU")
+            object.__setattr__(self, "sku", sku or None)
+        if not isinstance(self.unit_price, Money):
+            raise TypeError("Line item unit_price must be Money")
+        _require_decimal(self.quantity, "Line item quantity")
+        if self.quantity <= 0:
             raise InvariantViolation("Line item quantity must be finite and positive")
         if self.unit_price.amount < 0:
             raise InvariantViolation("Line item unit price cannot be negative")
@@ -42,10 +68,12 @@ class ShipmentTerm:
     target_date: date | None = None
 
     def __post_init__(self) -> None:
-        if not self.quantity.is_finite() or self.quantity <= 0:
+        _require_decimal(self.quantity, "Shipment quantity")
+        if self.quantity <= 0:
             raise InvariantViolation("Shipment quantity must be finite and positive")
-        if not self.destination.strip():
-            raise InvariantViolation("Shipment destination is required")
+        object.__setattr__(self, "destination", _normalized_text(self.destination, "Shipment destination", required=True))
+        if self.target_date is not None and type(self.target_date) is not date:
+            raise TypeError("Shipment target_date must be a date or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +83,12 @@ class PaymentTerm:
     due_condition: str
 
     def __post_init__(self) -> None:
+        if not isinstance(self.amount, Money):
+            raise TypeError("Payment term amount must be Money")
         if self.amount.amount <= 0:
             raise InvariantViolation("Payment term amount must be positive")
-        if not self.trigger.strip() or not self.due_condition.strip():
-            raise InvariantViolation("Payment trigger and due condition are required")
+        object.__setattr__(self, "trigger", _normalized_text(self.trigger, "Payment trigger", required=True).casefold())
+        object.__setattr__(self, "due_condition", _normalized_text(self.due_condition, "Payment due condition", required=True).casefold())
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +107,9 @@ class TradeTerms:
         object.__setattr__(self, "line_items", tuple(self.line_items))
         object.__setattr__(self, "shipments", tuple(self.shipments))
         object.__setattr__(self, "payment_terms", tuple(self.payment_terms))
+        object.__setattr__(self, "delivery_location", _normalized_text(self.delivery_location, "Delivery location", required=True))
+        object.__setattr__(self, "incoterm", _normalized_text(self.incoterm, "Incoterm").upper() or None if self.incoterm is not None else None)
+        object.__setattr__(self, "cancellation_terms", _normalized_text(self.cancellation_terms, "Cancellation terms"))
 
         if self.buyer_id == self.seller_id:
             raise InvariantViolation("Buyer and seller must be different organizations")
@@ -86,9 +119,7 @@ class TradeTerms:
             raise InvariantViolation("At least one shipment term is required")
         if not self.payment_terms:
             raise InvariantViolation("At least one payment term is required")
-        if not self.delivery_location.strip():
-            raise InvariantViolation("Delivery location is required")
-        if self.schema_version < 1:
+        if type(self.schema_version) is not int or self.schema_version < 1:
             raise InvariantViolation("Schema version must be positive")
 
         currencies = {item.unit_price.currency for item in self.line_items}
@@ -137,7 +168,7 @@ class TradeTerms:
             "shipments": [
                 {
                     "quantity": _decimal(shipment.quantity),
-                    "destination": shipment.destination,
+                    "destination": shipment.destination.casefold(),
                     "target_date": shipment.target_date.isoformat()
                     if shipment.target_date
                     else None,
@@ -152,15 +183,48 @@ class TradeTerms:
                 }
                 for term in self.payment_terms
             ],
-            "delivery_location": self.delivery_location,
+            "delivery_location": self.delivery_location.casefold(),
             "incoterm": self.incoterm,
             "cancellation_terms": self.cancellation_terms,
         }
+        # The model has no sequence field, so collection order is presentation-only.
+        for collection in ("line_items", "shipments", "payment_terms"):
+            payload[collection].sort(
+                key=lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
+            )
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
     @property
     def terms_hash(self) -> str:
         return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+
+    def validate_for_commit(self) -> None:
+        """Reject terms outside the documented first-demo trade contract."""
+        if self.schema_version != TRADE_TERMS_SCHEMA_VERSION:
+            raise InvariantViolation("Unsupported trade terms schema version")
+        if self.currency != SUPPORTED_DEMO_CURRENCY:
+            raise InvariantViolation("Only USD agreements are supported for the demo")
+        if len(self.line_items) != 1 or len(self.shipments) != 1 or len(self.payment_terms) != 1:
+            raise InvariantViolation("The demo supports one line item, shipment, and payment term")
+        if self.incoterm is not None or self.cancellation_terms:
+            raise InvariantViolation("Incoterms and custom cancellation terms are not supported")
+
+        item = self.line_items[0]
+        shipment = self.shipments[0]
+        payment = self.payment_terms[0]
+        if shipment.quantity != item.quantity:
+            raise InvariantViolation("Shipment quantity must match the line item quantity")
+        if shipment.destination.casefold() != self.delivery_location.casefold():
+            raise InvariantViolation("Shipment destination must match the delivery location")
+        if shipment.target_date is None:
+            raise InvariantViolation("A target delivery date is required to commit")
+        if payment.amount != self.total:
+            raise InvariantViolation("The payment term must equal the full trade total")
+        if (
+            payment.trigger != SUPPORTED_DEMO_PAYMENT_TRIGGER
+            or payment.due_condition != SUPPORTED_DEMO_PAYMENT_DUE_CONDITION
+        ):
+            raise InvariantViolation("The demo supports payment when the seller invoices")
 
 
 def _decimal(value: Decimal) -> str:

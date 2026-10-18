@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from syncally.infrastructure.models import Deal, Organization, OrganizationMember, User
+from syncally.infrastructure.models import Organization, OrganizationMember, User
+
+
+class DealParticipation(Protocol):
+    """The deal fields required to decide whether an actor takes part."""
+
+    buyer_organization_id: UUID
+    seller_organization_id: UUID
 
 
 @dataclass(frozen=True)
@@ -18,7 +26,7 @@ class ActorContext:
     user_id: UUID
     organization_ids: frozenset[UUID]
 
-    def can_access_deal(self, deal: Deal) -> bool:
+    def can_access_deal(self, deal: DealParticipation) -> bool:
         """Return whether the actor belongs to either party of the deal."""
         return bool(
             {deal.buyer_organization_id, deal.seller_organization_id}

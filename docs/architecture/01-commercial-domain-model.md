@@ -64,7 +64,7 @@ access-filtering step.
 `Constraint` - `id`, `deal_id`, `owner_organization_id` - `field`,
 `typed_value`, `currency_or_unit` where relevant - `kind`:
 `HARD_LIMIT | PREFERENCE | FLEXIBLE_OPTION | INFORMATIONAL` - `status`:
-`EXTRACTED | NEEDS_CLARIFICATION | CONFIRMED | SUPERSEDED` -
+`EXTRACTED | NEEDS_CLARIFICATION | CONFIRMED | REJECTED | SUPERSEDED` -
 `visibility`: `PRIVATE | SHAREABLE` - `source_message_id` -
 `source_span` or provenance reference - `confirmed_by`, `confirmed_at` -
 `version`

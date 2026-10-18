@@ -14,8 +14,9 @@ from syncally.api.organizations import (
     create_organization,
     list_my_organizations,
 )
-from syncally.application.identity import ActorContext, resolve_actor
+from syncally.application.identity import ActorContext
 from syncally.config import settings
+from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.models import Base, Organization, OrganizationMember, User
 
 

@@ -15,10 +15,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from syncally.application.identity import ActorContext, resolve_actor
+from syncally.application.identity import ActorContext
 from syncally.application.passwords import verify_password as _verify_password
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.models import RefreshToken, User
 
 bearer_scheme = HTTPBearer(auto_error=False)

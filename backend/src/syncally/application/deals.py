@@ -31,6 +31,9 @@ class DealRepository(Protocol):
     def get_for_participant(self, deal_id: UUID, user_id: UUID) -> Deal | None:
         """Load a deal only when the user has an active membership in either party."""
 
+    def list_for_participant(self, user_id: UUID) -> list[Deal]:
+        """List every deal where the user has an active membership in either party."""
+
 
 class DealNotFound(DomainError):
     """The deal or an organization it references does not exist for this actor.
@@ -79,6 +82,11 @@ def get_deal(actor: ActorContext, deal_id: UUID, repository: DealRepository) -> 
     if deal is None or not actor.can_access_deal(deal):
         raise DealNotFound("Deal not found")
     return deal
+
+
+def list_deals(actor: ActorContext, repository: DealRepository) -> list[Deal]:
+    """List every deal the actor participates in as buyer or seller."""
+    return repository.list_for_participant(actor.user_id)
 
 
 def _both_organizations_active(repository: DealRepository, command: CreateDealCommand) -> bool:

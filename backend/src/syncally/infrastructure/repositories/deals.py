@@ -34,6 +34,23 @@ def _to_domain(row: Deal) -> DomainDeal:
     )
 
 
+def _active_participation(user_id: UUID):
+    """Correlate a deal with an active membership the user holds in either party."""
+    return exists(
+        select(OrganizationMember.id)
+        .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .where(
+            OrganizationMember.user_id == user_id,
+            OrganizationMember.status == "ACTIVE",
+            Organization.status == "ACTIVE",
+            or_(
+                OrganizationMember.organization_id == Deal.buyer_organization_id,
+                OrganizationMember.organization_id == Deal.seller_organization_id,
+            ),
+        )
+    )
+
+
 class SqlAlchemyDealRepository:
     """Deal repository backed by a SQLAlchemy session."""
 
@@ -67,20 +84,15 @@ class SqlAlchemyDealRepository:
         return _to_domain(row)
 
     def get_for_participant(self, deal_id: UUID, user_id: UUID) -> DomainDeal | None:
-        active_membership = exists(
-            select(OrganizationMember.id)
-            .join(Organization, Organization.id == OrganizationMember.organization_id)
-            .where(
-                OrganizationMember.user_id == user_id,
-                OrganizationMember.status == "ACTIVE",
-                Organization.status == "ACTIVE",
-                or_(
-                    OrganizationMember.organization_id == Deal.buyer_organization_id,
-                    OrganizationMember.organization_id == Deal.seller_organization_id,
-                ),
-            )
-        )
         row = self._db.scalar(
-            select(Deal).where(Deal.id == deal_id, active_membership)
+            select(Deal).where(Deal.id == deal_id, _active_participation(user_id))
         )
         return _to_domain(row) if row is not None else None
+
+    def list_for_participant(self, user_id: UUID) -> list[DomainDeal]:
+        rows = self._db.scalars(
+            select(Deal)
+            .where(_active_participation(user_id))
+            .order_by(Deal.created_at.desc(), Deal.id)
+        ).all()
+        return [_to_domain(row) for row in rows]

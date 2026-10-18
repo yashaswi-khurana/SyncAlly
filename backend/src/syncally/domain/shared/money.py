@@ -1,7 +1,7 @@
 """Currency-aware, immutable monetary value object."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 from syncally.domain.shared.errors import InvariantViolation
 
@@ -23,12 +23,32 @@ class Money:
     def add(self, other: "Money") -> "Money":
         if self.currency != other.currency:
             raise InvariantViolation("Cannot add amounts with different currencies")
-        return Money(self.amount + other.amount, self.currency)
+        if self.amount.is_zero():
+            return Money(other.amount, self.currency)
+        if other.amount.is_zero():
+            return Money(self.amount, self.currency)
+
+        left, right = self.amount.as_tuple(), other.amount.as_tuple()
+        common_exponent = min(left.exponent, right.exponent)
+        precision = max(
+            len(left.digits) + left.exponent - common_exponent,
+            len(right.digits) + right.exponent - common_exponent,
+        ) + 1
+        with localcontext() as context:
+            context.prec = max(context.prec, precision)
+            amount = self.amount + other.amount
+        return Money(amount, self.currency)
 
     def multiply(self, quantity: Decimal) -> "Money":
+        if not isinstance(quantity, Decimal):
+            raise TypeError("Quantity must be Decimal")
         if not quantity.is_finite():
             raise InvariantViolation("Quantity must be finite")
-        return Money(self.amount * quantity, self.currency)
+        precision = max(1, len(self.amount.as_tuple().digits) + len(quantity.as_tuple().digits))
+        with localcontext() as context:
+            context.prec = max(context.prec, precision)
+            amount = self.amount * quantity
+        return Money(amount, self.currency)
 
     def canonical_amount(self) -> str:
         """Return a stable non-exponent decimal string for hashing/serialization."""

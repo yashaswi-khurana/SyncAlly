@@ -9,16 +9,15 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
     Message as DomainMessage,
 )
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
+    MessageSourceType,
     Visibility,
 )
 from syncally.domain.shared.identifiers import (
-    DealId,
     MessageId,
-    OrganizationId,
     UserId,
 )
 from syncally.infrastructure.database import create_database_engine
@@ -89,9 +88,7 @@ class DatabaseEngineTests(unittest.TestCase):
                     )
                     session.add(conversation)
                     session.commit()
-                    deal_id = deal.id
                     conversation_id = conversation.id
-                    buyer_id = buyer.id
                     user_id = user.id
 
                 logging_engine = create_database_engine(database_url, echo=True)
@@ -100,13 +97,11 @@ class DatabaseEngineTests(unittest.TestCase):
                     message = DomainMessage(
                         id=MessageId(uuid4()),
                         conversation_id=conversation_id,
-                        deal_id=DealId(deal_id),
-                        owner_organization_id=OrganizationId(buyer_id),
                         author_user_id=UserId(user_id),
                         author_agent_id=None,
                         body=secret_body,
                         visibility=Visibility.PRIVATE,
-                        source_type="USER",
+                        source_type=MessageSourceType.USER,
                         source_reference=secret_source,
                         created_at=datetime.now(UTC),
                     )

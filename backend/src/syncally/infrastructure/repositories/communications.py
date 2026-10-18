@@ -4,23 +4,29 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from syncally.domain.deals.communications import (
+from syncally.application.conversations import (
+    ConcurrentConstraintUpdate,
+    ConstraintNotFound,
+)
+from syncally.domain.conversations import (
     Constraint as DomainConstraint,
 )
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
     ConstraintKind,
     ConstraintStatus,
+    MessageSourceType,
     Visibility,
 )
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
     Conversation as DomainConversation,
 )
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
     Message as DomainMessage,
 )
+from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.shared.identifiers import (
     ConstraintId,
     ConversationId,
@@ -34,9 +40,12 @@ from syncally.infrastructure.models import (
     Conversation,
     Deal,
     Message,
+    Organization,
     OrganizationMember,
+    User,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
+from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 
 
 class CommunicationScopeError(ValueError):
@@ -69,28 +78,23 @@ def _conversation_to_domain(row: Conversation) -> DomainConversation:
 
 
 def _message_to_domain(
-    row: Message,
-    conversation: Conversation,
-    *,
-    include_source_reference: bool = True,
+    row: Message, *, include_source_reference: bool = True
 ) -> DomainMessage:
     return DomainMessage(
         id=MessageId(row.id),
         conversation_id=ConversationId(row.conversation_id),
-        deal_id=DealId(conversation.deal_id),
-        owner_organization_id=OrganizationId(conversation.participant_organization_id),
         author_user_id=UserId(row.author_user_id) if row.author_user_id is not None else None,
         author_agent_id=row.author_agent_id,
         body=row.body,
-        visibility=Visibility(row.visibility),
-        source_type=row.source_type,
+        visibility=Visibility.from_storage(row.visibility),
+        source_type=MessageSourceType(row.source_type),
         source_reference=row.source_reference if include_source_reference else None,
         created_at=as_utc(row.created_at),
     )
 
 
 def _constraint_to_domain(row: Constraint) -> DomainConstraint:
-    return DomainConstraint(
+    return DomainConstraint.reconstitute(
         id=ConstraintId(row.id),
         deal_id=DealId(row.deal_id),
         owner_organization_id=OrganizationId(row.owner_organization_id),
@@ -99,7 +103,7 @@ def _constraint_to_domain(row: Constraint) -> DomainConstraint:
         currency_or_unit=row.currency_or_unit,
         kind=ConstraintKind(row.kind),
         status=ConstraintStatus(row.status),
-        visibility=Visibility(row.visibility),
+        visibility=Visibility.from_storage(row.visibility),
         source_message_id=(
             MessageId(row.source_message_id) if row.source_message_id is not None else None
         ),
@@ -177,17 +181,13 @@ class SqlAlchemyCommunicationRepository:
         except (TypeError, ValueError) as error:
             raise CommunicationScopeError("Message visibility is invalid") from error
         conversation = self._db.get(Conversation, message.conversation_id)
-        if (
-            conversation is None
-            or conversation.deal_id != message.deal_id
-            or conversation.participant_organization_id != message.owner_organization_id
-        ):
+        if conversation is None:
             raise CommunicationScopeError(
                 "Message conversation is missing or outside the message scope"
             )
         if message.author_user_id is not None:
             self._require_active_member(
-                message.owner_organization_id, message.author_user_id
+                conversation.participant_organization_id, message.author_user_id
             )
         row = Message(
             id=message.id,
@@ -196,13 +196,13 @@ class SqlAlchemyCommunicationRepository:
             author_agent_id=message.author_agent_id,
             body=message.body,
             visibility=visibility.value,
-            source_type=message.source_type,
+            source_type=message.source_type.value,
             source_reference=message.source_reference,
             created_at=as_utc(message.created_at),
         )
         self._db.add(row)
         self._db.flush()
-        return _message_to_domain(row, conversation)
+        return _message_to_domain(row)
 
     def list_messages(
         self,
@@ -217,8 +217,13 @@ class SqlAlchemyCommunicationRepository:
         rows = self._db.execute(
             select(Message, Conversation)
             .join(Conversation, Conversation.id == Message.conversation_id)
+            .join(Deal, Deal.id == Conversation.deal_id)
             .where(
                 Conversation.deal_id == deal_id,
+                or_(
+                    Conversation.participant_organization_id == Deal.buyer_organization_id,
+                    Conversation.participant_organization_id == Deal.seller_organization_id,
+                ),
                 or_(
                     Conversation.participant_organization_id == organization_id,
                     Message.visibility == Visibility.SHAREABLE.value,
@@ -231,7 +236,6 @@ class SqlAlchemyCommunicationRepository:
         return [
             _message_to_domain(
                 message,
-                conversation,
                 include_source_reference=(
                     conversation.participant_organization_id == organization_id
                 ),
@@ -246,9 +250,14 @@ class SqlAlchemyCommunicationRepository:
         row = self._db.execute(
             select(Message, Conversation)
             .join(Conversation, Conversation.id == Message.conversation_id)
+            .join(Deal, Deal.id == Conversation.deal_id)
             .where(
                 Message.id == message_id,
                 Conversation.deal_id == deal_id,
+                or_(
+                    Conversation.participant_organization_id == Deal.buyer_organization_id,
+                    Conversation.participant_organization_id == Deal.seller_organization_id,
+                ),
                 or_(
                     Conversation.participant_organization_id == organization_id,
                     Message.visibility == Visibility.SHAREABLE.value,
@@ -258,7 +267,6 @@ class SqlAlchemyCommunicationRepository:
         return (
             _message_to_domain(
                 row[0],
-                row[1],
                 include_source_reference=(
                     row[1].participant_organization_id == organization_id
                 ),
@@ -334,6 +342,134 @@ class SqlAlchemyCommunicationRepository:
         self._db.flush()
         return _constraint_to_domain(row)
 
+    def get_deal_for_participant(
+        self, deal_id: UUID, user_id: UUID
+    ) -> DomainDeal | None:
+        """Load a deal only when the user is an active member of a deal party."""
+        return SqlAlchemyDealRepository(self._db).get_for_participant(deal_id, user_id)
+
+    def get_constraint_for_deal(
+        self, deal_id: UUID, constraint_id: UUID, user_id: UUID
+    ) -> DomainConstraint | None:
+        """Load a constraint only for an active member of its owner organization."""
+        source_belongs_to_deal = (
+            select(Message.id)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(
+                Message.id == Constraint.source_message_id,
+                Conversation.deal_id == Constraint.deal_id,
+            )
+            .exists()
+        )
+        row = self._db.scalar(
+            select(Constraint)
+            .join(Deal, Deal.id == Constraint.deal_id)
+            .join(
+                OrganizationMember,
+                OrganizationMember.organization_id == Constraint.owner_organization_id,
+            )
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(
+                Constraint.id == constraint_id,
+                Constraint.deal_id == deal_id,
+                or_(
+                    Constraint.owner_organization_id == Deal.buyer_organization_id,
+                    Constraint.owner_organization_id == Deal.seller_organization_id,
+                ),
+                OrganizationMember.user_id == user_id,
+                OrganizationMember.status == "ACTIVE",
+                Organization.status == "ACTIVE",
+                User.status == "ACTIVE",
+                or_(Constraint.source_message_id.is_(None), source_belongs_to_deal),
+            )
+        )
+        return _constraint_to_domain(row) if row is not None else None
+
+    def save_constraint(
+        self,
+        constraint: DomainConstraint,
+        *,
+        expected_version: int,
+        actor_user_id: UUID,
+    ) -> DomainConstraint:
+        """Compare-and-save a confirmation while holding membership locks to commit."""
+        if (
+            constraint.status is not ConstraintStatus.CONFIRMED
+            or constraint.confirmed_by != UserId(actor_user_id)
+            or constraint.version != expected_version + 1
+        ):
+            raise ConstraintNotFound("Constraint not found")
+
+        deal = self._db.scalar(
+            select(Deal)
+            .where(Deal.id == constraint.deal_id)
+            .with_for_update()
+        )
+        if (
+            deal is None
+            or constraint.owner_organization_id
+            not in (deal.buyer_organization_id, deal.seller_organization_id)
+        ):
+            raise ConstraintNotFound("Constraint not found")
+
+        membership_id = self._db.scalar(
+            select(OrganizationMember.id)
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(
+                OrganizationMember.organization_id == constraint.owner_organization_id,
+                OrganizationMember.user_id == actor_user_id,
+                OrganizationMember.status == "ACTIVE",
+                Organization.status == "ACTIVE",
+                User.status == "ACTIVE",
+            )
+            .with_for_update()
+        )
+        if membership_id is None:
+            raise ConstraintNotFound("Constraint not found")
+
+        if constraint.source_message_id is not None:
+            source_is_in_deal = self._db.scalar(
+                select(Message.id)
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(
+                    Message.id == constraint.source_message_id,
+                    Conversation.deal_id == constraint.deal_id,
+                )
+            )
+            if source_is_in_deal is None:
+                raise ConstraintNotFound("Constraint not found")
+
+        result = self._db.execute(
+            update(Constraint)
+            .where(
+                Constraint.id == constraint.id,
+                Constraint.deal_id == constraint.deal_id,
+                Constraint.owner_organization_id == constraint.owner_organization_id,
+                Constraint.version == expected_version,
+            )
+            .values(
+                status=constraint.status.value,
+                confirmed_by=constraint.confirmed_by,
+                confirmed_at=as_utc(constraint.confirmed_at),
+                version=constraint.version,
+                updated_at=func.now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise ConcurrentConstraintUpdate("Constraint was changed by another request")
+
+        row = self._db.scalar(
+            select(Constraint)
+            .where(Constraint.id == constraint.id)
+            .execution_options(populate_existing=True)
+        )
+        if row is None:
+            raise ConstraintNotFound("Constraint not found")
+        return _constraint_to_domain(row)
+
     def list_constraints(
         self,
         deal_id: UUID,
@@ -346,8 +482,13 @@ class SqlAlchemyCommunicationRepository:
         limit, offset = _page_bounds(limit, offset)
         rows = self._db.scalars(
             select(Constraint)
+            .join(Deal, Deal.id == Constraint.deal_id)
             .where(
                 Constraint.deal_id == deal_id,
+                or_(
+                    Constraint.owner_organization_id == Deal.buyer_organization_id,
+                    Constraint.owner_organization_id == Deal.seller_organization_id,
+                ),
                 or_(
                     Constraint.owner_organization_id == organization_id,
                     Constraint.visibility == Visibility.SHAREABLE.value,
@@ -364,9 +505,17 @@ class SqlAlchemyCommunicationRepository:
     ) -> DomainConstraint | None:
         self._require_deal_party(deal_id, organization_id)
         row = self._db.scalar(
-            select(Constraint).where(
+            select(Constraint)
+            .join(Deal, Deal.id == Constraint.deal_id)
+            .where(
                 Constraint.id == constraint_id,
                 Constraint.deal_id == deal_id,
+                or_(
+                    Constraint.owner_organization_id
+                    == Deal.buyer_organization_id,
+                    Constraint.owner_organization_id
+                    == Deal.seller_organization_id,
+                ),
                 or_(
                     Constraint.owner_organization_id == organization_id,
                     Constraint.visibility == Visibility.SHAREABLE.value,
@@ -392,10 +541,15 @@ class SqlAlchemyCommunicationRepository:
 
     def _require_active_member(self, organization_id: UUID, user_id: UUID) -> None:
         is_active_member = self._db.scalar(
-            select(OrganizationMember.id).where(
+            select(OrganizationMember.id)
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(
                 OrganizationMember.organization_id == organization_id,
                 OrganizationMember.user_id == user_id,
                 OrganizationMember.status == "ACTIVE",
+                Organization.status == "ACTIVE",
+                User.status == "ACTIVE",
             )
         )
         if is_active_member is None:

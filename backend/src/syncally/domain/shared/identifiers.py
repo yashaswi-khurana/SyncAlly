@@ -12,4 +12,7 @@ AgreementId = NewType("AgreementId", UUID)
 AgreementVersionId = NewType("AgreementVersionId", UUID)
 PaymentMilestoneId = NewType("PaymentMilestoneId", UUID)
 PaymentIntentId = NewType("PaymentIntentId", UUID)
+ConversationId = NewType("ConversationId", UUID)
+MessageId = NewType("MessageId", UUID)
+ConstraintId = NewType("ConstraintId", UUID)
 

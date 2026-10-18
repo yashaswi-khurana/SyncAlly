@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 from unicodedata import normalize
+from uuid import UUID
 
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
@@ -149,8 +150,7 @@ class TradeTerms:
             total = total.add(term.amount)
         return total
 
-    def canonical_json(self) -> str:
-        """Serialize every commitment-relevant field with deterministic ordering."""
+    def _payload(self, *, casefold_display: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "buyer_id": str(self.buyer_id),
@@ -168,7 +168,9 @@ class TradeTerms:
             "shipments": [
                 {
                     "quantity": _decimal(shipment.quantity),
-                    "destination": shipment.destination.casefold(),
+                    "destination": shipment.destination.casefold()
+                    if casefold_display
+                    else shipment.destination,
                     "target_date": shipment.target_date.isoformat()
                     if shipment.target_date
                     else None,
@@ -183,7 +185,9 @@ class TradeTerms:
                 }
                 for term in self.payment_terms
             ],
-            "delivery_location": self.delivery_location.casefold(),
+            "delivery_location": self.delivery_location.casefold()
+            if casefold_display
+            else self.delivery_location,
             "incoterm": self.incoterm,
             "cancellation_terms": self.cancellation_terms,
         }
@@ -192,7 +196,31 @@ class TradeTerms:
             payload[collection].sort(
                 key=lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
             )
-        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return payload
+
+    def canonical_json(self) -> str:
+        """Serialize every commitment-relevant field with deterministic ordering.
+
+        Destination/delivery location are casefolded here because this is
+        what ``terms_hash`` hashes - two terms differing only by that case
+        must still hash identically. Persist ``to_storage_dict()`` instead,
+        which keeps the original display case.
+        """
+        return json.dumps(
+            self._payload(casefold_display=True),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        """Same shape as ``canonical_json()``, but keeping display case.
+
+        This is what should be persisted as ``canonical_terms_json`` so
+        ``from_canonical_json`` can rebuild terms without losing the original
+        capitalization of free-text display fields.
+        """
+        return self._payload(casefold_display=False)
 
     @property
     def terms_hash(self) -> str:
@@ -226,6 +254,53 @@ class TradeTerms:
         ):
             raise InvariantViolation("The demo supports payment when the seller invoices")
 
+    @classmethod
+    def from_canonical_json(cls, data: dict[str, Any]) -> "TradeTerms":
+        """Reconstruct terms from the dict produced by ``canonical_json``.
+
+        Used to rebuild the domain aggregate from a stored ``AgreementVersion``
+        row so commit/approval invariants run through the same domain code
+        that produced the hash, rather than being re-derived in SQL.
+        """
+        return cls(
+            buyer_id=OrganizationId(UUID(data["buyer_id"])),
+            seller_id=OrganizationId(UUID(data["seller_id"])),
+            line_items=tuple(
+                TradeLineItem(
+                    description=item["description"],
+                    quantity=Decimal(item["quantity"]),
+                    unit=item["unit"],
+                    unit_price=_parse_money(item["unit_price"]),
+                    sku=item["sku"],
+                )
+                for item in data["line_items"]
+            ),
+            shipments=tuple(
+                ShipmentTerm(
+                    quantity=Decimal(shipment["quantity"]),
+                    destination=shipment["destination"],
+                    target_date=(
+                        date.fromisoformat(shipment["target_date"])
+                        if shipment["target_date"]
+                        else None
+                    ),
+                )
+                for shipment in data["shipments"]
+            ),
+            payment_terms=tuple(
+                PaymentTerm(
+                    amount=_parse_money(term["amount"]),
+                    trigger=term["trigger"],
+                    due_condition=term["due_condition"],
+                )
+                for term in data["payment_terms"]
+            ),
+            delivery_location=data["delivery_location"],
+            incoterm=data["incoterm"],
+            cancellation_terms=data["cancellation_terms"],
+            schema_version=data["schema_version"],
+        )
+
 
 def _decimal(value: Decimal) -> str:
     return canonical_decimal(value)
@@ -233,4 +308,8 @@ def _decimal(value: Decimal) -> str:
 
 def _money(value: Money) -> dict[str, str]:
     return {"amount": value.canonical_amount(), "currency": value.currency}
+
+
+def _parse_money(data: dict[str, str]) -> Money:
+    return Money(Decimal(data["amount"]), data["currency"])
 

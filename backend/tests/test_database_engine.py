@@ -68,6 +68,15 @@ class DatabaseEngineTests(unittest.TestCase):
                     user = User(email="buyer@example.com", display_name="Buyer")
                     session.add_all([buyer, seller, user])
                     session.flush()
+                    session.add(
+                        OrganizationMember(
+                            organization_id=buyer.id,
+                            user_id=user.id,
+                            role="MEMBER",
+                            status="ACTIVE",
+                        )
+                    )
+                    session.flush()
                     deal = Deal(
                         buyer_organization_id=buyer.id,
                         seller_organization_id=seller.id,

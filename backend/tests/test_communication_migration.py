@@ -43,6 +43,8 @@ class CommunicationMigrationTests(unittest.TestCase):
             metadata,
             Column("deal_id", Integer),
             Column("owner_organization_id", Integer),
+            Column("kind", String),
+            Column("status", String),
             Column("visibility", String),
             Column("created_at", DateTime),
         )
@@ -70,6 +72,19 @@ class CommunicationMigrationTests(unittest.TestCase):
                         for index in upgraded.get_indexes(table)
                     },
                 )
+                self.assertEqual(
+                    {
+                        "ck_message_visibility",
+                        "ck_constraint_kind",
+                        "ck_constraint_status",
+                        "ck_constraint_visibility",
+                    },
+                    {
+                        check["name"]
+                        for table in ("messages", "constraints")
+                        for check in upgraded.get_check_constraints(table)
+                    },
+                )
 
                 migration.downgrade()
                 downgraded = inspect(connection)
@@ -83,6 +98,14 @@ class CommunicationMigrationTests(unittest.TestCase):
                         index["name"]
                         for table in ("conversations", "messages", "constraints")
                         for index in downgraded.get_indexes(table)
+                    ],
+                )
+                self.assertEqual(
+                    [],
+                    [
+                        check["name"]
+                        for table in ("messages", "constraints")
+                        for check in downgraded.get_check_constraints(table)
                     ],
                 )
         finally:

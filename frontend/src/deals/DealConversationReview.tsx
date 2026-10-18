@@ -14,6 +14,7 @@ import type {
   FactReviewAction,
   Organization,
 } from "../api/types";
+import AISuggestionReview from "./AISuggestionReview";
 
 type OrganizationState =
   | { status: "loading" }
@@ -200,6 +201,27 @@ export default function DealConversationReview({ deal }: DealConversationReviewP
     } finally {
       setPendingFactId(null);
     }
+  }
+
+  function addSuggestedFact(fact: DealFact) {
+    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
+      ? { ...current, facts: [...current.facts.filter((item) => item.id !== fact.id), fact] }
+      : current);
+  }
+
+  function updateSuggestedFact(fact: DealFact) {
+    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
+      ? { ...current, facts: current.facts.map((item) => item.id === fact.id ? fact : item) }
+      : current);
+  }
+
+  function replaceSuggestedFact(replaced: DealFact, corrected: DealFact) {
+    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
+      ? {
+          ...current,
+          facts: [...current.facts.map((item) => item.id === replaced.id ? replaced : item), corrected],
+        }
+      : current);
   }
 
   return (
@@ -447,6 +469,17 @@ export default function DealConversationReview({ deal }: DealConversationReviewP
           </ul>
         )}
       </section>
+      {currentConversation ? (
+        <AISuggestionReview
+          key={`${deal.id}:${activeOrganizationId}`}
+          dealId={deal.id}
+          organizationId={activeOrganizationId}
+          onTraceSource={traceSourceMessage}
+          onFactAdded={addSuggestedFact}
+          onFactUpdated={updateSuggestedFact}
+          onFactCorrected={replaceSuggestedFact}
+        />
+      ) : null}
     </section>
   );
 }

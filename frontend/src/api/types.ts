@@ -66,6 +66,29 @@ export interface DealFact {
 
 export type FactReviewAction = "confirm" | "reject" | "clarify";
 
+export interface FactSuggestionResult {
+  status: "VALID" | "INVALID" | "NEEDS_CLARIFICATION";
+  issues: Array<{ schema_version: number; code: string; path: string; message: string }>;
+  facts: DealFact[];
+}
+
+export interface ProposalSuggestion {
+  schema_version: number;
+  description: string;
+  quantity: string;
+  unit: string;
+  unit_price: string;
+  currency: "USD";
+  delivery_destination: string;
+  delivery_date: string | null;
+  status: "DRAFT";
+}
+
+export interface FactCorrectionResult {
+  replaced_fact: DealFact;
+  corrected_fact: DealFact;
+}
+
 export interface CreateDealInput {
   buyer_organization_id: string;
   seller_organization_id: string;

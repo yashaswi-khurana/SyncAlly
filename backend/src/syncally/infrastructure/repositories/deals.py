@@ -1,0 +1,84 @@
+"""SQLAlchemy implementation of the deal repository port.
+
+Rows are translated to and from the framework-independent domain aggregate here so
+business rules and the API never depend on ORM entities.
+"""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from sqlalchemy import exists, or_, select
+from sqlalchemy.orm import Session
+
+from syncally.domain.deals.deal import Deal as DomainDeal
+from syncally.domain.deals.deal import DealStatus
+from syncally.domain.shared.identifiers import AgreementVersionId, DealId, OrganizationId
+from syncally.infrastructure.models import Deal, Organization, OrganizationMember
+
+
+def _to_domain(row: Deal) -> DomainDeal:
+    return DomainDeal(
+        id=DealId(row.id),
+        buyer_organization_id=OrganizationId(row.buyer_organization_id),
+        seller_organization_id=OrganizationId(row.seller_organization_id),
+        created_at=row.created_at,
+        status=DealStatus(row.status),
+        current_agreement_version_id=(
+            AgreementVersionId(row.current_agreement_version_id)
+            if row.current_agreement_version_id is not None
+            else None
+        ),
+        version=row.version,
+    )
+
+
+class SqlAlchemyDealRepository:
+    """Deal repository backed by a SQLAlchemy session."""
+
+    def __init__(self, db: Session) -> None:
+        self._db = db
+
+    def active_organization_exists(self, organization_id: UUID) -> bool:
+        return (
+            self._db.scalar(
+                select(Organization.id).where(
+                    Organization.id == organization_id,
+                    Organization.status == "ACTIVE",
+                )
+            )
+            is not None
+        )
+
+    def add(self, deal: DomainDeal) -> DomainDeal:
+        row = Deal(
+            id=deal.id,
+            buyer_organization_id=deal.buyer_organization_id,
+            seller_organization_id=deal.seller_organization_id,
+            status=deal.status.value,
+            current_agreement_version_id=deal.current_agreement_version_id,
+            version=deal.version,
+        )
+        self._db.add(row)
+        self._db.commit()
+        self._db.refresh(row)
+        return _to_domain(row)
+
+    def get_for_participant(self, deal_id: UUID, user_id: UUID) -> DomainDeal | None:
+        active_membership = exists(
+            select(OrganizationMember.id)
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .where(
+                OrganizationMember.user_id == user_id,
+                OrganizationMember.status == "ACTIVE",
+                Organization.status == "ACTIVE",
+                or_(
+                    OrganizationMember.organization_id == Deal.buyer_organization_id,
+                    OrganizationMember.organization_id == Deal.seller_organization_id,
+                ),
+            )
+        )
+        row = self._db.scalar(
+            select(Deal).where(Deal.id == deal_id, active_membership)
+        )
+        return _to_domain(row) if row is not None else None

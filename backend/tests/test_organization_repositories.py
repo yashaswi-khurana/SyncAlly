@@ -4,10 +4,8 @@ import unittest
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
 from syncally.domain.organizations.organization import (
     Organization as DomainOrganization,
@@ -21,6 +19,7 @@ from syncally.domain.organizations.organization import (
     OrganizationStatus,
 )
 from syncally.domain.shared.identifiers import OrganizationId, UserId
+from syncally.infrastructure.database import create_database_engine
 from syncally.infrastructure.models import Base, OrganizationMember, User
 from syncally.infrastructure.repositories import (
     SqlAlchemyOrganizationMemberRepository,
@@ -30,16 +29,7 @@ from syncally.infrastructure.repositories import (
 
 class OrganizationRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.engine = create_engine(
-            "sqlite+pysqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-
-        @event.listens_for(self.engine, "connect")
-        def enable_foreign_keys(connection, _record) -> None:
-            connection.execute("PRAGMA foreign_keys=ON")
-
+        self.engine = create_database_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.session = Session(self.engine)
 
@@ -83,10 +73,12 @@ class OrganizationRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded_organization.id, organization.id)
         self.assertEqual(loaded_organization.country_code, "US")
         self.assertEqual(loaded_organization.status, OrganizationStatus.ACTIVE)
+        self.assertEqual(loaded_organization.created_at, organization.created_at)
         self.assertIsInstance(loaded_membership, DomainMembership)
         self.assertEqual(loaded_membership.organization_id, stored_membership.organization_id)
         self.assertEqual(loaded_membership.user_id, stored_membership.user_id)
-        self.assertEqual(loaded_membership.created_at.replace(tzinfo=UTC), membership.created_at)
+        self.assertEqual(loaded_membership.created_at, membership.created_at)
+        self.assertEqual(loaded_membership.created_at.utcoffset(), UTC.utcoffset(None))
         self.assertEqual(loaded_membership.role, OrganizationMemberRole.ADMIN)
 
     def test_missing_records_return_none_and_membership_reads_are_org_scoped(self) -> None:

@@ -1,12 +1,14 @@
 """FastAPI application entry point."""
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from syncally.api.auth import router as auth_router
+from syncally.api.conversations import router as conversations_router
 from syncally.api.deals import router as deals_router
 from syncally.api.organizations import router as organizations_router
 from syncally.infrastructure.database import get_db
@@ -62,11 +64,38 @@ class RequestBodyLimitMiddleware:
         await self.app(scope, replay_receive, send)
 
 
+_VALIDATION_ERROR_FIELDS = ("type", "loc", "msg", "url")
+
+
+def _redacted_validation_errors(
+    exc: RequestValidationError,
+) -> list[dict[str, object]]:
+    """Project validation errors without echoing caller-submitted values."""
+    return [
+        {field: error[field] for field in _VALIDATION_ERROR_FIELDS if field in error}
+        for error in exc.errors()
+    ]
+
+
 app = FastAPI(title="SyncAlly API", version="0.1.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Return a 422 that never reflects request bodies back to the caller."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": _redacted_validation_errors(exc)},
+    )
+
+
 app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=MAX_REQUEST_BODY_BYTES)
 app.include_router(auth_router)
 app.include_router(organizations_router)
 app.include_router(deals_router)
+app.include_router(conversations_router)
 
 
 @app.get("/health", tags=["operations"])

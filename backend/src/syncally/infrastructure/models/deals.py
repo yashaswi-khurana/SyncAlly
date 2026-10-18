@@ -5,7 +5,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from syncally.infrastructure.models.base import UUID_TYPE, Base
@@ -30,6 +40,11 @@ class Deal(TimestampMixin, Base):
 class Conversation(Base):
     __tablename__ = "conversations"
     __table_args__ = (
+        UniqueConstraint(
+            "deal_id",
+            "participant_organization_id",
+            name="uq_conversations_deal_participant",
+        ),
         Index(
             "ix_conversations_deal_participant_created",
             "deal_id",

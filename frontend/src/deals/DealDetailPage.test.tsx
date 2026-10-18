@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getDeal } from "../api/client";
+import { ApiError, getDeal, listDealFacts, listDealMessages, listOrganizations } from "../api/client";
 import type { Deal } from "../api/types";
 import DealDetailPage from "./DealDetailPage";
 
@@ -10,10 +10,16 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     getDeal: vi.fn(),
+    listDealFacts: vi.fn(),
+    listDealMessages: vi.fn(),
+    listOrganizations: vi.fn(),
   };
 });
 
 const mockedGetDeal = vi.mocked(getDeal);
+const mockedListDealFacts = vi.mocked(listDealFacts);
+const mockedListDealMessages = vi.mocked(listDealMessages);
+const mockedListOrganizations = vi.mocked(listOrganizations);
 
 const DEAL: Deal = {
   id: "deal-1",
@@ -26,6 +32,19 @@ const DEAL: Deal = {
 describe("DealDetailPage", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  beforeEach(() => {
+    mockedListDealFacts.mockResolvedValue([]);
+    mockedListDealMessages.mockResolvedValue([]);
+    mockedListOrganizations.mockResolvedValue([
+      {
+        id: DEAL.buyer_organization_id,
+        legal_name: "Buyer Co",
+        country_code: "US",
+        role: "ADMIN",
+      },
+    ]);
   });
 
   it("fetches the deal on mount and renders its details", async () => {

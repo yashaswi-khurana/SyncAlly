@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { ApiError, getDeal } from "../api/client";
 import type { Deal } from "../api/types";
 import Reveal from "../ui/Reveal";
+import DealConstellation from "./DealConstellation";
+import DealConversationReview from "./DealConversationReview";
 
 type DealState =
   | { status: "loading" }
@@ -93,50 +95,70 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
   const { deal } = state;
   return (
     <Reveal>
-      <section className="card" aria-labelledby="deal-detail-heading">
-        <div className="page-header">
-          <div className="panel-head">
-            <span className="eyebrow">Deal</span>
-            <h2 id="deal-detail-heading">Deal details</h2>
+      <div className="workspace deal-workspace">
+        <section className="deal-room" aria-labelledby="deal-detail-heading">
+          <div className="deal-room__topline">
+            <button type="button" className="deal-room__back" onClick={onBackToDeals}>
+              <span aria-hidden="true">←</span> Back to deals
+            </button>
+            <span className="deal-room__index">TRANSACTION ROOM / {deal.id.slice(0, 8)}</span>
           </div>
-        </div>
-        <p className="muted">
-          A draft becomes a committed agreement only after both organizations approve the same
-          immutable version.
-        </p>
-        <dl className="details">
-          <div>
-            <dt>Status</dt>
-            <dd>
-              <span className="badge">{deal.status}</span>
-            </dd>
+
+          <div className="deal-room__main">
+            <div className="deal-room__copy">
+              <div className="deal-room__kicker">
+                <span className="eyebrow">The shared record</span>
+                <span className="deal-room__version">DEAL VERSION {String(deal.version).padStart(2, "0")}</span>
+              </div>
+              <h1 id="deal-detail-heading">
+                One deal.<br />
+                <span>Two perspectives.</span>
+              </h1>
+              <p className="deal-room__lede">
+                Read the conversation and review source-linked facts here. A fact review records a
+                decision; it does not approve or commit an agreement.
+              </p>
+              <div className="deal-room__state">
+                <span className="deal-room__state-dot" aria-hidden="true" />
+                <span>{deal.status}</span>
+                <span className="deal-room__state-divider" aria-hidden="true" />
+                <span>Deal version {deal.version}</span>
+              </div>
+              <div className="deal-room__actions">
+                <button type="button" className="button deal-room__refresh" onClick={retryDeal}>
+                  Refresh room <span aria-hidden="true">↗</span>
+                </button>
+              </div>
+            </div>
+
+            <DealConstellation
+              buyerOrganizationId={deal.buyer_organization_id}
+              sellerOrganizationId={deal.seller_organization_id}
+            />
           </div>
-          <div>
-            <dt>Version</dt>
-            <dd className="stat">{deal.version}</dd>
-          </div>
-          <div>
-            <dt>Deal ID</dt>
-            <dd className="mono">{deal.id}</dd>
-          </div>
-          <div>
-            <dt>Buyer organization</dt>
-            <dd className="mono">{deal.buyer_organization_id}</dd>
-          </div>
-          <div>
-            <dt>Seller organization</dt>
-            <dd className="mono">{deal.seller_organization_id}</dd>
-          </div>
-        </dl>
-        <div className="actions">
-          <button type="button" className="button" onClick={retryDeal}>
-            Refresh
-          </button>
-          <button type="button" className="button secondary" onClick={onBackToDeals}>
-            Back to deals
-          </button>
-        </div>
-      </section>
+
+          <dl className="deal-room__ledger">
+            <div className="deal-room__ledger-item">
+              <dt>Deal reference</dt>
+              <dd className="mono">{deal.id}</dd>
+            </div>
+            <div className="deal-room__ledger-item">
+              <dt>Buyer organization</dt>
+              <dd className="mono">{deal.buyer_organization_id}</dd>
+            </div>
+            <div className="deal-room__ledger-item">
+              <dt>Seller organization</dt>
+              <dd className="mono">{deal.seller_organization_id}</dd>
+            </div>
+            <div className="deal-room__ledger-item deal-room__ledger-item--version">
+              <dt>Deal version</dt>
+              <dd>{deal.version}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <DealConversationReview deal={deal} />
+      </div>
     </Reveal>
   );
 }

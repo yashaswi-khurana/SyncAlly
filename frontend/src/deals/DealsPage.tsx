@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { ApiError, listDeals } from "../api/client";
 import type { DealSummary, ViewerRole } from "../api/types";
 import OrganizationsPanel from "../organizations/OrganizationsPanel";
-import Marquee from "../ui/Marquee";
 import Reveal from "../ui/Reveal";
 
 type DealsState =
@@ -130,22 +129,15 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
   return (
     <div className="workspace">
       <Reveal className="hero">
-        <span className="eyebrow">Workspace</span>
-        <h1 className="display">
-          Your deals, <span className="gradient-text">agreed.</span>
-        </h1>
-        <p className="hero__lede">
-          Track every negotiation from draft to committed agreement. Both sides approve the same
-          immutable version before anything is binding.
-        </p>
-        <div className="hero__marquee">
-          <Marquee speed={26}>
-            <span>DRAFT</span>
-            <span>NEGOTIATE</span>
-            <span>APPROVE</span>
-            <span>PAY</span>
-          </Marquee>
+        <div className="workspace-intro__meta">
+          <span className="eyebrow">01 / Deal register</span>
+          <span className="workspace-intro__caption">Shared between your organizations</span>
         </div>
+        <h1 className="display">Deals, on record.</h1>
+        <p className="hero__lede">
+          Each deal has one shared reference. Open a record to read the conversation and review
+          the facts connected to their source messages.
+        </p>
       </Reveal>
 
       <Reveal delay={80}>{renderDeals()}</Reveal>

@@ -3,7 +3,7 @@
 import subprocess
 import sys
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -214,9 +214,9 @@ class DealDomainTests(unittest.TestCase):
             line_items=(
                 TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "USD")),
             ),
-            shipments=(ShipmentTerm(Decimal("1"), "Toronto"),),
+            shipments=(ShipmentTerm(Decimal("1"), "Toronto", date(2030, 1, 1)),),
             payment_terms=(
-                PaymentTerm(Money(Decimal("10"), "USD"), "order", "on order"),
+                PaymentTerm(Money(Decimal("10"), "USD"), "seller_invoice", "when seller invoices"),
             ),
             delivery_location="Toronto",
         )

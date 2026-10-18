@@ -18,6 +18,8 @@ commercial domain, Temporal orchestration, and PayPal payment execution.
     tying the documents together.
 5.  `05-domain-layer.md` --- implemented domain model boundaries, rules,
     and the remaining application and persistence work.
+6.  `06-ai-provider-boundary.md` --- the provider-independent AI suggestion
+    port, offline fake, bounded retries, and the deferred provider choice.
 
 ## Architecture at a glance
 

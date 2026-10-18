@@ -30,11 +30,12 @@ from syncally.application.agreements import (
     UnauthorizedApproval,
     WrongTermsHash,
     commit_agreement,
+    record_approval,
 )
 from syncally.domain.agreements.agreement import Agreement as DomainAgreement
 from syncally.domain.agreements.agreement import AgreementStatus, ApprovalDecision
 from syncally.domain.agreements.agreement import Approval as DomainApproval
-from syncally.domain.agreements.obligations import ObligationDraft
+from syncally.domain.agreements.obligations import ObligationDraft, PaymentMilestoneDraft
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
@@ -54,6 +55,7 @@ from syncally.infrastructure.models import (
     Organization,
     OrganizationMember,
     OutboxEvent,
+    PaymentMilestone,
     User,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
@@ -96,7 +98,7 @@ def _agreement_to_domain(
         for row in approval_rows
     }
     return DomainAgreement(
-        id=AgreementId(version_row.id),
+        id=AgreementId(version_row.deal_id),
         version_id=AgreementVersionId(version_row.id),
         deal_id=DealId(version_row.deal_id),
         version_number=version_row.version_number,
@@ -113,15 +115,31 @@ class SqlAlchemyAgreementRepository:
         self._db = db
 
     def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> DomainApproval:
+        # Locking the deal row serializes this against a concurrent commit()
+        # (which locks the same row), so the staleness/party checks below see
+        # a consistent snapshot of which version is current.
+        deal_row = self._db.scalar(
+            select(Deal).where(Deal.id == command.deal_id).with_for_update()
+        )
+        if deal_row is None:
+            raise AgreementNotFound("Deal not found")
+
         version_row = self._get_version(command.deal_id, command.version_number)
         if version_row is None:
             raise AgreementNotFound("Agreement version not found")
-        if version_row.status != AgreementStatus.PENDING_APPROVAL.value:
+        if (
+            version_row.status != AgreementStatus.PENDING_APPROVAL.value
+            or deal_row.current_agreement_version_id != version_row.id
+        ):
             raise StaleAgreementVersion("Agreement version is no longer pending approval")
         if version_row.terms_hash != command.terms_hash:
             raise WrongTermsHash("Terms hash does not match the current agreement version")
 
         terms = TradeTerms.from_canonical_json(version_row.canonical_terms_json)
+        if terms.buyer_id != OrganizationId(deal_row.buyer_organization_id) or terms.seller_id != OrganizationId(
+            deal_row.seller_organization_id
+        ):
+            raise UnauthorizedApproval("Agreement version parties do not match the deal")
         if OrganizationId(command.organization_id) not in (terms.buyer_id, terms.seller_id):
             raise UnauthorizedApproval("Organization is not a party to this agreement")
         self._require_active_member(command.organization_id, command.user_id)
@@ -136,28 +154,47 @@ class SqlAlchemyAgreementRepository:
         # Defensive re-check through the domain aggregate before writing.
         _agreement_to_domain(version_row, []).record_approval(approval)
 
-        try:
-            with self._db.begin_nested():
-                row = Approval(
-                    deal_id=version_row.deal_id,
-                    agreement_version_id=version_row.id,
-                    organization_id=command.organization_id,
-                    user_id=command.user_id,
-                    decision=command.decision.value,
-                    terms_hash=command.terms_hash,
-                    created_at=now,
+        existing_row = self._db.scalar(
+            select(Approval).where(
+                Approval.agreement_version_id == version_row.id,
+                Approval.organization_id == command.organization_id,
+            )
+        )
+        if existing_row is not None:
+            if existing_row.decision == command.decision.value:
+                raise DuplicateApproval(
+                    "Organization already recorded this decision for this agreement version"
                 )
-                self._db.add(row)
-                self._db.flush()
-        except IntegrityError as error:
-            raise DuplicateApproval(
-                "Organization already recorded a decision for this agreement version"
-            ) from error
+            # A party is revising a prior REJECT/APPROVE while still pending.
+            existing_row.decision = command.decision.value
+            existing_row.user_id = command.user_id
+            existing_row.terms_hash = command.terms_hash
+            existing_row.created_at = now
+            self._db.flush()
+        else:
+            try:
+                with self._db.begin_nested():
+                    row = Approval(
+                        deal_id=version_row.deal_id,
+                        agreement_version_id=version_row.id,
+                        organization_id=command.organization_id,
+                        user_id=command.user_id,
+                        decision=command.decision.value,
+                        terms_hash=command.terms_hash,
+                        created_at=now,
+                    )
+                    self._db.add(row)
+                    self._db.flush()
+            except IntegrityError as error:
+                raise DuplicateApproval(
+                    "Organization already recorded a decision for this agreement version"
+                ) from error
 
-        self._db.commit()
         return approval
 
-    def commit(self, command: CommitAgreementCommand, *, now: datetime) -> DomainAgreement:
+    def commit(
+        self, command: CommitAgreementCommand, *, now: datetime
+    ) -> tuple[DomainAgreement, bool]:
         deal_row = self._db.scalar(
             select(Deal).where(Deal.id == command.deal_id).with_for_update()
         )
@@ -168,6 +205,20 @@ class SqlAlchemyAgreementRepository:
         if version_row is None:
             raise AgreementNotFound("Agreement version not found")
         if version_row.status != AgreementStatus.PENDING_APPROVAL.value:
+            if (
+                version_row.status == AgreementStatus.COMMITTED.value
+                and version_row.terms_hash == command.expected_terms_hash
+            ):
+                # Idempotent replay: the caller already committed this exact
+                # version (e.g. a retry after losing the first response).
+                approval_rows = list(
+                    self._db.scalars(
+                        select(Approval).where(Approval.agreement_version_id == version_row.id)
+                    )
+                )
+                agreement = _agreement_to_domain(version_row, approval_rows)
+                agreement.commit(command.expected_terms_hash, as_utc(version_row.committed_at))
+                return agreement, False
             raise AgreementAlreadyCommitted(
                 "Agreement version is no longer pending approval"
             )
@@ -180,6 +231,10 @@ class SqlAlchemyAgreementRepository:
             )
         )
         agreement = _agreement_to_domain(version_row, approval_rows)
+        if agreement.terms.buyer_id != OrganizationId(
+            deal_row.buyer_organization_id
+        ) or agreement.terms.seller_id != OrganizationId(deal_row.seller_organization_id):
+            raise UnauthorizedApproval("Agreement version parties do not match the deal")
         agreement.commit(command.expected_terms_hash, now)
 
         committed = self._db.execute(
@@ -195,6 +250,8 @@ class SqlAlchemyAgreementRepository:
             raise AgreementAlreadyCommitted(
                 "Another request already committed this agreement version"
             )
+        version_row.status = AgreementStatus.COMMITTED.value
+        version_row.committed_at = now
 
         domain_deal = _deal_to_domain(deal_row)
         domain_deal.mark_agreed(AgreementVersionId(version_row.id))
@@ -206,9 +263,11 @@ class SqlAlchemyAgreementRepository:
         )
         if cast(CursorResult[Any], deal_updated).rowcount != 1:
             raise AgreementAlreadyCommitted("Deal was concurrently modified")
+        deal_row.status = domain_deal.status.value
+        deal_row.version = domain_deal.version
 
         self._db.flush()
-        return agreement
+        return agreement, True
 
     def _get_version(self, deal_id: UUID, version_number: int) -> AgreementVersion | None:
         return self._db.scalar(
@@ -241,18 +300,50 @@ class SqlAlchemyObligationRepository:
 
     def add_all(
         self, deal_id: UUID, agreement_version_id: UUID, drafts: list[ObligationDraft]
+    ) -> dict[str, UUID]:
+        rows = [
+            Obligation(
+                deal_id=deal_id,
+                agreement_version_id=agreement_version_id,
+                obligation_type=draft.obligation_type,
+                owner_organization_id=draft.owner_organization_id,
+                counterparty_organization_id=draft.counterparty_organization_id,
+                due_condition=draft.due_condition,
+                due_date=draft.due_date,
+                source_terms_reference=draft.source_terms_reference,
+            )
+            for draft in drafts
+        ]
+        self._db.add_all(rows)
+        self._db.flush()
+        return {
+            row.source_terms_reference: row.id for row in rows if row.source_terms_reference
+        }
+
+
+class SqlAlchemyPaymentMilestoneRepository:
+    def __init__(self, db: Session) -> None:
+        self._db = db
+
+    def add_all(
+        self,
+        deal_id: UUID,
+        agreement_version_id: UUID,
+        drafts: list[PaymentMilestoneDraft],
+        obligation_ids_by_reference: dict[str, UUID],
     ) -> None:
         for draft in drafts:
             self._db.add(
-                Obligation(
+                PaymentMilestone(
                     deal_id=deal_id,
                     agreement_version_id=agreement_version_id,
-                    obligation_type=draft.obligation_type,
-                    owner_organization_id=draft.owner_organization_id,
-                    counterparty_organization_id=draft.counterparty_organization_id,
+                    obligation_id=obligation_ids_by_reference.get(draft.source_terms_reference),
+                    sequence_number=draft.sequence_number,
+                    payer_organization_id=draft.payer_organization_id,
+                    amount=draft.amount.amount,
+                    currency=draft.amount.currency,
+                    trigger_type=draft.trigger_type,
                     due_condition=draft.due_condition,
-                    due_date=draft.due_date,
-                    source_terms_reference=draft.source_terms_reference,
                 )
             )
         self._db.flush()
@@ -294,6 +385,27 @@ class SqlAlchemyOutboxRepository:
         self._db.flush()
 
 
+def record_approval_in_transaction(
+    db: Session,
+    command: RecordApprovalCommand,
+    *,
+    now: datetime | None = None,
+) -> DomainApproval:
+    """Run RecordApproval as its own transaction: commits on success, rolls back on failure.
+
+    Owns the commit so the repository itself never commits the shared
+    session - unrelated pending writes on ``db`` are left untouched either way.
+    """
+    now = now or datetime.now(UTC)
+    try:
+        approval = record_approval(command, SqlAlchemyAgreementRepository(db), now=now)
+        db.commit()
+        return approval
+    except Exception:
+        db.rollback()
+        raise
+
+
 def commit_agreement_in_transaction(
     db: Session,
     command: CommitAgreementCommand,
@@ -314,6 +426,7 @@ def commit_agreement_in_transaction(
             command,
             SqlAlchemyAgreementRepository(db),
             SqlAlchemyObligationRepository(db),
+            SqlAlchemyPaymentMilestoneRepository(db),
             SqlAlchemyAuditRepository(db),
             SqlAlchemyOutboxRepository(db),
             now=now,

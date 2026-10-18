@@ -150,8 +150,7 @@ class TradeTerms:
             total = total.add(term.amount)
         return total
 
-    def canonical_json(self) -> str:
-        """Serialize every commitment-relevant field with deterministic ordering."""
+    def _payload(self, *, casefold_display: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "buyer_id": str(self.buyer_id),
@@ -169,7 +168,9 @@ class TradeTerms:
             "shipments": [
                 {
                     "quantity": _decimal(shipment.quantity),
-                    "destination": shipment.destination.casefold(),
+                    "destination": shipment.destination.casefold()
+                    if casefold_display
+                    else shipment.destination,
                     "target_date": shipment.target_date.isoformat()
                     if shipment.target_date
                     else None,
@@ -184,7 +185,9 @@ class TradeTerms:
                 }
                 for term in self.payment_terms
             ],
-            "delivery_location": self.delivery_location.casefold(),
+            "delivery_location": self.delivery_location.casefold()
+            if casefold_display
+            else self.delivery_location,
             "incoterm": self.incoterm,
             "cancellation_terms": self.cancellation_terms,
         }
@@ -193,7 +196,31 @@ class TradeTerms:
             payload[collection].sort(
                 key=lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
             )
-        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return payload
+
+    def canonical_json(self) -> str:
+        """Serialize every commitment-relevant field with deterministic ordering.
+
+        Destination/delivery location are casefolded here because this is
+        what ``terms_hash`` hashes - two terms differing only by that case
+        must still hash identically. Persist ``to_storage_dict()`` instead,
+        which keeps the original display case.
+        """
+        return json.dumps(
+            self._payload(casefold_display=True),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        """Same shape as ``canonical_json()``, but keeping display case.
+
+        This is what should be persisted as ``canonical_terms_json`` so
+        ``from_canonical_json`` can rebuild terms without losing the original
+        capitalization of free-text display fields.
+        """
+        return self._payload(casefold_display=False)
 
     @property
     def terms_hash(self) -> str:

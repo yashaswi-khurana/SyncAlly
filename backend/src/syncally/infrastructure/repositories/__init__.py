@@ -5,7 +5,9 @@ from syncally.infrastructure.repositories.agreements import (
     SqlAlchemyAuditRepository,
     SqlAlchemyObligationRepository,
     SqlAlchemyOutboxRepository,
+    SqlAlchemyPaymentMilestoneRepository,
     commit_agreement_in_transaction,
+    record_approval_in_transaction,
 )
 from syncally.infrastructure.repositories.communications import (
     CommunicationScopeError,
@@ -27,5 +29,7 @@ __all__ = [
     "SqlAlchemyOrganizationMemberRepository",
     "SqlAlchemyOrganizationRepository",
     "SqlAlchemyOutboxRepository",
+    "SqlAlchemyPaymentMilestoneRepository",
     "commit_agreement_in_transaction",
+    "record_approval_in_transaction",
 ]

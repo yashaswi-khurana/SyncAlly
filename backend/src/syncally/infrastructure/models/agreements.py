@@ -6,10 +6,19 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
-from syncally.infrastructure.models.base import Base, JSON_TYPE, UUID_TYPE
+from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE, Base
 from syncally.infrastructure.models.mixins import TimestampMixin
 
 

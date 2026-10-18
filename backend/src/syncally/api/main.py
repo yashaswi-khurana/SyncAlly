@@ -1,13 +1,14 @@
 """FastAPI application entry point."""
 
 from fastapi import Depends, FastAPI
-from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from syncally.api.auth import router as auth_router
 from syncally.api.deals import read_deal
+from syncally.api.organizations import router as organizations_router
 from syncally.infrastructure.database import get_db
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024
@@ -64,6 +65,7 @@ class RequestBodyLimitMiddleware:
 app = FastAPI(title="SyncAlly API", version="0.1.0")
 app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=MAX_REQUEST_BODY_BYTES)
 app.include_router(auth_router)
+app.include_router(organizations_router)
 
 
 @app.get("/health", tags=["operations"])

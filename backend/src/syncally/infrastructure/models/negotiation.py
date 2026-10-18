@@ -6,11 +6,21 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, CheckConstraint, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from syncally.infrastructure.models.base import Base, UUID_TYPE
+from syncally.infrastructure.models.base import UUID_TYPE, Base
 from syncally.infrastructure.models.mixins import TimestampMixin
 
 JSON_TYPE = JSON().with_variant(JSONB, "postgresql")

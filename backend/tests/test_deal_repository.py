@@ -4,14 +4,14 @@ import unittest
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
 from syncally.domain.shared.identifiers import DealId, OrganizationId
+from syncally.infrastructure.database import create_database_engine
 from syncally.infrastructure.models import (
     Base,
     Deal,
@@ -24,16 +24,7 @@ from syncally.infrastructure.repositories import SqlAlchemyDealRepository
 
 class DealRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.engine = create_engine(
-            "sqlite+pysqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-
-        @event.listens_for(self.engine, "connect")
-        def enable_foreign_keys(connection, _record) -> None:
-            connection.execute("PRAGMA foreign_keys=ON")
-
+        self.engine = create_database_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(self.engine)
         self.session = Session(self.engine)
 
@@ -80,6 +71,7 @@ class DealRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.version, 0)
         self.assertEqual(loaded.buyer_organization_id, buyer.id)
         self.assertEqual(loaded.seller_organization_id, seller.id)
+        self.assertEqual(loaded.created_at, deal.created_at)
 
     def test_active_organization_exists_only_for_active_organizations(self) -> None:
         _, buyer, _ = self._seed_participants()

@@ -15,6 +15,7 @@ from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
 from syncally.domain.shared.identifiers import AgreementVersionId, DealId, OrganizationId
 from syncally.infrastructure.models import Deal, Organization, OrganizationMember
+from syncally.infrastructure.repositories._timestamps import as_utc
 
 
 def _to_domain(row: Deal) -> DomainDeal:
@@ -22,7 +23,7 @@ def _to_domain(row: Deal) -> DomainDeal:
         id=DealId(row.id),
         buyer_organization_id=OrganizationId(row.buyer_organization_id),
         seller_organization_id=OrganizationId(row.seller_organization_id),
-        created_at=row.created_at,
+        created_at=as_utc(row.created_at),
         status=DealStatus(row.status),
         current_agreement_version_id=(
             AgreementVersionId(row.current_agreement_version_id)
@@ -55,6 +56,7 @@ class SqlAlchemyDealRepository:
             id=deal.id,
             buyer_organization_id=deal.buyer_organization_id,
             seller_organization_id=deal.seller_organization_id,
+            created_at=as_utc(deal.created_at),
             status=deal.status.value,
             current_agreement_version_id=deal.current_agreement_version_id,
             version=deal.version,

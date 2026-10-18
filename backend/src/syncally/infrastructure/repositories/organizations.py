@@ -20,6 +20,7 @@ from syncally.domain.organizations.organization import (
 )
 from syncally.domain.shared.identifiers import OrganizationId, UserId
 from syncally.infrastructure.models import Organization, OrganizationMember
+from syncally.infrastructure.repositories._timestamps import as_utc
 
 
 def _organization_to_domain(row: Organization) -> DomainOrganization:
@@ -27,7 +28,7 @@ def _organization_to_domain(row: Organization) -> DomainOrganization:
         id=OrganizationId(row.id),
         legal_name=row.legal_name,
         country_code=row.country_code,
-        created_at=row.created_at,
+        created_at=as_utc(row.created_at),
         status=OrganizationStatus(row.status),
     )
 
@@ -36,7 +37,7 @@ def _membership_to_domain(row: OrganizationMember) -> DomainOrganizationMember:
     return DomainOrganizationMember(
         organization_id=OrganizationId(row.organization_id),
         user_id=UserId(row.user_id),
-        created_at=row.created_at,
+        created_at=as_utc(row.created_at),
         role=OrganizationMemberRole(row.role),
         status=OrganizationMemberStatus(row.status),
     )
@@ -54,7 +55,7 @@ class SqlAlchemyOrganizationRepository:
             legal_name=organization.legal_name,
             country_code=organization.country_code,
             status=organization.status.value,
-            created_at=organization.created_at,
+            created_at=as_utc(organization.created_at),
         )
         self._db.add(row)
         self._db.flush()
@@ -77,7 +78,7 @@ class SqlAlchemyOrganizationMemberRepository:
             user_id=membership.user_id,
             role=membership.role.value,
             status=membership.status.value,
-            created_at=membership.created_at,
+            created_at=as_utc(membership.created_at),
         )
         self._db.add(row)
         self._db.flush()

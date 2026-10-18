@@ -47,6 +47,22 @@ rows. Requests without valid credentials return `401`; an actor acting for an or
 it does not belong to returns `403`; identical buyer and seller organizations or invalid
 fields return `422`; and missing, non-participating, or revoked-membership reads return the
 same `404` so the API does not reveal another organization's deal or membership details.
+`POST /deals/{deal_id}/messages` stores a user-authored message and
+`GET /deals/{deal_id}/messages` lists the messages a deal party may read. The author is
+always the verified actor, and the acting organization is derived from the actor's active
+memberships, never trusted from the body. When the caller belongs to both deal parties, the
+optional `organization_id` body field (or `organization_id` query parameter on reads) only
+selects among organizations the actor already belongs to. Each message has `PRIVATE` or
+`SHAREABLE` visibility; a party always sees its own messages and every `SHAREABLE` message
+from the other side, while a counterparty's `PRIVATE` message and its source reference stay
+hidden. A unique `(deal_id, participant_organization_id)` constraint guarantees one
+conversation per deal party, so concurrent first messages converge on a single conversation.
+`GET /deals/{deal_id}/facts` lists the reviewer's own facts plus shareable
+counterparty facts. `POST /deals/{deal_id}/facts/{fact_id}/confirm`, `/reject`, and `/clarify`
+advance a fact's review state, and only a member of the fact's owning organization may do so.
+Review conflicts (a stale version or an invalid state change) return `409`. Message bodies are
+never written to logs, and `422` validation errors are redacted so they do not echo submitted
+request values back to the caller.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
 Each refresh token can be used once. Replaying any rotated token, including a concurrent

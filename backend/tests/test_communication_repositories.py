@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from syncally.application.conversations import (
     ConcurrentConstraintUpdate,
     ConstraintNotFound,
+    ConstraintReviewAction,
     confirm_constraint,
+    review_constraint,
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.conversations import (
@@ -487,6 +489,97 @@ class CommunicationRepositoryTests(unittest.TestCase):
         with self.assertRaises(ConstraintNotFound):
             confirm_constraint(actor, self.deal.id, constraint.id, self.repository)
 
+    def test_get_or_create_conversation_is_idempotent_and_party_scoped(self) -> None:
+        first = self.repository.get_or_create_conversation(self.deal.id, self.buyer.id)
+        second = self.repository.get_or_create_conversation(self.deal.id, self.buyer.id)
+        self.assertEqual(first, self.buyer_conversation)
+        self.assertEqual(first, second)
+        self.assertEqual(first.participant_organization_id, OrganizationId(self.buyer.id))
+        self.session.commit()
+        self.assertEqual(
+            self.repository.list_conversations(self.deal.id, self.buyer.id),
+            [self.buyer_conversation],
+        )
+        with self.assertRaises(CommunicationScopeError):
+            self.repository.get_or_create_conversation(self.deal.id, self.outsider.id)
+
+    def test_get_or_create_conversation_recovers_when_a_concurrent_insert_wins(self) -> None:
+        original = self.repository._find_conversation
+        calls = {"count": 0}
+
+        def miss_once(deal_id, organization_id):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return None
+            return original(deal_id, organization_id)
+
+        self.repository._find_conversation = miss_once
+        try:
+            recovered = self.repository.get_or_create_conversation(
+                self.deal.id, self.buyer.id
+            )
+        finally:
+            del self.repository._find_conversation
+
+        self.assertEqual(recovered, self.buyer_conversation)
+        self.session.commit()
+        self.assertEqual(
+            self.repository.list_conversations(self.deal.id, self.buyer.id),
+            [self.buyer_conversation],
+        )
+
+    def test_reject_and_clarify_review_transitions_persist_for_the_owner(self) -> None:
+        actor = ActorContext(
+            user_id=self.user.id,
+            organization_ids=frozenset({self.buyer.id}),
+        )
+        rejected_source = self._constraint(
+            self.buyer.id, "quantity", Visibility.PRIVATE
+        )
+        clarified_source = self._constraint(
+            self.buyer.id, "delivery_window", Visibility.PRIVATE
+        )
+        self.session.commit()
+
+        rejected = review_constraint(
+            actor,
+            self.deal.id,
+            rejected_source.id,
+            ConstraintReviewAction.REJECT,
+            self.repository,
+        )
+        self.session.commit()
+        self.assertEqual(rejected.status, ConstraintStatus.REJECTED)
+        self.assertIsNone(rejected.confirmed_by)
+        self.assertEqual(rejected.version, 1)
+        persisted = self.repository.get_constraint_for_deal(
+            self.deal.id, rejected_source.id, self.user.id
+        )
+        self.assertEqual(persisted, rejected)
+
+        clarified = review_constraint(
+            actor,
+            self.deal.id,
+            clarified_source.id,
+            ConstraintReviewAction.REQUEST_CLARIFICATION,
+            self.repository,
+        )
+        self.session.commit()
+        self.assertEqual(clarified.status, ConstraintStatus.NEEDS_CLARIFICATION)
+        self.assertEqual(clarified.version, 1)
+
+        with self.assertRaises(ConstraintNotFound):
+            review_constraint(
+                ActorContext(
+                    user_id=self.seller_user.id,
+                    organization_ids=frozenset({self.seller.id}),
+                ),
+                self.deal.id,
+                clarified_source.id,
+                ConstraintReviewAction.REJECT,
+                self.repository,
+            )
+
     def test_list_methods_return_bounded_pages_and_validate_bounds(self) -> None:
         for body in ("first", "second", "third"):
             self._message(self.buyer_conversation, body, Visibility.PRIVATE)
@@ -593,16 +686,35 @@ class CommunicationRepositoryTests(unittest.TestCase):
             )
 
     def test_caller_transaction_rollback_discards_communication_records(self) -> None:
+        # The party already owns a conversation on self.deal, so use a second deal to
+        # exercise conversation rollback without breaking the one-per-party invariant.
+        rollback_deal = Deal(
+            buyer_organization_id=self.buyer.id,
+            seller_organization_id=self.seller.id,
+        )
+        self.session.add(rollback_deal)
+        self.session.flush()
         conversation = DomainConversation(
             id=ConversationId(uuid4()),
-            deal_id=DealId(self.deal.id),
+            deal_id=DealId(rollback_deal.id),
             participant_organization_id=OrganizationId(self.buyer.id),
             created_at=datetime.now(UTC),
         )
         self.repository.add_conversation(conversation)
         message = self._message(conversation, "rolled back", Visibility.PRIVATE)
-        constraint = self._constraint(
-            self.buyer.id, "quantity", Visibility.PRIVATE, source_message=message
+        constraint = self.repository.add_constraint(
+            DomainConstraint(
+                id=ConstraintId(uuid4()),
+                deal_id=DealId(rollback_deal.id),
+                owner_organization_id=OrganizationId(self.buyer.id),
+                field="quantity",
+                typed_value="test value",
+                kind=ConstraintKind.INFORMATIONAL,
+                visibility=Visibility.PRIVATE,
+                source_message_id=message.id,
+                source_span="source excerpt",
+                created_at=datetime.now(UTC),
+            )
         )
         self.session.rollback()
 

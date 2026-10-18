@@ -1,11 +1,19 @@
-"""Conversation visibility and constraint-confirmation use cases."""
+"""Conversation visibility and message/constraint-review use cases.
+
+This module owns the authorization and orchestration for deal conversations:
+it derives the acting organization from the authenticated ``ActorContext`` and a
+persistence port, never from data the caller supplies as authority. It must stay
+free of HTTP parsing, request/response schemas, and SQLAlchemy.
+"""
 
 from __future__ import annotations
 
 from copy import copy
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from syncally.application.identity import ActorContext
 from syncally.domain.conversations import (
@@ -13,11 +21,15 @@ from syncally.domain.conversations import (
     ConstraintStatus,
     Conversation,
     Message,
+    MessageSourceType,
     Visibility,
 )
 from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.errors import DomainError
-from syncally.domain.shared.identifiers import UserId
+from syncally.domain.shared.identifiers import ConversationId, MessageId, UserId
+
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
 
 
 class ConstraintRepository(Protocol):
@@ -48,12 +60,71 @@ class ConstraintRepository(Protocol):
         """
 
 
+class CommunicationRepository(ConstraintRepository, Protocol):
+    """Persistence boundary for deal-scoped messages and constraint reads."""
+
+    def get_or_create_conversation(
+        self, deal_id: UUID, organization_id: UUID
+    ) -> Conversation:
+        """Return the party's conversation for a deal, creating it when absent."""
+
+    def add_message(self, message: Message) -> Message:
+        """Persist a message whose author is an active member of its conversation owner."""
+
+    def list_messages(
+        self,
+        deal_id: UUID,
+        organization_id: UUID,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[Message]:
+        """List messages visible to an organization under the visibility rules."""
+
+    def list_constraints(
+        self,
+        deal_id: UUID,
+        organization_id: UUID,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[Constraint]:
+        """List constraints visible to an organization under the visibility rules."""
+
+
 class ConstraintNotFound(DomainError):
     """The constraint, its deal, or the actor's deal access is unavailable."""
 
 
 class ConcurrentConstraintUpdate(DomainError):
     """Another request changed the constraint after it was loaded."""
+
+
+class CommunicationNotFound(DomainError):
+    """The deal or record is missing or hidden from the authenticated actor."""
+
+
+class OrganizationAccessDenied(DomainError):
+    """The actor may not act on behalf of the requested organization."""
+
+
+class AmbiguousOrganization(DomainError):
+    """The actor belongs to both deal parties and must name the acting organization."""
+
+
+class ConstraintReviewAction(StrEnum):
+    """A human review decision applied to an extracted fact."""
+
+    CONFIRM = "CONFIRM"
+    REJECT = "REJECT"
+    REQUEST_CLARIFICATION = "REQUEST_CLARIFICATION"
+
+
+_REVIEW_TARGET_STATUS: dict[ConstraintReviewAction, ConstraintStatus] = {
+    ConstraintReviewAction.CONFIRM: ConstraintStatus.CONFIRMED,
+    ConstraintReviewAction.REJECT: ConstraintStatus.REJECTED,
+    ConstraintReviewAction.REQUEST_CLARIFICATION: ConstraintStatus.NEEDS_CLARIFICATION,
+}
 
 
 def can_view_message(
@@ -90,15 +161,125 @@ def can_view_constraint(actor: ActorContext, deal: Deal, constraint: Constraint)
     )
 
 
-def confirm_constraint(
+def resolve_participant_organization(
+    actor: ActorContext,
+    deal: Deal,
+    requested_organization_id: UUID | None = None,
+) -> UUID:
+    """Derive the deal party the actor acts for, ignoring caller-supplied authority.
+
+    A requested organization is only a selector among the memberships the actor
+    already holds; it can never grant access the verified actor does not have.
+    """
+    if requested_organization_id is not None:
+        if requested_organization_id not in actor.organization_ids:
+            raise OrganizationAccessDenied("Actor cannot act for this organization")
+        if requested_organization_id not in (
+            deal.buyer_organization_id,
+            deal.seller_organization_id,
+        ):
+            raise CommunicationNotFound("Deal not found")
+        return requested_organization_id
+
+    participant_organizations = [
+        organization_id
+        for organization_id in (
+            deal.buyer_organization_id,
+            deal.seller_organization_id,
+        )
+        if organization_id in actor.organization_ids
+    ]
+    if len(participant_organizations) == 1:
+        return participant_organizations[0]
+    raise AmbiguousOrganization("Actor must name one of its deal organizations")
+
+
+def _load_deal_for_participant(
+    actor: ActorContext, deal_id: UUID, repository: CommunicationRepository
+) -> Deal:
+    """Load a deal the actor participates in, hiding missing and forbidden deals alike."""
+    deal = repository.get_deal_for_participant(deal_id, actor.user_id)
+    if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
+        raise CommunicationNotFound("Deal not found")
+    return deal
+
+
+@dataclass(frozen=True)
+class AddMessageCommand:
+    """Input for a user-authored message attributed from the verified actor."""
+
+    body: str
+    visibility: Visibility
+    source_reference: str | None = None
+    organization_id: UUID | None = None
+
+
+def add_message(
+    actor: ActorContext,
+    deal_id: UUID,
+    command: AddMessageCommand,
+    repository: CommunicationRepository,
+    *,
+    now: datetime | None = None,
+) -> Message:
+    """Store a message authored by the authenticated user for its deal party."""
+    deal = _load_deal_for_participant(actor, deal_id, repository)
+    organization_id = resolve_participant_organization(actor, deal, command.organization_id)
+    conversation = repository.get_or_create_conversation(deal_id, organization_id)
+    message = Message(
+        id=MessageId(uuid4()),
+        conversation_id=ConversationId(conversation.id),
+        author_user_id=UserId(actor.user_id),
+        author_agent_id=None,
+        body=command.body,
+        visibility=command.visibility,
+        source_type=MessageSourceType.USER,
+        source_reference=command.source_reference,
+        created_at=now or datetime.now(UTC),
+    )
+    return repository.add_message(message)
+
+
+def list_visible_messages(
+    actor: ActorContext,
+    deal_id: UUID,
+    repository: CommunicationRepository,
+    *,
+    organization_id: UUID | None = None,
+    limit: int = DEFAULT_PAGE_SIZE,
+    offset: int = 0,
+) -> list[Message]:
+    """List messages a party of the deal may read under the visibility rules."""
+    deal = _load_deal_for_participant(actor, deal_id, repository)
+    resolved = resolve_participant_organization(actor, deal, organization_id)
+    return repository.list_messages(deal_id, resolved, limit=limit, offset=offset)
+
+
+def list_visible_constraints(
+    actor: ActorContext,
+    deal_id: UUID,
+    repository: CommunicationRepository,
+    *,
+    organization_id: UUID | None = None,
+    limit: int = DEFAULT_PAGE_SIZE,
+    offset: int = 0,
+) -> list[Constraint]:
+    """List facts a party of the deal may read under the visibility rules."""
+    deal = _load_deal_for_participant(actor, deal_id, repository)
+    resolved = resolve_participant_organization(actor, deal, organization_id)
+    return repository.list_constraints(deal_id, resolved, limit=limit, offset=offset)
+
+
+def review_constraint(
     actor: ActorContext,
     deal_id: UUID,
     constraint_id: UUID,
+    action: ConstraintReviewAction,
     repository: ConstraintRepository,
     *,
     now: datetime | None = None,
 ) -> Constraint:
-    """Confirm an extracted fact only for a member of its owning deal party."""
+    """Apply a human review decision to a fact for a member of its owning party."""
     deal = repository.get_deal_for_participant(deal_id, actor.user_id)
     if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
         raise ConstraintNotFound("Constraint not found")
@@ -118,18 +299,44 @@ def confirm_constraint(
     if constraint.owner_organization_id not in actor.organization_ids:
         raise ConstraintNotFound("Constraint not found")
 
-    user_id = UserId(actor.user_id)
-    if constraint.status is ConstraintStatus.CONFIRMED and constraint.confirmed_by == user_id:
+    target_status = _REVIEW_TARGET_STATUS[action]
+    if constraint.status is target_status:
         return constraint
 
     expected_version = constraint.version
     pending = copy(constraint)
-    pending.confirm(
-        confirmed_by=user_id,
-        confirmed_at=now or datetime.now(UTC),
-    )
+    if action is ConstraintReviewAction.CONFIRM:
+        pending.confirm(
+            confirmed_by=UserId(actor.user_id),
+            confirmed_at=now or datetime.now(UTC),
+        )
+    elif action is ConstraintReviewAction.REJECT:
+        pending.reject()
+    elif action is ConstraintReviewAction.REQUEST_CLARIFICATION:
+        pending.request_clarification()
+    else:  # pragma: no cover - guards future enum members
+        raise ValueError(f"Unsupported constraint review action: {action}")
     return repository.save_constraint(
         pending,
         expected_version=expected_version,
         actor_user_id=actor.user_id,
+    )
+
+
+def confirm_constraint(
+    actor: ActorContext,
+    deal_id: UUID,
+    constraint_id: UUID,
+    repository: ConstraintRepository,
+    *,
+    now: datetime | None = None,
+) -> Constraint:
+    """Confirm an extracted fact only for a member of its owning deal party."""
+    return review_constraint(
+        actor,
+        deal_id,
+        constraint_id,
+        ConstraintReviewAction.CONFIRM,
+        repository,
+        now=now,
     )

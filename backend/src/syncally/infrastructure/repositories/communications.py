@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.application.conversations import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
     ConcurrentConstraintUpdate,
     ConstraintNotFound,
 )
@@ -50,10 +54,6 @@ from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 
 class CommunicationScopeError(ValueError):
     """A conversation or constraint is outside the given deal/organization scope."""
-
-
-DEFAULT_PAGE_SIZE = 100
-MAX_PAGE_SIZE = 500
 
 
 def _page_bounds(limit: int, offset: int) -> tuple[int, int]:
@@ -174,6 +174,49 @@ class SqlAlchemyCommunicationRepository:
             )
         )
         return _conversation_to_domain(row) if row is not None else None
+
+    def get_or_create_conversation(
+        self, deal_id: UUID, organization_id: UUID
+    ) -> DomainConversation:
+        """Return the party's conversation, creating it once under concurrency.
+
+        A unique constraint on ``(deal_id, participant_organization_id)`` makes the
+        invariant durable. A concurrent first message that wins the race commits the
+        row first; the loser's insert violates the constraint, so it rolls back to a
+        savepoint and re-reads the winner instead of surfacing a 500.
+        """
+        self._require_deal_party(deal_id, organization_id)
+        row = self._find_conversation(deal_id, organization_id)
+        if row is not None:
+            return _conversation_to_domain(row)
+
+        try:
+            with self._db.begin_nested():
+                row = Conversation(
+                    deal_id=deal_id,
+                    participant_organization_id=organization_id,
+                    created_at=datetime.now(UTC),
+                )
+                self._db.add(row)
+                self._db.flush()
+        except IntegrityError:
+            row = self._find_conversation(deal_id, organization_id)
+            if row is None:
+                raise
+        return _conversation_to_domain(row)
+
+    def _find_conversation(
+        self, deal_id: UUID, organization_id: UUID
+    ) -> Conversation | None:
+        return self._db.scalar(
+            select(Conversation)
+            .where(
+                Conversation.deal_id == deal_id,
+                Conversation.participant_organization_id == organization_id,
+            )
+            .order_by(Conversation.created_at, Conversation.id)
+            .limit(1)
+        )
 
     def add_message(self, message: DomainMessage) -> DomainMessage:
         try:
@@ -393,12 +436,19 @@ class SqlAlchemyCommunicationRepository:
         expected_version: int,
         actor_user_id: UUID,
     ) -> DomainConstraint:
-        """Compare-and-save a confirmation while holding membership locks to commit."""
-        if (
-            constraint.status is not ConstraintStatus.CONFIRMED
-            or constraint.confirmed_by != UserId(actor_user_id)
-            or constraint.version != expected_version + 1
-        ):
+        """Compare-and-save a review decision while holding membership locks to commit."""
+        if constraint.version != expected_version + 1:
+            raise ConstraintNotFound("Constraint not found")
+        if constraint.status is ConstraintStatus.CONFIRMED:
+            if (
+                constraint.confirmed_by != UserId(actor_user_id)
+                or constraint.confirmed_at is None
+            ):
+                raise ConstraintNotFound("Constraint not found")
+        elif constraint.status not in {
+            ConstraintStatus.REJECTED,
+            ConstraintStatus.NEEDS_CLARIFICATION,
+        } or constraint.confirmed_by is not None or constraint.confirmed_at is not None:
             raise ConstraintNotFound("Constraint not found")
 
         deal = self._db.scalar(
@@ -452,7 +502,11 @@ class SqlAlchemyCommunicationRepository:
             .values(
                 status=constraint.status.value,
                 confirmed_by=constraint.confirmed_by,
-                confirmed_at=as_utc(constraint.confirmed_at),
+                confirmed_at=(
+                    as_utc(constraint.confirmed_at)
+                    if constraint.confirmed_at is not None
+                    else None
+                ),
                 version=constraint.version,
                 updated_at=func.now(),
             )

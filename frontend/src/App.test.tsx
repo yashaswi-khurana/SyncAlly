@@ -1,15 +1,87 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 
+vi.mock("./api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api/client")>();
+  return {
+    ...actual,
+    login: vi.fn(),
+    listOrganizations: vi.fn(),
+    listDeals: vi.fn(),
+    createDeal: vi.fn(),
+    getDeal: vi.fn(),
+  };
+});
+
+import { getDeal, listDeals, listOrganizations } from "./api/client";
+import { clearAccessToken, setAccessToken } from "./api/tokenStore";
+
+const mockedGetDeal = vi.mocked(getDeal);
+const mockedListDeals = vi.mocked(listDeals);
+const mockedListOrganizations = vi.mocked(listOrganizations);
+
 describe("App", () => {
-  it("renders the SyncAlly placeholder page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearAccessToken();
+    window.location.hash = "";
+    mockedListDeals.mockResolvedValue([]);
+    mockedListOrganizations.mockResolvedValue([
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        legal_name: "Buyer Co",
+        country_code: "US",
+        role: "ADMIN",
+      },
+    ]);
+  });
+
+  it("asks an unauthenticated visitor to sign in", () => {
     render(<App />);
 
     expect(
-      screen.getByRole("heading", { name: "Commercial conversations, in sync." }),
+      screen.getByRole("heading", { name: "Sign in to continue" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Deal creation, negotiation, approvals, and payments/)).toBeInTheDocument();
+  });
+
+  it("fetches the deal from the API for the current URL on reload", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/deals/deal-42";
+    mockedGetDeal.mockResolvedValue({
+      id: "deal-42",
+      buyer_organization_id: "11111111-1111-1111-1111-111111111111",
+      seller_organization_id: "22222222-2222-2222-2222-222222222222",
+      status: "DRAFT",
+      version: 0,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("DRAFT")).toBeInTheDocument();
+    expect(mockedGetDeal).toHaveBeenCalledWith("deal-42");
+  });
+
+  it("lands a signed-in user on the deals workspace by default", async () => {
+    setAccessToken("access-token");
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Deals shared with you" }),
+    ).toBeInTheDocument();
+    expect(mockedListDeals).toHaveBeenCalledTimes(1);
+    expect(mockedListOrganizations).toHaveBeenCalled();
+  });
+
+  it("shows the create flow when the create route is requested", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/deals/new";
+
+    render(<App />);
+
+    expect(await screen.findByLabelText("Buyer organization")).toBeInTheDocument();
+    expect(mockedListOrganizations).toHaveBeenCalledTimes(1);
   });
 });

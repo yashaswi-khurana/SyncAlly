@@ -127,6 +127,15 @@ _REVIEW_TARGET_STATUS: dict[ConstraintReviewAction, ConstraintStatus] = {
 }
 
 
+def visible_to_viewer(
+    visibility: Visibility,
+    owner_organization_id: UUID,
+    viewer_organization_ids: frozenset[UUID],
+) -> bool:
+    """A SHAREABLE item is visible to anyone; a PRIVATE item only to its owner org."""
+    return visibility is Visibility.SHAREABLE or owner_organization_id in viewer_organization_ids
+
+
 def can_view_message(
     actor: ActorContext,
     deal: Deal,
@@ -142,8 +151,8 @@ def can_view_message(
         or not actor.can_access_deal(deal)
     ):
         return False
-    return message.visibility is Visibility.SHAREABLE or (
-        conversation.participant_organization_id in actor.organization_ids
+    return visible_to_viewer(
+        message.visibility, conversation.participant_organization_id, actor.organization_ids
     )
 
 
@@ -156,8 +165,8 @@ def can_view_constraint(actor: ActorContext, deal: Deal, constraint: Constraint)
         or not actor.can_access_deal(deal)
     ):
         return False
-    return constraint.visibility is Visibility.SHAREABLE or (
-        constraint.owner_organization_id in actor.organization_ids
+    return visible_to_viewer(
+        constraint.visibility, constraint.owner_organization_id, actor.organization_ids
     )
 
 
@@ -268,6 +277,60 @@ def list_visible_constraints(
     deal = _load_deal_for_participant(actor, deal_id, repository)
     resolved = resolve_participant_organization(actor, deal, organization_id)
     return repository.list_constraints(deal_id, resolved, limit=limit, offset=offset)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AiContext:
+    """The messages and constraints one organization's AI prompt may see."""
+
+    deal_id: UUID
+    organization_id: UUID
+    messages: tuple[Message, ...]
+    constraints: tuple[Constraint, ...]
+
+    def __repr__(self) -> str:
+        # Never interpolate message.body / constraint.typed_value here - this is
+        # the guard against raw private content reaching logs or workflow input.
+        return (
+            f"AiContext(deal_id={self.deal_id}, organization_id={self.organization_id}, "
+            f"messages={len(self.messages)}, constraints={len(self.constraints)})"
+        )
+
+
+def select_ai_context(
+    actor: ActorContext,
+    deal_id: UUID,
+    organization_id: UUID,
+    repository: CommunicationRepository,
+) -> AiContext:
+    """Select what one organization's AI assistant may see for this deal.
+
+    The acting organization (`organization_id`) is the "owner" here: the one
+    whose side the AI is helping. It may see:
+      - its own PRIVATE chats and terms for this deal (its internal notes,
+        negotiating positions, draft facts not yet shared), and
+      - anything either party marked SHAREABLE (terms/chats both sides agreed
+        to expose across the table).
+    It may never see the counterparty's PRIVATE chats or terms - those never
+    enter this result, so no downstream prompt can leak them by accident.
+
+    A thin composition of `list_visible_messages`/`list_visible_constraints`: no
+    new privacy rule and no prompt-building, so it is testable without an AI
+    service. `organization_id` is required explicitly so an actor who belongs to
+    both deal parties still gets one deliberate, single-sided view.
+    """
+    messages = list_visible_messages(
+        actor, deal_id, repository, organization_id=organization_id, limit=MAX_PAGE_SIZE
+    )
+    constraints = list_visible_constraints(
+        actor, deal_id, repository, organization_id=organization_id, limit=MAX_PAGE_SIZE
+    )
+    return AiContext(
+        deal_id=deal_id,
+        organization_id=organization_id,
+        messages=tuple(messages),
+        constraints=tuple(constraints),
+    )
 
 
 def review_constraint(

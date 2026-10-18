@@ -3,7 +3,7 @@
 **Status:** Implemented domain foundation; commercial workflow persistence and transaction handlers remain incomplete
 **Scope:** Framework-independent commercial models in `backend/src/syncally/domain`
 
-This document distinguishes code that exists from the larger architecture in the reference design. The current slice implements shared money and identifiers, organization and membership domain records, deal lifecycle, negotiation proposals, canonical trade terms, bilateral agreement approval, and payment-intent state. The domain package does not perform persistence, database transactions, actor authorization, outbox delivery, execution plans, document storage, or provider calls. The application and infrastructure layers resolve persisted memberships, apply request authorization, and save business state.
+This document distinguishes code that exists from the larger architecture in the reference design. The current slice implements shared money and identifiers, organization and membership domain records, deal lifecycle, conversations and messages, constraint review, negotiation proposals, canonical trade terms, bilateral agreement approval, and payment-intent state. The domain package does not perform persistence, database transactions, actor authorization, outbox delivery, execution plans, document storage, or provider calls. The application layer applies conversation visibility and confirmation authorization; persistence and API flows remain incomplete.
 
 ## Dependency direction
 
@@ -28,6 +28,9 @@ flowchart TD
     Organization[Organization<br/>legal identity and status]
     Membership[OrganizationMember<br/>user, organization, role, status]
     Deal[Deal aggregate<br/>parties and coarse lifecycle]
+    Conversation[Conversation<br/>deal and owning organization]
+    Message[Message<br/>conversation and visibility]
+    Constraint[Constraint<br/>deal, owner, provenance, review status]
     Session[NegotiationSession<br/>round count and current proposal]
     Proposal[Proposal<br/>submitted terms snapshot]
     Terms[TradeTerms<br/>immutable canonical value]
@@ -36,6 +39,9 @@ flowchart TD
     Intent[PaymentIntent<br/>authorized provider operation]
     Membership --> Organization
     Deal --> Organization
+    Deal --> Conversation
+    Conversation --> Message
+    Deal --> Constraint
     Deal --> Session
     Session --> Proposal
     Proposal --> Terms
@@ -54,12 +60,17 @@ The diagram shows references and business flow, not object ownership. These are 
 | `Money` | Decimal-only finite amount, normalized three-letter currency, same-currency addition |
 | `Organization` | Required legal name, two-letter country code, explicit active status |
 | `OrganizationMember` | Typed organization/user IDs, explicit role and membership status; only `ACTIVE` is active |
+| `Conversation` | Deal and owning organization are required; the owner must be a party when application policy is applied |
+| `Message` | Requires a conversation, exactly one user or agent author, a non-empty body, and explicit visibility; its deal and owner scope come from the conversation |
+| `Constraint` | Requires deal and owner scope, a typed kind and visibility, and provenance fields; starts `EXTRACTED`; confirmation records a user and time and advances its version |
 | `TradeTerms` | Distinct buyer and seller; non-empty items, shipments, and payment terms; one currency; payment schedule equals line-item total; deterministic JSON and SHA-256 terms hash |
 | `Proposal` | Submitted proposal has a single lifecycle path; negotiation checks deal and predecessor references and maximum rounds |
 | `Deal` | Buyer differs from seller; explicit transitions and current agreement version check |
 | `Agreement` | Only parties approve; approval hash must match immutable terms; commitment requires approval from both parties for that hash |
 | `PaymentMilestone` | Positive amount and sequence; explicit payer and payment trigger |
 | `PaymentIntent` | Stable idempotency key; payer matches milestone; an ambiguous create cannot retry until reconciled; only reconciled full amount becomes `PAID` |
+
+Application authorization limits private messages and constraints to their owning organization; shareable records are visible to either deal party. Only a member of the owning organization can confirm its constraint. Confirmation means a person reviewed an extracted fact; it does not create a proposal, approve terms, or commit an agreement.
 
 The application layer must still verify that `authorized_by` is an active member with the required permission. Domain checks cannot establish identity or tenant membership by themselves.
 
@@ -93,6 +104,7 @@ The model does not claim exactly-once provider execution. Unique idempotency key
 ```text
 backend/src/syncally/domain/
 ├── shared/          # IDs, Money, domain errors
+├── conversations.py # Deal-scoped conversations, messages, constraints
 ├── organizations/   # Organization and organization membership records
 ├── deals/           # Deal state machine
 ├── negotiation/     # Proposals and negotiation session
@@ -104,6 +116,6 @@ Keep framework imports, persistence mappings, external SDKs, actor authenticatio
 
 ## Deliberate next steps
 
-The current code is a domain foundation, not an end-to-end vertical slice. Before claiming production behavior, add focused domain tests, then implement application ports and transaction handlers. Remaining domain work includes constraints, execution obligations and amendment history, document snapshots, and richer currency/quantity/tax/trade-term policies. Persistence work must add optimistic concurrency, uniqueness for idempotency keys and commitments, transactional outbox records, and migrations. Provider integration must verify callbacks and reconcile outcomes before treating payments as complete.
+The current code is a domain foundation, not an end-to-end vertical slice. Before claiming production behavior, implement persistence and transaction handlers for messages and constraints, plus execution obligations and amendment history, document snapshots, and richer currency/quantity/tax/trade-term policies. Persistence work must add optimistic concurrency, uniqueness for idempotency keys and commitments, transactional outbox records, and migrations. Provider integration must verify callbacks and reconcile outcomes before treating payments as complete.
 
 The initial `TradeTerms` schema supports one currency and requires payment terms to sum to the line-item total. Taxes, discounts, fees, exchange rates, multi-currency deals, per-item shipment allocation, and Incoterms validation are intentionally not inferred or implemented here.

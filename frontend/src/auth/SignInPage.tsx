@@ -3,10 +3,7 @@ import type { FormEvent } from "react";
 
 import { ApiError, login } from "../api/client";
 import type { TokenResponse } from "../api/types";
-import CustomCursor from "../ui/CustomCursor";
-import LiveClock from "../ui/LiveClock";
-import Marquee from "../ui/Marquee";
-import Reveal from "../ui/Reveal";
+import TradeFlowScene from "../deals/TradeFlowScene";
 
 interface SignInPageProps {
   onSignIn: (tokens: TokenResponse) => void;
@@ -59,45 +56,73 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
 
   return (
     <main className="auth-layout">
-      <div className="aurora" aria-hidden="true">
-        <span className="aurora__blob aurora__blob--a" />
-        <span className="aurora__blob aurora__blob--b" />
-      </div>
-      <CustomCursor />
+      <header className="auth-masthead">
+        <a className="auth-wordmark" href="#/deals" aria-label="SyncAlly home">
+          <span className="auth-wordmark__mark" aria-hidden="true">
+            <svg viewBox="0 0 28 28" focusable="false">
+              <path d="M4 6.5h13.5L24 13v8.5H10.5L4 15z" />
+              <path d="M4 6.5 10.5 13v8.5M10.5 13H24" />
+            </svg>
+          </span>
+          <span>SyncAlly</span>
+        </a>
+        <div className="auth-masthead__note">
+          <span className="auth-masthead__index">SA / 01</span>
+          <span>TRADE RECORDS, KEPT TOGETHER</span>
+        </div>
+      </header>
 
-      <Reveal className="auth-hero">
-        <span className="eyebrow">Deal workspace</span>
-        <h1 className="display">
-          Conversations become{" "}
-          <span className="gradient-text">committed agreements</span>.
+      <section className="auth-hero" aria-labelledby="auth-title">
+        <div className="auth-hero__meta">
+          <span className="eyebrow">A shared record for both sides</span>
+          <span className="auth-hero__edition">BUYER ↔ SELLER</span>
+        </div>
+        <h1 id="auth-title">
+          When terms matter,<br />
+          <span>keep the whole conversation.</span>
         </h1>
-        <p className="hero__lede">
-          SyncAlly turns buyer and seller talks into reviewed trade terms, bilateral approval, and
-          durable payment requests — with every decision recorded.
+        <p className="auth-hero__lede">
+          Read the conversation alongside source-linked facts. Each organization reviews the facts
+          it owns, with private details kept to that side.
         </p>
-        <div className="auth-badges">
-          <span className="pill">Bilateral approval</span>
-          <span className="pill">Canonical terms</span>
-          <span className="pill">Durable payment intent</span>
-        </div>
-        <div className="hero__marquee">
-          <Marquee speed={30}>
-            <span>NEGOTIATE</span>
-            <span>AGREE</span>
-            <span>FULFIL</span>
-            <span>PAY</span>
-          </Marquee>
-        </div>
-        <LiveClock />
-      </Reveal>
 
-      <Reveal delay={120} className="card auth-card">
-        <span className="eyebrow">SyncAlly</span>
-        <h2 id="sign-in-heading" style={{ marginTop: 14 }}>
-          Sign in to continue
-        </h2>
-        <p className="muted">
-          Use a provisioned demo account. Public registration is not available in this demo.
+        <div className="auth-diagram" aria-label="Conversation to suggested facts to owner review">
+          <div className="auth-diagram__topline">
+            <span>THE RECORD PATH</span>
+            <span>01 — 03</span>
+          </div>
+          <div className="auth-diagram__drawing" aria-hidden="true">
+            <TradeFlowScene />
+          </div>
+          <div className="auth-diagram__labels">
+            <div>
+              <span>01 / INPUT</span>
+              <strong>Conversation</strong>
+            </div>
+            <div>
+              <span>02 / RECORD</span>
+              <strong>Suggested facts</strong>
+            </div>
+            <div>
+              <span>03 / REVIEW</span>
+              <strong>Owner review</strong>
+            </div>
+          </div>
+        </div>
+        <div className="auth-hero__footnote">
+          <span className="auth-hero__footnote-mark" aria-hidden="true">↳</span>
+          <span>Reviewing a fact records a decision; it does not commit an agreement.</span>
+        </div>
+      </section>
+
+      <aside className="card auth-card" aria-labelledby="sign-in-heading">
+        <div className="auth-card__topline">
+          <span className="eyebrow">Workspace access</span>
+          <span className="auth-card__number">01 / 01</span>
+        </div>
+        <h2 id="sign-in-heading">Open your trade desk.</h2>
+        <p className="auth-card__intro">
+          Sign in with a provisioned buyer or seller account. Public registration is turned off.
         </p>
         <form className="form" onSubmit={handleSubmit} noValidate>
           <div className="field">
@@ -139,11 +164,22 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
               {formError}
             </p>
           ) : null}
-          <button type="submit" className="button" disabled={submitting}>
-            {submitting ? "Signing in…" : "Sign in"}
+          <button type="submit" className="button auth-card__submit" disabled={submitting}>
+            <span>{submitting ? "Signing in…" : "Enter workspace"}</span>
+            <span aria-hidden="true">↗</span>
           </button>
         </form>
-      </Reveal>
+        <div className="auth-card__fineprint">
+          <span className="auth-card__fineprint-dot" aria-hidden="true" />
+          <span>Development accounts · records saved to the local database</span>
+        </div>
+      </aside>
+
+      <footer className="auth-footer">
+        <span>SYNCALLY / DEAL WORKSPACE</span>
+        <span>NEGOTIATE &nbsp;·&nbsp; RECORD &nbsp;·&nbsp; REVIEW</span>
+        <span>PRIVATE BY DEFAULT</span>
+      </footer>
     </main>
   );
 }

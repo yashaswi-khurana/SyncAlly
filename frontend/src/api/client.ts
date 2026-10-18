@@ -3,7 +3,10 @@ import type {
   CreateDealInput,
   CreateOrganizationInput,
   Deal,
+  DealFact,
+  DealMessage,
   DealSummary,
+  FactReviewAction,
   Organization,
   OrganizationMember,
   TokenResponse,
@@ -134,4 +137,30 @@ export function createDeal(input: CreateDealInput): Promise<Deal> {
 
 export function getDeal(dealId: string): Promise<Deal> {
   return apiRequest<Deal>(`/deals/${encodeURIComponent(dealId)}`);
+}
+
+export function listDealMessages(
+  dealId: string,
+  organizationId: string,
+): Promise<DealMessage[]> {
+  const query = new URLSearchParams({ organization_id: organizationId });
+  return apiRequest<DealMessage[]>(
+    `/deals/${encodeURIComponent(dealId)}/messages?${query.toString()}`,
+  );
+}
+
+export function listDealFacts(dealId: string, organizationId: string): Promise<DealFact[]> {
+  const query = new URLSearchParams({ organization_id: organizationId });
+  return apiRequest<DealFact[]>(`/deals/${encodeURIComponent(dealId)}/facts?${query.toString()}`);
+}
+
+export function reviewDealFact(
+  dealId: string,
+  factId: string,
+  action: FactReviewAction,
+): Promise<DealFact> {
+  return apiRequest<DealFact>(
+    `/deals/${encodeURIComponent(dealId)}/facts/${encodeURIComponent(factId)}/${action}`,
+    { method: "POST" },
+  );
 }

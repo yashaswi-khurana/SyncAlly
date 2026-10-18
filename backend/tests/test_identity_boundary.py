@@ -394,16 +394,8 @@ class IdentityBoundaryTests(unittest.TestCase):
             status="DRAFT",
         )
 
-        self.assertTrue(
-            actor.can_access_organizations(
-                accessible.buyer_organization_id, accessible.seller_organization_id
-            )
-        )
-        self.assertFalse(
-            actor.can_access_organizations(
-                inaccessible.buyer_organization_id, inaccessible.seller_organization_id
-            )
-        )
+        self.assertTrue(actor.can_access_deal(accessible))
+        self.assertFalse(actor.can_access_deal(inaccessible))
 
     def test_development_identity_is_rejected_outside_local_environments(self) -> None:
         with self.assertRaises(ValidationError):

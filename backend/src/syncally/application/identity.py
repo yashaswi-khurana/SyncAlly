@@ -1,25 +1,29 @@
-"""Verified request identity passed into application use cases."""
+"""Authenticated actor and organization authorization rules."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
+from uuid import UUID
 
-from syncally.domain.shared.identifiers import OrganizationId, UserId
+
+class DealParticipation(Protocol):
+    """The deal fields required to decide whether an actor takes part."""
+
+    buyer_organization_id: UUID
+    seller_organization_id: UUID
 
 
 @dataclass(frozen=True)
 class ActorContext:
     """The verified user and active organization memberships for one request."""
 
-    user_id: UserId
-    organization_ids: frozenset[OrganizationId]
+    user_id: UUID
+    organization_ids: frozenset[UUID]
 
-    def can_access_organizations(
-        self,
-        buyer_organization_id: OrganizationId,
-        seller_organization_id: OrganizationId,
-    ) -> bool:
-        """Return whether the actor belongs to either party of a deal."""
+    def can_access_deal(self, deal: DealParticipation) -> bool:
+        """Return whether the actor belongs to either party of the deal."""
         return bool(
-            {buyer_organization_id, seller_organization_id} & self.organization_ids
+            {deal.buyer_organization_id, deal.seller_organization_id}
+            & self.organization_ids
         )

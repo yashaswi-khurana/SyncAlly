@@ -6,7 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext
-from syncally.domain.shared.identifiers import OrganizationId, UserId
 from syncally.infrastructure.models import Organization, OrganizationMember, User
 
 
@@ -25,7 +24,4 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
             Organization.status == "ACTIVE",
         )
     )
-    return ActorContext(
-        user_id=UserId(user_id),
-        organization_ids=frozenset(OrganizationId(value) for value in organization_ids),
-    )
+    return ActorContext(user_id=user_id, organization_ids=frozenset(organization_ids))

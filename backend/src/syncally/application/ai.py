@@ -11,13 +11,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import sleep as default_sleep
 from typing import Protocol, runtime_checkable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from syncally.application.conversations import (
     AiContext,
+    CommunicationNotFound,
     CommunicationRepository,
+    OrganizationAccessDenied,
     select_ai_context,
 )
 from syncally.application.identity import ActorContext
@@ -32,6 +35,8 @@ from syncally.domain.ai.contracts import (
     ValidationStatus,
     scope_extracted_facts,
 )
+from syncally.domain.conversations import Constraint, ConstraintKind, ConstraintStatus, Visibility
+from syncally.domain.shared.identifiers import ConstraintId, DealId, OrganizationId
 
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -210,6 +215,17 @@ def extract_facts(
     fact from the counterparty's private data.
     """
     context = select_ai_context(actor, deal_id, organization_id, repository)
+    return extract_facts_from_context(context, provider, policy=policy, sleep=sleep)
+
+
+def extract_facts_from_context(
+    context: AiContext,
+    provider: AISuggestionProvider,
+    *,
+    policy: AIRetryPolicy = AIRetryPolicy(),
+    sleep: Callable[[float], None] = default_sleep,
+) -> FactExtractionResult:
+    """Call the provider and validate candidates after authorized context is loaded."""
     request = FactExtractionRequest(context=context)
 
     try:
@@ -221,7 +237,7 @@ def extract_facts(
         candidates = scope_extracted_facts(
             facts,
             authorized_messages={message.id: message.body for message in context.messages},
-            owner_organization_id=organization_id,
+            owner_organization_id=context.organization_id,
         )
     except AIPermanentError as error:
         return _rejected_fact_result("AI_OUTPUT_INVALID", str(error))
@@ -242,6 +258,17 @@ def draft_proposal(
 ) -> ProposalDraftResult:
     """Draft one non-binding proposal from a single organization's context."""
     context = select_ai_context(actor, deal_id, organization_id, repository)
+    return draft_proposal_from_context(context, provider, policy=policy, sleep=sleep)
+
+
+def draft_proposal_from_context(
+    context: AiContext,
+    provider: AISuggestionProvider,
+    *,
+    policy: AIRetryPolicy = AIRetryPolicy(),
+    sleep: Callable[[float], None] = default_sleep,
+) -> ProposalDraftResult:
+    """Call a provider with an already authorized, transaction-free context."""
     request = ProposalDraftRequest(context=context)
 
     try:
@@ -259,6 +286,72 @@ def draft_proposal(
         )
         return ProposalDraftResult(ValidationResult.invalid((issue,)), None)
     return ProposalDraftResult(ValidationResult.valid(), proposal)
+
+
+def persist_fact_candidates(
+    actor: ActorContext,
+    deal_id: UUID,
+    result: FactExtractionResult,
+    repository: CommunicationRepository,
+    *,
+    now: datetime | None = None,
+) -> tuple[Constraint, ...]:
+    """Save validated candidates as private, unconfirmed facts for human review."""
+    deal = repository.get_deal_for_participant(deal_id, actor.user_id)
+    if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
+        raise CommunicationNotFound("Deal not found")
+    if result.result.status is not ValidationStatus.VALID:
+        return ()
+
+    saved: list[Constraint] = []
+    candidate_owners = {candidate.owner_organization_id for candidate in result.candidates}
+    existing = [
+        fact
+        for owner_id in candidate_owners
+        if owner_id in actor.organization_ids
+        for fact in repository.list_constraints(deal_id, owner_id, limit=500, offset=0)
+    ]
+    existing_by_signature = {
+        (fact.owner_organization_id, fact.source_message_id, fact.field, fact.typed_value): fact
+        for fact in existing
+    }
+    created_at = now or datetime.now(UTC)
+    for candidate in result.candidates:
+        if candidate.owner_organization_id not in actor.organization_ids or candidate.owner_organization_id not in (
+            deal.buyer_organization_id,
+            deal.seller_organization_id,
+        ):
+            raise OrganizationAccessDenied("Actor cannot save a fact for this organization")
+        signature = (
+            candidate.owner_organization_id,
+            candidate.source_message_id,
+            candidate.fact.field.value,
+            candidate.fact.value,
+        )
+        existing_fact = existing_by_signature.get(signature)
+        if existing_fact is not None:
+            if existing_fact.status in {
+                ConstraintStatus.EXTRACTED,
+                ConstraintStatus.NEEDS_CLARIFICATION,
+            }:
+                saved.append(existing_fact)
+            continue
+        fact = Constraint(
+            id=ConstraintId(uuid4()),
+            deal_id=DealId(deal_id),
+            owner_organization_id=OrganizationId(candidate.owner_organization_id),
+            field=candidate.fact.field.value,
+            typed_value=candidate.fact.value,
+            currency_or_unit=candidate.fact.currency_or_unit,
+            kind=ConstraintKind.INFORMATIONAL,
+            visibility=Visibility.PRIVATE,
+            source_message_id=candidate.source_message_id,
+            source_span=candidate.fact.source.quote,
+            created_at=created_at,
+        )
+        saved.append(repository.add_constraint(fact))
+        existing_by_signature[signature] = fact
+    return tuple(saved)
 
 
 def _rejected_fact_result(code: str, message: str) -> FactExtractionResult:

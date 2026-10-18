@@ -8,7 +8,7 @@ request as authority. Message bodies are never written to logs.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import NoReturn
 from uuid import UUID
 
@@ -17,6 +17,13 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.application.ai import (
+    AISuggestionProvider,
+    AITransientError,
+    draft_proposal_from_context,
+    extract_facts_from_context,
+    persist_fact_candidates,
+)
 from syncally.application.conversations import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -29,13 +36,25 @@ from syncally.application.conversations import (
     ConstraintReviewAction,
     OrganizationAccessDenied,
     add_message,
+    correct_constraint,
     list_visible_constraints,
     list_visible_messages,
     review_constraint,
+    select_ai_context,
 )
 from syncally.application.identity import ActorContext
+from syncally.config import settings
+from syncally.domain.ai.contracts import (
+    AI_SCHEMA_VERSION,
+    AIContractError,
+    ExtractedFact,
+    FactField,
+    SourceReference,
+    ValidationResult,
+)
 from syncally.domain.conversations import Constraint, Message, Visibility
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
+from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.repositories import (
     CommunicationScopeError,
@@ -103,11 +122,225 @@ class ConstraintResponse(BaseModel):
     created_at: datetime
 
 
+class ValidationIssueResponse(BaseModel):
+    schema_version: int
+    code: str
+    path: str
+    message: str
+
+
+class FactSuggestionResponse(BaseModel):
+    status: str
+    issues: list[ValidationIssueResponse]
+    facts: list[ConstraintResponse]
+
+
+class ProposalSuggestionResponse(BaseModel):
+    schema_version: int
+    description: str
+    quantity: str
+    unit: str
+    unit_price: str
+    currency: str
+    delivery_destination: str
+    delivery_date: date | None
+    status: str = "DRAFT"
+
+
+class AISuggestionRequest(BaseModel):
+    organization_id: UUID
+
+
+class CorrectFactRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    field: str = Field(min_length=1, max_length=100)
+    typed_value: str = Field(min_length=1, max_length=2000)
+    currency_or_unit: str | None = Field(default=None, max_length=32)
+
+    @field_validator("field", "typed_value", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class FactCorrectionResponse(BaseModel):
+    replaced_fact: ConstraintResponse
+    corrected_fact: ConstraintResponse
+
+
 def get_communication_repository(
     db: Session = Depends(get_db),
 ) -> CommunicationRepository:
     """Provide the conversation persistence port for the current request."""
     return SqlAlchemyCommunicationRepository(db)
+
+
+def get_ai_suggestion_provider() -> AISuggestionProvider:
+    """Use the deterministic demo provider locally; require a chosen provider elsewhere."""
+    if settings.app_env.lower() not in {"development", "test"}:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI suggestions are not configured",
+        )
+    return DemoAISuggestionProvider()
+
+
+def _validation_issue_responses(result: ValidationResult) -> list[ValidationIssueResponse]:
+    return [
+        ValidationIssueResponse(
+            schema_version=issue.schema_version,
+            code=issue.code,
+            path=issue.path,
+            message=issue.message,
+        )
+        for issue in result.issues
+    ]
+
+
+@router.post("/ai/facts", response_model=FactSuggestionResponse)
+def suggest_facts_route(
+    deal_id: UUID,
+    payload: AISuggestionRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+    provider: AISuggestionProvider = Depends(get_ai_suggestion_provider),
+    db: Session = Depends(get_db),
+) -> FactSuggestionResponse:
+    """Run the scoped fake/provider on explicit request and save unreviewed candidates."""
+    try:
+        context = select_ai_context(actor, deal_id, payload.organization_id, repository)
+        db.rollback()  # Do not hold a database transaction while the provider runs.
+        result = extract_facts_from_context(context, provider)
+        facts = persist_fact_candidates(actor, deal_id, result, repository)
+        db.commit()
+    except AITransientError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI provider is temporarily unavailable",
+        ) from exc
+    except (
+        CommunicationNotFound,
+        OrganizationAccessDenied,
+        AmbiguousOrganization,
+        CommunicationScopeError,
+    ) as exc:
+        db.rollback()
+        _raise_review_error(exc)
+    except Exception:
+        db.rollback()
+        raise
+
+    return FactSuggestionResponse(
+        status=result.result.status.value,
+        issues=_validation_issue_responses(result.result),
+        facts=[_to_constraint_response(fact) for fact in facts],
+    )
+
+
+@router.post("/ai/proposal", response_model=ProposalSuggestionResponse)
+def suggest_proposal_route(
+    deal_id: UUID,
+    payload: AISuggestionRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+    provider: AISuggestionProvider = Depends(get_ai_suggestion_provider),
+    db: Session = Depends(get_db),
+) -> ProposalSuggestionResponse:
+    """Return validated draft terms; this route cannot save or approve an agreement."""
+    try:
+        context = select_ai_context(actor, deal_id, payload.organization_id, repository)
+        db.rollback()
+        result = draft_proposal_from_context(context, provider)
+    except AITransientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI provider is temporarily unavailable",
+        ) from exc
+    except (
+        CommunicationNotFound,
+        OrganizationAccessDenied,
+        AmbiguousOrganization,
+        CommunicationScopeError,
+    ) as exc:
+        _raise_review_error(exc)
+
+    if result.proposal is None:
+        message = result.result.issues[0].message if result.result.issues else "Proposal could not be drafted"
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=message)
+    proposal = result.proposal
+    return ProposalSuggestionResponse(
+        schema_version=proposal.schema_version,
+        description=proposal.description,
+        quantity=str(proposal.quantity),
+        unit=proposal.unit,
+        unit_price=str(proposal.unit_price),
+        currency=proposal.currency,
+        delivery_destination=proposal.delivery_destination,
+        delivery_date=proposal.delivery_date,
+    )
+
+
+@router.patch("/facts/{fact_id}", response_model=FactCorrectionResponse)
+def correct_fact_route(
+    deal_id: UUID,
+    fact_id: UUID,
+    payload: CorrectFactRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+    db: Session = Depends(get_db),
+) -> FactCorrectionResponse:
+    """Record a user correction as a new private candidate with the same evidence."""
+    try:
+        fact_field = FactField(payload.field)
+        ExtractedFact(
+            schema_version=AI_SCHEMA_VERSION,
+            field=fact_field,
+            value=payload.typed_value,
+            source=SourceReference(
+                schema_version=AI_SCHEMA_VERSION,
+                message_id=None,
+                quote=None,
+                unknown_reason="Human correction of a source-backed suggestion",
+            ),
+            currency_or_unit=payload.currency_or_unit,
+        )
+    except (ValueError, AIContractError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Corrected fact does not match a supported field format",
+        ) from exc
+
+    try:
+        replaced, corrected = correct_constraint(
+            actor,
+            deal_id,
+            fact_id,
+            expected_version=payload.expected_version,
+            field=fact_field.value,
+            typed_value=payload.typed_value,
+            currency_or_unit=payload.currency_or_unit,
+            repository=repository,
+        )
+        db.commit()
+    except (
+        ConstraintNotFound,
+        OrganizationAccessDenied,
+        ConcurrentConstraintUpdate,
+        InvalidTransition,
+        InvariantViolation,
+        CommunicationScopeError,
+    ) as exc:
+        db.rollback()
+        _raise_review_error(exc)
+    except Exception:
+        db.rollback()
+        raise
+
+    return FactCorrectionResponse(
+        replaced_fact=_to_constraint_response(replaced),
+        corrected_fact=_to_constraint_response(corrected),
+    )
 
 
 def _to_message_response(message: Message) -> MessageResponse:

@@ -25,8 +25,15 @@ from syncally.domain.conversations import (
     Visibility,
 )
 from syncally.domain.deals.deal import Deal
-from syncally.domain.shared.errors import DomainError
-from syncally.domain.shared.identifiers import ConversationId, MessageId, UserId
+from syncally.domain.shared.errors import DomainError, InvalidTransition
+from syncally.domain.shared.identifiers import (
+    ConstraintId,
+    ConversationId,
+    DealId,
+    MessageId,
+    OrganizationId,
+    UserId,
+)
 
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 500
@@ -58,6 +65,9 @@ class ConstraintRepository(Protocol):
         ``ConstraintNotFound`` for revoked membership or invalid provenance and
         ``ConcurrentConstraintUpdate`` when another write won the version check.
         """
+
+    def add_constraint(self, constraint: Constraint) -> Constraint:
+        """Persist a new unreviewed constraint after checking its deal and source scope."""
 
 
 class CommunicationRepository(ConstraintRepository, Protocol):
@@ -384,6 +394,56 @@ def review_constraint(
         expected_version=expected_version,
         actor_user_id=actor.user_id,
     )
+
+
+def correct_constraint(
+    actor: ActorContext,
+    deal_id: UUID,
+    constraint_id: UUID,
+    *,
+    expected_version: int,
+    field: str,
+    typed_value: str,
+    currency_or_unit: str | None,
+    repository: CommunicationRepository,
+    now: datetime | None = None,
+) -> tuple[Constraint, Constraint]:
+    """Replace an unreviewed candidate with a corrected private fact, atomically."""
+    deal = repository.get_deal_for_participant(deal_id, actor.user_id)
+    if deal is None or not actor.can_access_deal(deal):
+        raise ConstraintNotFound("Constraint not found")
+    original = repository.get_constraint_for_deal(deal_id, constraint_id, actor.user_id)
+    if original is None or original.deal_id != deal.id:
+        raise ConstraintNotFound("Constraint not found")
+    if original.version != expected_version:
+        raise ConcurrentConstraintUpdate("Constraint was changed by another request")
+    if original.status not in {
+        ConstraintStatus.EXTRACTED,
+        ConstraintStatus.NEEDS_CLARIFICATION,
+    }:
+        raise InvalidTransition("Only unreviewed facts can be corrected")
+
+    rejected = copy(original)
+    rejected.reject()
+    saved_original = repository.save_constraint(
+        rejected,
+        expected_version=expected_version,
+        actor_user_id=actor.user_id,
+    )
+    corrected = Constraint(
+        id=ConstraintId(uuid4()),
+        deal_id=DealId(deal_id),
+        owner_organization_id=OrganizationId(original.owner_organization_id),
+        field=field,
+        typed_value=typed_value,
+        currency_or_unit=currency_or_unit,
+        kind=original.kind,
+        visibility=Visibility.PRIVATE,
+        source_message_id=original.source_message_id,
+        source_span=original.source_span,
+        created_at=now or datetime.now(UTC),
+    )
+    return saved_original, repository.add_constraint(corrected)
 
 
 def confirm_constraint(

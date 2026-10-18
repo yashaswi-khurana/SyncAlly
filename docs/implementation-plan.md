@@ -11,6 +11,7 @@ This plan tracks the constrained first demo from the shared [demo contract in is
 - Backend API health endpoints, JWT authentication, refresh-token storage/rotation, and deal reads authorized through database-backed organization membership.
 - PostgreSQL models, Alembic migrations, database configuration, persistence/rollback coverage, and migration instructions (PRs [#41](https://github.com/yashaswi-khurana/SyncAlly/pull/41) and [#42](https://github.com/yashaswi-khurana/SyncAlly/pull/42)).
 - Framework-independent domain foundations for deals, trade terms, negotiation, bilateral agreements, and payment intents.
+- Framework-independent conversation, message, and constraint contracts with visibility checks and owner-authorized fact confirmation.
 - React/TypeScript Vite shell.
 - Backend test/lint commands, a health-route test, and frontend test/build/lint checks are defined in the project READMEs and verified by this story.
 - Development/test demo seeding creates buyer/seller accounts, organizations, and admin memberships; public self-registration is disabled.
@@ -211,7 +212,9 @@ membership) remains planned.
 
 **Why:** Later proposal work needs to know who said something and whether it can be shared.
 
-**What to build:** Add Conversation, Message, and Constraint types. Each has a deal and owner. Messages and facts have explicit private/shareable visibility. Extracted facts start unconfirmed.
+**What to build:** Add Conversation, Message, and Constraint types. A conversation uses `participant_organization_id`; messages and facts have explicit private/shareable visibility. Facts retain units and provenance, start unconfirmed, and advance by versioned review transitions.
+
+**Contract code:** Domain types and fake-backed authorization/confirmation checks are implemented. A message inherits deal/owner scope through its required conversation reference; a constraint stores its deal and owner directly. The repository port requires current owner membership, same-deal provenance, and an expected-version check in the save transaction. Persistence, API routes, and UI remain in S3-02 through S3-04.
 
 **Done when:**
 - Tests reject messages or facts without a deal owner and visibility.

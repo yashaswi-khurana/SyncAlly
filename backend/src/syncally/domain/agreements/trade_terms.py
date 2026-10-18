@@ -11,6 +11,8 @@ from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.domain.shared.money import Money, canonical_decimal
 
+TRADE_TERMS_SCHEMA_VERSION = 1
+
 
 @dataclass(frozen=True, slots=True)
 class TradeLineItem:
@@ -69,7 +71,7 @@ class TradeTerms:
     delivery_location: str
     incoterm: str | None = None
     cancellation_terms: str = ""
-    schema_version: int = 1
+    schema_version: int = TRADE_TERMS_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "line_items", tuple(self.line_items))

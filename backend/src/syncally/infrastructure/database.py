@@ -2,18 +2,38 @@
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from syncally.config import settings
 
-engine = create_engine(
-    settings.database_url,
-    echo=settings.debug,
-    connect_args={"connect_timeout": 10},
-    pool_pre_ping=True,
-    pool_timeout=30,
-)
+
+def create_database_engine(database_url: str, *, echo: bool = False) -> Engine:
+    """Create an engine with safe parameter logging and SQLite FK enforcement."""
+    is_sqlite = make_url(database_url).get_backend_name() == "sqlite"
+    engine_options = {"pool_pre_ping": True, "hide_parameters": True}
+    if not is_sqlite:
+        engine_options["pool_timeout"] = 30
+    db_engine = create_engine(
+        database_url,
+        echo=echo,
+        connect_args={"timeout": 10} if is_sqlite else {"connect_timeout": 10},
+        **engine_options,
+    )
+
+    if is_sqlite:
+
+        @event.listens_for(db_engine, "connect")
+        def enable_sqlite_foreign_keys(connection, _record) -> None:
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return db_engine
+
+
+engine = create_database_engine(settings.database_url, echo=settings.debug)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

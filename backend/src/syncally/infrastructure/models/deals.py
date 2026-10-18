@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from syncally.infrastructure.models.base import UUID_TYPE, Base
@@ -29,6 +29,14 @@ class Deal(TimestampMixin, Base):
 
 class Conversation(Base):
     __tablename__ = "conversations"
+    __table_args__ = (
+        Index(
+            "ix_conversations_deal_participant_created",
+            "deal_id",
+            "participant_organization_id",
+            "created_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id", ondelete="CASCADE"), nullable=False)
@@ -44,6 +52,7 @@ class Message(Base):
             "OR (author_user_id IS NULL AND author_agent_id IS NOT NULL)",
             name="ck_message_has_author",
         ),
+        Index("ix_messages_conversation_visibility_created", "conversation_id", "visibility", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
@@ -53,11 +62,21 @@ class Message(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     visibility: Mapped[str] = mapped_column(String(32), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Constraint(Base):
     __tablename__ = "constraints"
+    __table_args__ = (
+        Index(
+            "ix_constraints_deal_owner_visibility_created",
+            "deal_id",
+            "owner_organization_id",
+            "visibility",
+            "created_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id", ondelete="CASCADE"), nullable=False)

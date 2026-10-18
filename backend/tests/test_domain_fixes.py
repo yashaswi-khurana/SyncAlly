@@ -89,6 +89,15 @@ def build_proposal(
 
 
 class DecimalCanonicalizationTests(TestCase):
+    def test_money_addition_is_exact_beyond_default_decimal_precision(self) -> None:
+        first = Money(Decimal("999999999999999998000000000.000000001"), "USD")
+        second = Money(Decimal("1"), "USD")
+        with localcontext() as context:
+            context.prec = 50
+            expected = first.amount + second.amount
+
+        self.assertEqual(first.add(second).amount, expected)
+
     def test_canonicalization_is_exact_and_context_independent(self) -> None:
         first = Decimal("1.234567890123456789012345678901")
         second = Decimal("1.234567890123456789012345678902")

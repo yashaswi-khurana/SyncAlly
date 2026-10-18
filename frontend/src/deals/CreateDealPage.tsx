@@ -130,8 +130,8 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
         Open a <span className="gradient-text">draft.</span>
       </h1>
       <p className="hero__lede">
-        Start with a buyer and a seller organization. Nothing is binding until both sides approve
-        the same version.
+        Start with a buyer and a seller organization. Review shareable conversation facts before
+        negotiating terms; fact review does not commit an agreement.
       </p>
     </Reveal>
   );

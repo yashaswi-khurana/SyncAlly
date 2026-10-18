@@ -22,7 +22,7 @@ describe("SignInPage", () => {
   it("validates required fields before calling the API", async () => {
     render(<SignInPage onSignIn={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
 
     expect(await screen.findByText("Email is required.")).toBeInTheDocument();
     expect(screen.getByText("Password is required.")).toBeInTheDocument();
@@ -46,7 +46,7 @@ describe("SignInPage", () => {
     fireEvent.change(screen.getByLabelText("Password"), {
       target: { value: "correct-horse-battery" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
 
     await waitFor(() => expect(onSignIn).toHaveBeenCalledWith(tokens));
     expect(mockedLogin).toHaveBeenCalledWith("buyer@syncally.demo", "correct-horse-battery");
@@ -63,7 +63,7 @@ describe("SignInPage", () => {
     fireEvent.change(screen.getByLabelText("Password"), {
       target: { value: "wrong-password" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
 
     expect(await screen.findByText("Invalid email or password.")).toBeInTheDocument();
   });

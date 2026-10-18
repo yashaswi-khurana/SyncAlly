@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 from unicodedata import normalize
+from uuid import UUID
 
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
@@ -226,6 +227,53 @@ class TradeTerms:
         ):
             raise InvariantViolation("The demo supports payment when the seller invoices")
 
+    @classmethod
+    def from_canonical_json(cls, data: dict[str, Any]) -> "TradeTerms":
+        """Reconstruct terms from the dict produced by ``canonical_json``.
+
+        Used to rebuild the domain aggregate from a stored ``AgreementVersion``
+        row so commit/approval invariants run through the same domain code
+        that produced the hash, rather than being re-derived in SQL.
+        """
+        return cls(
+            buyer_id=OrganizationId(UUID(data["buyer_id"])),
+            seller_id=OrganizationId(UUID(data["seller_id"])),
+            line_items=tuple(
+                TradeLineItem(
+                    description=item["description"],
+                    quantity=Decimal(item["quantity"]),
+                    unit=item["unit"],
+                    unit_price=_parse_money(item["unit_price"]),
+                    sku=item["sku"],
+                )
+                for item in data["line_items"]
+            ),
+            shipments=tuple(
+                ShipmentTerm(
+                    quantity=Decimal(shipment["quantity"]),
+                    destination=shipment["destination"],
+                    target_date=(
+                        date.fromisoformat(shipment["target_date"])
+                        if shipment["target_date"]
+                        else None
+                    ),
+                )
+                for shipment in data["shipments"]
+            ),
+            payment_terms=tuple(
+                PaymentTerm(
+                    amount=_parse_money(term["amount"]),
+                    trigger=term["trigger"],
+                    due_condition=term["due_condition"],
+                )
+                for term in data["payment_terms"]
+            ),
+            delivery_location=data["delivery_location"],
+            incoterm=data["incoterm"],
+            cancellation_terms=data["cancellation_terms"],
+            schema_version=data["schema_version"],
+        )
+
 
 def _decimal(value: Decimal) -> str:
     return canonical_decimal(value)
@@ -233,4 +281,8 @@ def _decimal(value: Decimal) -> str:
 
 def _money(value: Money) -> dict[str, str]:
     return {"amount": value.canonical_amount(), "currency": value.currency}
+
+
+def _parse_money(data: dict[str, str]) -> Money:
+    return Money(Decimal(data["amount"]), data["currency"])
 

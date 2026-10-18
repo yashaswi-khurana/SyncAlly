@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
 from syncally.domain.shared.identifiers import AgreementVersionId, DealId, OrganizationId
-from syncally.infrastructure.models import Deal, Organization, OrganizationMember
+from syncally.infrastructure.models import Deal, Organization, OrganizationMember, User
 from syncally.infrastructure.repositories._timestamps import as_utc
 
 
@@ -39,10 +39,12 @@ def _active_participation(user_id: UUID):
     return exists(
         select(OrganizationMember.id)
         .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .join(User, User.id == OrganizationMember.user_id)
         .where(
             OrganizationMember.user_id == user_id,
             OrganizationMember.status == "ACTIVE",
             Organization.status == "ACTIVE",
+            User.status == "ACTIVE",
             or_(
                 OrganizationMember.organization_id == Deal.buyer_organization_id,
                 OrganizationMember.organization_id == Deal.seller_organization_id,

@@ -35,7 +35,11 @@ class CommunicationMigrationTests(unittest.TestCase):
             "messages",
             metadata,
             Column("conversation_id", Integer),
+            Column("author_user_id", Integer),
+            Column("author_agent_id", String),
+            Column("body", String),
             Column("visibility", String),
+            Column("source_type", String),
             Column("created_at", DateTime),
         )
         Table(
@@ -43,9 +47,16 @@ class CommunicationMigrationTests(unittest.TestCase):
             metadata,
             Column("deal_id", Integer),
             Column("owner_organization_id", Integer),
+            Column("field", String),
+            Column("typed_value", String),
             Column("kind", String),
             Column("status", String),
             Column("visibility", String),
+            Column("source_message_id", Integer),
+            Column("source_span", String),
+            Column("confirmed_by", Integer),
+            Column("confirmed_at", DateTime),
+            Column("version", Integer),
             Column("created_at", DateTime),
         )
 
@@ -75,9 +86,18 @@ class CommunicationMigrationTests(unittest.TestCase):
                 self.assertEqual(
                     {
                         "ck_message_visibility",
+                        "ck_message_source_type",
+                        "ck_message_source_matches_author",
+                        "ck_message_body_nonempty",
                         "ck_constraint_kind",
                         "ck_constraint_status",
                         "ck_constraint_visibility",
+                        "ck_constraint_fact_nonempty",
+                        "ck_constraint_source_present",
+                        "ck_constraint_source_span_nonempty",
+                        "ck_constraint_version_nonnegative",
+                        "ck_constraint_confirmation_metadata_pair",
+                        "ck_constraint_confirmation_status",
                     },
                     {
                         check["name"]

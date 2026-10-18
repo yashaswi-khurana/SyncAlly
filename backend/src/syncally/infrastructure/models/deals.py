@@ -56,6 +56,16 @@ class Message(Base):
             "visibility IN ('PRIVATE', 'SHAREABLE', 'INTERNAL')",
             name="ck_message_visibility",
         ),
+        CheckConstraint(
+            "source_type IN ('USER', 'AGENT')",
+            name="ck_message_source_type",
+        ),
+        CheckConstraint(
+            "(source_type = 'USER' AND author_user_id IS NOT NULL AND author_agent_id IS NULL) "
+            "OR (source_type = 'AGENT' AND author_user_id IS NULL AND author_agent_id IS NOT NULL)",
+            name="ck_message_source_matches_author",
+        ),
+        CheckConstraint("length(trim(body)) > 0", name="ck_message_body_nonempty"),
         Index("ix_messages_conversation_visibility_created", "conversation_id", "visibility", "created_at"),
     )
 
@@ -78,12 +88,36 @@ class Constraint(Base):
             name="ck_constraint_kind",
         ),
         CheckConstraint(
-            "status IN ('EXTRACTED', 'NEEDS_CLARIFICATION', 'CONFIRMED', 'SUPERSEDED')",
+            "status IN ('EXTRACTED', 'NEEDS_CLARIFICATION', 'CONFIRMED', 'REJECTED', 'SUPERSEDED')",
             name="ck_constraint_status",
         ),
         CheckConstraint(
             "visibility IN ('PRIVATE', 'SHAREABLE', 'INTERNAL')",
             name="ck_constraint_visibility",
+        ),
+        CheckConstraint(
+            "length(trim(field)) > 0 AND length(trim(typed_value)) > 0",
+            name="ck_constraint_fact_nonempty",
+        ),
+        CheckConstraint(
+            "(source_message_id IS NOT NULL) OR "
+            "(source_span IS NOT NULL AND length(trim(source_span)) > 0)",
+            name="ck_constraint_source_present",
+        ),
+        CheckConstraint(
+            "source_span IS NULL OR length(trim(source_span)) > 0",
+            name="ck_constraint_source_span_nonempty",
+        ),
+        CheckConstraint("version >= 0", name="ck_constraint_version_nonnegative"),
+        CheckConstraint(
+            "(confirmed_by IS NULL AND confirmed_at IS NULL) "
+            "OR (confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL)",
+            name="ck_constraint_confirmation_metadata_pair",
+        ),
+        CheckConstraint(
+            "(status IN ('CONFIRMED', 'SUPERSEDED') AND confirmed_by IS NOT NULL) "
+            "OR (status NOT IN ('CONFIRMED', 'SUPERSEDED') AND confirmed_by IS NULL)",
+            name="ck_constraint_confirmation_status",
         ),
         Index(
             "ix_constraints_deal_owner_visibility_created",

@@ -1,24 +1,32 @@
 """Database-backed coverage for communication persistence and tenant isolation."""
 
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from syncally.domain.deals.communications import (
+from syncally.application.conversations import (
+    ConcurrentConstraintUpdate,
+    ConstraintNotFound,
+    confirm_constraint,
+)
+from syncally.application.identity import ActorContext
+from syncally.domain.conversations import (
     Constraint as DomainConstraint,
 )
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
     ConstraintKind,
     ConstraintStatus,
+    MessageSourceType,
     Visibility,
 )
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
     Conversation as DomainConversation,
 )
-from syncally.domain.deals.communications import (
+from syncally.domain.conversations import (
     Message as DomainMessage,
 )
 from syncally.domain.shared.errors import InvariantViolation
@@ -121,8 +129,6 @@ class CommunicationRepositoryTests(unittest.TestCase):
             DomainMessage(
                 id=MessageId(uuid4()),
                 conversation_id=conversation.id,
-                deal_id=conversation.deal_id,
-                owner_organization_id=conversation.participant_organization_id,
                 author_user_id=author_user_id
                 or UserId(
                     self.seller_user.id
@@ -133,7 +139,7 @@ class CommunicationRepositoryTests(unittest.TestCase):
                 author_agent_id=None,
                 body=body,
                 visibility=visibility,
-                source_type="USER",
+                source_type=MessageSourceType.USER,
                 source_reference=source_reference,
                 created_at=datetime.now(UTC),
             )
@@ -148,8 +154,24 @@ class CommunicationRepositoryTests(unittest.TestCase):
         source_message: DomainMessage | None = None,
         status: ConstraintStatus = ConstraintStatus.EXTRACTED,
     ) -> DomainConstraint:
-        return self.repository.add_constraint(
-            DomainConstraint(
+        if visibility is Visibility.SHAREABLE and source_message is None:
+            source_conversation = (
+                self.seller_conversation
+                if owner_id == self.seller.id
+                else self.buyer_conversation
+            )
+            source_message = self._message(
+                source_conversation,
+                "shared provenance",
+                Visibility.SHAREABLE,
+                author_user_id=UserId(
+                    self.seller_user.id if owner_id == self.seller.id else self.user.id
+                ),
+            )
+        confirmer = UserId(
+            self.seller_user.id if owner_id == self.seller.id else self.user.id
+        )
+        constraint = DomainConstraint(
                 id=ConstraintId(uuid4()),
                 deal_id=DealId(self.deal.id),
                 owner_organization_id=OrganizationId(owner_id),
@@ -157,19 +179,13 @@ class CommunicationRepositoryTests(unittest.TestCase):
                 typed_value="test value",
                 kind=ConstraintKind.INFORMATIONAL,
                 visibility=visibility,
-                status=status,
                 source_message_id=(source_message.id if source_message else None),
-                source_span="source excerpt" if source_message else None,
-                confirmed_by=(
-                    UserId(self.seller_user.id if owner_id == self.seller.id else self.user.id)
-                    if status is ConstraintStatus.CONFIRMED
-                    else None
-                ),
-                confirmed_at=(datetime.now(UTC) if status is ConstraintStatus.CONFIRMED else None),
-                version=2 if status is ConstraintStatus.CONFIRMED else 0,
+                source_span="source excerpt" if source_message else "extracted source note",
                 created_at=datetime.now(UTC),
-            )
         )
+        if status is ConstraintStatus.CONFIRMED:
+            constraint.confirm(confirmed_by=confirmer, confirmed_at=datetime.now(UTC))
+        return self.repository.add_constraint(constraint)
 
     def test_messages_round_trip_owner_visibility_source_and_utc_timestamp(self) -> None:
         message = self._message(
@@ -202,8 +218,7 @@ class CommunicationRepositoryTests(unittest.TestCase):
             {row.body for row in seller_messages}, {seller_private.body, shareable.body}
         )
         loaded = next(row for row in buyer_messages if row.id == message.id)
-        self.assertEqual(loaded.owner_organization_id, OrganizationId(self.buyer.id))
-        self.assertEqual(loaded.deal_id, DealId(self.deal.id))
+        self.assertEqual(loaded.conversation_id, self.buyer_conversation.id)
         self.assertEqual(loaded.source_reference, "upload:buyer-document-7")
         self.assertEqual(loaded.created_at.utcoffset(), UTC.utcoffset(None))
         self.assertEqual(
@@ -214,19 +229,7 @@ class CommunicationRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(
             self.repository.get_message(shareable.id, self.deal.id, self.buyer.id),
-            DomainMessage(
-                id=shareable.id,
-                conversation_id=shareable.conversation_id,
-                deal_id=shareable.deal_id,
-                owner_organization_id=shareable.owner_organization_id,
-                author_user_id=shareable.author_user_id,
-                author_agent_id=shareable.author_agent_id,
-                body=shareable.body,
-                visibility=shareable.visibility,
-                source_type=shareable.source_type,
-                created_at=shareable.created_at,
-                source_reference=None,
-            ),
+            replace(shareable, source_reference=None),
         )
         seller_shareable = self.repository.get_message(
             shareable.id, self.deal.id, self.seller.id
@@ -284,7 +287,7 @@ class CommunicationRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded_shareable.status, ConstraintStatus.CONFIRMED)
         self.assertEqual(loaded_shareable.confirmed_by, UserId(self.seller_user.id))
         self.assertEqual(loaded_shareable.confirmed_at.utcoffset(), UTC.utcoffset(None))
-        self.assertEqual(loaded_shareable.version, 2)
+        self.assertEqual(loaded_shareable.version, 1)
         self.assertNotIn(seller_private.id, {item.id for item in buyer_constraints})
         self.assertIsNone(
             self.repository.get_constraint(seller_private.id, self.deal.id, self.buyer.id)
@@ -404,13 +407,11 @@ class CommunicationRepositoryTests(unittest.TestCase):
         invalid_author = DomainMessage(
             id=MessageId(uuid4()),
             conversation_id=self.buyer_conversation.id,
-            deal_id=DealId(self.deal.id),
-            owner_organization_id=OrganizationId(self.buyer.id),
             author_user_id=UserId(outsider_user.id),
             author_agent_id=None,
             body="misattributed",
             visibility=Visibility.PRIVATE,
-            source_type="USER",
+            source_type=MessageSourceType.USER,
             created_at=datetime.now(UTC),
         )
         with self.assertRaises(CommunicationScopeError):
@@ -424,13 +425,67 @@ class CommunicationRepositoryTests(unittest.TestCase):
             typed_value="12",
             kind=ConstraintKind.INFORMATIONAL,
             visibility=Visibility.PRIVATE,
-            status=ConstraintStatus.CONFIRMED,
-            confirmed_by=UserId(outsider_user.id),
-            confirmed_at=datetime.now(UTC),
+            source_span="source excerpt",
             created_at=datetime.now(UTC),
+        )
+        invalid_confirmation.confirm(
+            confirmed_by=UserId(outsider_user.id), confirmed_at=datetime.now(UTC)
         )
         with self.assertRaises(CommunicationScopeError):
             self.repository.add_constraint(invalid_confirmation)
+
+    def test_s3_01_confirmation_use_case_integrates_with_database_repository(self) -> None:
+        constraint = self._constraint(
+            self.buyer.id, "quantity", Visibility.PRIVATE
+        )
+        self.session.commit()
+        actor = ActorContext(
+            user_id=self.user.id,
+            organization_ids=frozenset({self.buyer.id}),
+        )
+
+        confirmed = confirm_constraint(
+            actor, self.deal.id, constraint.id, self.repository
+        )
+        self.assertEqual(confirmed.status, ConstraintStatus.CONFIRMED)
+        self.assertEqual(confirmed.confirmed_by, UserId(self.user.id))
+        self.assertEqual(confirmed.version, 1)
+
+        self.session.commit()
+        persisted = self.repository.get_constraint_for_deal(
+            self.deal.id, constraint.id, self.user.id
+        )
+        self.assertEqual(persisted, confirmed)
+        self.assertEqual(
+            confirm_constraint(actor, self.deal.id, constraint.id, self.repository),
+            confirmed,
+        )
+        with self.assertRaises(ConcurrentConstraintUpdate):
+            self.repository.save_constraint(
+                confirmed,
+                expected_version=0,
+                actor_user_id=self.user.id,
+            )
+        self.session.rollback()
+
+        with self.assertRaises(ConstraintNotFound):
+            confirm_constraint(
+                ActorContext(
+                    user_id=self.seller_user.id,
+                    organization_ids=frozenset({self.seller.id}),
+                ),
+                self.deal.id,
+                constraint.id,
+                self.repository,
+            )
+
+        self.user.status = "INACTIVE"
+        self.session.commit()
+        self.assertIsNone(
+            self.repository.get_deal_for_participant(self.deal.id, self.user.id)
+        )
+        with self.assertRaises(ConstraintNotFound):
+            confirm_constraint(actor, self.deal.id, constraint.id, self.repository)
 
     def test_list_methods_return_bounded_pages_and_validate_bounds(self) -> None:
         for body in ("first", "second", "third"):
@@ -468,25 +523,25 @@ class CommunicationRepositoryTests(unittest.TestCase):
             self.repository.list_constraints(self.deal.id, self.buyer.id, offset=-1)
 
     def test_enum_values_are_validated_before_write_and_constrained_in_database(self) -> None:
-        with self.assertRaises(CommunicationScopeError):
+        with self.assertRaises(InvariantViolation):
             self._message(
                 self.buyer_conversation,
                 "invalid visibility",
                 "UNRECOGNIZED",  # type: ignore[arg-type]
             )
 
-        invalid_constraint = DomainConstraint(
-            id=ConstraintId(uuid4()),
-            deal_id=DealId(self.deal.id),
-            owner_organization_id=OrganizationId(self.buyer.id),
-            field="quantity",
-            typed_value="12",
-            kind="UNKNOWN",  # type: ignore[arg-type]
-            visibility=Visibility.PRIVATE,
-            created_at=datetime.now(UTC),
-        )
-        with self.assertRaises(CommunicationScopeError):
-            self.repository.add_constraint(invalid_constraint)
+        with self.assertRaises(InvariantViolation):
+            DomainConstraint(
+                id=ConstraintId(uuid4()),
+                deal_id=DealId(self.deal.id),
+                owner_organization_id=OrganizationId(self.buyer.id),
+                field="quantity",
+                typed_value="12",
+                kind="UNKNOWN",  # type: ignore[arg-type]
+                visibility=Visibility.PRIVATE,
+                source_span="source excerpt",
+                created_at=datetime.now(UTC),
+            )
 
         self.session.add(
             MessageRow(
@@ -515,13 +570,11 @@ class CommunicationRepositoryTests(unittest.TestCase):
         mismatched_message = DomainMessage(
             id=MessageId(uuid4()),
             conversation_id=self.seller_conversation.id,
-            deal_id=DealId(self.deal.id),
-            owner_organization_id=OrganizationId(self.buyer.id),
             author_user_id=UserId(self.user.id),
             author_agent_id=None,
             body="cross scoped",
             visibility=Visibility.PRIVATE,
-            source_type="USER",
+            source_type=MessageSourceType.USER,
             created_at=datetime.now(UTC),
         )
         with self.assertRaises(CommunicationScopeError):
@@ -531,13 +584,11 @@ class CommunicationRepositoryTests(unittest.TestCase):
             DomainMessage(
                 id=MessageId(uuid4()),
                 conversation_id=self.buyer_conversation.id,
-                deal_id=DealId(self.deal.id),
-                owner_organization_id=OrganizationId(self.buyer.id),
                 author_user_id=None,
                 author_agent_id=None,
                 body="no author",
                 visibility=Visibility.PRIVATE,
-                source_type="USER",
+                source_type=MessageSourceType.USER,
                 created_at=datetime.now(UTC),
             )
 

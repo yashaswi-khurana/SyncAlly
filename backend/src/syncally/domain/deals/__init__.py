@@ -6,6 +6,7 @@ from syncally.domain.deals.communications import (
     ConstraintStatus,
     Conversation,
     Message,
+    MessageSourceType,
     Visibility,
 )
 from syncally.domain.deals.deal import Deal, DealStatus
@@ -18,6 +19,7 @@ __all__ = [
     "Deal",
     "DealStatus",
     "Message",
+    "MessageSourceType",
     "Visibility",
 ]
 

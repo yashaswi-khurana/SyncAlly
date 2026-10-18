@@ -15,6 +15,7 @@ from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
 from syncally.domain.shared.identifiers import AgreementVersionId, DealId, OrganizationId
 from syncally.infrastructure.models import Deal, Organization, OrganizationMember
+from syncally.infrastructure.repositories._timestamps import as_utc
 
 
 def _to_domain(row: Deal) -> DomainDeal:
@@ -22,7 +23,7 @@ def _to_domain(row: Deal) -> DomainDeal:
         id=DealId(row.id),
         buyer_organization_id=OrganizationId(row.buyer_organization_id),
         seller_organization_id=OrganizationId(row.seller_organization_id),
-        created_at=row.created_at,
+        created_at=as_utc(row.created_at),
         status=DealStatus(row.status),
         current_agreement_version_id=(
             AgreementVersionId(row.current_agreement_version_id)
@@ -30,6 +31,23 @@ def _to_domain(row: Deal) -> DomainDeal:
             else None
         ),
         version=row.version,
+    )
+
+
+def _active_participation(user_id: UUID):
+    """Correlate a deal with an active membership the user holds in either party."""
+    return exists(
+        select(OrganizationMember.id)
+        .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .where(
+            OrganizationMember.user_id == user_id,
+            OrganizationMember.status == "ACTIVE",
+            Organization.status == "ACTIVE",
+            or_(
+                OrganizationMember.organization_id == Deal.buyer_organization_id,
+                OrganizationMember.organization_id == Deal.seller_organization_id,
+            ),
+        )
     )
 
 
@@ -55,6 +73,7 @@ class SqlAlchemyDealRepository:
             id=deal.id,
             buyer_organization_id=deal.buyer_organization_id,
             seller_organization_id=deal.seller_organization_id,
+            created_at=as_utc(deal.created_at),
             status=deal.status.value,
             current_agreement_version_id=deal.current_agreement_version_id,
             version=deal.version,
@@ -65,20 +84,15 @@ class SqlAlchemyDealRepository:
         return _to_domain(row)
 
     def get_for_participant(self, deal_id: UUID, user_id: UUID) -> DomainDeal | None:
-        active_membership = exists(
-            select(OrganizationMember.id)
-            .join(Organization, Organization.id == OrganizationMember.organization_id)
-            .where(
-                OrganizationMember.user_id == user_id,
-                OrganizationMember.status == "ACTIVE",
-                Organization.status == "ACTIVE",
-                or_(
-                    OrganizationMember.organization_id == Deal.buyer_organization_id,
-                    OrganizationMember.organization_id == Deal.seller_organization_id,
-                ),
-            )
-        )
         row = self._db.scalar(
-            select(Deal).where(Deal.id == deal_id, active_membership)
+            select(Deal).where(Deal.id == deal_id, _active_participation(user_id))
         )
         return _to_domain(row) if row is not None else None
+
+    def list_for_participant(self, user_id: UUID) -> list[DomainDeal]:
+        rows = self._db.scalars(
+            select(Deal)
+            .where(_active_participation(user_id))
+            .order_by(Deal.created_at.desc(), Deal.id)
+        ).all()
+        return [_to_domain(row) for row in rows]

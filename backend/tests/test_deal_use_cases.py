@@ -10,6 +10,7 @@ from syncally.application.deals import (
     DealNotFound,
     create_deal,
     get_deal,
+    list_deals,
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.deals.deal import Deal, DealStatus
@@ -23,6 +24,7 @@ class FakeDealRepository:
         self.active_organizations = active_organizations or set()
         self.deals: dict[UUID, Deal] = {}
         self.added: list[Deal] = []
+        self.listed_for: UUID | None = None
 
     def active_organization_exists(self, organization_id: UUID) -> bool:
         return organization_id in self.active_organizations
@@ -34,6 +36,10 @@ class FakeDealRepository:
 
     def get_for_participant(self, deal_id: UUID, user_id: UUID) -> Deal | None:
         return self.deals.get(deal_id)
+
+    def list_for_participant(self, user_id: UUID) -> list[Deal]:
+        self.listed_for = user_id
+        return list(self.deals.values())
 
 
 class DealUseCaseTests(unittest.TestCase):
@@ -110,6 +116,18 @@ class DealUseCaseTests(unittest.TestCase):
 
         with self.assertRaises(DealNotFound):
             get_deal(actor, uuid4(), repository)
+
+    def test_list_deals_scopes_to_the_actors_user_id(self) -> None:
+        buyer_id, seller_id, other_seller_id = uuid4(), uuid4(), uuid4()
+        repository = FakeDealRepository({buyer_id, seller_id, other_seller_id})
+        actor = ActorContext(user_id=uuid4(), organization_ids=frozenset({buyer_id}))
+        first = create_deal(actor, CreateDealCommand(buyer_id, seller_id), repository)
+        second = create_deal(actor, CreateDealCommand(buyer_id, other_seller_id), repository)
+
+        deals = list_deals(actor, repository)
+
+        self.assertEqual(repository.listed_for, actor.user_id)
+        self.assertCountEqual(deals, [first, second])
 
 
 if __name__ == "__main__":

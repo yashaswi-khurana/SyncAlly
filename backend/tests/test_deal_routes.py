@@ -291,6 +291,86 @@ class DealRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], str(deal.id))
 
+    def test_list_deals_returns_participating_deals_with_the_viewer_role(self) -> None:
+        _, buyer, seller = self._seed_participants()
+        seller_user = User(email="seller@example.com", display_name="Seller")
+        self.session.add(seller_user)
+        self.session.flush()
+        self.session.add(
+            OrganizationMember(
+                user_id=seller_user.id,
+                organization_id=seller.id,
+                status="ACTIVE",
+            )
+        )
+        deal = Deal(
+            buyer_organization_id=buyer.id,
+            seller_organization_id=seller.id,
+            status="DRAFT",
+            version=0,
+        )
+        self.session.add(deal)
+        self.session.commit()
+        self._authenticate(
+            ActorContext(user_id=seller_user.id, organization_ids=frozenset({seller.id}))
+        )
+
+        response = self._request("GET", "/deals")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            [
+                {
+                    "id": str(deal.id),
+                    "buyer_organization_id": str(buyer.id),
+                    "seller_organization_id": str(seller.id),
+                    "status": "DRAFT",
+                    "version": 0,
+                    "viewer_role": "SELLER",
+                }
+            ],
+        )
+
+    def test_list_deals_is_empty_for_a_non_participant(self) -> None:
+        _, buyer, seller = self._seed_participants()
+        outsider = User(email="outsider@example.com", display_name="Outsider")
+        outsider_org = Organization(legal_name="Outsider Co", country_code="DE")
+        self.session.add_all([outsider, outsider_org])
+        self.session.flush()
+        self.session.add(
+            OrganizationMember(
+                user_id=outsider.id,
+                organization_id=outsider_org.id,
+                status="ACTIVE",
+            )
+        )
+        self.session.add(
+            Deal(
+                buyer_organization_id=buyer.id,
+                seller_organization_id=seller.id,
+                status="DRAFT",
+                version=0,
+            )
+        )
+        self.session.commit()
+        self._authenticate(
+            ActorContext(user_id=outsider.id, organization_ids=frozenset({outsider_org.id}))
+        )
+
+        response = self._request("GET", "/deals")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_list_deals_requires_authentication(self) -> None:
+        app.dependency_overrides[get_db] = lambda: self.session
+        self._seed_participants()
+
+        response = self._request("GET", "/deals")
+
+        self.assertEqual(response.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

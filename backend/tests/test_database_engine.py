@@ -119,6 +119,5 @@ class DatabaseEngineTests(unittest.TestCase):
                 Base.metadata.drop_all(setup_engine)
                 setup_engine.dispose()
 
-
 if __name__ == "__main__":
     unittest.main()

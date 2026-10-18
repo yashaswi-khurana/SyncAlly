@@ -299,6 +299,8 @@ membership) remains planned.
 
 **What to build:** Add a small interface for fact extraction and proposal drafting. Add a fake implementation for tests. Add one real provider only after the team chooses it. Set time and retry limits; parse output with S4-01 schemas. Use LangGraph only if a simple typed function is not enough.
 
+**Contract code:** The `AISuggestionProvider` port, `AIRetryPolicy`, the bounded `extract_facts`/`draft_proposal` use cases, and `DeterministicFakeAIProvider` are implemented in `application/ai.py` and `infrastructure/ai/`. Output is parsed with the S4-01 schemas and grounded against the S4-02 filtered context. No real provider is selected; see [the AI provider boundary](architecture/06-ai-provider-boundary.md). API routes and UI remain later work.
+
 **Done when:**
 - Tests run with the fake and need no network or API key.
 - Invalid AI output is rejected or sent for clarification; it is never auto-confirmed.

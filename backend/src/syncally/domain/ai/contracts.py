@@ -17,6 +17,9 @@ from typing import Any
 from uuid import UUID
 
 from syncally.domain.agreements.trade_terms import (
+    SUPPORTED_DEMO_CURRENCY,
+    SUPPORTED_DEMO_PAYMENT_DUE_CONDITION,
+    SUPPORTED_DEMO_PAYMENT_TRIGGER,
     TRADE_TERMS_SCHEMA_VERSION,
     PaymentTerm,
     ShipmentTerm,
@@ -311,7 +314,7 @@ class ProposedTerms:
         if self.unit_price <= 0:
             raise AIContractError("unit_price must be positive")
         _validate_unit(self.unit)
-        if self.currency != "USD":
+        if self.currency != SUPPORTED_DEMO_CURRENCY:
             raise AIContractError("only USD is supported for the demo proposal")
         _required_string(self.delivery_destination, "delivery_destination")
         if len(self.delivery_destination.strip()) > 2_000:
@@ -332,7 +335,7 @@ class ProposedTerms:
             },
         )
         currency = _required_string(payload.get("currency"), "currency")
-        if currency != "USD":
+        if currency != SUPPORTED_DEMO_CURRENCY:
             raise AIContractError("only USD is supported for the demo proposal")
         raw_date = payload.get("delivery_date")
         try:
@@ -367,7 +370,13 @@ class ProposedTerms:
                 seller_id=seller_id,
                 line_items=(line,),
                 shipments=(ShipmentTerm(self.quantity, self.delivery_destination, self.delivery_date),),
-                payment_terms=(PaymentTerm(total, "seller_invoice", "when seller invoices"),),
+                payment_terms=(
+                    PaymentTerm(
+                        total,
+                        SUPPORTED_DEMO_PAYMENT_TRIGGER,
+                        SUPPORTED_DEMO_PAYMENT_DUE_CONDITION,
+                    ),
+                ),
                 delivery_location=self.delivery_destination,
                 schema_version=TRADE_TERMS_SCHEMA_VERSION,
             )

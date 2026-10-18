@@ -1,8 +1,14 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, localcontext
 from unittest import TestCase
 from uuid import uuid4
 
+from syncally.domain.agreements.agreement import (
+    Agreement,
+    AgreementStatus,
+    Approval,
+    ApprovalDecision,
+)
 from syncally.domain.agreements.trade_terms import (
     PaymentTerm,
     ShipmentTerm,
@@ -22,6 +28,7 @@ from syncally.domain.payments.intent import (
 )
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import (
+    AgreementId,
     AgreementVersionId,
     DealId,
     NegotiationSessionId,
@@ -41,6 +48,7 @@ def build_terms(
     payment_terms: tuple[PaymentTerm, ...] | list[PaymentTerm] | None = None,
     buyer_id: OrganizationId | None = None,
     seller_id: OrganizationId | None = None,
+    schema_version: int = 1,
 ) -> TradeTerms:
     buyer = buyer_id or OrganizationId(uuid4())
     seller = seller_id or OrganizationId(uuid4())
@@ -52,11 +60,12 @@ def build_terms(
         else (TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "USD")),),
         shipments=shipments
         if shipments is not None
-        else (ShipmentTerm(Decimal("1"), "Toronto"),),
+        else (ShipmentTerm(Decimal("1"), "Toronto", date(2030, 1, 1)),),
         payment_terms=payment_terms
         if payment_terms is not None
-        else (PaymentTerm(Money(Decimal("10"), "USD"), "order", "on order"),),
+        else (PaymentTerm(Money(Decimal("10"), "USD"), "seller_invoice", "when seller invoices"),),
         delivery_location="Toronto",
+        schema_version=schema_version,
     )
 
 
@@ -114,6 +123,123 @@ class DecimalCanonicalizationTests(TestCase):
 
 
 class TradeTermsTests(TestCase):
+    def test_canonical_hash_ignores_order_and_formatting(self) -> None:
+        buyer_id = OrganizationId(uuid4())
+        seller_id = OrganizationId(uuid4())
+        first = build_terms(
+            line_items=(
+                TradeLineItem(" Desk ", Decimal("1.00"), " each ", Money(Decimal("10.00"), "usd")),
+                TradeLineItem("Lamp", Decimal("2"), "each", Money(Decimal("5"), "USD")),
+            ),
+            shipments=(ShipmentTerm(Decimal("1.0"), "North"), ShipmentTerm(Decimal("2"), "South")),
+            payment_terms=(
+                PaymentTerm(Money(Decimal("10.00"), "USD"), "seller_invoice", "When seller invoices"),
+                PaymentTerm(Money(Decimal("10"), "USD"), "seller_invoice", "when seller invoices"),
+            ),
+            buyer_id=buyer_id,
+            seller_id=seller_id,
+        )
+        reordered = build_terms(
+            line_items=(
+                TradeLineItem("Lamp", Decimal("2.0"), "each", Money(Decimal("5.00"), "USD")),
+                TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "USD")),
+            ),
+            shipments=(ShipmentTerm(Decimal("2.00"), "South"), ShipmentTerm(Decimal("1"), "NORTH")),
+            payment_terms=(
+                PaymentTerm(Money(Decimal("10"), "USD"), "seller_invoice", "when seller invoices"),
+                PaymentTerm(Money(Decimal("10.0"), "USD"), "seller_invoice", "when seller invoices"),
+            ),
+            buyer_id=buyer_id,
+            seller_id=seller_id,
+        )
+
+        self.assertEqual(first.canonical_json(), reordered.canonical_json())
+        self.assertEqual(first.terms_hash, reordered.terms_hash)
+
+    def test_float_quantities_are_rejected(self) -> None:
+        with self.assertRaises(TypeError):
+            TradeLineItem("Desk", 1.0, "each", Money(Decimal("10"), "USD"))  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            ShipmentTerm(1.0, "Toronto")  # type: ignore[arg-type]
+
+    def test_commit_rejects_incomplete_or_unsupported_terms(self) -> None:
+        missing_date = build_terms(shipments=(ShipmentTerm(Decimal("1"), "Toronto"),))
+        unsupported_currency = build_terms(
+            line_items=(TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "CAD")),),
+            payment_terms=(PaymentTerm(Money(Decimal("10"), "CAD"), "seller_invoice", "when seller invoices"),),
+        )
+        unknown_payment_trigger = build_terms(
+            payment_terms=(PaymentTerm(Money(Decimal("10"), "USD"), "on_delivery", "when delivered"),),
+        )
+        unsupported_schema = build_terms(schema_version=2)
+
+        for terms in (missing_date, unsupported_currency, unknown_payment_trigger, unsupported_schema):
+            with self.subTest(terms=terms):
+                with self.assertRaises(InvariantViolation):
+                    terms.validate_for_commit()
+
+        agreement = Agreement(
+            id=AgreementId(uuid4()),
+            version_id=AgreementVersionId(uuid4()),
+            deal_id=DealId(uuid4()),
+            version_number=1,
+            terms=missing_date,
+            created_at=datetime(2030, 1, 1, tzinfo=UTC),
+        )
+        with self.assertRaises(InvariantViolation):
+            agreement.commit(agreement.terms_hash, datetime(2030, 1, 2, tzinfo=UTC))
+        self.assertEqual(agreement.status, AgreementStatus.PENDING_APPROVAL)
+
+        build_terms().validate_for_commit()
+
+    def test_committed_version_cannot_change_and_revision_creates_next_version(self) -> None:
+        terms = build_terms()
+        agreement = Agreement(
+            id=AgreementId(uuid4()),
+            version_id=AgreementVersionId(uuid4()),
+            deal_id=DealId(uuid4()),
+            version_number=1,
+            terms=terms,
+            created_at=datetime(2030, 1, 1, tzinfo=UTC),
+        )
+        for organization_id in (terms.buyer_id, terms.seller_id):
+            agreement.record_approval(
+                Approval(
+                    organization_id=organization_id,
+                    user_id=UserId(uuid4()),
+                    decision=ApprovalDecision.APPROVE,
+                    terms_hash=agreement.terms_hash,
+                    created_at=datetime(2030, 1, 1, tzinfo=UTC),
+                )
+            )
+        agreement.commit(agreement.terms_hash, datetime(2030, 1, 2, tzinfo=UTC))
+        committed_hash = agreement.terms_hash
+        revised_terms = build_terms(
+            line_items=(TradeLineItem("Desk, walnut", Decimal("1"), "each", Money(Decimal("10"), "USD")),),
+            buyer_id=terms.buyer_id,
+            seller_id=terms.seller_id,
+        )
+
+        with self.assertRaises(InvalidTransition):
+            agreement.terms = revised_terms
+        with self.assertRaises(InvalidTransition):
+            agreement.version_number = 2
+        with self.assertRaises(InvalidTransition):
+            agreement.status = AgreementStatus.PENDING_APPROVAL
+        with self.assertRaises(TypeError):
+            agreement.approvals[terms.buyer_id] = agreement.approvals[terms.buyer_id]  # type: ignore[index]
+
+        next_version = agreement.create_next_version(
+            version_id=AgreementVersionId(uuid4()),
+            terms=revised_terms,
+            created_at=datetime(2030, 1, 3, tzinfo=UTC),
+        )
+        self.assertEqual(agreement.terms_hash, committed_hash)
+        self.assertEqual(agreement.status, AgreementStatus.COMMITTED)
+        self.assertEqual(next_version.version_number, 2)
+        self.assertNotEqual(next_version.terms_hash, committed_hash)
+        self.assertEqual(next_version.status, AgreementStatus.PENDING_APPROVAL)
+
     def test_trade_terms_defensively_copy_mutable_collections(self) -> None:
         items = [TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "USD"))]
         shipments = [ShipmentTerm(Decimal("1"), "Toronto")]

@@ -125,6 +125,65 @@ class DealRepositoryTests(unittest.TestCase):
         self.assertIsNotNone(self.session.scalar(select(Deal).where(Deal.id == deal.id)))
         self.assertIsNone(repository.get_for_participant(deal.id, user.id))
 
+    def test_list_for_participant_scopes_to_active_memberships(self) -> None:
+        user, buyer, seller = self._seed_participants()
+        outsider = User(email="outsider@example.com", display_name="Outsider")
+        outsider_org = Organization(legal_name="Outsider Co", country_code="DE")
+        self.session.add_all([outsider, outsider_org])
+        self.session.flush()
+        self.session.add(
+            OrganizationMember(
+                user_id=outsider.id,
+                organization_id=outsider_org.id,
+                status="ACTIVE",
+            )
+        )
+        self.session.commit()
+        repository = SqlAlchemyDealRepository(self.session)
+        first = repository.add(self._new_deal(buyer.id, seller.id))
+        second = repository.add(self._new_deal(buyer.id, seller.id))
+
+        listed = repository.list_for_participant(user.id)
+
+        self.assertEqual({deal.id for deal in listed}, {first.id, second.id})
+        self.assertEqual(repository.list_for_participant(outsider.id), [])
+
+    def test_list_for_participant_includes_deals_where_the_user_is_the_seller(self) -> None:
+        _, buyer, seller = self._seed_participants()
+        seller_user = User(email="seller@example.com", display_name="Seller")
+        self.session.add(seller_user)
+        self.session.flush()
+        self.session.add(
+            OrganizationMember(
+                user_id=seller_user.id,
+                organization_id=seller.id,
+                status="ACTIVE",
+            )
+        )
+        self.session.commit()
+        repository = SqlAlchemyDealRepository(self.session)
+        deal = repository.add(self._new_deal(buyer.id, seller.id))
+
+        listed = repository.list_for_participant(seller_user.id)
+
+        self.assertEqual([stored.id for stored in listed], [deal.id])
+
+    def test_list_for_participant_excludes_deals_after_membership_revoked(self) -> None:
+        user, buyer, seller = self._seed_participants()
+        repository = SqlAlchemyDealRepository(self.session)
+        repository.add(self._new_deal(buyer.id, seller.id))
+
+        membership = self.session.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == user.id,
+                OrganizationMember.organization_id == buyer.id,
+            )
+        )
+        membership.status = "REVOKED"
+        self.session.commit()
+
+        self.assertEqual(repository.list_for_participant(user.id), [])
+
 
 if __name__ == "__main__":
     unittest.main()

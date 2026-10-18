@@ -2,7 +2,7 @@
 
 SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
 
-> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. Public self-registration and product invitation/acceptance are not implemented; product invitations remain planned. The complete deal workflow, frontend/API integration, Temporal workflows, and external payment integration remain planned work.
+> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. Public self-registration and product invitation/acceptance are not implemented; product invitations remain planned. Deal creation and the create/detail browser flow are implemented; message review, proposals, approvals, Temporal workflows, and external payment integration remain planned work.
 
 ## Architecture
 
@@ -116,7 +116,9 @@ npm run build
 npm run dev
 ```
 
-The frontend is a placeholder shell and is not connected to the API yet.
+The frontend provides a sign-in form and a deal create/detail flow connected to the API. It
+proxies API paths to the backend during local development; see [frontend/README.md](frontend/README.md)
+for the contract, configuration, and commands.
 
 ### Implementation boundaries
 

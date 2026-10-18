@@ -39,7 +39,9 @@ After signing in, `POST /deals` creates a draft deal. The request body names the
 `buyer_organization_id` and `seller_organization_id`; the caller must have an active
 membership in the buyer organization, while the seller may be any active organization.
 Success returns `201` with the deal ID, both organization IDs, `DRAFT` status, and version.
-`GET /deals/{deal_id}` returns the same representation to an active member of either party.
+`GET /deals` lists every deal the caller participates in, newest first, each with a
+`viewer_role` of `BUYER`, `SELLER`, or `BOTH` naming the caller's side. `GET /deals/{deal_id}`
+returns the same representation to an active member of either party.
 Routes call the application use cases and return explicit response schemas, never database
 rows. Requests without valid credentials return `401`; an actor acting for an organization
 it does not belong to returns `403`; identical buyer and seller organizations or invalid

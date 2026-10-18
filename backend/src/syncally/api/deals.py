@@ -19,6 +19,7 @@ from syncally.application.deals import (
     DealRepository,
     create_deal,
     get_deal,
+    list_deals,
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.deals.deal import Deal
@@ -46,6 +47,12 @@ class DealResponse(BaseModel):
     version: int
 
 
+class DealSummaryResponse(DealResponse):
+    """A deal plus the party the requesting actor acts for."""
+
+    viewer_role: str
+
+
 def get_deal_repository(db: Session = Depends(get_db)) -> DealRepository:
     """Provide the deal persistence port for the current request."""
     return SqlAlchemyDealRepository(db)
@@ -59,6 +66,30 @@ def _to_response(deal: Deal) -> DealResponse:
         status=deal.status.value,
         version=deal.version,
     )
+
+
+def _viewer_role(actor: ActorContext, deal: Deal) -> str:
+    """Name the actor's side of a deal they participate in."""
+    is_buyer = deal.buyer_organization_id in actor.organization_ids
+    is_seller = deal.seller_organization_id in actor.organization_ids
+    if is_buyer and is_seller:
+        return "BOTH"
+    return "BUYER" if is_buyer else "SELLER"
+
+
+@router.get("", response_model=list[DealSummaryResponse])
+def list_deals_route(
+    actor: ActorContext = Depends(get_current_actor),
+    repository: DealRepository = Depends(get_deal_repository),
+) -> list[DealSummaryResponse]:
+    """List the deals the actor participates in, newest first."""
+    return [
+        DealSummaryResponse(
+            **_to_response(deal).model_dump(),
+            viewer_role=_viewer_role(actor, deal),
+        )
+        for deal in list_deals(actor, repository)
+    ]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=DealResponse)

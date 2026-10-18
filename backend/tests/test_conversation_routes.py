@@ -242,6 +242,92 @@ class ConversationRouteTests(unittest.TestCase):
         self.assertEqual(body["source_type"], "USER")
         self.assertEqual(body["source_reference"], "upload:buyer-doc-7")
 
+    def test_ai_suggestions_are_explicit_scoped_persisted_and_reviewable(self) -> None:
+        source = self._message(
+            self.buyer_conversation,
+            "Item: Widget, 12 boxes at USD 2.50, deliver to Toronto by 2026-12-01.",
+            Visibility.PRIVATE,
+            author_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/ai/facts",
+            json={"organization_id": str(self.buyer.id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "VALID")
+        facts = body["facts"]
+        self.assertEqual(
+            {fact["field"] for fact in facts},
+            {"item_description", "quantity", "unit", "unit_price", "delivery_destination", "delivery_date"},
+        )
+        self.assertTrue(all(fact["status"] == "EXTRACTED" for fact in facts))
+        self.assertTrue(all(fact["visibility"] == "PRIVATE" for fact in facts))
+        self.assertTrue(all(fact["source_message_id"] == str(source.id) for fact in facts))
+        self.assertTrue(all(fact["source_span"] for fact in facts))
+
+        repeated = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/ai/facts",
+            json={"organization_id": str(self.buyer.id)},
+        )
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertEqual({fact["id"] for fact in repeated.json()["facts"]}, {fact["id"] for fact in facts})
+        self.assertEqual(len(self.repository.list_constraints(self.deal.id, self.buyer.id, limit=100, offset=0)), 6)
+
+        self._authenticate(self._seller_actor())
+        seller_facts = self._request(
+            "GET", f"/deals/{self.deal.id}/facts?organization_id={self.seller.id}"
+        )
+        self.assertEqual(seller_facts.status_code, 200)
+        self.assertFalse(any(fact["id"] in {item["id"] for item in facts} for fact in seller_facts.json()))
+
+        self._authenticate(self._buyer_actor())
+        proposal = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/ai/proposal",
+            json={"organization_id": str(self.buyer.id)},
+        )
+        self.assertEqual(proposal.status_code, 200, proposal.text)
+        self.assertEqual(proposal.json()["status"], "DRAFT")
+        self.assertEqual(proposal.json()["description"], "Widget")
+        self.assertEqual(proposal.json()["currency"], "USD")
+
+        candidate = next(fact for fact in facts if fact["field"] == "quantity")
+        correction = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{candidate['id']}",
+            json={
+                "expected_version": candidate["version"],
+                "field": "quantity",
+                "typed_value": "24",
+                "currency_or_unit": "boxes",
+            },
+        )
+        self.assertEqual(correction.status_code, 200, correction.text)
+        self.assertEqual(correction.json()["replaced_fact"]["status"], "REJECTED")
+        corrected = correction.json()["corrected_fact"]
+        self.assertEqual(corrected["typed_value"], "24")
+        self.assertEqual(corrected["status"], "EXTRACTED")
+        confirmed = self._request(
+            "POST", f"/deals/{self.deal.id}/facts/{corrected['id']}/confirm"
+        )
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertEqual(confirmed.json()["status"], "CONFIRMED")
+
+        self._authenticate(self._outsider_actor())
+        outsider_attempt = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/ai/facts",
+            json={"organization_id": str(self.buyer.id)},
+        )
+        self.assertEqual(outsider_attempt.status_code, 404)
+
     def test_add_message_creates_the_actor_organization_conversation(self) -> None:
         self._authenticate(self._seller_actor())
         repository = SqlAlchemyCommunicationRepository(self.session)

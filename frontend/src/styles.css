@@ -2580,6 +2580,49 @@ body::after {
   box-shadow: 0 0 0 3px rgba(207, 79, 50, 0.12);
 }
 
+.ai-review-card {
+  grid-column: 1 / -1;
+}
+
+.ai-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.ai-suggestion-list,
+.proposal-draft {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.ai-suggestion-list h3,
+.proposal-draft h3 {
+  margin: 0;
+}
+
+.ai-suggestion {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.proposal-draft {
+  max-width: 720px;
+}
+
+.proposal-currency {
+  margin: 0;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .auth-masthead { order: 0; }
   .auth-card { order: 1; }

@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     temporal_address: str = "localhost:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "syncally-deals"
+    temporal_tls: bool = False
     outbox_poll_interval_seconds: float = 2.0
     outbox_batch_size: int = 25
 
@@ -102,6 +103,12 @@ class Settings(BaseSettings):
             raise ValueError("Token lifetimes must be positive")
         if self.max_organizations_per_user <= 0:
             raise ValueError("MAX_ORGANIZATIONS_PER_USER must be positive")
+        if self.outbox_batch_size <= 0:
+            raise ValueError("OUTBOX_BATCH_SIZE must be positive")
+        if self.outbox_poll_interval_seconds <= 0:
+            raise ValueError("OUTBOX_POLL_INTERVAL_SECONDS must be positive")
+        if not local_environment and not self.temporal_tls:
+            raise ValueError("TEMPORAL_TLS must be enabled outside development/test")
         return self
 
     model_config = SettingsConfigDict(

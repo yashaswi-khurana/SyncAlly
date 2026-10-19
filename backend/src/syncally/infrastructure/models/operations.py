@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import DateTime, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE, Base
@@ -14,6 +14,9 @@ from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE, Base
 
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("ix_outbox_events_status_next_attempt_created", "status", "next_attempt_at", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     aggregate_type: Mapped[str] = mapped_column(String(64), nullable=False)

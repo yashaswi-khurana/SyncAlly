@@ -10,10 +10,12 @@ from __future__ import annotations
 import logging
 import time
 
+import temporalio.service
+
 from syncally.config import settings
 from syncally.infrastructure.database import SessionLocal
 from syncally.infrastructure.outbox import dispatch_pending_outbox_events
-from syncally.infrastructure.temporal import TemporalDealWorkflowStarter
+from syncally.infrastructure.temporal import TemporalDealWorkflowStarter, is_permanent_rpc_error
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,14 @@ def _connect_with_retry(*, poll_interval: float) -> TemporalDealWorkflowStarter:
                 address=settings.temporal_address,
                 namespace=settings.temporal_namespace,
                 task_queue=settings.temporal_task_queue,
+                tls=settings.temporal_tls,
             )
+        except temporalio.service.RPCError as error:
+            if is_permanent_rpc_error(error):
+                logger.error("Permanent Temporal connection failure, not retrying: %s", error)
+                raise
+            logger.exception("Failed to connect to Temporal, retrying")
+            time.sleep(poll_interval)
         except Exception:
             logger.exception("Failed to connect to Temporal, retrying")
             time.sleep(poll_interval)

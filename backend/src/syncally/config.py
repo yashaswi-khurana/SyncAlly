@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = 30
     max_organizations_per_user: int = 5
     dev_auth_user_id: str | None = None
+    temporal_address: str = "localhost:7233"
+    temporal_namespace: str = "default"
+    temporal_task_queue: str = "syncally-deals"
+    outbox_poll_interval_seconds: float = 2.0
+    outbox_batch_size: int = 25
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":

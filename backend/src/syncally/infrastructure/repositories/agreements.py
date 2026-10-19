@@ -11,25 +11,30 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.application.agreements import (
+    AgreementAccessDenied,
     AgreementAlreadyCommitted,
     AgreementNotFound,
+    AgreementVersionConflict,
     AuditEventDraft,
     CommitAgreementCommand,
+    CreateAgreementDraftCommand,
     DuplicateApproval,
     OutboxEventDraft,
+    ProposalNotFound,
     RecordApprovalCommand,
     StaleAgreementVersion,
     UnauthorizedApproval,
     WrongTermsHash,
     commit_agreement,
+    create_agreement_draft,
     record_approval,
 )
 from syncally.domain.agreements.agreement import Agreement as DomainAgreement
@@ -39,6 +44,7 @@ from syncally.domain.agreements.obligations import ObligationDraft, PaymentMiles
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
+from syncally.domain.shared.errors import InvalidTransition
 from syncally.domain.shared.identifiers import (
     AgreementId,
     AgreementVersionId,
@@ -56,9 +62,13 @@ from syncally.infrastructure.models import (
     OrganizationMember,
     OutboxEvent,
     PaymentMilestone,
+    Proposal,
     User,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
+
+_TERMINAL_PROPOSAL_STATUSES = frozenset({"REJECTED", "EXPIRED", "SUPERSEDED"})
+_APPROVABLE_DEAL_STATUSES = frozenset({DealStatus.DRAFT, DealStatus.NEGOTIATING})
 
 
 def _deal_to_domain(row: Deal) -> DomainDeal:
@@ -113,6 +123,84 @@ class SqlAlchemyAgreementRepository:
 
     def __init__(self, db: Session) -> None:
         self._db = db
+
+    def create_draft(
+        self, command: CreateAgreementDraftCommand, *, now: datetime
+    ) -> DomainAgreement:
+        # Locking the deal serializes draft creation against a concurrent
+        # approval or commit, so only one version can become current.
+        deal_row = self._db.scalar(
+            select(Deal).where(Deal.id == command.deal_id).with_for_update()
+        )
+        if deal_row is None:
+            raise AgreementNotFound("Deal not found")
+        if not self._is_active_participant(deal_row, command.user_id):
+            raise AgreementAccessDenied("User must be an active member of a deal party")
+
+        proposal_row = self._db.scalar(
+            select(Proposal).where(
+                Proposal.id == command.proposal_id,
+                Proposal.deal_id == command.deal_id,
+            )
+        )
+        if proposal_row is None:
+            raise ProposalNotFound("Proposal not found for this deal")
+        if proposal_row.status in _TERMINAL_PROPOSAL_STATUSES:
+            raise AgreementVersionConflict(
+                f"Proposal is {proposal_row.status} and cannot become an agreement"
+            )
+
+        terms = TradeTerms.from_canonical_json(proposal_row.terms_json)
+        if terms.buyer_id != OrganizationId(
+            deal_row.buyer_organization_id
+        ) or terms.seller_id != OrganizationId(deal_row.seller_organization_id):
+            raise AgreementVersionConflict("Proposal terms parties do not match the deal")
+        if terms.terms_hash != proposal_row.terms_hash:
+            raise AgreementVersionConflict("Proposal terms do not match their recorded hash")
+
+        pending_version_id = self._db.scalar(
+            select(AgreementVersion.id).where(
+                AgreementVersion.deal_id == command.deal_id,
+                AgreementVersion.status == AgreementStatus.PENDING_APPROVAL.value,
+            )
+        )
+        if pending_version_id is not None:
+            raise AgreementVersionConflict(
+                "A pending agreement version already exists for this deal"
+            )
+
+        domain_deal = _deal_to_domain(deal_row)
+        if domain_deal.status not in _APPROVABLE_DEAL_STATUSES:
+            raise AgreementVersionConflict(
+                f"Deal is {domain_deal.status} and cannot start approval"
+            )
+
+        version_number = self._next_version_number(command.deal_id)
+        version_id = uuid4()
+        try:
+            if domain_deal.status is DealStatus.DRAFT:
+                domain_deal.start_negotiation()
+            domain_deal.request_approval(AgreementVersionId(version_id))
+        except InvalidTransition as error:
+            raise AgreementVersionConflict(str(error)) from error
+
+        version_row = AgreementVersion(
+            id=version_id,
+            deal_id=deal_row.id,
+            proposal_id=proposal_row.id,
+            version_number=version_number,
+            canonical_terms_json=terms.to_storage_dict(),
+            terms_hash=terms.terms_hash,
+            status=AgreementStatus.PENDING_APPROVAL.value,
+            created_by=command.user_id,
+            created_at=now,
+        )
+        self._db.add(version_row)
+        deal_row.status = domain_deal.status.value
+        deal_row.current_agreement_version_id = version_id
+        deal_row.version = domain_deal.version
+        self._db.flush()
+        return _agreement_to_domain(version_row, [])
 
     def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> DomainApproval:
         # Locking the deal row serializes this against a concurrent commit()
@@ -204,6 +292,13 @@ class SqlAlchemyAgreementRepository:
         version_row = self._get_version(command.deal_id, command.expected_version)
         if version_row is None:
             raise AgreementNotFound("Agreement version not found")
+        if (
+            version_row.status == AgreementStatus.PENDING_APPROVAL.value
+            and deal_row.current_agreement_version_id != version_row.id
+        ):
+            raise StaleAgreementVersion(
+                "Agreement version is no longer current for this deal"
+            )
         if version_row.status != AgreementStatus.PENDING_APPROVAL.value:
             if (
                 version_row.status == AgreementStatus.COMMITTED.value
@@ -276,6 +371,31 @@ class SqlAlchemyAgreementRepository:
                 AgreementVersion.version_number == version_number,
             )
         )
+
+    def _next_version_number(self, deal_id: UUID) -> int:
+        highest = self._db.scalar(
+            select(func.max(AgreementVersion.version_number)).where(
+                AgreementVersion.deal_id == deal_id
+            )
+        )
+        return (highest or 0) + 1
+
+    def _is_active_participant(self, deal_row: Deal, user_id: UUID) -> bool:
+        is_member = self._db.scalar(
+            select(OrganizationMember.id)
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(
+                OrganizationMember.user_id == user_id,
+                OrganizationMember.status == "ACTIVE",
+                Organization.status == "ACTIVE",
+                User.status == "ACTIVE",
+                OrganizationMember.organization_id.in_(
+                    [deal_row.buyer_organization_id, deal_row.seller_organization_id]
+                ),
+            )
+        )
+        return is_member is not None
 
     def _require_active_member(self, organization_id: UUID, user_id: UUID) -> None:
         is_active_member = self._db.scalar(
@@ -383,6 +503,23 @@ class SqlAlchemyOutboxRepository:
             )
         )
         self._db.flush()
+
+
+def create_agreement_draft_in_transaction(
+    db: Session,
+    command: CreateAgreementDraftCommand,
+    *,
+    now: datetime | None = None,
+) -> DomainAgreement:
+    """Run CreateAgreementDraft as its own transaction: commits on success, rolls back on failure."""
+    now = now or datetime.now(UTC)
+    try:
+        agreement = create_agreement_draft(command, SqlAlchemyAgreementRepository(db), now=now)
+        db.commit()
+        return agreement
+    except Exception:
+        db.rollback()
+        raise
 
 
 def record_approval_in_transaction(

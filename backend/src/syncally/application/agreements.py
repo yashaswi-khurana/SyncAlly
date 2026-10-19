@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
 from syncally.domain.agreements.obligations import (
     ObligationDraft,
@@ -21,11 +22,16 @@ from syncally.domain.agreements.obligations import (
     build_obligations,
     build_payment_milestones,
 )
+from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.errors import DomainError
 
 
 class AgreementNotFound(DomainError):
     """The deal or the requested agreement version does not exist."""
+
+
+class ProposalNotFound(DomainError):
+    """The proposal to draft an agreement from does not exist for this deal."""
 
 
 class StaleAgreementVersion(DomainError):
@@ -40,12 +46,33 @@ class UnauthorizedApproval(DomainError):
     """The actor cannot approve on behalf of the requested organization."""
 
 
+class AgreementAccessDenied(DomainError):
+    """The actor cannot act for a party to this agreement."""
+
+
+class AmbiguousAgreementOrganization(DomainError):
+    """The actor belongs to both parties and must choose which one it acts for."""
+
+
 class DuplicateApproval(DomainError):
     """The organization already recorded a decision for this agreement version."""
 
 
 class AgreementAlreadyCommitted(DomainError):
     """Another request already committed this agreement version."""
+
+
+class AgreementVersionConflict(DomainError):
+    """The deal already has a current agreement version or cannot enter approval."""
+
+
+@dataclass(frozen=True)
+class CreateAgreementDraftCommand:
+    """Input for snapshotting a proposal into an approvable agreement version."""
+
+    deal_id: UUID
+    proposal_id: UUID
+    user_id: UUID
 
 
 @dataclass(frozen=True)
@@ -92,12 +119,19 @@ class OutboxEventDraft:
 class AgreementRepository(Protocol):
     """Persistence port for approvals and the atomic agreement commit.
 
-    The adapter owns the transaction's invariants: ``record_approval`` must
-    reject an unauthorized organization, a stale version, a wrong hash, and a
-    repeated/conflicting decision; ``commit`` must verify both authorized
-    approvals match the current version/hash, commit at most once under
-    concurrent callers, and update the deal in the same transaction.
+    The adapter owns the transaction's invariants: ``create_draft`` must
+    snapshot only a proposal belonging to the deal and make it current;
+    ``record_approval`` must reject an unauthorized organization, a stale
+    version, a wrong hash, and a repeated/conflicting decision; ``commit``
+    must verify both authorized approvals match the current version/hash,
+    commit at most once under concurrent callers, and update the deal in the
+    same transaction.
     """
+
+    def create_draft(
+        self, command: CreateAgreementDraftCommand, *, now: datetime
+    ) -> Agreement:
+        """Create the current, pending-approval agreement version from a proposal."""
 
     def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> Approval:
         """Persist one organization's approval decision."""
@@ -142,6 +176,46 @@ class AuditRepository(Protocol):
 class OutboxRepository(Protocol):
     def add(self, draft: OutboxEventDraft) -> None:
         """Persist one outbox row for later relay. Never call Temporal here."""
+
+
+def resolve_party_organization(
+    actor: ActorContext,
+    deal: Deal,
+    organization_id: UUID | None = None,
+) -> UUID:
+    """Resolve the deal party the actor acts for, rejecting impersonation.
+
+    The browser may name an organization only to disambiguate a user who is an
+    active member of both parties. The value must come from the actor's
+    verified memberships and must be one of this deal's parties.
+    """
+    party_organizations = {
+        deal.buyer_organization_id,
+        deal.seller_organization_id,
+    } & actor.organization_ids
+    if not party_organizations:
+        raise AgreementAccessDenied("Actor is not an active member of a deal party")
+    if organization_id is None:
+        if len(party_organizations) > 1:
+            raise AmbiguousAgreementOrganization(
+                "Actor belongs to both parties; organization_id is required"
+            )
+        return next(iter(party_organizations))
+    if organization_id not in actor.organization_ids:
+        raise AgreementAccessDenied("Actor cannot act for this organization")
+    if organization_id not in party_organizations:
+        raise AgreementAccessDenied("Organization is not a party to this deal")
+    return organization_id
+
+
+def create_agreement_draft(
+    command: CreateAgreementDraftCommand,
+    repository: AgreementRepository,
+    *,
+    now: datetime | None = None,
+) -> Agreement:
+    """Snapshot a saved proposal into the deal's current agreement version."""
+    return repository.create_draft(command, now=now or datetime.now(UTC))
 
 
 def record_approval(

@@ -441,6 +441,7 @@ class IdentityBoundaryTests(unittest.TestCase):
             app_env="production",
             database_url="postgresql+psycopg://configured.example/syncally",
             jwt_secret=secret,
+            temporal_tls=True,
         )
 
         self.assertEqual(configured.jwt_secret, secret)

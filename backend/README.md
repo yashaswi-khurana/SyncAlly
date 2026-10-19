@@ -104,4 +104,21 @@ alembic upgrade head
 This applies all migrations to the PostgreSQL database configured by `DATABASE_URL`.
 The same command upgrades an existing database as well as creating a fresh schema.
 
+Run the outbox relay separately after applying migrations:
+
+```text
+python -m syncally.cli.outbox_worker
+```
+
+Configure `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_TASK_QUEUE` in
+the environment. The relay sends only deal/agreement IDs. Failed deliveries use
+a persisted exponential retry delay with jitter (up to five minutes); malformed
+events become `FAILED` for inspection. After correcting a failed event, reset its
+status to `PENDING` and clear `next_attempt_at` to retry immediately.
+
+To include the PostgreSQL concurrency test, set `TEST_POSTGRES_URL` to a test
+database URL and run the test suite. The test creates and removes its own isolated
+schema; the database user needs permission to create schemas. Temporal adapter
+tests use a mocked client; live Temporal smoke testing remains part of S6-04.
+
 See [the domain architecture](../docs/architecture/05-domain-layer.md) for implemented invariants, package boundaries, and remaining work. The domain types do not perform persistence, authenticated authorization, or external provider calls.

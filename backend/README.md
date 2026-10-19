@@ -63,6 +63,20 @@ advance a fact's review state, and only a member of the fact's owning organizati
 Review conflicts (a stale version or an invalid state change) return `409`. Message bodies are
 never written to logs, and `422` validation errors are redacted so they do not echo submitted
 request values back to the caller.
+`POST /deals/{deal_id}/agreements` with `{ "proposal_id": "..." }` snapshots a saved proposal
+into the deal's next `PENDING_APPROVAL` agreement version and returns its version number and
+`terms_hash`. `POST /deals/{deal_id}/agreements/{version_number}/approve` and `/reject` record
+the authenticated party's decision for that exact version and the `terms_hash` the user saw.
+`POST /deals/{deal_id}/agreements/{version_number}/commit` commits the version once both
+parties approved it and derives the obligations, payment milestone, audit, and outbox rows in
+one transaction. The acting organization always comes from the verified memberships: a caller
+that belongs to both parties may pass `organization_id` only to select between them, and a
+caller that names an organization it does not belong to or that is not a deal party receives
+`403`. Requests cannot set an agreement status, so a browser cannot mark a deal `COMMITTED`.
+A stale version, a mismatch between the displayed `terms_hash` and the stored terms, a repeated
+decision, or a commit without both approvals returns `409` with a reload message. Non-participants
+receive the same `404` as a missing deal, and a leaked or missing credential receives `401`.
+Committing the same version and hash again is an idempotent success.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
 Each refresh token can be used once. Replaying any rotated token, including a concurrent

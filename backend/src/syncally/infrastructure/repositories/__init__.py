@@ -7,6 +7,7 @@ from syncally.infrastructure.repositories.agreements import (
     SqlAlchemyOutboxRepository,
     SqlAlchemyPaymentMilestoneRepository,
     commit_agreement_in_transaction,
+    create_agreement_draft_in_transaction,
     record_approval_in_transaction,
 )
 from syncally.infrastructure.repositories.communications import (
@@ -31,5 +32,6 @@ __all__ = [
     "SqlAlchemyOutboxRepository",
     "SqlAlchemyPaymentMilestoneRepository",
     "commit_agreement_in_transaction",
+    "create_agreement_draft_in_transaction",
     "record_approval_in_transaction",
 ]

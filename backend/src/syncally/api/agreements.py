@@ -1,0 +1,300 @@
+"""Deal agreement draft, approval, and commit HTTP endpoints.
+
+Approval is a verified backend command: the acting organization is derived
+from the authenticated ``ActorContext`` and the request must name the exact
+agreement version and terms hash the user reviewed. The caller can never send
+an agreement status, so it cannot set ``COMMITTED`` directly. Routes only
+validate transport schemas and translate application outcomes into the API
+error contract.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, NoReturn
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Path, status
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
+
+from syncally.api.auth import get_current_actor
+from syncally.application.agreements import (
+    AgreementAccessDenied,
+    AgreementAlreadyCommitted,
+    AgreementNotFound,
+    AgreementVersionConflict,
+    AmbiguousAgreementOrganization,
+    CommitAgreementCommand,
+    CreateAgreementDraftCommand,
+    DuplicateApproval,
+    ProposalNotFound,
+    RecordApprovalCommand,
+    StaleAgreementVersion,
+    UnauthorizedApproval,
+    WrongTermsHash,
+    resolve_party_organization,
+)
+from syncally.application.deals import (
+    DealAccessDenied,
+    DealNotFound,
+    DealRepository,
+    get_deal,
+)
+from syncally.application.identity import ActorContext
+from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
+from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
+from syncally.infrastructure.database import get_db
+from syncally.infrastructure.repositories import (
+    SqlAlchemyDealRepository,
+    commit_agreement_in_transaction,
+    create_agreement_draft_in_transaction,
+    record_approval_in_transaction,
+)
+
+router = APIRouter(prefix="/deals/{deal_id}/agreements", tags=["agreements"])
+
+_TERMS_HASH_FIELD = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CreateAgreementDraftRequest(BaseModel):
+    """Name the saved proposal to snapshot as the deal's candidate agreement."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_id: UUID
+
+
+class RecordApprovalRequest(BaseModel):
+    """The exact agreement version and hash shown to the user, plus optional party choice.
+
+    ``organization_id`` is only a disambiguator for a user who is an active
+    member of both parties; it is never authorization on its own.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    terms_hash: str = _TERMS_HASH_FIELD
+    organization_id: UUID | None = None
+
+
+class CommitAgreementRequest(BaseModel):
+    """The exact agreement version and hash the user asked to commit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    terms_hash: str = _TERMS_HASH_FIELD
+
+
+class AgreementVersionResponse(BaseModel):
+    """Public representation of one immutable agreement version."""
+
+    deal_id: UUID
+    version_number: int
+    terms_hash: str
+    status: str
+    terms: dict[str, Any]
+    created_at: datetime
+    committed_at: datetime | None = None
+
+
+class ApprovalResponse(BaseModel):
+    """Public representation of one organization's recorded decision."""
+
+    deal_id: UUID
+    version_number: int
+    organization_id: UUID
+    user_id: UUID
+    decision: str
+    terms_hash: str
+    created_at: datetime
+
+
+def get_deal_repository(db: Session = Depends(get_db)) -> DealRepository:
+    """Provide the deal persistence port so routes can authorize the actor."""
+    return SqlAlchemyDealRepository(db)
+
+
+def _to_agreement_response(agreement: Agreement) -> AgreementVersionResponse:
+    return AgreementVersionResponse(
+        deal_id=agreement.deal_id,
+        version_number=agreement.version_number,
+        terms_hash=agreement.terms_hash,
+        status=agreement.status.value,
+        terms=agreement.terms.to_storage_dict(),
+        created_at=agreement.created_at,
+        committed_at=agreement.committed_at,
+    )
+
+
+def _to_approval_response(
+    deal_id: UUID, version_number: int, approval: Approval
+) -> ApprovalResponse:
+    return ApprovalResponse(
+        deal_id=deal_id,
+        version_number=version_number,
+        organization_id=approval.organization_id,
+        user_id=approval.user_id,
+        decision=approval.decision.value,
+        terms_hash=approval.terms_hash,
+        created_at=approval.created_at,
+    )
+
+
+def _raise_agreement_error(error: Exception) -> NoReturn:
+    """Translate agreement application outcomes into the stable HTTP contract."""
+    if isinstance(error, DealNotFound):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    if isinstance(error, (AgreementNotFound, ProposalNotFound)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    if isinstance(error, (UnauthorizedApproval, AgreementAccessDenied, DealAccessDenied)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    if isinstance(error, StaleAgreementVersion):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The agreement changed; reload it before continuing",
+        ) from error
+    if isinstance(error, WrongTermsHash):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The displayed agreement terms are no longer current; reload before continuing",
+        ) from error
+    if isinstance(
+        error,
+        (
+            DuplicateApproval,
+            AgreementAlreadyCommitted,
+            AgreementVersionConflict,
+            InvalidTransition,
+        ),
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    if isinstance(error, AmbiguousAgreementOrganization):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
+    if isinstance(error, InvariantViolation):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from error
+    raise error
+
+
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=AgreementVersionResponse)
+def create_agreement_draft_route(
+    deal_id: UUID,
+    payload: CreateAgreementDraftRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> AgreementVersionResponse:
+    """Snapshot a saved proposal into the deal's next pending agreement version."""
+    try:
+        get_deal(actor, deal_id, deal_repository)
+        agreement = create_agreement_draft_in_transaction(
+            db,
+            CreateAgreementDraftCommand(
+                deal_id=deal_id,
+                proposal_id=payload.proposal_id,
+                user_id=actor.user_id,
+            ),
+        )
+    except Exception as exc:
+        _raise_agreement_error(exc)
+    return _to_agreement_response(agreement)
+
+
+def _record_decision(
+    *,
+    deal_id: UUID,
+    version_number: int,
+    payload: RecordApprovalRequest,
+    decision: ApprovalDecision,
+    actor: ActorContext,
+    db: Session,
+    deal_repository: DealRepository,
+) -> ApprovalResponse:
+    try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        organization_id = resolve_party_organization(actor, deal, payload.organization_id)
+        approval = record_approval_in_transaction(
+            db,
+            RecordApprovalCommand(
+                deal_id=deal_id,
+                version_number=version_number,
+                terms_hash=payload.terms_hash,
+                organization_id=organization_id,
+                user_id=actor.user_id,
+                decision=decision,
+            ),
+        )
+    except Exception as exc:
+        _raise_agreement_error(exc)
+    return _to_approval_response(deal_id, version_number, approval)
+
+
+@router.post("/{version_number}/approve", response_model=ApprovalResponse)
+def approve_agreement_route(
+    deal_id: UUID,
+    payload: RecordApprovalRequest,
+    version_number: int = Path(ge=1),
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> ApprovalResponse:
+    """Record the authenticated party's approval of the exact displayed version."""
+    return _record_decision(
+        deal_id=deal_id,
+        version_number=version_number,
+        payload=payload,
+        decision=ApprovalDecision.APPROVE,
+        actor=actor,
+        db=db,
+        deal_repository=deal_repository,
+    )
+
+
+@router.post("/{version_number}/reject", response_model=ApprovalResponse)
+def reject_agreement_route(
+    deal_id: UUID,
+    payload: RecordApprovalRequest,
+    version_number: int = Path(ge=1),
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> ApprovalResponse:
+    """Record the authenticated party's rejection of the exact displayed version."""
+    return _record_decision(
+        deal_id=deal_id,
+        version_number=version_number,
+        payload=payload,
+        decision=ApprovalDecision.REJECT,
+        actor=actor,
+        db=db,
+        deal_repository=deal_repository,
+    )
+
+
+@router.post("/{version_number}/commit", response_model=AgreementVersionResponse)
+def commit_agreement_route(
+    deal_id: UUID,
+    payload: CommitAgreementRequest,
+    version_number: int = Path(ge=1),
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> AgreementVersionResponse:
+    """Commit the exact version once both verified parties approved it."""
+    try:
+        get_deal(actor, deal_id, deal_repository)
+        agreement = commit_agreement_in_transaction(
+            db,
+            CommitAgreementCommand(
+                deal_id=deal_id,
+                expected_version=version_number,
+                expected_terms_hash=payload.terms_hash,
+            ),
+        )
+    except Exception as exc:
+        _raise_agreement_error(exc)
+    return _to_agreement_response(agreement)

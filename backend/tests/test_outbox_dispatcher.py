@@ -5,7 +5,7 @@ import os
 import unittest
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import temporalio.common
@@ -313,7 +313,8 @@ class OutboxDispatcherTests(unittest.TestCase):
         # duplicate side effect. The row converges to delivered exactly once.
         self.assertEqual(len(shared_starter.calls), 2)
         self.assertEqual(len(shared_starter._started_ids), 1)
-        self.assertEqual(self.session.scalar(select(OutboxEvent)).status, "DELIVERED")
+        with Session(self.engine) as verify:
+            self.assertEqual(verify.scalar(select(OutboxEvent)).status, "DELIVERED")
 
     def test_dispatch_never_forwards_full_payload_to_starter(self) -> None:
         starter = FakeDealWorkflowStarter()
@@ -369,13 +370,13 @@ class OutboxDispatcherTests(unittest.TestCase):
     # -- Pure helpers, no DB -----------------------------------------------
 
     def test_claim_statement_uses_skip_locked_only_on_postgresql(self) -> None:
-        stmt = _claim_statement()
-        pg_sql = str(
-            stmt.with_for_update(skip_locked=True).compile(dialect=postgresql.dialect())
-        ).upper()
-        self.assertIn("FOR UPDATE SKIP LOCKED", pg_sql)
+        fake_db = MagicMock()
+        fake_db.bind.dialect.name = "postgresql"
+        claim_next_pending_event(fake_db)
+        pg_stmt = fake_db.scalar.call_args[0][0]
+        self.assertIn("FOR UPDATE SKIP LOCKED", str(pg_stmt.compile(dialect=postgresql.dialect())).upper())
 
-        sqlite_sql = str(stmt.compile(dialect=sqlite.dialect())).upper()
+        sqlite_sql = str(_claim_statement().compile(dialect=sqlite.dialect())).upper()
         self.assertNotIn("FOR UPDATE", sqlite_sql)
 
     def test_build_deal_workflow_id_is_stable(self) -> None:

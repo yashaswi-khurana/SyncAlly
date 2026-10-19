@@ -9,11 +9,14 @@ a fake starter.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 
 def build_deal_workflow_id(deal_id: UUID) -> str:
@@ -99,7 +102,14 @@ def dispatch_outbox_event(
             agreement_version_id=agreement_version_id,
         )
     except WorkflowStartPermanentError as error:
+        logger.error("Outbox event %s permanently failed: %s", event.id, error)
         return OutboxDispatchResult(delivered=False, permanent_failure=True, error_detail=str(error))
     except WorkflowStartError as error:
+        logger.warning("Outbox event %s failed, will retry: %s", event.id, error)
+        return OutboxDispatchResult(delivered=False, error_detail=str(error))
+    except Exception as error:
+        # An unexpected starter error must still resolve to a retry outcome,
+        # or it would escape to the caller and block every later row in the batch.
+        logger.exception("Outbox event %s raised an unexpected error, will retry", event.id)
         return OutboxDispatchResult(delivered=False, error_detail=str(error))
     return OutboxDispatchResult(delivered=True)

@@ -28,9 +28,9 @@ from syncally.application.payments import (
     PaymentIntentAuthorizationOutcome,
     PaymentIntentCommandMismatch,
     PaymentMilestoneNotFound,
-    UnauthorizedPaymentAuthorization,
     authorize_payment_intent,
 )
+from syncally.domain.agreements.agreement import AgreementStatus
 from syncally.domain.payments.intent import PaymentIntent as DomainPaymentIntent
 from syncally.domain.payments.intent import PaymentMilestone as DomainPaymentMilestone
 from syncally.domain.shared.identifiers import (
@@ -43,6 +43,7 @@ from syncally.domain.shared.identifiers import (
 )
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.models import (
+    AgreementVersion,
     Deal,
     Organization,
     OrganizationMember,
@@ -86,11 +87,14 @@ class SqlAlchemyPaymentIntentRepository:
     def add(
         self, command: AuthorizePaymentIntentCommand, *, now: datetime
     ) -> PaymentIntentAuthorizationOutcome:
-        milestone, deal = self._load_milestone_and_deal(command.payment_milestone_id)
-        self._require_command_matches_milestone(command, milestone, deal)
-        self._require_active_member(command.payer_organization_id, command.authorized_by)
+        milestone, deal, agreement_version = self._load_milestone_and_deal(
+            command.payment_milestone_id
+        )
+        self._require_command_matches_milestone(
+            command, milestone, deal, agreement_version
+        )
 
-        # Constructing the domain aggregate re-checks the payer/idempotency-key
+        # Constructing the domain aggregate re-checks the seller/payer/idempotency-key
         # invariants that matter even if every field above already lined up
         # (e.g. a blank idempotency key) - see domain.payments.intent.
         DomainPaymentIntent(
@@ -105,6 +109,7 @@ class SqlAlchemyPaymentIntentRepository:
                 trigger=milestone.trigger_type,
                 due_condition=milestone.due_condition,
             ),
+            seller_organization_id=OrganizationId(command.seller_organization_id),
             payer_organization_id=OrganizationId(command.payer_organization_id),
             authorized_by=UserId(command.authorized_by),
             idempotency_key=command.idempotency_key,
@@ -179,36 +184,9 @@ class SqlAlchemyPaymentIntentRepository:
             f"Idempotency key {command.idempotency_key!r} is already used by a different payment authorization"
         )
 
-    def _load_milestone_and_deal(self, payment_milestone_id: UUID) -> tuple[PaymentMilestoneRow, Deal]:
-        row = self._db.execute(
-            select(PaymentMilestoneRow, Deal)
-            .join(Deal, Deal.id == PaymentMilestoneRow.deal_id)
-            .where(PaymentMilestoneRow.id == payment_milestone_id)
-        ).first()
-        if row is None:
-            raise PaymentMilestoneNotFound(f"No payment milestone {payment_milestone_id}")
-        milestone, deal = row
-        return milestone, deal
-
-    def _require_command_matches_milestone(
-        self, command: AuthorizePaymentIntentCommand, milestone: PaymentMilestoneRow, deal: Deal
-    ) -> None:
-        mismatches = {
-            "deal_id": milestone.deal_id != command.deal_id,
-            "agreement_version_id": milestone.agreement_version_id != command.agreement_version_id,
-            "seller_organization_id": deal.seller_organization_id != command.seller_organization_id,
-            "payer_organization_id": milestone.payer_organization_id != command.payer_organization_id,
-            "amount": milestone.amount != command.amount.amount,
-            "currency": milestone.currency != command.amount.currency,
-        }
-        bad_fields = [field for field, mismatched in mismatches.items() if mismatched]
-        if bad_fields:
-            raise PaymentIntentCommandMismatch(
-                f"Command disagrees with its payment milestone on: {', '.join(bad_fields)}"
-            )
-
-    def _require_active_member(self, organization_id: UUID, user_id: UUID) -> None:
-        is_active_member = self._db.scalar(
+    def is_active_seller_member(self, organization_id: UUID, user_id: UUID) -> bool:
+        """Application authorization port, backed by current database membership."""
+        return self._db.scalar(
             select(OrganizationMember.id)
             .join(Organization, Organization.id == OrganizationMember.organization_id)
             .join(User, User.id == OrganizationMember.user_id)
@@ -219,10 +197,43 @@ class SqlAlchemyPaymentIntentRepository:
                 Organization.status == "ACTIVE",
                 User.status == "ACTIVE",
             )
-        )
-        if is_active_member is None:
-            raise UnauthorizedPaymentAuthorization(
-                "authorized_by must be an active member of the payer organization"
+        ) is not None
+
+    def _load_milestone_and_deal(
+        self, payment_milestone_id: UUID
+    ) -> tuple[PaymentMilestoneRow, Deal, AgreementVersion]:
+        row = self._db.execute(
+            select(PaymentMilestoneRow, Deal, AgreementVersion)
+            .join(Deal, Deal.id == PaymentMilestoneRow.deal_id)
+            .join(AgreementVersion, AgreementVersion.id == PaymentMilestoneRow.agreement_version_id)
+            .where(PaymentMilestoneRow.id == payment_milestone_id)
+        ).first()
+        if row is None:
+            raise PaymentMilestoneNotFound(f"No payment milestone {payment_milestone_id}")
+        milestone, deal, agreement_version = row
+        return milestone, deal, agreement_version
+
+    def _require_command_matches_milestone(
+        self,
+        command: AuthorizePaymentIntentCommand,
+        milestone: PaymentMilestoneRow,
+        deal: Deal,
+        agreement_version: AgreementVersion,
+    ) -> None:
+        mismatches = {
+            "deal_id": milestone.deal_id != command.deal_id,
+            "agreement_version_id": milestone.agreement_version_id != command.agreement_version_id,
+            "agreement_version_deal_id": agreement_version.deal_id != command.deal_id,
+            "agreement_version_status": agreement_version.status != AgreementStatus.COMMITTED.value,
+            "seller_organization_id": deal.seller_organization_id != command.seller_organization_id,
+            "payer_organization_id": milestone.payer_organization_id != command.payer_organization_id,
+            "amount": milestone.amount != command.amount.amount,
+            "currency": milestone.currency != command.amount.currency,
+        }
+        bad_fields = [field for field, mismatched in mismatches.items() if mismatched]
+        if bad_fields:
+            raise PaymentIntentCommandMismatch(
+                f"Command disagrees with its payment milestone on: {', '.join(bad_fields)}"
             )
 
 
@@ -239,9 +250,11 @@ def authorize_payment_intent_in_transaction(
     """
     now = now or datetime.now(UTC)
     try:
+        repository = SqlAlchemyPaymentIntentRepository(db)
         outcome = authorize_payment_intent(
             command,
-            SqlAlchemyPaymentIntentRepository(db),
+            repository,
+            repository,
             SqlAlchemyOutboxRepository(db),
             now=now,
         )

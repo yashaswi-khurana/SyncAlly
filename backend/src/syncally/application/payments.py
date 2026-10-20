@@ -87,19 +87,33 @@ class PaymentIntentRepository(Protocol):
         """Persist one newly authorized payment intent."""
 
 
+class SellerMembershipRepository(Protocol):
+    """Check whether the authorizing user may act for the seller organization."""
+
+    def is_active_seller_member(self, organization_id: UUID, user_id: UUID) -> bool:
+        """Return whether the user is an active member of the seller organization."""
+
+
 def authorize_payment_intent(
     command: AuthorizePaymentIntentCommand,
     repository: PaymentIntentRepository,
+    membership_repository: SellerMembershipRepository,
     outbox_repository: OutboxRepository,
     *,
     now: datetime | None = None,
 ) -> PaymentIntentAuthorizationOutcome:
-    """Save the intent and its outbox dispatch event through one caller-owned transaction.
+    """Authorize the seller member, then save the intent and outbox atomically.
 
     A replay (``already_existed``) skips the outbox write: the original call
     already queued that dispatch, and this one has nothing new to report.
     """
     now = now or datetime.now(UTC)
+    if not membership_repository.is_active_seller_member(
+        command.seller_organization_id, command.authorized_by
+    ):
+        raise UnauthorizedPaymentAuthorization(
+            "authorized_by must be an active member of the seller organization"
+        )
     outcome = repository.add(command, now=now)
     if outcome.already_existed:
         return outcome

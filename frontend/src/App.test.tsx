@@ -12,15 +12,17 @@ vi.mock("./api/client", async (importOriginal) => {
     listDeals: vi.fn(),
     createDeal: vi.fn(),
     getDeal: vi.fn(),
+    getCurrentAgreement: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
   };
 });
 
-import { getDeal, listDealFacts, listDealMessages, listDeals, listOrganizations } from "./api/client";
+import { ApiError, getCurrentAgreement, getDeal, listDealFacts, listDealMessages, listDeals, listOrganizations } from "./api/client";
 import { clearAccessToken, setAccessToken } from "./api/tokenStore";
 
 const mockedGetDeal = vi.mocked(getDeal);
+const mockedGetCurrentAgreement = vi.mocked(getCurrentAgreement);
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedListDealFacts = vi.mocked(listDealFacts);
@@ -62,6 +64,7 @@ describe("App", () => {
       status: "DRAFT",
       version: 0,
     });
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
 
     render(<App />);
 

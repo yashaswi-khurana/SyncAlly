@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from syncally.application.deals import DealRepository, get_deal
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
 from syncally.domain.agreements.obligations import (
@@ -133,6 +134,9 @@ class AgreementRepository(Protocol):
     ) -> Agreement:
         """Create the current, pending-approval agreement version from a proposal."""
 
+    def get_current(self, deal_id: UUID) -> Agreement | None:
+        """Load the deal's current immutable agreement version, if one exists."""
+
     def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> Approval:
         """Persist one organization's approval decision."""
 
@@ -216,6 +220,20 @@ def create_agreement_draft(
 ) -> Agreement:
     """Snapshot a saved proposal into the deal's current agreement version."""
     return repository.create_draft(command, now=now or datetime.now(UTC))
+
+
+def get_current_agreement(
+    actor: ActorContext,
+    deal_id: UUID,
+    deal_repository: DealRepository,
+    agreement_repository: AgreementRepository,
+) -> Agreement:
+    """Read the current agreement only after the deal use case authorizes the actor."""
+    get_deal(actor, deal_id, deal_repository)
+    agreement = agreement_repository.get_current(deal_id)
+    if agreement is None:
+        raise AgreementNotFound("No current agreement version exists for this deal")
+    return agreement
 
 
 def record_approval(

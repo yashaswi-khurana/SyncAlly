@@ -299,7 +299,7 @@ membership) remains planned.
 
 **What to build:** Add a small interface for fact extraction and proposal drafting. Add a fake implementation for tests. Add one real provider only after the team chooses it. Set time and retry limits; parse output with S4-01 schemas. Use LangGraph only if a simple typed function is not enough.
 
-**Contract code:** The `AISuggestionProvider` port, `AIRetryPolicy`, the bounded `extract_facts`/`draft_proposal` use cases, and `DeterministicFakeAIProvider` are implemented in `application/ai.py` and `infrastructure/ai/`. Output is parsed with the S4-01 schemas and grounded against the S4-02 filtered context. No real provider is selected; see [the AI provider boundary](architecture/06-ai-provider-boundary.md). API routes and UI remain later work.
+**Contract code:** The `AISuggestionProvider` port, `AIRetryPolicy`, the bounded `extract_facts`/`draft_proposal` use cases, and deterministic providers are implemented in `application/ai.py` and `infrastructure/ai/`. Output is parsed with the S4-01 schemas and grounded against the S4-02 filtered context. The explicit review API and UI are integrated; no real provider is selected. See [the AI provider boundary](architecture/06-ai-provider-boundary.md).
 
 **Done when:**
 - Tests run with the fake and need no network or API key.
@@ -320,7 +320,7 @@ membership) remains planned.
 - A private fact never appears in the other party's proposal screen.
 - AI drafts are clearly different from approved agreements.
 
-**Stage check:** The fake AI can suggest a fact and proposal; a user reviews them; tests prove private context is filtered.
+**Stage check:** Verified on the current mainline: deterministic AI suggestions are requested explicitly, facts are saved unconfirmed with source evidence, the user can review them, and private context remains organization-scoped. Backend coverage is in `test_ai_context.py`, `test_ai_provider.py`, and `test_conversation_routes.py`; frontend coverage is in `DealConversationReview.test.tsx`.
 
 ## Stage 5 - Agreement and Approvals
 

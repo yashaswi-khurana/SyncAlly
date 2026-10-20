@@ -2,6 +2,8 @@ import { getAccessToken } from "./tokenStore";
 import type {
   CreateDealInput,
   CreateOrganizationInput,
+  AgreementApproval,
+  AgreementVersion,
   Deal,
   DealFact,
   DealMessage,
@@ -140,6 +142,42 @@ export function createDeal(input: CreateDealInput): Promise<Deal> {
 
 export function getDeal(dealId: string): Promise<Deal> {
   return apiRequest<Deal>(`/deals/${encodeURIComponent(dealId)}`);
+}
+
+export function getCurrentAgreement(dealId: string): Promise<AgreementVersion> {
+  return apiRequest<AgreementVersion>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/current`,
+  );
+}
+
+export function recordAgreementDecision(
+  dealId: string,
+  versionNumber: number,
+  termsHash: string,
+  decision: "approve" | "reject",
+  organizationId?: string,
+): Promise<AgreementApproval> {
+  return apiRequest<AgreementApproval>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/${versionNumber}/${decision}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        terms_hash: termsHash,
+        ...(organizationId ? { organization_id: organizationId } : {}),
+      }),
+    },
+  );
+}
+
+export function commitAgreementVersion(
+  dealId: string,
+  versionNumber: number,
+  termsHash: string,
+): Promise<AgreementVersion> {
+  return apiRequest<AgreementVersion>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/${versionNumber}/commit`,
+    { method: "POST", body: JSON.stringify({ terms_hash: termsHash }) },
+  );
 }
 
 export function listDealMessages(

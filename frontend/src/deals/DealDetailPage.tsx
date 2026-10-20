@@ -5,6 +5,7 @@ import type { Deal } from "../api/types";
 import Reveal from "../ui/Reveal";
 import DealConstellation from "./DealConstellation";
 import DealConversationReview from "./DealConversationReview";
+import AgreementReview from "./AgreementReview";
 
 type DealState =
   | { status: "loading" }
@@ -157,6 +158,11 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
           </dl>
         </section>
 
+        <AgreementReview
+          dealId={deal.id}
+          buyerOrganizationId={deal.buyer_organization_id}
+          sellerOrganizationId={deal.seller_organization_id}
+        />
         <DealConversationReview deal={deal} />
       </div>
     </Reveal>

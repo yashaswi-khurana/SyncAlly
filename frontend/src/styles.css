@@ -2623,6 +2623,111 @@ body::after {
   font-weight: 700;
 }
 
+.agreement-review {
+  display: grid;
+  gap: 20px;
+}
+
+.agreement-review__summary {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.5fr) minmax(280px, 1.7fr) minmax(160px, 0.8fr);
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.agreement-review__summary > div,
+.agreement-terms__item > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.agreement-review__summary strong {
+  text-transform: uppercase;
+}
+
+.agreement-review__hash {
+  overflow-wrap: anywhere;
+  color: var(--accent);
+  font-size: 0.74rem;
+}
+
+.agreement-review__notice {
+  margin: 0;
+  padding: 14px 16px;
+  border-left: 2px solid var(--accent);
+  background: rgba(85, 151, 255, 0.07);
+}
+
+.agreement-terms,
+.agreement-review__approvals {
+  display: grid;
+  gap: 12px;
+}
+
+.agreement-terms h3,
+.agreement-review__approvals h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+}
+
+.agreement-terms__item {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+}
+
+.agreement-terms__item dt {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.agreement-terms__item dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agreement-review__approvals {
+  padding-top: 8px;
+}
+
+.agreement-review__approval {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.agreement-review__error {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.agreement-review__commit {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+@media (max-width: 720px) {
+  .agreement-review__summary {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .auth-masthead { order: 0; }
   .auth-card { order: 1; }

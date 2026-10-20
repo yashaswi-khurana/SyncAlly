@@ -27,6 +27,13 @@ the documented contract: `POST /auth/login`, `GET /organizations`, `POST /organi
 API data is authoritative; the UI refetches deals from the API when a page loads, including
 after a browser reload.
 
+The deal review screen loads `GET /deals/{deal_id}/agreements/current` to show the exact saved
+terms, version, hash, and party decisions. Approve and reject requests send that displayed version
+and hash to the corresponding agreement endpoint. Once both parties approve that exact hash, a
+separate commit action requests the backend to mark the deal agreed. A `409` response leaves the
+old terms visible, disables further decisions, and asks the user to reload and review the current
+version.
+
 After signing in, the app opens the deals workspace (`#/deals`), which lists every deal where the
 signed-in account's organization is the buyer or the seller and labels which side the account is
 on. A seller reaches shared deals here instead of the create form. The workspace also lists the

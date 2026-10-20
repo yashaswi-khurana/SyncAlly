@@ -33,6 +33,7 @@ from syncally.application.agreements import (
     StaleAgreementVersion,
     UnauthorizedApproval,
     WrongTermsHash,
+    get_current_agreement,
     resolve_party_organization,
 )
 from syncally.application.deals import (
@@ -46,6 +47,7 @@ from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDe
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.repositories import (
+    SqlAlchemyAgreementRepository,
     SqlAlchemyDealRepository,
     commit_agreement_in_transaction,
     create_agreement_draft_in_transaction,
@@ -86,18 +88,6 @@ class CommitAgreementRequest(BaseModel):
     terms_hash: str = _TERMS_HASH_FIELD
 
 
-class AgreementVersionResponse(BaseModel):
-    """Public representation of one immutable agreement version."""
-
-    deal_id: UUID
-    version_number: int
-    terms_hash: str
-    status: str
-    terms: dict[str, Any]
-    created_at: datetime
-    committed_at: datetime | None = None
-
-
 class ApprovalResponse(BaseModel):
     """Public representation of one organization's recorded decision."""
 
@@ -110,9 +100,27 @@ class ApprovalResponse(BaseModel):
     created_at: datetime
 
 
+class AgreementVersionResponse(BaseModel):
+    """Public representation of one immutable agreement version."""
+
+    deal_id: UUID
+    version_number: int
+    terms_hash: str
+    status: str
+    terms: dict[str, Any]
+    created_at: datetime
+    committed_at: datetime | None = None
+    approvals: list[ApprovalResponse] = Field(default_factory=list)
+
+
 def get_deal_repository(db: Session = Depends(get_db)) -> DealRepository:
     """Provide the deal persistence port so routes can authorize the actor."""
     return SqlAlchemyDealRepository(db)
+
+
+def get_agreement_repository(db: Session = Depends(get_db)) -> SqlAlchemyAgreementRepository:
+    """Provide the agreement read port for the current request."""
+    return SqlAlchemyAgreementRepository(db)
 
 
 def _to_agreement_response(agreement: Agreement) -> AgreementVersionResponse:
@@ -124,6 +132,10 @@ def _to_agreement_response(agreement: Agreement) -> AgreementVersionResponse:
         terms=agreement.terms.to_storage_dict(),
         created_at=agreement.created_at,
         committed_at=agreement.committed_at,
+        approvals=[
+            _to_approval_response(agreement.deal_id, agreement.version_number, approval)
+            for approval in agreement.approvals.values()
+        ],
     )
 
 
@@ -139,6 +151,26 @@ def _to_approval_response(
         terms_hash=approval.terms_hash,
         created_at=approval.created_at,
     )
+
+
+@router.get("/current", response_model=AgreementVersionResponse)
+def read_current_agreement_route(
+    deal_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+    agreement_repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+) -> AgreementVersionResponse:
+    """Return the current saved agreement only to an active deal participant."""
+    try:
+        agreement = get_current_agreement(
+            actor,
+            deal_id,
+            deal_repository,
+            agreement_repository,
+        )
+    except Exception as exc:
+        _raise_agreement_error(exc)
+    return _to_agreement_response(agreement)
 
 
 def _raise_agreement_error(error: Exception) -> NoReturn:

@@ -20,7 +20,7 @@ This plan tracks the constrained first demo from the shared [demo contract in is
 
 - Persisted deal creation and complete browser-to-API deal workflows.
 - Message/fact review, proposal creation and negotiation workflows, bilateral approval, and committed agreement persistence.
-- Temporal orchestration and PayPal Sandbox invoice creation/reconciliation.
+- PayPal Sandbox invoice creation and reconciliation.
 - Frontend connection to the API and user-facing product flows.
 - Product onboarding through organization invitations, acceptance, and password setup.
 
@@ -406,7 +406,7 @@ membership) remains planned.
 
 **What to build:** Add one workflow per deal. It may wait, set timers, and receive signals. It must call activities for database, AI, or provider work; do not call those systems directly from workflow code. Put a limit on waits, retries, and proposal rounds.
 
-**Contract code:** `workflows/deal.py` accepts the ID-only start payload from the S6-01 outbox, deduplicates notification IDs, and refreshes persisted state through the `RefreshDealState` activity contract. The workflow has a 30-day wait deadline and a three-attempt activity retry limit. Timeout returns `WAIT_EXPIRED` and does not mutate business state. Activity registration remains in S6-03. The workflow patch marker and input schema migration strategy is documented in [the Temporal contract](architecture/02-temporal-deal-workflow-contract.md#10-temporal-workflow-determinism-and-versioning).
+**Contract code:** `workflows/deal.py` accepts the ID-only start payload from the S6-01 outbox, deduplicates notification IDs, and refreshes persisted state through the `RefreshDealState` activity contract. The workflow has a 30-day wait deadline and a three-attempt activity retry limit. Timeout returns `WAIT_EXPIRED` and does not mutate business state. The activity implementation and worker registration are in S6-03. The workflow patch marker and input schema migration strategy is documented in [the Temporal contract](architecture/02-temporal-deal-workflow-contract.md#10-temporal-workflow-determinism-and-versioning).
 
 **Done when:**
 - Tests show the workflow waits for approval and continues after a signal or worker restart.
@@ -421,6 +421,8 @@ membership) remains planned.
 **Why:** Activities do external work; the API and workflow worker should be startable separately.
 
 **What to build:** Add activities that call application services using saved record IDs. Add a worker entry point separate from the FastAPI app. Reload current state before taking an action; do not treat old workflow input as current authorization.
+
+**Contract code:** `application/workflow_state.py` reloads the deal and current agreement by saved ID; the agreement version carried in older workflow input is not treated as current. `workflows/activities.py` implements `RefreshDealState`, converts validation and business rejections to non-retryable errors, and leaves transient database failures to the workflow's bounded retry policy. `workflows/worker.py` registers the workflow and activity as a process independent of FastAPI.
 
 **Done when:**
 - Tests show activities reload current state and use safe/repeatable commands.

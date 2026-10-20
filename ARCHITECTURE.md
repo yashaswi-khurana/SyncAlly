@@ -5,7 +5,7 @@
 
 This document summarizes the intended system shape. Detailed contracts and the original decision record are in [`docs/architecture/`](docs/architecture/README.md). Nothing here implies that the design has been implemented or deployed.
 
-The current domain code covers deal and negotiation foundations, canonical trade terms, bilateral agreement approval, and payment-intent state. The API, persistence, authorization handlers, outbox, Temporal workers, and provider adapters remain unimplemented. See [the domain layer implementation boundary](docs/architecture/05-domain-layer.md).
+The current code covers the deal and negotiation foundations, canonical trade terms, bilateral agreement approval, payment-intent state, the HTTP API and persistence adapters, the transactional outbox, and a durable Temporal deal workflow with a separately startable worker and activities. Provider adapters and local service wiring remain unimplemented. See [the domain layer implementation boundary](docs/architecture/05-domain-layer.md).
 
 ## System shape
 
@@ -96,7 +96,7 @@ Every wait needs a deadline and escalation policy. A timeout never implies accep
 
 ## Initial deployment direction
 
-The proposed local development environment uses Docker Compose. For production, the design favors managed PostgreSQL and Temporal where practical, with the API and Temporal workers running as separate processes from the same repository. Only the API shell exists so far; the Temporal worker and local infrastructure definitions remain future work.
+The proposed local development environment uses Docker Compose. For production, the design favors managed PostgreSQL and Temporal where practical, with the API and Temporal workers running as separate processes from the same repository. The FastAPI process and the Temporal worker are now separate entry points; the combined local service setup and restart smoke test remain future work.
 
 ## Scope and open gates
 

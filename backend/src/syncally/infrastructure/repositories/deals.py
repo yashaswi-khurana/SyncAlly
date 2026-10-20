@@ -93,6 +93,11 @@ class SqlAlchemyDealRepository:
         self._db.refresh(row)
         return _to_domain(row)
 
+    def get(self, deal_id: UUID) -> DomainDeal | None:
+        """Load a deal by saved identifier for trusted workflow work."""
+        row = self._db.get(Deal, deal_id)
+        return _to_domain(row) if row is not None else None
+
     def get_for_participant(self, deal_id: UUID, user_id: UUID) -> DomainDeal | None:
         row = self._db.scalar(
             select(Deal).where(Deal.id == deal_id, _active_participation(user_id))

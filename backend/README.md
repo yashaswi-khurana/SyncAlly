@@ -127,6 +127,13 @@ Run the outbox relay separately after applying migrations:
 python -m syncally.cli.outbox_worker
 ```
 
+Run the API and Temporal workflow worker as separate processes as well:
+
+```text
+python -m uvicorn syncally.api.main:app --reload
+python -m syncally.workflows.worker
+```
+
 Configure `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_TASK_QUEUE` in
 the environment. The relay sends only deal/agreement IDs. Failed deliveries use
 a persisted exponential retry delay with jitter (up to five minutes); malformed
@@ -136,6 +143,12 @@ status to `PENDING` and clear `next_attempt_at` to retry immediately.
 To include the PostgreSQL concurrency test, set `TEST_POSTGRES_URL` to a test
 database URL and run the test suite. The test creates and removes its own isolated
 schema; the database user needs permission to create schemas. Temporal adapter
-tests use a mocked client; live Temporal smoke testing remains part of S6-04.
+unit tests use a mocked client.
+
+For the end-to-end local restart smoke test, start PostgreSQL and Temporal as described
+in [the infrastructure guide](../infra/README.md), then set `TEST_POSTGRES_URL` and
+`SYNCALLY_TEMPORAL_ADDRESS` and run `python -m unittest discover -s tests -p test_local_workflow_smoke.py -v`.
+The test creates an isolated schema and verifies outbox delivery, workflow recovery
+after worker restart, and idempotent replay of the agreement commit.
 
 See [the domain architecture](../docs/architecture/05-domain-layer.md) for implemented invariants, package boundaries, and remaining work. The domain types do not perform persistence, authenticated authorization, or external provider calls.

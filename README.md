@@ -2,7 +2,7 @@
 
 SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
 
-> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. Public self-registration and product invitation/acceptance are not implemented; product invitations remain planned. Deal creation, the create/detail browser flow, bilateral agreement approval, and the durable Temporal deal workflow with its separate worker process are implemented; local service wiring, the restart smoke test, and external payment integration remain planned work.
+> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. Public self-registration and product invitation/acceptance are not implemented; product invitations remain planned. Deal creation, the create/detail browser flow, bilateral agreement approval, and the durable Temporal deal workflow with its separate worker process are implemented. Local PostgreSQL and Temporal development services and an opt-in worker restart smoke test are provided in `infra/`; external payment integration remains planned.
 
 ## Architecture
 
@@ -56,7 +56,7 @@ The reference design proposes one buyer, one seller, one supported currency and 
 ├── frontend/
 │   ├── package.json
 │   └── src/                     # React application
-├── infra/                       # Local and deployment infrastructure (future)
+├── infra/                       # Local PostgreSQL and Temporal development services
 ├── docs/architecture/           # Domain, workflow, payment, and ADR documents
 ├── ARCHITECTURE.md
 ├── LICENSE
@@ -64,6 +64,10 @@ The reference design proposes one buyer, one seller, one supported currency and 
 ```
 
 ## Development
+
+Start PostgreSQL and the persistent Temporal development service from the repository
+root by following [the local infrastructure guide](infra/README.md). Then use the
+backend and frontend commands below in separate terminals.
 
 ### Backend
 

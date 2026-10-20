@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: syncally
       POSTGRES_PASSWORD: syncally-local-only
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -27,13 +27,13 @@ services:
       - --ui-port
       - "8233"
       - --db-filename
-      - /var/lib/temporal/temporal.db
+      - /home/temporal/temporal.db
     ports:
-      - "7233:7233"
-      - "8233:8233"
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
     volumes:
-      - temporal_data:/var/lib/temporal
+      - temporal_home_data:/home/temporal
 
 volumes:
   postgres_data:
-  temporal_data:
+  temporal_home_data:

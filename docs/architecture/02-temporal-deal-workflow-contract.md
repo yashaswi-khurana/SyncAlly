@@ -248,7 +248,7 @@ signal-with-start with `ALLOW_DUPLICATE` reuse and `USE_EXISTING` conflict
 policies. An active execution receives the signal; a closed one is
 restarted and receives the signal atomically.
 
-Activities and their worker registration are added in S6-03.
+The `RefreshDealState` activity and the standalone workflow worker are implemented in S6-03. The activity reloads the deal and its current agreement by saved ID, uses bounded workflow retries for transient failures, and reports malformed input or business rejections as non-retryable errors.
 
 For incompatible workflow behavior changes, add a `workflow.patched`
 marker at the command-sequence change and keep both branches until every

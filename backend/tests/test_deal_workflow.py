@@ -341,7 +341,7 @@ class DealWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 id=f"deal/{self.input.deal_id}/lifecycle",
                 task_queue=self.task_queue,
             )
-            first_run_id = (await handle.describe()).run_id
+            first_run_id = handle.first_execution_run_id
             result = await handle.result()
             self.assertEqual(
                 result,
@@ -354,7 +354,6 @@ class DealWorkflowTests(unittest.IsolatedAsyncioTestCase):
             history = await first_run.fetch_history()
             event_types = [event.event_type for event in history.events]
             self.assertIn(28, event_types)
-            await handle.cancel()
         finally:
             await worker.__aexit__(None, None, None)
 

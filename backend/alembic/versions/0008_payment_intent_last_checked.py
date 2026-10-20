@@ -32,11 +32,10 @@ def upgrade() -> None:
         with context.autocommit_block():
             # A prior failed CONCURRENTLY build can leave an invalid index
             # behind; IF NOT EXISTS alone would then skip rebuilding it.
-            # Identifiers can't be bind parameters in DDL, so this goes
-            # through the dialect's own preparer rather than raw string
-            # interpolation (quote() also escapes embedded quotes safely).
-            quoted_index = context.dialect.identifier_preparer.quote(_INDEX_NAME)
-            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {quoted_index}")
+            op.drop_index(
+                _INDEX_NAME, table_name=_TABLE,
+                if_exists=True, postgresql_concurrently=True,
+            )
             op.create_index(
                 _INDEX_NAME, _TABLE, ["payment_milestone_id"],
                 unique=True, postgresql_where=sa.text(_WHERE), postgresql_concurrently=True,

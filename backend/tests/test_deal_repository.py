@@ -17,6 +17,7 @@ from syncally.infrastructure.models import (
     Deal,
     Organization,
     OrganizationMember,
+    OutboxEvent,
     User,
 )
 from syncally.infrastructure.repositories import SqlAlchemyDealRepository
@@ -72,6 +73,11 @@ class DealRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded.buyer_organization_id, buyer.id)
         self.assertEqual(loaded.seller_organization_id, seller.id)
         self.assertEqual(loaded.created_at, deal.created_at)
+        notification = self.session.scalar(select(OutboxEvent))
+        self.assertEqual(notification.event_type, "DEAL_NOTIFICATION")
+        self.assertEqual(notification.payload["deal_id"], str(deal.id))
+        self.assertEqual(notification.payload["record_id"], str(deal.id))
+        self.assertEqual(notification.payload["kind"], "DEAL_CREATED")
 
     def test_active_organization_exists_only_for_active_organizations(self) -> None:
         _, buyer, _ = self._seed_participants()

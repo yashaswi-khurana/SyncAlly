@@ -17,6 +17,7 @@ from syncally.application.conversations import (
     ConcurrentConstraintUpdate,
     ConstraintNotFound,
 )
+from syncally.application.workflow_notifications import NotificationKind
 from syncally.domain.conversations import (
     Constraint as DomainConstraint,
 )
@@ -52,6 +53,7 @@ from syncally.infrastructure.models import (
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
+from syncally.infrastructure.workflow_notifications import queue_deal_workflow_notification
 
 
 class CommunicationScopeError(ValueError):
@@ -247,6 +249,12 @@ class SqlAlchemyCommunicationRepository:
         )
         self._db.add(row)
         self._db.flush()
+        queue_deal_workflow_notification(
+            self._db,
+            deal_id=conversation.deal_id,
+            record_id=message.id,
+            kind=NotificationKind.MESSAGE_RECEIVED,
+        )
         return _message_to_domain(row)
 
     def list_messages(
@@ -385,6 +393,12 @@ class SqlAlchemyCommunicationRepository:
         )
         self._db.add(row)
         self._db.flush()
+        queue_deal_workflow_notification(
+            self._db,
+            deal_id=constraint.deal_id,
+            record_id=constraint.id,
+            kind=NotificationKind.CONSTRAINT_CHANGED,
+        )
         return _constraint_to_domain(row)
 
     def get_deal_for_participant(
@@ -524,6 +538,12 @@ class SqlAlchemyCommunicationRepository:
         )
         if row is None:
             raise ConstraintNotFound("Constraint not found")
+        queue_deal_workflow_notification(
+            self._db,
+            deal_id=constraint.deal_id,
+            record_id=constraint.id,
+            kind=NotificationKind.CONSTRAINT_CHANGED,
+        )
         return _constraint_to_domain(row)
 
     def list_constraints(

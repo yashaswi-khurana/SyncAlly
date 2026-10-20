@@ -1,9 +1,7 @@
 """Real Temporal adapter for the outbox dispatcher.
 
-The only file in this codebase that imports ``temporalio``. Starts the deal
-lifecycle workflow by its string type name rather than an imported class,
-since the workflow itself (S6-02) isn't built yet - this dispatcher only
-needs to be able to start it once that lands.
+The adapter starts the workflow by its stable type name, keeping workflow
+definitions out of the dispatcher and API process imports.
 """
 
 from __future__ import annotations
@@ -22,6 +20,7 @@ from syncally.application.outbox import (
     WorkflowStartPermanentError,
     WorkflowStartTransientError,
 )
+from syncally.application.workflow_notifications import DealWorkflowNotification
 
 _DEAL_WORKFLOW_TYPE_NAME = "DealWorkflow"
 
@@ -70,17 +69,39 @@ class TemporalDealWorkflowStarter:
         return cls(client, task_queue=task_queue, loop=loop)
 
     def start_deal_workflow(
-        self, *, workflow_id: str, deal_id: UUID, agreement_version_id: UUID
+        self,
+        *,
+        workflow_id: str,
+        deal_id: UUID,
+        agreement_version_id: UUID | None,
+        notification: DealWorkflowNotification,
     ) -> WorkflowStartOutcome:
         try:
             self._loop.run_until_complete(
                 self._client.start_workflow(
                     _DEAL_WORKFLOW_TYPE_NAME,
-                    args=[{"deal_id": str(deal_id), "agreement_version_id": str(agreement_version_id)}],
+                    args=[
+                        {
+                            "deal_id": str(deal_id),
+                            "agreement_version_id": (
+                                str(agreement_version_id)
+                                if agreement_version_id is not None
+                                else None
+                            ),
+                        }
+                    ],
                     id=workflow_id,
                     task_queue=self._task_queue,
-                    id_reuse_policy=temporalio.common.WorkflowIDReusePolicy.REJECT_DUPLICATE,
-                    id_conflict_policy=temporalio.common.WorkflowIDConflictPolicy.FAIL,
+                    id_reuse_policy=temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+                    id_conflict_policy=temporalio.common.WorkflowIDConflictPolicy.USE_EXISTING,
+                    start_signal="notify",
+                    start_signal_args=[
+                        {
+                            "notification_id": notification.notification_id,
+                            "record_id": notification.record_id,
+                            "kind": notification.kind.value,
+                        }
+                    ],
                     rpc_timeout=timedelta(seconds=10),
                 )
             )

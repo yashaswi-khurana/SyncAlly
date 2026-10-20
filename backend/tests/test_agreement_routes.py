@@ -375,7 +375,10 @@ class AgreementRouteTests(unittest.TestCase):
         self.assertEqual({o.obligation_type for o in obligations}, {"DELIVERY", "PAYMENT"})
         self.assertEqual(self.session.scalar(select(AuditEvent)).event_type, "AGREEMENT_COMMITTED")
         self.assertEqual(
-            self.session.scalar(select(OutboxEvent)).event_type, "AGREEMENT_COMMITTED"
+            self.session.scalar(
+                select(OutboxEvent).where(OutboxEvent.event_type == "AGREEMENT_COMMITTED")
+            ).event_type,
+            "AGREEMENT_COMMITTED",
         )
 
     def test_commit_is_idempotent_for_the_same_version_and_hash(self) -> None:

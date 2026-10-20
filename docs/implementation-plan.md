@@ -406,6 +406,8 @@ membership) remains planned.
 
 **What to build:** Add one workflow per deal. It may wait, set timers, and receive signals. It must call activities for database, AI, or provider work; do not call those systems directly from workflow code. Put a limit on waits, retries, and proposal rounds.
 
+**Contract code:** `workflows/deal.py` accepts the ID-only start payload from the S6-01 outbox, deduplicates notification IDs, and refreshes persisted state through the `RefreshDealState` activity contract. The workflow has a 30-day wait deadline and a three-attempt activity retry limit. Timeout returns `WAIT_EXPIRED` and does not mutate business state. Activity registration remains in S6-03. The workflow patch marker and input schema migration strategy is documented in [the Temporal contract](architecture/02-temporal-deal-workflow-contract.md#10-temporal-workflow-determinism-and-versioning).
+
 **Done when:**
 - Tests show the workflow waits for approval and continues after a signal or worker restart.
 - Repeated/out-of-order signals do not repeat business actions.

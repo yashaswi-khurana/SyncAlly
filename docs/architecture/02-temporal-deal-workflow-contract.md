@@ -201,6 +201,35 @@ between PostgreSQL and an external orchestration service.
 -   Test replay against representative histories before production
     releases.
 
+### Deal workflow signal and wait contract
+
+`DealWorkflow` uses the stable `deal/{deal_id}/lifecycle` ID and accepts
+only the deal and agreement-version IDs from the outbox start request.
+Its signals contain a notification ID, record ID, and notification kind;
+message bodies, approval decisions, payment states, credentials, and
+other private content do not enter workflow history. The workflow ignores
+repeated notification IDs and asks the `RefreshDealState` activity to
+reload and validate current domain state for each distinct notification.
+That activity must make decisions from persisted records, so delayed or
+out-of-order notifications cannot authorize a business action by
+themselves.
+
+The initial workflow waits at most 30 days in total. Each state-refresh
+activity has a 30-second start-to-close timeout and at most three attempts.
+A timeout returns `WAIT_EXPIRED` without changing deal, approval, or
+payment state. Negotiation proposal rounds remain bounded by the domain
+session's `max_rounds`; the workflow does not invent a second round limit.
+Activities and their worker registration are added in S6-03.
+
+For incompatible workflow behavior changes, add a `workflow.patched`
+marker at the command-sequence change and keep both branches until every
+execution that could replay the old branch has passed that marker. Only
+then may the old branch be retired with `workflow.deprecate_patch`. For
+incompatible input changes, increment `schema_version` and keep a decoder
+for in-flight old inputs or introduce a new workflow type. Before release,
+replay representative histories for every supported version. Never reuse
+an existing patch ID for a different change.
+
 ## 11. Workflow failure policy
 
 Distinguish: - **Business rejection:** normal domain result; do not

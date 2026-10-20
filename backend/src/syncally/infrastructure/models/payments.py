@@ -12,12 +12,14 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,9 +48,26 @@ class PaymentMilestone(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
 
 
+# Matches syncally.domain.payments.intent.PaymentIntentStatus's terminal states.
+# Kept as a literal here (not imported from the domain layer) to match this
+# file's existing CheckConstraint style of inlined status literals.
+_ACTIVE_PAYMENT_INTENT_WHERE = text("status NOT IN ('PAID', 'FAILED', 'CANCELLED')")
+
+
 class PaymentIntent(TimestampMixin, Base):
     __tablename__ = "payment_intents"
-    __table_args__ = (CheckConstraint("amount > 0", name="ck_payment_intent_amount_positive"),)
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_payment_intent_amount_positive"),
+        # At most one non-terminal intent per milestone: the persistence-level
+        # guard against starting a second PayPal invoice for the same money.
+        Index(
+            "ix_payment_intents_one_active_per_milestone",
+            "payment_milestone_id",
+            unique=True,
+            postgresql_where=_ACTIVE_PAYMENT_INTENT_WHERE,
+            sqlite_where=_ACTIVE_PAYMENT_INTENT_WHERE,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id"), nullable=False)
@@ -66,6 +85,7 @@ class PaymentIntent(TimestampMixin, Base):
     request_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reconciled_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     last_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

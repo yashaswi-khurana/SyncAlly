@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -46,6 +47,7 @@ from syncally.infrastructure.models import (
     Deal,
     Organization,
     OrganizationMember,
+    OutboxEvent,
     User,
 )
 from syncally.infrastructure.models import (
@@ -210,6 +212,21 @@ class CommunicationRepositoryTests(unittest.TestCase):
             author_user_id=UserId(self.seller_user.id),
         )
         self.session.commit()
+
+        notifications = self.session.scalars(select(OutboxEvent)).all()
+        self.assertEqual(len(notifications), 3)
+        self.assertTrue(
+            all(
+                notification.event_type == "DEAL_NOTIFICATION"
+                and "body" not in notification.payload
+                and "source_reference" not in notification.payload
+                for notification in notifications
+            )
+        )
+        self.assertEqual(
+            {notification.payload["record_id"] for notification in notifications},
+            {str(message.id), str(shareable.id), str(seller_private.id)},
+        )
 
         buyer_messages = self.repository.list_messages(self.deal.id, self.buyer.id)
         seller_messages = self.repository.list_messages(self.deal.id, self.seller.id)
@@ -721,6 +738,13 @@ class CommunicationRepositoryTests(unittest.TestCase):
         self.assertIsNone(self.session.get(ConversationRow, conversation.id))
         self.assertIsNone(self.session.get(MessageRow, message.id))
         self.assertIsNone(self.session.get(ConstraintRow, constraint.id))
+        self.assertNotIn(
+            str(rollback_deal.id),
+            {
+                event.payload["deal_id"]
+                for event in self.session.scalars(select(OutboxEvent)).all()
+            },
+        )
 
 
 if __name__ == "__main__":

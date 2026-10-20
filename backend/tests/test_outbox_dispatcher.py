@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import temporalio.common
 import temporalio.exceptions
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, delete, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -27,6 +27,10 @@ from syncally.application.outbox import (
     WorkflowStartTransientError,
     build_deal_workflow_id,
     dispatch_outbox_event,
+)
+from syncally.application.workflow_notifications import (
+    DealWorkflowNotification,
+    NotificationKind,
 )
 from syncally.domain.agreements.agreement import ApprovalDecision
 from syncally.domain.shared.identifiers import OrganizationId
@@ -63,12 +67,15 @@ class FakeDealWorkflowStarter:
         self._started_ids: set[str] = set()
         self.calls: list[dict] = []
 
-    def start_deal_workflow(self, *, workflow_id, deal_id, agreement_version_id):
+    def start_deal_workflow(
+        self, *, workflow_id, deal_id, agreement_version_id, notification
+    ):
         self.calls.append(
             {
                 "workflow_id": workflow_id,
                 "deal_id": deal_id,
                 "agreement_version_id": agreement_version_id,
+                "notification": notification,
             }
         )
         if self._failures:
@@ -175,9 +182,21 @@ class OutboxDispatcherTests(unittest.TestCase):
                 expected_terms_hash=terms.terms_hash,
             ),
         )
+        # Other agreement tests assert that approvals create their own
+        # transactional notifications. Keep this dispatch fixture focused on
+        # the committed-agreement event it claims below.
+        self.session.execute(
+            delete(OutboxEvent).where(OutboxEvent.event_type == "DEAL_NOTIFICATION")
+        )
+        self.session.commit()
 
     def _pending_row(self) -> OutboxEvent:
-        return self.session.scalar(select(OutboxEvent).where(OutboxEvent.status == "PENDING"))
+        return self.session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.status == "PENDING",
+                OutboxEvent.event_type == "AGREEMENT_COMMITTED",
+            )
+        )
 
     # -- Acceptance criteria --------------------------------------------
 
@@ -192,6 +211,10 @@ class OutboxDispatcherTests(unittest.TestCase):
         self.assertIsNotNone(row.delivered_at)
         self.assertEqual(len(starter.calls), 1)
         self.assertEqual(starter.calls[0]["workflow_id"], build_deal_workflow_id(self.deal.id))
+        self.assertIn(
+            starter.calls[0]["notification"].kind,
+            {NotificationKind.AGREEMENT_COMMITTED, NotificationKind.AGREEMENT_APPROVAL_RECORDED},
+        )
 
     def test_already_running_workflow_is_treated_as_delivered(self) -> None:
         starter = FakeDealWorkflowStarter()
@@ -286,7 +309,12 @@ class OutboxDispatcherTests(unittest.TestCase):
 
         self.assertEqual(dispatched, 1)
         with Session(self.engine) as verify_session:
-            self.assertEqual(verify_session.scalar(select(OutboxEvent)).status, "DELIVERED")
+            self.assertEqual(
+                verify_session.scalar(
+                    select(OutboxEvent.status).where(OutboxEvent.status == "PENDING")
+                ),
+                None,
+            )
 
     def test_two_dispatchers_racing_on_same_row_cause_no_duplicate_start(self) -> None:
         # Two dispatchers both read the row while it is still PENDING - SQLite
@@ -327,8 +355,63 @@ class OutboxDispatcherTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            set(starter.calls[0].keys()), {"workflow_id", "deal_id", "agreement_version_id"}
+            set(starter.calls[0].keys()),
+            {"workflow_id", "deal_id", "agreement_version_id", "notification"},
         )
+        self.assertNotEqual(starter.calls[0]["notification"].record_id, row.payload.get("message_body"))
+
+    def test_committed_agreement_starts_with_its_notification(self) -> None:
+        row = self._pending_row()
+        starter = FakeDealWorkflowStarter()
+
+        result = dispatch_outbox_event(
+            PendingOutboxEvent(id=row.id, event_type=row.event_type, payload=row.payload), starter
+        )
+
+        self.assertTrue(result.delivered)
+        self.assertEqual(starter.calls[0]["notification"].kind, NotificationKind.AGREEMENT_COMMITTED)
+        self.assertEqual(starter.calls[0]["notification"].record_id, str(self.version.id))
+
+    def test_generic_deal_notification_is_delivered_as_a_signal(self) -> None:
+        starter = FakeDealWorkflowStarter()
+        record_id = uuid4()
+        event = PendingOutboxEvent(
+            id=uuid4(),
+            event_type="DEAL_NOTIFICATION",
+            payload={
+                "deal_id": str(self.deal.id),
+                "record_id": str(record_id),
+                "kind": NotificationKind.MESSAGE_RECEIVED.value,
+                "body": "must not be passed to Temporal",
+            },
+        )
+
+        result = dispatch_outbox_event(event, starter)
+
+        self.assertTrue(result.delivered)
+        self.assertIsNone(starter.calls[0]["agreement_version_id"])
+        notification = starter.calls[0]["notification"]
+        self.assertEqual(notification.record_id, str(record_id))
+        self.assertEqual(notification.notification_id, str(event.id))
+        self.assertNotIn("body", starter.calls[0])
+
+    def test_deal_created_notification_starts_a_workflow(self) -> None:
+        starter = FakeDealWorkflowStarter()
+        event = PendingOutboxEvent(
+            id=uuid4(),
+            event_type="DEAL_NOTIFICATION",
+            payload={
+                "deal_id": str(self.deal.id),
+                "record_id": str(self.deal.id),
+                "kind": NotificationKind.DEAL_CREATED.value,
+            },
+        )
+
+        result = dispatch_outbox_event(event, starter)
+
+        self.assertTrue(result.delivered)
+        self.assertEqual(starter.calls[0]["workflow_id"], build_deal_workflow_id(self.deal.id))
+        self.assertEqual(starter.calls[0]["notification"].kind, NotificationKind.DEAL_CREATED)
 
     def test_payment_intent_authorized_rows_are_left_for_the_payment_worker(self) -> None:
         # This dispatcher only knows Temporal/AGREEMENT_COMMITTED - claiming a
@@ -438,16 +521,11 @@ class PostgresDispatcherTests(unittest.TestCase):
 
 
 class TemporalAdapterTests(unittest.TestCase):
-    def test_rejects_reuse_after_workflow_completes(self) -> None:
-        # Exercise the real adapter. The client models a closed execution:
-        # ALLOW_DUPLICATE would start again, REJECT_DUPLICATE must reject it.
+    def test_signal_with_start_recovers_a_closed_workflow_execution(self) -> None:
         calls = []
 
         async def start(workflow, **kwargs):
             calls.append(kwargs)
-            if kwargs.get("id_reuse_policy") == temporalio.common.WorkflowIDReusePolicy.REJECT_DUPLICATE:
-                raise temporalio.exceptions.WorkflowAlreadyStartedError(kwargs["id"], workflow)
-            self.fail("A completed lifecycle workflow would be started again")
 
         client = AsyncMock()
         client.start_workflow.side_effect = start
@@ -455,13 +533,24 @@ class TemporalAdapterTests(unittest.TestCase):
         try:
             starter = TemporalDealWorkflowStarter(client, task_queue="test", loop=loop)
             deal_id, agreement_id = uuid4(), uuid4()
+            notification = DealWorkflowNotification(
+                notification_id=str(uuid4()),
+                record_id=str(agreement_id),
+                kind=NotificationKind.AGREEMENT_COMMITTED,
+            )
             outcome = starter.start_deal_workflow(
                 workflow_id=build_deal_workflow_id(deal_id), deal_id=deal_id,
-                agreement_version_id=agreement_id,
+                agreement_version_id=agreement_id, notification=notification,
             )
-            self.assertEqual(outcome, WorkflowStartOutcome.ALREADY_RUNNING)
-            self.assertEqual(calls[0]["id_conflict_policy"], temporalio.common.WorkflowIDConflictPolicy.FAIL)
-            self.assertEqual(calls[0]["args"], [{"deal_id": str(deal_id), "agreement_version_id": str(agreement_id)}])
+            self.assertEqual(outcome, WorkflowStartOutcome.STARTED)
+            self.assertEqual(calls[0]["id_reuse_policy"], temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE)
+            self.assertEqual(calls[0]["id_conflict_policy"], temporalio.common.WorkflowIDConflictPolicy.USE_EXISTING)
+            self.assertEqual(calls[0]["start_signal"], "notify")
+            self.assertEqual(calls[0]["start_signal_args"][0]["notification_id"], notification.notification_id)
+            self.assertEqual(
+                calls[0]["args"],
+                [{"deal_id": str(deal_id), "agreement_version_id": str(agreement_id)}],
+            )
             self.assertEqual(calls[0]["rpc_timeout"], timedelta(seconds=10))
         finally:
             loop.close()
@@ -473,7 +562,17 @@ class TemporalAdapterTests(unittest.TestCase):
         try:
             starter = TemporalDealWorkflowStarter(client, task_queue="test", loop=loop)
             with self.assertRaises(WorkflowStartTransientError):
-                starter.start_deal_workflow(workflow_id="deal/test/lifecycle", deal_id=uuid4(), agreement_version_id=uuid4())
+                deal_id = uuid4()
+                starter.start_deal_workflow(
+                    workflow_id="deal/test/lifecycle",
+                    deal_id=deal_id,
+                    agreement_version_id=uuid4(),
+                    notification=DealWorkflowNotification(
+                        notification_id=str(uuid4()),
+                        record_id=str(uuid4()),
+                        kind=NotificationKind.DEAL_CREATED,
+                    ),
+                )
         finally:
             loop.close()
 

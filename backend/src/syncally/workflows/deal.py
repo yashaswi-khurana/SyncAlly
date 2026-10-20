@@ -17,6 +17,7 @@ from syncally.application.workflow_notifications import (
 from syncally.application.workflow_notifications import (
     NotificationKind as NotificationKind,
 )
+from syncally.workflows.errors import NON_RETRYABLE_ACTIVITY_ERROR_TYPES
 
 WORKFLOW_SCHEMA_VERSION = 2
 MAX_WORKFLOW_WAIT = timedelta(days=30)
@@ -24,12 +25,6 @@ ACTIVITY_TIMEOUT = timedelta(seconds=30)
 MAX_PENDING_NOTIFICATIONS = 256
 MAX_REMEMBERED_NOTIFICATION_IDS = 1024
 MAX_NOTIFICATIONS_PER_RUN = 100
-NON_RETRYABLE_ACTIVITY_ERROR_TYPES = (
-    "ValidationError",
-    "BusinessRejectionError",
-    "AuthorizationError",
-    "SecurityError",
-)
 ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
     backoff_coefficient=2.0,

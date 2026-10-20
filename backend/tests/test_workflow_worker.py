@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import subprocess
 import sys
 import unittest
@@ -33,7 +34,11 @@ from syncally.workflows.deal import (
 )
 from syncally.workflows.worker import (
     CONNECT_RETRY_INTERVAL_SECONDS,
+    GRACEFUL_SHUTDOWN_TIMEOUT,
+    SHUTDOWN_SIGNALS,
     _connect_with_retry,
+    _register_shutdown_handlers,
+    _request_shutdown,
     create_worker,
     run_worker,
     workflow_activities,
@@ -70,6 +75,9 @@ class WorkflowWorkerTests(unittest.TestCase):
         self.assertEqual(kwargs["task_queue"], "deals")
         self.assertEqual(kwargs["workflows"], [DealWorkflow])
         self.assertIs(kwargs["activity_executor"], activity_executor)
+        self.assertEqual(
+            kwargs["graceful_shutdown_timeout"], GRACEFUL_SHUTDOWN_TIMEOUT
+        )
         self.assertEqual(
             getattr(kwargs["activities"][0], "__temporal_activity_definition").name,
             REFRESH_DEAL_STATE_ACTIVITY,
@@ -184,6 +192,42 @@ class ConnectWithRetryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(connect.await_count, 1)
         sleep.assert_not_awaited()
+
+
+class WorkerShutdownSignalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_signal_callback_requests_graceful_shutdown(self) -> None:
+        worker = MagicMock()
+        worker.shutdown = AsyncMock()
+
+        _request_shutdown(worker, "SIGTERM")
+        await asyncio.sleep(0)
+
+        worker.shutdown.assert_awaited_once_with()
+
+    def test_registers_all_supported_shutdown_signals(self) -> None:
+        loop = MagicMock()
+        worker = MagicMock()
+
+        installed = _register_shutdown_handlers(loop, worker)
+
+        self.assertEqual(installed, list(SHUTDOWN_SIGNALS))
+        self.assertEqual(loop.add_signal_handler.call_count, len(SHUTDOWN_SIGNALS))
+        for call, signal_number in zip(
+            loop.add_signal_handler.call_args_list, SHUTDOWN_SIGNALS, strict=True
+        ):
+            self.assertEqual(
+                call.args,
+                (signal_number, _request_shutdown, worker, signal_number.name),
+            )
+
+    def test_unsupported_signal_handler_does_not_break_startup(self) -> None:
+        loop = MagicMock()
+        loop.add_signal_handler.side_effect = [NotImplementedError, None]
+        worker = MagicMock()
+
+        installed = _register_shutdown_handlers(loop, worker)
+
+        self.assertEqual(installed, [signal.SIGINT])
 
 
 class RunWorkerExecutorTests(unittest.IsolatedAsyncioTestCase):

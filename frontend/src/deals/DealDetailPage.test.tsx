@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getDeal, listDealFacts, listDealMessages, listOrganizations } from "../api/client";
+import { ApiError, getCurrentAgreement, getDeal, listDealFacts, listDealMessages, listOrganizations } from "../api/client";
 import type { Deal } from "../api/types";
 import DealDetailPage from "./DealDetailPage";
 
@@ -10,6 +10,7 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     getDeal: vi.fn(),
+    getCurrentAgreement: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
     listOrganizations: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("../api/client", async (importOriginal) => {
 });
 
 const mockedGetDeal = vi.mocked(getDeal);
+const mockedGetCurrentAgreement = vi.mocked(getCurrentAgreement);
 const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
 const mockedListOrganizations = vi.mocked(listOrganizations);
@@ -45,6 +47,7 @@ describe("DealDetailPage", () => {
         role: "ADMIN",
       },
     ]);
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
   });
 
   it("fetches the deal on mount and renders its details", async () => {

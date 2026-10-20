@@ -155,6 +155,9 @@ class AgreementRouteTests(unittest.TestCase):
             json={"terms_hash": terms_hash or self.terms.terms_hash},
         )
 
+    def _get_current(self):
+        return self._request("GET", f"/deals/{self.deal.id}/agreements/current")
+
     def _add_pending_version(self, version_number: int, *, make_current: bool) -> AgreementVersion:
         version = AgreementVersion(
             deal_id=self.deal.id,
@@ -180,6 +183,40 @@ class AgreementRouteTests(unittest.TestCase):
         response = self._create_draft()
 
         self.assertEqual(response.status_code, 401)
+
+    def test_current_agreement_read_returns_exact_terms_and_approval_state(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.assertEqual(self._create_draft().status_code, 201)
+
+        pending = self._get_current()
+
+        self.assertEqual(pending.status_code, 200, pending.text)
+        body = pending.json()
+        self.assertEqual(body["version_number"], 1)
+        self.assertEqual(body["terms_hash"], self.terms.terms_hash)
+        self.assertEqual(body["status"], "PENDING_APPROVAL")
+        self.assertEqual(body["terms"]["line_items"][0]["description"], "Desk")
+        self.assertEqual(body["approvals"], [])
+
+        self.assertEqual(self._approve(1).status_code, 200)
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        self.assertEqual(self._approve(1).status_code, 200)
+        self.assertEqual(self._commit(1).status_code, 200)
+
+        committed = self._get_current()
+        self.assertEqual(committed.status_code, 200, committed.text)
+        self.assertEqual(committed.json()["status"], "COMMITTED")
+        self.assertEqual(len(committed.json()["approvals"]), 2)
+
+    def test_current_agreement_read_hides_missing_and_nonparticipant_deals(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        missing = self._get_current()
+        self.assertEqual(missing.status_code, 404)
+
+        self._add_pending_version(1, make_current=True)
+        self._authenticate(self._actor(self.outsider_user, self.outsider))
+        forbidden = self._get_current()
+        self.assertEqual(forbidden.status_code, 404)
 
     def test_create_draft_snapshots_proposal_and_advances_deal(self) -> None:
         self._authenticate(self._actor(self.buyer_user, self.buyer))

@@ -90,12 +90,7 @@ def _deal_to_domain(row: Deal) -> DomainDeal:
 def _agreement_to_domain(
     version_row: AgreementVersion, approval_rows: list[Approval]
 ) -> DomainAgreement:
-    """Rebuild the PENDING_APPROVAL aggregate so domain invariants can run.
-
-    ``Agreement`` always constructs as PENDING_APPROVAL (status is a private,
-    init=False field since the terms-freezing change) - callers only use this
-    for rows that are still PENDING_APPROVAL, checked before calling in.
-    """
+    """Rebuild a pending agreement aggregate from persisted values."""
     terms = TradeTerms.from_canonical_json(version_row.canonical_terms_json)
     approvals = {
         OrganizationId(row.organization_id): DomainApproval(
@@ -201,6 +196,37 @@ class SqlAlchemyAgreementRepository:
         deal_row.version = domain_deal.version
         self._db.flush()
         return _agreement_to_domain(version_row, [])
+
+    def get_current(self, deal_id: UUID) -> DomainAgreement | None:
+        """Load the deal's current immutable version and its recorded decisions."""
+        deal_row = self._db.get(Deal, deal_id)
+        if deal_row is None or deal_row.current_agreement_version_id is None:
+            return None
+        version_row = self._db.scalar(
+            select(AgreementVersion).where(
+                AgreementVersion.id == deal_row.current_agreement_version_id,
+                AgreementVersion.deal_id == deal_id,
+            )
+        )
+        if version_row is None:
+            return None
+        approval_rows = list(
+            self._db.scalars(
+                select(Approval)
+                .where(Approval.agreement_version_id == version_row.id)
+                .order_by(Approval.organization_id)
+            )
+        )
+        agreement = _agreement_to_domain(version_row, approval_rows)
+        if agreement.terms_hash != version_row.terms_hash:
+            raise AgreementVersionConflict("Stored agreement terms do not match their hash")
+        if version_row.status == AgreementStatus.COMMITTED.value:
+            if version_row.committed_at is None:
+                raise AgreementVersionConflict("Committed agreement is missing its commit time")
+            agreement.commit(version_row.terms_hash, as_utc(version_row.committed_at))
+        elif version_row.status != AgreementStatus.PENDING_APPROVAL.value:
+            raise AgreementVersionConflict("Current agreement has an unsupported status")
+        return agreement
 
     def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> DomainApproval:
         # Locking the deal row serializes this against a concurrent commit()

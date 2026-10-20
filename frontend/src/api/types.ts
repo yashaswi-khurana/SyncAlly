@@ -19,6 +19,51 @@ export interface Deal {
   version: number;
 }
 
+export type AgreementStatus = "PENDING_APPROVAL" | "COMMITTED" | "SUPERSEDED" | "VOIDED";
+
+export interface AgreementLineItem {
+  description: string;
+  sku: string | null;
+  quantity: string;
+  unit: string;
+  unit_price: { amount: string; currency: string };
+}
+
+export interface AgreementVersion {
+  deal_id: string;
+  version_number: number;
+  terms_hash: string;
+  status: AgreementStatus;
+  terms: {
+    schema_version: number;
+    buyer_id: string;
+    seller_id: string;
+    line_items: AgreementLineItem[];
+    shipments: Array<{ quantity: string; destination: string; target_date: string | null }>;
+    payment_terms: Array<{
+      amount: { amount: string; currency: string };
+      trigger: string;
+      due_condition: string;
+    }>;
+    delivery_location: string;
+    incoterm: string | null;
+    cancellation_terms: string;
+  };
+  created_at: string;
+  committed_at: string | null;
+  approvals: AgreementApproval[];
+}
+
+export interface AgreementApproval {
+  deal_id: string;
+  version_number: number;
+  organization_id: string;
+  user_id: string;
+  decision: "APPROVE" | "REJECT";
+  terms_hash: string;
+  created_at: string;
+}
+
 export type ViewerRole = "BUYER" | "SELLER" | "BOTH";
 
 export interface DealSummary extends Deal {

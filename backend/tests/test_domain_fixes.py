@@ -25,6 +25,8 @@ from syncally.domain.payments.intent import (
     PaymentIntent,
     PaymentIntentStatus,
     PaymentMilestone,
+    VerifiedProviderPaymentState,
+    VerifiedProviderPaymentStatus,
 )
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import (
@@ -274,7 +276,7 @@ class TradeTermsTests(TestCase):
 
 
 class PaymentReconciliationTests(TestCase):
-    def test_lower_stale_reconciliation_cannot_reduce_recorded_payment(self) -> None:
+    def _intent(self, idempotency_key: str = "intent-key") -> PaymentIntent:
         buyer = OrganizationId(uuid4())
         milestone = PaymentMilestone(
             id=PaymentMilestoneId(uuid4()),
@@ -283,34 +285,122 @@ class PaymentReconciliationTests(TestCase):
             sequence_number=1,
             payer_organization_id=buyer,
             amount=Money(Decimal("100"), "USD"),
-            trigger="order",
-            due_condition="on order",
+            trigger="invoice",
+            due_condition="on commitment",
         )
-        intent = PaymentIntent(
+        return PaymentIntent(
             id=PaymentIntentId(uuid4()),
             milestone=milestone,
+            seller_organization_id=OrganizationId(uuid4()),
             payer_organization_id=buyer,
             authorized_by=UserId(uuid4()),
-            idempotency_key="intent-key",
+            idempotency_key=idempotency_key,
             created_at=datetime.now(UTC),
         )
+
+    def test_lower_stale_reconciliation_cannot_reduce_recorded_payment(self) -> None:
+        intent = self._intent()
         intent.begin_create()
         intent.record_provider_created("provider-123")
         intent.mark_sent()
         intent.reconcile_provider_state(
-            provider_reference="provider-123",
-            paid_amount=Money(Decimal("40"), "USD"),
+            VerifiedProviderPaymentState(
+                status=VerifiedProviderPaymentStatus.PARTIALLY_PAID,
+                provider_reference="provider-123",
+                paid_amount=Money(Decimal("40"), "USD"),
+            )
         )
 
         with self.assertRaises(InvalidTransition):
             intent.reconcile_provider_state(
-                provider_reference="stale-reference",
-                paid_amount=Money(Decimal("10"), "USD"),
+                VerifiedProviderPaymentState(
+                    status=VerifiedProviderPaymentStatus.PARTIALLY_PAID,
+                    provider_reference="stale-reference",
+                    paid_amount=Money(Decimal("10"), "USD"),
+                )
             )
 
         self.assertEqual(intent.status, PaymentIntentStatus.PARTIALLY_PAID)
         self.assertEqual(intent.reconciled_amount, Money(Decimal("40"), "USD"))
         self.assertEqual(intent.provider_reference, "provider-123")
+
+    def test_pending_full_amount_does_not_mark_payment_paid(self) -> None:
+        intent = self._intent("intent-pending")
+        intent.begin_create()
+        intent.record_provider_created("provider-123")
+        intent.mark_sent()
+
+        intent.reconcile_provider_state(
+            VerifiedProviderPaymentState(
+                status=VerifiedProviderPaymentStatus.PENDING,
+                provider_reference="provider-123",
+                paid_amount=Money(Decimal("100"), "USD"),
+            )
+        )
+
+        self.assertEqual(intent.status, PaymentIntentStatus.PENDING)
+        self.assertEqual(intent.reconciled_amount, Money(Decimal("100"), "USD"))
+
+    def test_only_verified_paid_state_with_full_milestone_amount_marks_paid(self) -> None:
+        intent = self._intent("intent-paid")
+        intent.begin_create()
+        intent.record_provider_created("provider-123")
+        intent.mark_sent()
+        with self.assertRaises(InvariantViolation):
+            intent.reconcile_provider_state(
+                VerifiedProviderPaymentState(
+                    status=VerifiedProviderPaymentStatus.PAID,
+                    provider_reference="provider-123",
+                    paid_amount=Money(Decimal("99"), "USD"),
+                )
+            )
+        self.assertEqual(intent.status, PaymentIntentStatus.SENT)
+
+        intent.reconcile_provider_state(
+            VerifiedProviderPaymentState(
+                status=VerifiedProviderPaymentStatus.PAID,
+                provider_reference="provider-123",
+                paid_amount=Money(Decimal("100"), "USD"),
+            )
+        )
+
+        self.assertEqual(intent.status, PaymentIntentStatus.PAID)
+
+    def test_payment_status_cannot_be_set_directly(self) -> None:
+        intent = self._intent("intent-direct-status")
+
+        with self.assertRaises(AttributeError):
+            setattr(intent, "status", PaymentIntentStatus.PAID)
+
+        self.assertEqual(intent.status, PaymentIntentStatus.AUTHORIZED)
+
+    def test_unknown_create_can_retry_only_after_verified_not_found(self) -> None:
+        intent = self._intent("intent-unknown")
+        intent.begin_create()
+        intent.record_create_unknown()
+
+        with self.assertRaises(InvalidTransition):
+            intent.begin_create()
+
+        intent.reconcile_provider_state(
+            VerifiedProviderPaymentState(
+                status=VerifiedProviderPaymentStatus.UNKNOWN,
+                provider_reference=None,
+                paid_amount=Money(Decimal("0"), "USD"),
+            )
+        )
+        self.assertEqual(intent.status, PaymentIntentStatus.CREATE_UNKNOWN)
+
+        intent.reconcile_provider_state(
+            VerifiedProviderPaymentState(
+                status=VerifiedProviderPaymentStatus.NOT_FOUND,
+                provider_reference=None,
+                paid_amount=Money(Decimal("0"), "USD"),
+            )
+        )
+        self.assertEqual(intent.status, PaymentIntentStatus.AUTHORIZED)
+        intent.begin_create()
+        self.assertEqual(intent.status, PaymentIntentStatus.CREATE_PENDING)
 
 
 class NegotiationTests(TestCase):

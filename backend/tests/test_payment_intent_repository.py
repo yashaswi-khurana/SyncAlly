@@ -7,6 +7,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 from test_domain_fixes import build_terms
@@ -19,8 +20,13 @@ from syncally.application.agreements import (
 from syncally.application.payments import (
     AuthorizePaymentIntentCommand,
     DuplicateActivePaymentIntent,
+    IdempotencyKeyReused,
+    PaymentIntentCommandMismatch,
+    PaymentMilestoneNotFound,
+    UnauthorizedPaymentAuthorization,
 )
 from syncally.domain.agreements.agreement import ApprovalDecision
+from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.models import (
@@ -40,7 +46,11 @@ from syncally.infrastructure.repositories.agreements import (
     SqlAlchemyAgreementRepository,
     commit_agreement_in_transaction,
 )
-from syncally.infrastructure.repositories.payments import authorize_payment_intent_in_transaction
+from syncally.infrastructure.repositories.payments import (
+    _is_idempotency_key_violation,
+    _is_one_active_per_milestone_violation,
+    authorize_payment_intent_in_transaction,
+)
 
 
 class PaymentIntentRepositoryTests(unittest.TestCase):
@@ -141,7 +151,12 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
         self.assertIsNotNone(self.milestone_id)
 
     def _command(
-        self, *, milestone_id=None, idempotency_key: str | None = None
+        self,
+        *,
+        milestone_id=None,
+        idempotency_key: str | None = None,
+        authorized_by=None,
+        amount: Money | None = None,
     ) -> AuthorizePaymentIntentCommand:
         return AuthorizePaymentIntentCommand(
             id=uuid4(),
@@ -150,8 +165,8 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
             payment_milestone_id=milestone_id or self.milestone_id,
             seller_organization_id=self.seller_org_id,
             payer_organization_id=self.buyer_org_id,
-            authorized_by=self.buyer_user_id,
-            amount=Money(Decimal("10"), "USD"),
+            authorized_by=authorized_by or self.buyer_user_id,
+            amount=amount or Money(Decimal("10"), "USD"),
             idempotency_key=idempotency_key or f"intent-{uuid4()}",
         )
 
@@ -193,6 +208,90 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
                 "payment_milestone_id": str(self.milestone_id),
             },
         )
+
+    def _add_second_milestone(self) -> "PaymentMilestone":
+        second_milestone = PaymentMilestone(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement_version_id,
+            sequence_number=2,
+            payer_organization_id=self.buyer_org_id,
+            amount=Decimal("10"),
+            currency="USD",
+            trigger_type="MANUAL",
+            due_condition="On delivery",
+            status="PENDING",
+        )
+        self.session.add(second_milestone)
+        self.session.flush()
+        return second_milestone
+
+    def test_reusing_an_idempotency_key_for_a_different_authorization_is_rejected(self) -> None:
+        # Two intents for *different* milestones that collide only on
+        # idempotency_key is a client bug, not a retry - it must not be
+        # silently merged into either row, nor reported as a milestone conflict.
+        second_milestone = self._add_second_milestone()
+
+        first = self._command(idempotency_key="shared-key")
+        authorize_payment_intent_in_transaction(self.session, first)
+
+        second = self._command(milestone_id=second_milestone.id, idempotency_key="shared-key")
+        with self.assertRaises(IdempotencyKeyReused):
+            authorize_payment_intent_in_transaction(self.session, second)
+
+        self.assertEqual(len(list(self.session.scalars(select(PaymentIntent)))), 1)
+
+    def test_unrelated_integrity_violation_is_not_classified_as_either_known_conflict(self) -> None:
+        # A check constraint or FK violation must not be mistaken for the
+        # milestone-conflict or idempotency-key-reuse cases above.
+        error = IntegrityError("INSERT", {}, Exception("CHECK constraint failed: ck_payment_intent_amount_positive"))
+        self.assertFalse(_is_one_active_per_milestone_violation(error))
+        self.assertFalse(_is_idempotency_key_violation(error))
+
+    def test_retrying_with_the_same_idempotency_key_replays_the_original_result(self) -> None:
+        # Commit succeeds but the caller loses the acknowledgement and retries
+        # with a fresh attempt id but the same idempotency key - it must get
+        # back the original intent, not a duplicate or a false conflict.
+        first = self._command(idempotency_key="shared-key")
+        first_outcome = authorize_payment_intent_in_transaction(self.session, first)
+        self.assertFalse(first_outcome.already_existed)
+        self.assertEqual(first_outcome.intent_id, first.id)
+
+        retry = self._command(idempotency_key="shared-key")
+        retry_outcome = authorize_payment_intent_in_transaction(self.session, retry)
+
+        self.assertTrue(retry_outcome.already_existed)
+        self.assertEqual(retry_outcome.intent_id, first.id)
+        self.assertEqual(len(list(self.session.scalars(select(PaymentIntent)))), 1)
+        # No second outbox dispatch for a replay that reported nothing new.
+        self.assertEqual(len(self._outbox_rows()), 1)
+
+    def test_unknown_milestone_is_rejected(self) -> None:
+        command = self._command(milestone_id=uuid4())
+        with self.assertRaises(PaymentMilestoneNotFound):
+            authorize_payment_intent_in_transaction(self.session, command)
+
+    def test_amount_mismatched_with_the_milestone_is_rejected(self) -> None:
+        command = self._command(amount=Money(Decimal("999"), "USD"))
+        with self.assertRaises(PaymentIntentCommandMismatch):
+            authorize_payment_intent_in_transaction(self.session, command)
+
+    def test_inactive_authorizer_is_rejected(self) -> None:
+        inactive_user = User(email="inactive@example.com", display_name="Inactive", status="SUSPENDED")
+        self.session.add(inactive_user)
+        self.session.flush()
+        self.session.add(
+            OrganizationMember(user_id=inactive_user.id, organization_id=self.buyer_org_id, status="ACTIVE")
+        )
+        self.session.commit()
+
+        command = self._command(authorized_by=inactive_user.id)
+        with self.assertRaises(UnauthorizedPaymentAuthorization):
+            authorize_payment_intent_in_transaction(self.session, command)
+
+    def test_blank_idempotency_key_is_rejected(self) -> None:
+        command = self._command(idempotency_key=" ")
+        with self.assertRaises(InvariantViolation):
+            authorize_payment_intent_in_transaction(self.session, command)
 
     def test_second_active_intent_for_same_milestone_is_rejected(self) -> None:
         first = self._command(idempotency_key="intent-1")

@@ -19,18 +19,28 @@ _WHERE = "status NOT IN ('PAID', 'FAILED', 'CANCELLED')"
 
 
 def upgrade() -> None:
-    op.add_column("payment_intents", sa.Column("last_checked_at", sa.DateTime(timezone=True), nullable=True))
+    # Adding the column and (on postgres) building the index concurrently are
+    # two separate transactions - autocommit_block() commits the column add
+    # before the index build runs. If the index build then fails, rerunning
+    # this migration must not try to re-add a column that already landed.
+    existing_columns = {col["name"] for col in sa.inspect(op.get_bind()).get_columns(_TABLE)}
+    if "last_checked_at" not in existing_columns:
+        op.add_column("payment_intents", sa.Column("last_checked_at", sa.DateTime(timezone=True), nullable=True))
 
     context = op.get_context()
     if context.dialect.name == "postgresql":
         with context.autocommit_block():
+            # A prior failed CONCURRENTLY build can leave an invalid index
+            # behind; IF NOT EXISTS alone would then skip rebuilding it.
+            op.execute(f'DROP INDEX CONCURRENTLY IF EXISTS "{_INDEX_NAME}"')
             op.create_index(
                 _INDEX_NAME, _TABLE, ["payment_milestone_id"],
                 unique=True, postgresql_where=sa.text(_WHERE), postgresql_concurrently=True,
             )
     else:
         op.create_index(
-            _INDEX_NAME, _TABLE, ["payment_milestone_id"], unique=True, sqlite_where=sa.text(_WHERE)
+            _INDEX_NAME, _TABLE, ["payment_milestone_id"],
+            unique=True, sqlite_where=sa.text(_WHERE), if_not_exists=True,
         )
 
 

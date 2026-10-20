@@ -65,7 +65,10 @@ never written to logs, and `422` validation errors are redacted so they do not e
 request values back to the caller.
 `POST /deals/{deal_id}/agreements` with `{ "proposal_id": "..." }` snapshots a saved proposal
 into the deal's next `PENDING_APPROVAL` agreement version and returns its version number and
-`terms_hash`. `POST /deals/{deal_id}/agreements/{version_number}/approve` and `/reject` record
+`terms_hash`. `GET /deals/{deal_id}/agreements/current` returns the current immutable terms,
+version, hash, status, and both parties' recorded decisions to an active deal participant; it
+returns `404` before a version exists. `POST /deals/{deal_id}/agreements/{version_number}/approve`
+and `/reject` record
 the authenticated party's decision for that exact version and the `terms_hash` the user saw.
 `POST /deals/{deal_id}/agreements/{version_number}/commit` commits the version once both
 parties approved it and derives the obligations, payment milestone, audit, and outbox rows in

@@ -24,7 +24,6 @@ type AgreementState =
 function apiMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return "Your session has expired. Sign in again.";
-    if (error.status === 0) return error.message;
     return error.message;
   }
   return "Unable to load this agreement. Please try again.";

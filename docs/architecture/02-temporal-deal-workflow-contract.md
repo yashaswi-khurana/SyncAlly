@@ -203,22 +203,51 @@ between PostgreSQL and an external orchestration service.
 
 ### Deal workflow signal and wait contract
 
-`DealWorkflow` uses the stable `deal/{deal_id}/lifecycle` ID and accepts
-only the deal and agreement-version IDs from the outbox start request.
-Its signals contain a notification ID, record ID, and notification kind;
+`DealWorkflow` uses the stable `deal/{deal_id}/lifecycle` ID. The
+transactional outbox sends deal creation, agreement commits, approvals,
+messages, and constraint changes as signals containing only an outbox
+notification ID, record ID, and notification kind;
 message bodies, approval decisions, payment states, credentials, and
 other private content do not enter workflow history. The workflow ignores
 repeated notification IDs and asks the `RefreshDealState` activity to
-reload and validate current domain state for each distinct notification.
+reload and validate current domain state. The start request uses
+signal-with-start, so the first committed event is processed immediately
+without waiting for a later signal. The first notification immediately
+triggers an activity to refresh persisted deal state; every later
+notification does the same. The activity must not treat the
+initiating agreement-version ID as current authority.
 That activity must make decisions from persisted records, so delayed or
 out-of-order notifications cannot authorize a business action by
 themselves.
 
-The initial workflow waits at most 30 days in total. Each state-refresh
-activity has a 30-second start-to-close timeout and at most three attempts.
-A timeout returns `WAIT_EXPIRED` without changing deal, approval, or
-payment state. Negotiation proposal rounds remain bounded by the domain
-session's `max_rounds`; the workflow does not invent a second round limit.
+The workflow waits at most 30 days in total, carrying its absolute deadline
+through Continue-As-New. Each state-refresh activity has a 30-second
+start-to-close timeout, a schedule-to-close timeout no later than that
+deadline, and at most three attempts. Validation, business rejection,
+authorization, and security activity errors are non-retryable by their
+Temporal error type names. A timeout returns `WAIT_EXPIRED` and emits an
+operational warning without changing deal, approval, or payment state.
+The operations worker must alert on that warning and on failed workflow
+executions.
+
+The signal queue is capped at 256 entries; overflow coalesces wake-up
+hints, because the activity always reloads the full authoritative deal
+state. Duplicate IDs are remembered in a rolling 1,024-ID window. The
+workflow continues as new after at most 100 processed notifications (the
+internal input may lower this cap), carrying its absolute deadline, pending
+notifications, deduplication window, and
+processed count forward. Activity refresh is therefore required to be
+idempotent and complete enough to recover state when hints are coalesced.
+This rollout guards the new Continue-As-New command with the patch ID
+`deal-workflow-history-rollover-v1`. Keep the old branch available until
+all runs created before the marker have closed; then retire it with
+`workflow.deprecate_patch` in a later deployment.
+
+When a timed-out or failed execution closes, the next outbox event uses
+signal-with-start with `ALLOW_DUPLICATE` reuse and `USE_EXISTING` conflict
+policies. An active execution receives the signal; a closed one is
+restarted and receives the signal atomically.
+
 Activities and their worker registration are added in S6-03.
 
 For incompatible workflow behavior changes, add a `workflow.patched`

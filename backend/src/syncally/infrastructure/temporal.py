@@ -1,9 +1,7 @@
 """Real Temporal adapter for the outbox dispatcher.
 
-The only file in this codebase that imports ``temporalio``. Starts the deal
-lifecycle workflow by its string type name rather than an imported class,
-since the workflow itself (S6-02) isn't built yet - this dispatcher only
-needs to be able to start it once that lands.
+The adapter starts the workflow by its stable type name, keeping workflow
+definitions out of the dispatcher and API process imports.
 """
 
 from __future__ import annotations

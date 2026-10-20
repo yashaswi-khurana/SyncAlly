@@ -5,22 +5,26 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import timedelta
 from uuid import uuid4
 
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from syncally.application.workflow_notifications import NotificationKind
 from syncally.workflows.deal import (
+    MAX_PENDING_NOTIFICATIONS,
+    MAX_REMEMBERED_NOTIFICATION_IDS,
     REFRESH_DEAL_STATE_ACTIVITY,
     DealWorkflow,
     DealWorkflowInput,
     DealWorkflowNotification,
     DealWorkflowResult,
     DealWorkflowStatus,
-    NotificationKind,
 )
 
 _TEMPORAL_TEST_SERVER_ERROR: str | None = None
@@ -37,6 +41,8 @@ class RefreshActivity:
         self.calls: list[RefreshCall] = []
         self.terminal_record_ids: set[str] = set()
         self.failures_remaining = 0
+        self.permanent_failures_remaining = 0
+        self.attempt_count = 0
 
     @activity.defn(name=REFRESH_DEAL_STATE_ACTIVITY)
     async def refresh(
@@ -44,6 +50,10 @@ class RefreshActivity:
         workflow_input: DealWorkflowInput,
         notification: DealWorkflowNotification,
     ) -> bool:
+        self.attempt_count += 1
+        if self.permanent_failures_remaining:
+            self.permanent_failures_remaining -= 1
+            raise ApplicationError("not authorized", type="AuthorizationError")
         if self.failures_remaining:
             self.failures_remaining -= 1
             raise RuntimeError("temporary activity failure")
@@ -79,11 +89,27 @@ class DealWorkflowUnitTests(unittest.TestCase):
         self.assertEqual(workflow._pending, [notification])
         self.assertEqual(workflow._seen_notification_ids, {notification.notification_id})
 
+    def test_signal_queue_and_deduplication_memory_are_bounded(self) -> None:
+        workflow = DealWorkflow()
+        notifications = [new_notification() for _ in range(MAX_PENDING_NOTIFICATIONS + 8)]
+
+        for notification in notifications:
+            workflow.notify(notification)
+
+        self.assertEqual(len(workflow._pending), MAX_PENDING_NOTIFICATIONS)
+        self.assertEqual(workflow._pending[-1], notifications[-1])
+        self.assertLessEqual(len(workflow._seen_notification_ids), MAX_REMEMBERED_NOTIFICATION_IDS)
+        self.assertLessEqual(len(workflow._seen_notification_order), MAX_REMEMBERED_NOTIFICATION_IDS)
+
     def test_workflow_input_rejects_unsupported_schema_and_invalid_ids(self) -> None:
         with self.assertRaises(ValueError):
-            DealWorkflowInput(str(uuid4()), str(uuid4()), schema_version=2)
+            DealWorkflowInput(str(uuid4()), str(uuid4()), schema_version=3)
         with self.assertRaises(ValueError):
             DealWorkflowInput("not-a-uuid", str(uuid4()))
+        with self.assertRaises(ValueError):
+            DealWorkflowInput(
+                str(uuid4()), str(uuid4()), continue_after_notifications=101
+            )
 
 
 class DealWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -135,11 +161,13 @@ class DealWorkflowTests(unittest.IsolatedAsyncioTestCase):
             await handle.signal(DealWorkflow.notify, first)
             await handle.signal(DealWorkflow.notify, second)
 
+            await self._wait_for_processed_notifications(handle, 2)
             await self._wait_for_calls(2)
-            self.assertEqual(
-                {call.notification.notification_id for call in self.activity.calls},
-                {first.notification_id, second.notification_id},
-            )
+            notification_ids = [call.notification.notification_id for call in self.activity.calls]
+            self.assertEqual(len(notification_ids), 2)
+            self.assertCountEqual(notification_ids, [first.notification_id, second.notification_id])
+            self.assertEqual(notification_ids.count(first.notification_id), 1)
+            self.assertEqual(notification_ids.count(second.notification_id), 1)
             self.assertTrue(
                 all(call.workflow_input.deal_id == self.input.deal_id for call in self.activity.calls)
             )
@@ -171,7 +199,7 @@ class DealWorkflowTests(unittest.IsolatedAsyncioTestCase):
         try:
             await handle.signal(DealWorkflow.notify, duplicate)
             await handle.signal(DealWorkflow.notify, terminal)
-            await self._wait_for_processed_notifications(handle, 2)
+            await self._wait_for_calls(2)
             async with asyncio.timeout(10):
                 result = await handle.result()
         finally:
@@ -188,15 +216,55 @@ class DealWorkflowTests(unittest.IsolatedAsyncioTestCase):
         try:
             handle = await self.environment.client.start_workflow(
                 DealWorkflow.run,
-                self.input,
+                replace(
+                    self.input,
+                    deadline=await self.environment.get_current_time() + timedelta(seconds=10),
+                ),
                 id=f"deal/{self.input.deal_id}/lifecycle",
                 task_queue=self.task_queue,
             )
 
+            await self.environment.sleep(timedelta(seconds=9))
+            description = await handle.describe()
+            self.assertEqual(description.status.name, "RUNNING")
+            self.assertEqual(await handle.query(DealWorkflow.processed_notification_count), 0)
+
+            await self.environment.sleep(timedelta(seconds=2))
             result = await handle.result()
 
             self.assertEqual(result, DealWorkflowResult(DealWorkflowStatus.WAIT_EXPIRED, 0))
             self.assertEqual(self.activity.calls, [])
+        finally:
+            await worker.__aexit__(None, None, None)
+
+    async def test_queued_activity_cannot_extend_the_workflow_deadline(self) -> None:
+        # A workflow-only worker leaves RefreshDealState queued. Its
+        # schedule-to-close timeout must still be capped by the deal deadline.
+        worker = Worker(
+            self.environment.client,
+            task_queue=self.task_queue,
+            workflows=[DealWorkflow],
+            max_cached_workflows=0,
+        )
+        await worker.__aenter__()
+        try:
+            handle = await self.environment.client.start_workflow(
+                DealWorkflow.run,
+                replace(
+                    self.input,
+                    deadline=await self.environment.get_current_time() + timedelta(seconds=10),
+                ),
+                id=f"deal/{self.input.deal_id}/lifecycle",
+                task_queue=self.task_queue,
+            )
+            await handle.signal(DealWorkflow.notify, new_notification())
+            await self.environment.sleep(timedelta(seconds=9))
+            self.assertEqual((await handle.describe()).status.name, "RUNNING")
+
+            await self.environment.sleep(timedelta(seconds=2))
+            result = await handle.result()
+            self.assertEqual(result.status, DealWorkflowStatus.WAIT_EXPIRED)
+            self.assertEqual(result.processed_notifications, 0)
         finally:
             await worker.__aexit__(None, None, None)
 
@@ -219,8 +287,79 @@ class DealWorkflowTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await worker.__aexit__(None, None, None)
 
-    async def _wait_for_calls(self, count: int) -> None:
-        async with asyncio.timeout(5):
+    async def test_permanent_activity_error_is_not_retried(self) -> None:
+        self.activity.permanent_failures_remaining = 3
+        worker = await self.start_worker()
+        try:
+            handle = await self.environment.client.start_workflow(
+                DealWorkflow.run,
+                self.input,
+                id=f"deal/{self.input.deal_id}/lifecycle",
+                task_queue=self.task_queue,
+            )
+            await handle.signal(DealWorkflow.notify, new_notification())
+
+            with self.assertRaises(WorkflowFailureError):
+                await handle.result()
+
+            self.assertEqual(self.activity.attempt_count, 1)
+            self.assertEqual(self.activity.permanent_failures_remaining, 2)
+        finally:
+            await worker.__aexit__(None, None, None)
+
+    async def test_start_signal_is_processed_without_a_later_signal(self) -> None:
+        worker = await self.start_worker()
+        notification = new_notification()
+        try:
+            handle = await self.environment.client.start_workflow(
+                DealWorkflow.run,
+                self.input,
+                id=f"deal/{self.input.deal_id}/lifecycle",
+                task_queue=self.task_queue,
+                start_signal="notify",
+                start_signal_args=[notification],
+            )
+
+            await self._wait_for_processed_notifications(handle, 1)
+            self.assertEqual(len(self.activity.calls), 1)
+            self.assertEqual(self.activity.calls[0].notification, notification)
+            await handle.cancel()
+        finally:
+            await worker.__aexit__(None, None, None)
+
+    async def test_continue_as_new_bounds_each_workflow_history(self) -> None:
+        worker = await self.start_worker()
+        try:
+            notifications = (new_notification(), new_notification())
+            handle = await self.environment.client.start_workflow(
+                DealWorkflow.run,
+                replace(
+                    self.input,
+                    continue_after_notifications=2,
+                    pending_notifications=notifications,
+                ),
+                id=f"deal/{self.input.deal_id}/lifecycle",
+                task_queue=self.task_queue,
+            )
+            first_run_id = (await handle.describe()).run_id
+            result = await handle.result()
+            self.assertEqual(
+                result,
+                DealWorkflowResult(DealWorkflowStatus.WAIT_EXPIRED, processed_notifications=2),
+            )
+            self.assertEqual(len(self.activity.calls), 2)
+            first_run = self.environment.client.get_workflow_handle(
+                f"deal/{self.input.deal_id}/lifecycle", run_id=first_run_id
+            )
+            history = await first_run.fetch_history()
+            event_types = [event.event_type for event in history.events]
+            self.assertIn(28, event_types)
+            await handle.cancel()
+        finally:
+            await worker.__aexit__(None, None, None)
+
+    async def _wait_for_calls(self, count: int, *, timeout: float = 5) -> None:
+        async with asyncio.timeout(timeout):
             while len(self.activity.calls) < count:
                 await asyncio.sleep(0.01)
 

@@ -1,4 +1,4 @@
-"""Outbox relay: deliver committed-agreement events to Temporal.
+"""Outbox relay: deliver committed deal notifications to Temporal.
 
 The outbox row is written in the same transaction as the business change
 (see ``commit_agreement`` in ``application/agreements.py``) and read later by
@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 from uuid import UUID
+
+from syncally.application.workflow_notifications import (
+    DealWorkflowNotification,
+    NotificationKind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +55,14 @@ class DealWorkflowStarter(Protocol):
     """
 
     def start_deal_workflow(
-        self, *, workflow_id: str, deal_id: UUID, agreement_version_id: UUID
+        self,
+        *,
+        workflow_id: str,
+        deal_id: UUID,
+        agreement_version_id: UUID | None,
+        notification: DealWorkflowNotification,
     ) -> WorkflowStartOutcome:
-        """Start (or confirm already running) one deal lifecycle workflow."""
+        """Start the workflow or deliver a notification to its active execution."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,32 +84,44 @@ class OutboxDispatchResult:
 def dispatch_outbox_event(
     event: PendingOutboxEvent, starter: DealWorkflowStarter
 ) -> OutboxDispatchResult:
-    """Start the Temporal workflow for one outbox event.
+    """Start or signal the Temporal workflow for one outbox event.
 
-    Only ``deal_id`` and ``agreement_version_id`` are ever read out of the
-    payload and passed on - no other payload field, present or future, can
-    reach the starter through this function.
+Only deal and referenced-record IDs plus a fixed notification kind are
+read from the payload and passed on. No other payload field can reach
+Temporal through this function.
     """
     try:
-        if event.event_type != "AGREEMENT_COMMITTED":
-            raise WorkflowStartPermanentError(
-                f"Outbox dispatcher cannot handle event_type {event.event_type!r}"
-            )
         try:
             if not isinstance(event.payload, Mapping):
                 raise ValueError("payload must be an object")
-            for key in ("deal_id", "agreement_version_id"):
+            if event.event_type == "AGREEMENT_COMMITTED":
+                record_key = "agreement_version_id"
+                notification_kind = "AGREEMENT_COMMITTED"
+            elif event.event_type == "DEAL_NOTIFICATION":
+                record_key = "record_id"
+                notification_kind = event.payload.get("kind")
+            else:
+                raise WorkflowStartPermanentError(
+                    f"Outbox dispatcher cannot handle event_type {event.event_type!r}"
+                )
+            for key in ("deal_id", record_key):
                 if not isinstance(event.payload[key], str):
                     raise ValueError(f"{key} must be a UUID string")
             deal_id = UUID(event.payload["deal_id"])
-            agreement_version_id = UUID(event.payload["agreement_version_id"])
-        except (KeyError, ValueError) as error:
+            record_id = UUID(event.payload[record_key])
+            notification = DealWorkflowNotification(
+                notification_id=str(event.id),
+                record_id=str(record_id),
+                kind=NotificationKind(notification_kind),
+            )
+        except (KeyError, TypeError, ValueError) as error:
             # Do not persist the invalid value: it may contain private text.
             raise WorkflowStartPermanentError("Malformed outbox payload: expected UUID IDs") from error
         starter.start_deal_workflow(
             workflow_id=build_deal_workflow_id(deal_id),
             deal_id=deal_id,
-            agreement_version_id=agreement_version_id,
+            agreement_version_id=record_id if event.event_type == "AGREEMENT_COMMITTED" else None,
+            notification=notification,
         )
     except WorkflowStartPermanentError as error:
         logger.error("Outbox event %s permanently failed: %s", event.id, error)

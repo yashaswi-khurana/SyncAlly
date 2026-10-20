@@ -173,7 +173,25 @@ class AgreementCommitTests(unittest.TestCase):
 
         self.assertEqual(self.session.scalar(select(AuditEvent)).event_type, "AGREEMENT_COMMITTED")
         self.assertEqual(
-            self.session.scalar(select(OutboxEvent)).event_type, "AGREEMENT_COMMITTED"
+            self.session.scalar(
+                select(OutboxEvent).where(OutboxEvent.event_type == "AGREEMENT_COMMITTED")
+            ).event_type,
+            "AGREEMENT_COMMITTED",
+        )
+        approval_notifications = self.session.scalars(
+            select(OutboxEvent).where(OutboxEvent.event_type == "DEAL_NOTIFICATION")
+        ).all()
+        self.assertEqual(len(approval_notifications), 2)
+        self.assertTrue(
+            all(
+                row.payload
+                == {
+                    "deal_id": str(self.deal.id),
+                    "record_id": str(self.version.id),
+                    "kind": "AGREEMENT_APPROVAL_RECORDED",
+                }
+                for row in approval_notifications
+            )
         )
 
     def test_commit_rejects_only_one_side_approved(self) -> None:
@@ -264,7 +282,7 @@ class AgreementCommitTests(unittest.TestCase):
         self.assertEqual(self.session.get(AgreementVersion, self.version.id).status, "COMMITTED")
         self.assertEqual(len(self.session.scalars(select(Obligation)).all()), 2)
         self.assertEqual(len(self.session.scalars(select(AuditEvent)).all()), 1)
-        self.assertEqual(len(self.session.scalars(select(OutboxEvent)).all()), 1)
+        self.assertEqual(len(self.session.scalars(select(OutboxEvent)).all()), 3)
 
     def test_commit_retry_with_mismatched_hash_is_rejected(self) -> None:
         self._approve(self.buyer_org.id, self.buyer_user.id)

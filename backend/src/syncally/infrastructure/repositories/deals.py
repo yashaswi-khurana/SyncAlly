@@ -11,11 +11,13 @@ from uuid import UUID
 from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
+from syncally.application.workflow_notifications import NotificationKind
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
 from syncally.domain.shared.identifiers import AgreementVersionId, DealId, OrganizationId
 from syncally.infrastructure.models import Deal, Organization, OrganizationMember, User
 from syncally.infrastructure.repositories._timestamps import as_utc
+from syncally.infrastructure.workflow_notifications import queue_deal_workflow_notification
 
 
 def _to_domain(row: Deal) -> DomainDeal:
@@ -81,6 +83,12 @@ class SqlAlchemyDealRepository:
             version=deal.version,
         )
         self._db.add(row)
+        queue_deal_workflow_notification(
+            self._db,
+            deal_id=deal.id,
+            record_id=deal.id,
+            kind=NotificationKind.DEAL_CREATED,
+        )
         self._db.commit()
         self._db.refresh(row)
         return _to_domain(row)

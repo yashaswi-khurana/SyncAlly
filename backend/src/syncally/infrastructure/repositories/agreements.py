@@ -37,6 +37,7 @@ from syncally.application.agreements import (
     create_agreement_draft,
     record_approval,
 )
+from syncally.application.workflow_notifications import NotificationKind
 from syncally.domain.agreements.agreement import Agreement as DomainAgreement
 from syncally.domain.agreements.agreement import AgreementStatus, ApprovalDecision
 from syncally.domain.agreements.agreement import Approval as DomainApproval
@@ -66,6 +67,7 @@ from syncally.infrastructure.models import (
     User,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
+from syncally.infrastructure.workflow_notifications import queue_deal_workflow_notification
 
 _TERMINAL_PROPOSAL_STATUSES = frozenset({"REJECTED", "EXPIRED", "SUPERSEDED"})
 _APPROVABLE_DEAL_STATUSES = frozenset({DealStatus.DRAFT, DealStatus.NEGOTIATING})
@@ -304,6 +306,12 @@ class SqlAlchemyAgreementRepository:
                     "Organization already recorded a decision for this agreement version"
                 ) from error
 
+        queue_deal_workflow_notification(
+            self._db,
+            deal_id=version_row.deal_id,
+            record_id=version_row.id,
+            kind=NotificationKind.AGREEMENT_APPROVAL_RECORDED,
+        )
         return approval
 
     def commit(

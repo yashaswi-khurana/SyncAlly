@@ -435,7 +435,9 @@ membership) remains planned.
 
 **Why:** All developers need a repeatable way to run PostgreSQL, Temporal, the API, and the worker.
 
-**What to build:** Add only the local service setup that has been tested. Document how to run migrations, API, and worker. Add a smoke test that starts a workflow and continues it after an approval signal.
+**What to build:** Add only the local service setup that has been tested. Document how to run migrations, API, outbox relay, and workflow worker. Add a smoke test that starts a workflow from the outbox and continues it after approval signals and a worker restart.
+
+**Local implementation:** `infra/compose.yaml` runs PostgreSQL and a Temporal CLI development server with persistent local workflow history. The API, outbox relay, and workflow worker run as separate backend processes. `backend/tests/test_local_workflow_smoke.py` is an opt-in PostgreSQL/Temporal integration test that verifies outbox start, approval notification delivery, worker restart recovery, and idempotent commit replay.
 
 **Done when:**
 - A new developer can follow the instructions and start all local processes.

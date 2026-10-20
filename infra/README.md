@@ -2,9 +2,17 @@
 
 This Compose file starts only the local dependencies used by the backend: PostgreSQL
 for application data and Temporal's development server for durable workflows. The
-Temporal development server stores its history in the `temporal_data` volume. Its
+Temporal development server stores its history at `/home/temporal/temporal.db` in the
+`temporal_home_data` volume. This mounts over the image's UID 1000 user's home
+directory so a fresh Docker volume is initialized with the correct ownership. Its
 embedded store is for local development; it is separate from the PostgreSQL database
-used by the application and is not a production Temporal deployment.
+used by the application and is not a production Temporal deployment. All published
+ports bind to `127.0.0.1` and are available only from the host machine.
+
+The previous Compose configuration used a `temporal_data` volume at
+`/var/lib/temporal`. The updated configuration creates a new volume; the old volume is
+left untouched and can be removed after confirming its workflow history is no longer
+needed.
 
 Requirements: Docker Desktop (or Docker Engine with Compose v2), Python 3.12+, and
 the backend dependencies installed from `backend/`.

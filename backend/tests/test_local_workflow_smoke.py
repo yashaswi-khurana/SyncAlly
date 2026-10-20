@@ -271,7 +271,9 @@ class LocalWorkflowSmokeTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def _wait_for_processed(self, handle, expected: int) -> None:
-        async with asyncio.timeout(15):
+        # A restarted Temporal worker may wait for the server's sticky-task
+        # timeout before the workflow task is offered to its new poller.
+        async with asyncio.timeout(30):
             while await handle.query(DealWorkflow.processed_notification_count) < expected:
                 await asyncio.sleep(0.05)
 

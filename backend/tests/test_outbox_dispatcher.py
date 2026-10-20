@@ -330,6 +330,18 @@ class OutboxDispatcherTests(unittest.TestCase):
             set(starter.calls[0].keys()), {"workflow_id", "deal_id", "agreement_version_id"}
         )
 
+    def test_payment_intent_authorized_rows_are_left_for_the_payment_worker(self) -> None:
+        # This dispatcher only knows Temporal/AGREEMENT_COMMITTED - claiming a
+        # payment event would permanently fail it before the payment worker
+        # (S7-03) ever gets a chance to consume it.
+        row = self._pending_row()
+        row.event_type = "PAYMENT_INTENT_AUTHORIZED"
+        self.session.commit()
+
+        self.assertIsNone(claim_next_pending_event(self.session))
+        self.assertFalse(dispatch_one_pending_event(self.session, FakeDealWorkflowStarter()))
+        self.assertEqual(self.session.scalar(select(OutboxEvent)).status, "PENDING")
+
     def test_unknown_event_type_is_a_permanent_error(self) -> None:
         starter = FakeDealWorkflowStarter()
         event = PendingOutboxEvent(id=self.version.id, event_type="SOMETHING_ELSE", payload={})

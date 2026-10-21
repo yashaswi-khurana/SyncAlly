@@ -478,6 +478,15 @@ membership) remains planned.
 
 **What to build:** Add an adapter to create and send an invoice using the saved PaymentIntent and committed agreement data. Create and send are separate operations. Use stable request IDs when PayPal supports them. Do not call PayPal while a database transaction is open.
 
+**Contract implementation:** The separate Sandbox HTTP adapter, fake invoice client,
+seller issuance authorization seam, and durable payment worker are implemented
+against #34's saved intent/outbox. See [the worker contract and recovery guide](architecture/07-sandbox-invoice-worker.md).
+Create and send have separate stable operation IDs; ambiguous mutations reconcile
+before retry; unresolved creates never automatically recreate. Automated tests
+cover failures/restarts without keys. This does **not** mark Stage 7 integrated:
+#30–#32 and the Stage 6 exit check remain unverified, #33 must align authenticated
+seller issuance/state rules, and #36 owns settlement/webhook reconciliation.
+
 **Done when:**
 - Automated tests use a fake PayPal client and need no credentials.
 - A timeout records an unknown result and checks PayPal before retrying invoice creation.

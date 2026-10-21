@@ -136,3 +136,10 @@ schema; the database user needs permission to create schemas. Temporal adapter
 tests use a mocked client; live Temporal smoke testing remains part of S6-04.
 
 See [the domain architecture](../docs/architecture/05-domain-layer.md) for implemented invariants, package boundaries, and remaining work. The domain types do not perform persistence, authenticated authorization, or external provider calls.
+
+The S7-03 Sandbox invoice adapter and separate payment worker are implemented
+against #34's saved-intent/outbox contract. They remain isolated until the Stage 6
+integration gate is verified. See [the Sandbox worker contract and recovery guide](../docs/architecture/07-sandbox-invoice-worker.md)
+for seller issuance authorization, environment configuration, startup commands,
+retry behavior, test coverage, and manual recovery. Automated tests use a fake
+provider or HTTP mock transport and require no PayPal credentials.

@@ -145,6 +145,7 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
         self.buyer_org_id = buyer_org.id
         self.seller_org_id = seller_org.id
         self.buyer_user_id = buyer_user.id
+        self.seller_user_id = seller_user.id
         self.milestone_id = self.session.scalar(
             select(PaymentMilestone.id).where(PaymentMilestone.agreement_version_id == self.agreement_version_id)
         )
@@ -165,7 +166,7 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
             payment_milestone_id=milestone_id or self.milestone_id,
             seller_organization_id=self.seller_org_id,
             payer_organization_id=self.buyer_org_id,
-            authorized_by=authorized_by or self.buyer_user_id,
+            authorized_by=authorized_by or self.seller_user_id,
             amount=amount or Money(Decimal("10"), "USD"),
             idempotency_key=idempotency_key or f"intent-{uuid4()}",
         )
@@ -275,18 +276,44 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
         with self.assertRaises(PaymentIntentCommandMismatch):
             authorize_payment_intent_in_transaction(self.session, command)
 
+    def test_currency_mismatched_with_the_milestone_is_rejected(self) -> None:
+        command = self._command(amount=Money(Decimal("10"), "EUR"))
+        with self.assertRaises(PaymentIntentCommandMismatch):
+            authorize_payment_intent_in_transaction(self.session, command)
+
+    def test_uncommitted_agreement_version_cannot_authorize_payment(self) -> None:
+        version = self.session.get(AgreementVersion, self.agreement_version_id)
+        self.assertIsNotNone(version)
+        version.status = "PENDING_APPROVAL"
+        self.session.commit()
+
+        with self.assertRaises(PaymentIntentCommandMismatch):
+            authorize_payment_intent_in_transaction(self.session, self._command())
+
+        self.assertEqual(list(self.session.scalars(select(PaymentIntent))), [])
+        self.assertEqual(self._outbox_rows(), [])
+
     def test_inactive_authorizer_is_rejected(self) -> None:
         inactive_user = User(email="inactive@example.com", display_name="Inactive", status="SUSPENDED")
         self.session.add(inactive_user)
         self.session.flush()
         self.session.add(
-            OrganizationMember(user_id=inactive_user.id, organization_id=self.buyer_org_id, status="ACTIVE")
+            OrganizationMember(user_id=inactive_user.id, organization_id=self.seller_org_id, status="ACTIVE")
         )
         self.session.commit()
 
         command = self._command(authorized_by=inactive_user.id)
         with self.assertRaises(UnauthorizedPaymentAuthorization):
             authorize_payment_intent_in_transaction(self.session, command)
+
+    def test_buyer_membership_does_not_authorize_seller_invoice(self) -> None:
+        command = self._command(authorized_by=self.buyer_user_id)
+
+        with self.assertRaises(UnauthorizedPaymentAuthorization):
+            authorize_payment_intent_in_transaction(self.session, command)
+
+        self.assertEqual(list(self.session.scalars(select(PaymentIntent))), [])
+        self.assertEqual(self._outbox_rows(), [])
 
     def test_blank_idempotency_key_is_rejected(self) -> None:
         command = self._command(idempotency_key=" ")

@@ -584,6 +584,14 @@ opt-in; the normal suite needs no external services or credentials.
 - The guide warns not to create a new PayPal request ID after an unclear timeout until the old request is checked.
 - Health checks do not claim a dependency is healthy unless they actually check it.
 
+**Implementation:** Standard-library allowlisted operational output is configured on
+API and worker entrypoints. HTTP responses carry generated correlation UUIDs;
+committed outbox/payment outcomes expose safe identifiers, status and retry timing.
+Captured-output tests exercise privacy canaries and recovery-related boundaries.
+The [operations guide](operations.md) documents health scope, guarded inspection and
+recovery, unknown PayPal outcomes and webhook reconciliation limitations. Live
+Sandbox and full-demo stage gates require separate environment verification.
+
 **Final demo check:** A new developer can run the app locally with fake AI/PayPal services and complete the flow. The optional Sandbox test can complete one invoice. All privacy, approval, restart, and payment tests pass.
 
 ## Do Not Add to This First Build

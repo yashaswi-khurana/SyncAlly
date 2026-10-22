@@ -9,7 +9,6 @@ a fake starter.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -20,8 +19,6 @@ from syncally.application.workflow_notifications import (
     DealWorkflowNotification,
     NotificationKind,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def build_deal_workflow_id(deal_id: UUID) -> str:
@@ -101,9 +98,7 @@ Temporal through this function.
                 record_key = "record_id"
                 notification_kind = event.payload.get("kind")
             else:
-                raise WorkflowStartPermanentError(
-                    f"Outbox dispatcher cannot handle event_type {event.event_type!r}"
-                )
+                raise WorkflowStartPermanentError("Outbox dispatcher cannot handle this event type")
             for key in ("deal_id", record_key):
                 if not isinstance(event.payload[key], str):
                     raise ValueError(f"{key} must be a UUID string")
@@ -123,15 +118,21 @@ Temporal through this function.
             agreement_version_id=record_id if event.event_type == "AGREEMENT_COMMITTED" else None,
             notification=notification,
         )
-    except WorkflowStartPermanentError as error:
-        logger.error("Outbox event %s permanently failed: %s", event.id, error)
-        return OutboxDispatchResult(delivered=False, permanent_failure=True, error_detail=str(error))
-    except WorkflowStartError as error:
-        logger.warning("Outbox event %s failed, will retry: %s", event.id, error)
-        return OutboxDispatchResult(delivered=False, error_detail=str(error))
-    except Exception as error:
-        # An unexpected starter error must still resolve to a retry outcome,
-        # or it would escape to the caller and block every later row in the batch.
-        logger.exception("Outbox event %s raised an unexpected error, will retry", event.id)
-        return OutboxDispatchResult(delivered=False, error_detail=str(error))
+    except WorkflowStartPermanentError:
+        return OutboxDispatchResult(
+            delivered=False,
+            permanent_failure=True,
+            error_detail="Workflow dispatch rejected; inspect event identifiers and configuration.",
+        )
+    except WorkflowStartError:
+        return OutboxDispatchResult(
+            delivered=False,
+            error_detail="Workflow service unavailable; delivery will retry.",
+        )
+    except Exception:
+        # Never persist provider/DB exception text, parameters or private payloads.
+        return OutboxDispatchResult(
+            delivered=False,
+            error_detail="Workflow dispatch failed unexpectedly; delivery will retry.",
+        )
     return OutboxDispatchResult(delivered=True)

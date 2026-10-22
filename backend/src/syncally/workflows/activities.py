@@ -9,6 +9,7 @@ rejections are raised as non-retryable ``ApplicationError`` types.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -24,11 +25,14 @@ from syncally.application.workflow_state import (
 from syncally.domain.shared.errors import DomainError
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
+from syncally.operations import Operation, log_operation
 from syncally.workflows.deal import REFRESH_DEAL_STATE_ACTIVITY
 from syncally.workflows.errors import (
     BUSINESS_REJECTION_ERROR_TYPE,
     VALIDATION_ERROR_TYPE,
 )
+
+logger = logging.getLogger(__name__)
 
 SessionFactory = Callable[[], Session]
 
@@ -63,6 +67,13 @@ class RefreshDealStateActivity:
                     deal_id,
                     SqlAlchemyDealRepository(db),
                     SqlAlchemyAgreementRepository(db),
+                )
+                log_operation(
+                    logger,
+                    Operation.ACTIVITY_COMPLETED,
+                    deal_id=deal_id,
+                    terminal=state.is_terminal,
+                    attempt=activity.info().attempt if activity.in_activity() else 1,
                 )
                 return state.is_terminal
         except DomainError as error:

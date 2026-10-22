@@ -19,6 +19,7 @@ from temporalio.worker import Worker
 
 from syncally.config import settings
 from syncally.infrastructure.temporal import is_permanent_rpc_error
+from syncally.operations import Operation, configure_logging, log_operation
 from syncally.workflows.activities import RefreshDealStateActivity, SessionFactory
 from syncally.workflows.deal import DealWorkflow
 
@@ -46,14 +47,18 @@ async def _connect_with_retry(
             )
         except temporalio.service.RPCError as error:
             if is_permanent_rpc_error(error):
-                logger.error(
-                    "Permanent Temporal connection failure, not retrying: %s", error
+                log_operation(
+                    logger, Operation.CONNECTION_FAILED, level=logging.ERROR, worker="workflow"
                 )
                 raise
-            logger.exception("Failed to connect to Temporal, retrying")
+            log_operation(
+                logger, Operation.CONNECTION_RETRY, level=logging.WARNING, worker="workflow"
+            )
             await asyncio.sleep(CONNECT_RETRY_INTERVAL_SECONDS)
         except Exception:
-            logger.exception("Failed to connect to Temporal, retrying")
+            log_operation(
+                logger, Operation.CONNECTION_RETRY, level=logging.WARNING, worker="workflow"
+            )
             await asyncio.sleep(CONNECT_RETRY_INTERVAL_SECONDS)
 
 
@@ -141,7 +146,7 @@ async def run_worker(
         )
         loop = asyncio.get_running_loop()
         installed_signals = _register_shutdown_handlers(loop, worker)
-        logger.info("Starting deal workflow worker on task queue %s", task_queue)
+        log_operation(logger, Operation.WORKER_STARTED, worker="workflow")
         try:
             await worker.run()
         finally:
@@ -151,15 +156,19 @@ async def run_worker(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(
-        run_worker(
-            address=settings.temporal_address,
-            namespace=settings.temporal_namespace,
-            task_queue=settings.temporal_task_queue,
-            tls=settings.temporal_tls,
+    configure_logging()
+    try:
+        asyncio.run(
+            run_worker(
+                address=settings.temporal_address,
+                namespace=settings.temporal_namespace,
+                task_queue=settings.temporal_task_queue,
+                tls=settings.temporal_tls,
+            )
         )
-    )
+    except Exception:
+        log_operation(logger, Operation.WORKER_FAILED, level=logging.CRITICAL, worker="workflow")
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

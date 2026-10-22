@@ -1,6 +1,6 @@
 """FastAPI application entry point."""
 
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import Depends, Request, status
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -12,10 +12,12 @@ from syncally.api.auth import router as auth_router
 from syncally.api.conversations import router as conversations_router
 from syncally.api.deals import router as deals_router
 from syncally.api.documents import router as documents_router
+from syncally.api.operations import OperationalFastAPI
 from syncally.api.organizations import router as organizations_router
 from syncally.api.payments import router as payments_router
 from syncally.api.paypal_webhooks import router as paypal_webhooks_router
 from syncally.infrastructure.database import get_db
+from syncally.operations import configure_logging
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024
 
@@ -81,7 +83,9 @@ def _redacted_validation_errors(
     ]
 
 
-app = FastAPI(title="SyncAlly API", version="0.1.0")
+configure_logging()
+
+app = OperationalFastAPI(title="SyncAlly API", version="0.1.0")
 
 
 @app.exception_handler(RequestValidationError)

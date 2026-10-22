@@ -26,6 +26,7 @@ from syncally.application.workflow_notifications import (
 from syncally.domain.deals.deal import DealStatus
 from syncally.infrastructure.models import Base, Organization
 from syncally.infrastructure.models import Deal as DealRow
+from syncally.operations import Operation
 from syncally.workflows.deal import (
     REFRESH_DEAL_STATE_ACTIVITY,
     DealWorkflow,
@@ -139,7 +140,9 @@ class ConnectWithRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, client)
         self.assertEqual(connect.await_count, 2)
         sleep.assert_awaited_once_with(CONNECT_RETRY_INTERVAL_SECONDS)
-        logger.exception.assert_called_once()
+        logger.log.assert_called_once()
+        self.assertEqual(logger.log.call_args.kwargs["extra"]["operation"], Operation.CONNECTION_RETRY)
+        logger.exception.assert_not_called()
 
     async def test_retries_transient_exceptions_then_returns_client(self) -> None:
         client = object()
@@ -176,7 +179,9 @@ class ConnectWithRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(raised.exception, error)
         self.assertEqual(connect.await_count, 1)
         sleep.assert_not_awaited()
-        logger.error.assert_called_once()
+        logger.log.assert_called_once()
+        self.assertEqual(logger.log.call_args.kwargs["extra"]["operation"], Operation.CONNECTION_FAILED)
+        logger.exception.assert_not_called()
 
     async def test_cancellation_propagates_without_retrying(self) -> None:
         connect = AsyncMock(side_effect=asyncio.CancelledError())

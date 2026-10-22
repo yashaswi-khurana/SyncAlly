@@ -12,7 +12,8 @@ idempotency for the deal's stable workflow ID, not the DB lock.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from random import uniform
 
@@ -30,6 +31,9 @@ from syncally.application.payments import (
     PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
 )
 from syncally.infrastructure.models import OutboxEvent
+from syncally.operations import Operation, log_operation
+
+logger = logging.getLogger(__name__)
 
 # This dispatcher only knows how to talk to Temporal: a different event type
 # it has never heard of still gets claimed and permanently failed (there's no
@@ -94,7 +98,18 @@ def dispatch_one_pending_event(
         starter,
     )
     apply_dispatch_result(row, result, now=now)
+    fields = dict(
+        outbox_event_id=row.id,
+        deal_id=row.payload.get("deal_id") if isinstance(row.payload, Mapping) else None,
+        event_type=row.event_type,
+        status=row.status,
+        retry_count=row.retry_count,
+        next_attempt_at=row.next_attempt_at,
+        failure_kind="PERMANENT" if result.permanent_failure else "TRANSIENT" if not result.delivered else None,
+    )
     db.commit()
+    level = {"FAILED": logging.ERROR, "PENDING": logging.WARNING}.get(fields["status"], logging.INFO)
+    log_operation(logger, Operation.OUTBOX_COMPLETED, level=level, **fields)
     return True
 
 

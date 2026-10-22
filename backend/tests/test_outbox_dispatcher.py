@@ -238,7 +238,7 @@ class OutboxDispatcherTests(unittest.TestCase):
         row = self.session.scalar(select(OutboxEvent))
         self.assertEqual(row.status, "PENDING")
         self.assertEqual(row.retry_count, 1)
-        self.assertIn("down", row.error_detail)
+        self.assertEqual(row.error_detail, "Workflow service unavailable; delivery will retry.")
         self.assertIsNone(row.delivered_at)
         self.assertIsNotNone(row.next_attempt_at)
 

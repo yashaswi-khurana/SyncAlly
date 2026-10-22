@@ -12,10 +12,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from syncally.application.payment_processing import (
+    PaymentInvoiceReconciliation,
     PaymentRetryableError,
     PaymentWorkItem,
 )
-from syncally.domain.payments.intent import PaymentIntentStatus
+from syncally.domain.payments.intent import (
+    PaymentIntentStatus,
+    VerifiedProviderPaymentState,
+    VerifiedProviderPaymentStatus,
+)
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.models import Base, OutboxEvent
 from syncally.infrastructure.payment_outbox import (
@@ -32,6 +37,7 @@ class FakeRepository:
     def __init__(self, work=None, error=None) -> None:
         self.work = work
         self.error = error
+        self.reconciliations = []
 
     def load(self, payment_intent_id):
         if self.error is not None:
@@ -59,6 +65,19 @@ class FakeRepository:
     def mark_manual_action(self, payment_intent_id, code, detail):
         raise AssertionError("A terminal fixture should not require manual action")
 
+    def record_reconciliation(
+        self,
+        payment_intent_id,
+        payment_state,
+        *,
+        outbox_event_id,
+        webhook_event_id,
+        lease_until,
+    ):
+        self.reconciliations.append(
+            (payment_intent_id, payment_state, outbox_event_id, webhook_event_id, lease_until)
+        )
+
 
 class NoCallProvider:
     def find_invoice(self, lookup):
@@ -85,14 +104,21 @@ class PaymentOutboxWorkerTests(unittest.TestCase):
         Base.metadata.drop_all(self.engine)
         self.engine.dispose()
 
-    def _event(self, *, event_type="PAYMENT_INTENT_AUTHORIZED", status="PENDING", next_attempt_at=None):
+    def _event(
+        self,
+        *,
+        event_type="PAYMENT_INTENT_AUTHORIZED",
+        status="PENDING",
+        next_attempt_at=None,
+        payload=None,
+    ):
         event_id = uuid4()
         event = OutboxEvent(
             id=event_id,
             aggregate_type="payment_intent",
             aggregate_id=uuid4(),
             event_type=event_type,
-            payload={"payment_intent_id": str(uuid4())},
+            payload=payload or {"payment_intent_id": str(uuid4())},
             status=status,
             next_attempt_at=next_attempt_at,
         )
@@ -100,6 +126,50 @@ class PaymentOutboxWorkerTests(unittest.TestCase):
             db.add(event)
             db.commit()
         return event_id
+
+    def test_webhook_event_fetches_current_provider_state_and_completes(self) -> None:
+        work = self._sent_work()
+        webhook_id = uuid4()
+        event_id = self._event(
+            event_type="PAYPAL_WEBHOOK_RECONCILIATION_REQUESTED",
+            payload={
+                "payment_intent_id": str(work.payment_intent_id),
+                "webhook_event_id": str(webhook_id),
+            },
+        )
+        repository = FakeRepository(work=work)
+        calls = []
+
+        class ReconciliationProvider(NoCallProvider):
+            def get_invoice_reconciliation(self, provider_invoice_id):
+                calls.append(provider_invoice_id)
+                return PaymentInvoiceReconciliation(
+                    provider_invoice_id=provider_invoice_id,
+                    invoice_number=work.invoice_number,
+                    reference=work.reference,
+                    amount=work.amount,
+                    payment_state=VerifiedProviderPaymentState(
+                        status=VerifiedProviderPaymentStatus.PENDING,
+                        paid_amount=Money(Decimal("0.00"), "USD"),
+                        provider_reference=provider_invoice_id,
+                    ),
+                )
+
+        self.assertTrue(
+            dispatch_one_payment_event(
+                self.session_factory,
+                repository,
+                ReconciliationProvider(),
+            )
+        )
+
+        self.assertEqual(calls, ["paypal-invoice-1"])
+        self.assertEqual(len(repository.reconciliations), 1)
+        self.assertEqual(repository.reconciliations[0][0], work.payment_intent_id)
+        self.assertEqual(repository.reconciliations[0][2], event_id)
+        self.assertEqual(repository.reconciliations[0][3], webhook_id)
+        with self.session_factory() as db:
+            self.assertEqual(db.get(OutboxEvent, event_id).status, "DELIVERED")
 
     def _sent_work(self) -> PaymentWorkItem:
         intent_id = uuid4()

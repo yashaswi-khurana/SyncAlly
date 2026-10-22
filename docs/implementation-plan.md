@@ -504,6 +504,14 @@ membership) remains planned.
 - Old events cannot overwrite a newer checked status.
 - Status, audit, and outbox updates commit together.
 
+**Implementation:** `POST /webhooks/paypal/invoicing` verifies the transmission
+with PayPal's Sandbox webhook-verification API, persists verified event IDs once,
+and writes reconciliation work to the payment outbox in the same transaction.
+The payment worker fetches the current invoice, checks its saved identity, amount,
+currency and payment progress, then commits the guarded intent update, audit row,
+webhook completion, and outbox completion together. Automated coverage uses fake
+PayPal responses; the live Sandbox webhook round trip remains an environment check.
+
 **Stage check:** The Sandbox flow authorizes, creates, sends, and checks one invoice. Tests cover timeouts, duplicate webhooks, and partial payments.
 
 ## Stage 8 - Finish the Demo and Handoff

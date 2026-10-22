@@ -9,6 +9,8 @@ vi.mock("./api/client", async (importOriginal) => {
     ...actual,
     login: vi.fn(),
     listOrganizations: vi.fn(),
+    listPaymentStatuses: vi.fn(),
+    getCommercialDocumentDraft: vi.fn(),
     listDeals: vi.fn(),
     createDeal: vi.fn(),
     getDeal: vi.fn(),
@@ -18,7 +20,17 @@ vi.mock("./api/client", async (importOriginal) => {
   };
 });
 
-import { ApiError, getCurrentAgreement, getDeal, listDealFacts, listDealMessages, listDeals, listOrganizations } from "./api/client";
+import {
+  ApiError,
+  getCommercialDocumentDraft,
+  getCurrentAgreement,
+  getDeal,
+  listDealFacts,
+  listDealMessages,
+  listDeals,
+  listOrganizations,
+  listPaymentStatuses,
+} from "./api/client";
 import { clearAccessToken, setAccessToken } from "./api/tokenStore";
 
 const mockedGetDeal = vi.mocked(getDeal);
@@ -27,6 +39,8 @@ const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
+const mockedGetCommercialDocumentDraft = vi.mocked(getCommercialDocumentDraft);
+const mockedListPaymentStatuses = vi.mocked(listPaymentStatuses);
 
 describe("App", () => {
   beforeEach(() => {
@@ -34,6 +48,10 @@ describe("App", () => {
     clearAccessToken();
     window.location.hash = "";
     mockedListDeals.mockResolvedValue([]);
+    mockedListPaymentStatuses.mockResolvedValue([]);
+    mockedGetCommercialDocumentDraft.mockRejectedValue(
+      new ApiError(409, "Agreement not committed"),
+    );
     mockedListDealFacts.mockResolvedValue([]);
     mockedListDealMessages.mockResolvedValue([]);
     mockedListOrganizations.mockResolvedValue([

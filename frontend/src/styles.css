@@ -2722,6 +2722,66 @@ body::after {
   padding-top: 12px;
 }
 
+.payment-status,
+.document-status {
+  display: grid;
+  gap: 16px;
+}
+
+.payment-status__list {
+  display: grid;
+  gap: 12px;
+}
+
+.payment-status__item {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.payment-status__summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.payment-status__summary h3,
+.payment-status__summary p,
+.payment-status__item > p,
+.payment-status__message,
+.document-status__ready p {
+  margin: 0;
+}
+
+.payment-status__summary h3 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+}
+
+.payment-status__amount {
+  font-weight: 700;
+}
+
+.payment-status__checked,
+.payment-status__footnote {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.payment-status__footnote {
+  margin: 0;
+}
+
+.payment-status__message,
+.document-status__ready {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
 @media (max-width: 720px) {
   .agreement-review__summary {
     grid-template-columns: 1fr;

@@ -11,7 +11,9 @@ from syncally.api.agreements import router as agreements_router
 from syncally.api.auth import router as auth_router
 from syncally.api.conversations import router as conversations_router
 from syncally.api.deals import router as deals_router
+from syncally.api.documents import router as documents_router
 from syncally.api.organizations import router as organizations_router
+from syncally.api.payments import router as payments_router
 from syncally.api.paypal_webhooks import router as paypal_webhooks_router
 from syncally.infrastructure.database import get_db
 
@@ -99,6 +101,8 @@ app.include_router(organizations_router)
 app.include_router(deals_router)
 app.include_router(conversations_router)
 app.include_router(agreements_router)
+app.include_router(payments_router)
+app.include_router(documents_router)
 app.include_router(paypal_webhooks_router)
 
 

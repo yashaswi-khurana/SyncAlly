@@ -58,9 +58,14 @@ function displayAmount(amount: string, currency: string): string {
 interface PaymentStatusPanelProps {
   dealId: string;
   sellerOrganizationId: string;
+  reloadToken?: number;
 }
 
-export default function PaymentStatusPanel({ dealId, sellerOrganizationId }: PaymentStatusPanelProps) {
+export default function PaymentStatusPanel({
+  dealId,
+  sellerOrganizationId,
+  reloadToken = 0,
+}: PaymentStatusPanelProps) {
   const [state, setState] = useState<PaymentState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
   const [authorizing, setAuthorizing] = useState(false);
@@ -102,7 +107,7 @@ export default function PaymentStatusPanel({ dealId, sellerOrganizationId }: Pay
     return () => {
       cancelled = true;
     };
-  }, [dealId, reloadCount, sellerOrganizationId]);
+  }, [dealId, reloadCount, reloadToken, sellerOrganizationId]);
 
   function retry() {
     setAuthorizationError("");

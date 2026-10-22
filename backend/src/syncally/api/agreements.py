@@ -302,7 +302,7 @@ def create_reviewed_agreement_draft_route(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Reviewed terms do not match the supported demo agreement",
+            detail=f"Reviewed terms do not match the supported demo agreement: {error}",
         ) from error
     except Exception as error:
         db.rollback()

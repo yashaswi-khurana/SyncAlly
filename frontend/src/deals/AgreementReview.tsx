@@ -14,6 +14,7 @@ interface AgreementReviewProps {
   buyerOrganizationId: string;
   sellerOrganizationId: string;
   reloadToken?: number;
+  onCommitted?: () => void;
 }
 
 type AgreementState =
@@ -47,6 +48,7 @@ export default function AgreementReview({
   buyerOrganizationId,
   sellerOrganizationId,
   reloadToken = 0,
+  onCommitted,
 }: AgreementReviewProps) {
   const [state, setState] = useState<AgreementState>({ status: "loading" });
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
@@ -126,6 +128,7 @@ export default function AgreementReview({
         state.agreement.version_number,
         state.agreement.terms_hash,
       );
+      onCommitted?.();
       reloadAgreement();
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {

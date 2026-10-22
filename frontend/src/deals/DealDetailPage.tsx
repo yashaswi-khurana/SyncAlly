@@ -166,8 +166,13 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
           buyerOrganizationId={deal.buyer_organization_id}
           sellerOrganizationId={deal.seller_organization_id}
           reloadToken={agreementReloadToken}
+          onCommitted={() => setAgreementReloadToken((token) => token + 1)}
         />
-        <PaymentStatusPanel dealId={deal.id} sellerOrganizationId={deal.seller_organization_id} />
+        <PaymentStatusPanel
+          dealId={deal.id}
+          sellerOrganizationId={deal.seller_organization_id}
+          reloadToken={agreementReloadToken}
+        />
         <CommercialDocumentPanel dealId={deal.id} />
         <DealConversationReview
           deal={deal}

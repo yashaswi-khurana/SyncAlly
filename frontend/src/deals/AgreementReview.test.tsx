@@ -186,6 +186,7 @@ describe("AgreementReview", () => {
   });
 
   it("offers commit only after both parties approve the exact saved version", async () => {
+    const onCommitted = vi.fn();
     const approvals = [BUYER_ID, SELLER_ID].map((organizationId) => ({
       deal_id: DEAL_ID,
       version_number: AGREEMENT.version_number,
@@ -204,7 +205,14 @@ describe("AgreementReview", () => {
         committed_at: "2026-10-19T10:02:00Z",
       });
 
-    renderReview();
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        onCommitted={onCommitted}
+      />,
+    );
     await screen.findByText("VERSION 3");
     fireEvent.click(screen.getByRole("button", { name: "Commit approved agreement" }));
 
@@ -216,6 +224,7 @@ describe("AgreementReview", () => {
       ),
     );
     expect(await screen.findByText(/committed\. its terms are read-only/i)).toBeInTheDocument();
+    expect(onCommitted).toHaveBeenCalledTimes(1);
   });
 
   it("shows an actionable error when approval cannot be saved", async () => {

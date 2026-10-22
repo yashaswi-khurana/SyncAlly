@@ -16,6 +16,7 @@ from syncally.config import settings
 from syncally.infrastructure.database import SessionLocal
 from syncally.infrastructure.outbox import dispatch_pending_outbox_events
 from syncally.infrastructure.temporal import TemporalDealWorkflowStarter, is_permanent_rpc_error
+from syncally.operations import Operation, configure_logging, log_operation
 
 logger = logging.getLogger(__name__)
 
@@ -31,31 +32,42 @@ def _connect_with_retry(*, poll_interval: float) -> TemporalDealWorkflowStarter:
             )
         except temporalio.service.RPCError as error:
             if is_permanent_rpc_error(error):
-                logger.error("Permanent Temporal connection failure, not retrying: %s", error)
+                log_operation(
+                    logger, Operation.CONNECTION_FAILED, level=logging.ERROR, worker="outbox"
+                )
                 raise
-            logger.exception("Failed to connect to Temporal, retrying")
+            log_operation(
+                logger, Operation.CONNECTION_RETRY, level=logging.WARNING, worker="outbox"
+            )
             time.sleep(poll_interval)
         except Exception:
-            logger.exception("Failed to connect to Temporal, retrying")
+            log_operation(
+                logger, Operation.CONNECTION_RETRY, level=logging.WARNING, worker="outbox"
+            )
             time.sleep(poll_interval)
 
 
 def run_forever(*, poll_interval: float, batch_size: int) -> None:
+    log_operation(logger, Operation.WORKER_STARTED, worker="outbox")
     starter = _connect_with_retry(poll_interval=poll_interval)
     while True:
         try:
             dispatch_pending_outbox_events(SessionLocal, starter, batch_size=batch_size)
         except Exception:
-            logger.exception("Outbox dispatch iteration failed")
+            log_operation(logger, Operation.WORKER_FAILED, level=logging.ERROR, worker="outbox")
         time.sleep(poll_interval)
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    run_forever(
-        poll_interval=settings.outbox_poll_interval_seconds,
-        batch_size=settings.outbox_batch_size,
-    )
+    configure_logging()
+    try:
+        run_forever(
+            poll_interval=settings.outbox_poll_interval_seconds,
+            batch_size=settings.outbox_batch_size,
+        )
+    except Exception:
+        log_operation(logger, Operation.WORKER_FAILED, level=logging.CRITICAL, worker="outbox")
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ def main() -> None:
         gmail_settings.gmail_from_email.strip() or None,
     )
     notifier.send_invoice_notice(notice)
-    print(f"Sent invoice {notice.invoice_number} to {notice.recipient_email}.")
+    print("Invoice email copy sent.")
 
 
 if __name__ == "__main__":

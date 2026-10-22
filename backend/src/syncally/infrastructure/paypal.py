@@ -27,6 +27,15 @@ from syncally.domain.shared.money import Money, canonical_decimal
 
 PAYPAL_SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com"
 _PAYPAL_TIMEOUT_SECONDS = 15.0
+_ZERO_DECIMAL_CURRENCIES = {"HUF", "JPY", "TWD"}
+
+
+def _has_excess_currency_precision(value: Decimal, precision: int) -> bool:
+    _, digits, exponent = value.as_tuple()
+    while exponent < 0 and digits and digits[-1] == 0:
+        digits = digits[:-1]
+        exponent += 1
+    return exponent < -precision
 
 
 class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
@@ -135,6 +144,20 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
             may_have_effect=True,
         )
 
+    def get_invoice_status(self, provider_invoice_id: str) -> str:
+        response = self._api_request(
+            "GET",
+            f"/v2/invoicing/invoices/{quote(provider_invoice_id, safe='')}",
+            None,
+        )
+        status = response.get("status")
+        if not isinstance(status, str):
+            raise PaymentNeedsAction(
+                "PAYPAL_INVOICE_STATUS_INVALID",
+                "PayPal returned no usable invoice status; reconcile the invoice manually.",
+            )
+        return status
+
     def get_invoice_notice(self, provider_invoice_id: str) -> PaymentInvoiceNotice:
         response = self._api_request(
             "GET",
@@ -232,6 +255,7 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
         items = []
         total = Decimal("0")
         for item in request.line_items:
+            unit_price_precision = 0 if item.unit_price.currency in _ZERO_DECIMAL_CURRENCIES else 2
             if (
                 not item.name.strip()
                 or len(item.name) > 200
@@ -240,6 +264,9 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
                 or item.quantity.as_tuple().exponent < -5
                 or len(item.description or "") > 1000
                 or item.unit_price.currency != request.amount.currency
+                or _has_excess_currency_precision(
+                    item.unit_price.amount, unit_price_precision
+                )
             ):
                 raise PaymentNeedsAction(
                     "PAYPAL_INVOICE_ITEM_INVALID",
@@ -334,6 +361,11 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
                 "PayPal returned an invalid response; inspect the Sandbox integration.",
             ) from error
         if not isinstance(result, dict):
+            if may_have_effect:
+                raise PaymentOutcomeUnknown(
+                    "PAYPAL_RESPONSE_INVALID",
+                    "PayPal may have processed the request but returned an invalid response.",
+                )
             raise PaymentNeedsAction(
                 "PAYPAL_RESPONSE_INVALID",
                 "PayPal returned an invalid response; inspect the Sandbox integration.",
@@ -362,6 +394,11 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
                 method="POST",
             )
             status_code, response_body = self._send(request, may_have_effect=False)
+            if status_code == 401:
+                raise PaymentRetryableError(
+                    "PAYPAL_AUTH_FAILED",
+                    "PayPal Sandbox rejected the configured credentials; correct them to resume payment processing.",
+                )
             self._raise_for_status(status_code, response_body, may_have_effect=False)
             try:
                 response = json.loads(response_body)

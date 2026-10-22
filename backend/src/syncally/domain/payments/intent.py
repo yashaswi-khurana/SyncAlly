@@ -166,7 +166,6 @@ class PaymentIntent:
         if self.status not in {
             PaymentIntentStatus.AUTHORIZED,
             PaymentIntentStatus.CREATE_PENDING,
-            PaymentIntentStatus.PROVIDER_CREATED,
         }:
             raise InvalidTransition(f"Cannot mark a payment failed from {self.status}")
         self._status = PaymentIntentStatus.FAILED

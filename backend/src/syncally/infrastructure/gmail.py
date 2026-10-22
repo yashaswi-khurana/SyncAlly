@@ -83,6 +83,17 @@ class GmailSMTPInvoiceNotifier:
                 "GMAIL_SMTP_REJECTED",
                 "Gmail rejected the invoice email; check the sender configuration and recipient.",
             ) from error
+        except smtplib.SMTPRecipientsRefused as error:
+            codes = [code for code, _ in error.recipients.values()]
+            if codes and all(400 <= code < 500 for code in codes):
+                raise PaymentRetryableError(
+                    "GMAIL_TEMPORARILY_UNAVAILABLE",
+                    "Gmail temporarily rejected the invoice email; it will be retried.",
+                ) from error
+            raise PaymentNeedsAction(
+                "GMAIL_SMTP_RECIPIENT_REJECTED",
+                "Gmail rejected the invoice recipient; verify the buyer contact email.",
+            ) from error
         except (smtplib.SMTPException, OSError, TimeoutError) as error:
             raise PaymentRetryableError(
                 "GMAIL_TEMPORARILY_UNAVAILABLE",

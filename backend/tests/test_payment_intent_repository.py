@@ -434,6 +434,16 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
             repository.load(command.id).status,
             PaymentIntentStatus.PROVIDER_CREATED,
         )
+        repository.mark_manual_action(command.id, "TEST_MANUAL_ACTION", "inspect invoice")
+        self.assertEqual(
+            repository.load(command.id).status,
+            PaymentIntentStatus.PROVIDER_CREATED,
+        )
+        repository.mark_failure(command.id, "TEST_SEND_FAILURE", "send was rejected")
+        self.assertEqual(
+            repository.load(command.id).status,
+            PaymentIntentStatus.PROVIDER_CREATED,
+        )
         repository.mark_sent(command.id)
 
         with Session(self.engine) as db:
@@ -442,7 +452,7 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
             self.assertEqual(intent.provider_invoice_id, "paypal-invoice-1")
             self.assertEqual(intent.request_payload_hash, request_hash)
             self.assertIsNotNone(intent.provider_create_started_at)
-            self.assertEqual(intent.version, 6)
+            self.assertEqual(intent.version, 8)
 
     def test_ambiguous_buyer_contact_is_not_guessed(self) -> None:
         command = self._command(idempotency_key="intent-contact")

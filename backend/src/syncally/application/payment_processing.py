@@ -15,6 +15,21 @@ from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.domain.shared.money import Money, canonical_decimal
 
 PAYPAL_REQUEST_ID_RETRY_WINDOW = timedelta(days=44)
+_SENT_INVOICE_STATUSES = {
+    "SENT",
+    "SCHEDULED",
+    "UNPAID",
+    "PARTIALLY_PAID",
+    "PAID",
+    "MARKED_AS_PAID",
+    "PAYMENT_PENDING",
+    "REFUNDED",
+    "PARTIALLY_REFUNDED",
+    "MARKED_AS_REFUNDED",
+    "PAID_EXTERNAL",
+    "REFUNDED_EXTERNAL",
+    "SHARED",
+}
 
 
 class PaymentRetryableError(Exception):
@@ -185,6 +200,9 @@ class PaymentInvoiceProvider(Protocol):
     def find_invoice(self, lookup: PaymentInvoiceLookup) -> str | None:
         """Find an invoice by its stable invoice number and validate its identity."""
 
+    def get_invoice_status(self, provider_invoice_id: str) -> str:
+        """Return the current PayPal status for a previously found invoice."""
+
     def create_invoice(self, request: PaymentInvoiceRequest) -> str:
         """Create a draft invoice using a stable provider request ID."""
 
@@ -248,6 +266,17 @@ def process_payment_intent(
             raise PaymentNeedsAction("PAYMENT_INTENT_NOT_FOUND", "Payment intent is unavailable.")
 
     if work.status is PaymentIntentStatus.CREATE_UNKNOWN:
+        if work.invoice_request is None:
+            code = work.request_error_code or "PAYMENT_INVOICE_DATA_UNAVAILABLE"
+            detail = work.request_error_detail or "Invoice data needs manual action."
+            repository.mark_manual_action(payment_intent_id, code, detail)
+            raise PaymentNeedsAction(code, detail)
+        if work.request_payload_hash != work.invoice_request.payload_hash:
+            detail = "Invoice details changed after an uncertain provider create; reconcile manually."
+            repository.mark_manual_action(
+                payment_intent_id, "PAYMENT_INVOICE_REQUEST_CHANGED", detail
+            )
+            raise PaymentNeedsAction("PAYMENT_INVOICE_REQUEST_CHANGED", detail)
         try:
             provider_invoice_id = provider.find_invoice(work.lookup)
         except PaymentNeedsAction as error:
@@ -255,6 +284,20 @@ def process_payment_intent(
             raise
         if provider_invoice_id is not None:
             repository.record_provider_created(payment_intent_id, provider_invoice_id)
+            try:
+                provider_status = provider.get_invoice_status(provider_invoice_id)
+            except PaymentNeedsAction as error:
+                repository.mark_manual_action(payment_intent_id, error.code, error.detail)
+                raise
+            if provider_status in _SENT_INVOICE_STATUSES:
+                repository.mark_sent(payment_intent_id)
+                return
+            if provider_status != "DRAFT":
+                detail = "The matching PayPal invoice has an unsupported status; reconcile manually."
+                repository.mark_manual_action(
+                    payment_intent_id, "PAYMENT_PROVIDER_STATE_UNSUPPORTED", detail
+                )
+                raise PaymentNeedsAction("PAYMENT_PROVIDER_STATE_UNSUPPORTED", detail)
             work = repository.load(payment_intent_id)
             if work is None:
                 raise PaymentNeedsAction("PAYMENT_INTENT_NOT_FOUND", "Payment intent is unavailable.")
@@ -264,15 +307,6 @@ def process_payment_intent(
                 detail = work.request_error_detail or "Invoice data needs manual action."
                 repository.mark_manual_action(payment_intent_id, code, detail)
                 raise PaymentNeedsAction(code, detail)
-            if (
-                work.request_payload_hash is not None
-                and work.request_payload_hash != work.invoice_request.payload_hash
-            ):
-                detail = "Invoice details changed after an uncertain provider create; reconcile manually."
-                repository.mark_manual_action(
-                    payment_intent_id, "PAYMENT_INVOICE_REQUEST_CHANGED", detail
-                )
-                raise PaymentNeedsAction("PAYMENT_INVOICE_REQUEST_CHANGED", detail)
             if work.provider_create_started_at is None:
                 detail = "The original PayPal create time is unknown; reconcile the invoice manually."
                 repository.mark_manual_action(
@@ -309,25 +343,43 @@ def process_payment_intent(
         try:
             repository.begin_create(payment_intent_id, request_hash)
         except PaymentNeedsAction as error:
-            repository.mark_manual_action(payment_intent_id, error.code, error.detail)
-            raise
-        try:
-            provider_invoice_id = provider.create_invoice(work.invoice_request)
-        except PaymentOutcomeUnknown:
-            repository.mark_create_unknown(payment_intent_id)
-            raise
-        except PaymentRetryableError:
-            # Conservatively reconcile before another create even when the
-            # client cannot prove whether PayPal processed the request.
-            repository.mark_create_unknown(payment_intent_id)
-            raise
-        except PaymentNeedsAction as error:
-            repository.mark_failure(payment_intent_id, error.code, error.detail)
-            raise
-        repository.record_provider_created(payment_intent_id, provider_invoice_id)
-        work = repository.load(payment_intent_id)
-        if work is None:
-            raise PaymentNeedsAction("PAYMENT_INTENT_NOT_FOUND", "Payment intent is unavailable.")
+            latest = repository.load(payment_intent_id)
+            if latest is None:
+                raise
+            if latest.status is PaymentIntentStatus.PROVIDER_CREATED:
+                work = latest
+            elif latest.status in {
+                PaymentIntentStatus.CREATE_PENDING,
+                PaymentIntentStatus.CREATE_UNKNOWN,
+                PaymentIntentStatus.SENT,
+                PaymentIntentStatus.PENDING,
+                PaymentIntentStatus.PARTIALLY_PAID,
+                PaymentIntentStatus.PAID,
+                PaymentIntentStatus.CANCELLED,
+                PaymentIntentStatus.FAILED,
+            }:
+                return
+            else:
+                repository.mark_manual_action(payment_intent_id, error.code, error.detail)
+                raise
+        else:
+            try:
+                provider_invoice_id = provider.create_invoice(work.invoice_request)
+            except PaymentOutcomeUnknown:
+                repository.mark_create_unknown(payment_intent_id)
+                raise
+            except PaymentRetryableError:
+                # Conservatively reconcile before another create even when the
+                # client cannot prove whether PayPal processed the request.
+                repository.mark_create_unknown(payment_intent_id)
+                raise
+            except PaymentNeedsAction as error:
+                repository.mark_failure(payment_intent_id, error.code, error.detail)
+                raise
+            repository.record_provider_created(payment_intent_id, provider_invoice_id)
+            work = repository.load(payment_intent_id)
+            if work is None:
+                raise PaymentNeedsAction("PAYMENT_INTENT_NOT_FOUND", "Payment intent is unavailable.")
 
     if work.status is PaymentIntentStatus.PROVIDER_CREATED:
         if not work.provider_invoice_id:

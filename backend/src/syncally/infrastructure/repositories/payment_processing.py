@@ -174,7 +174,8 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
         def transition(intent: DomainPaymentIntent, row: PaymentIntent) -> dict:
             if intent.status is PaymentIntentStatus.FAILED:
                 return {"failure_code": code, "failure_detail": detail}
-            intent.mark_failed()
+            if intent.status is not PaymentIntentStatus.PROVIDER_CREATED:
+                intent.mark_failed()
             return {"failure_code": code, "failure_detail": detail}
 
         self._transition(payment_intent_id, transition)
@@ -186,7 +187,6 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 intent.record_create_unknown()
             elif intent.status in {
                 PaymentIntentStatus.AUTHORIZED,
-                PaymentIntentStatus.PROVIDER_CREATED,
             }:
                 intent.mark_failed()
             return {"failure_code": code, "failure_detail": detail}

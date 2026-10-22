@@ -80,6 +80,10 @@ A stale version, a mismatch between the displayed `terms_hash` and the stored te
 decision, or a commit without both approvals returns `409` with a reload message. Non-participants
 receive the same `404` as a missing deal, and a leaked or missing credential receives `401`.
 Committing the same version and hash again is an idempotent success.
+The proposal review screen saves the person's final edits through
+`POST /deals/{deal_id}/agreements/from-reviewed-terms`. The server derives both parties from the
+deal, validates the reviewed terms, then saves the proposal and pending agreement in one
+transaction. Saving terms does not record either party's approval.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
 Each refresh token can be used once. Replaying any rotated token, including a concurrent
@@ -142,6 +146,10 @@ environment, then run this separate process:
 python -m syncally.cli.payment_worker
 ```
 
+After an agreement is committed, an active seller member can authorize its first payment
+milestone with `POST /deals/{deal_id}/payments` and an `idempotency_key`. The API saves the
+PaymentIntent and outbox event together; the separate payment worker performs the PayPal calls.
+
 For payment status updates, register an HTTPS webhook URL ending in
 `/webhooks/paypal/invoicing` on that same Sandbox REST app and subscribe it to
 the invoice events. Set `PAYPAL_WEBHOOK_ID` to the webhook ID shown by PayPal.
@@ -193,7 +201,11 @@ unit tests use a mocked client.
 For the end-to-end local restart smoke test, start PostgreSQL and Temporal as described
 in [the infrastructure guide](../infra/README.md), then set `TEST_POSTGRES_URL` and
 `SYNCALLY_TEMPORAL_ADDRESS` and run `python -m unittest discover -s tests -p test_local_workflow_smoke.py -v`.
-The test creates an isolated schema and verifies outbox delivery, workflow recovery
-after worker restart, and idempotent replay of the agreement commit.
+The test creates an isolated schema and verifies outbox delivery, two simultaneous agreement
+commit requests, workflow recovery after worker restart, and idempotent replay of the agreement
+commit. The ordinary test suite also runs `python -m unittest tests.test_demo_lifecycle -v` with
+in-memory SQLite and fake AI, PayPal, and webhook adapters. It covers the browser-facing API
+lifecycle, both parties' private messages, seller-only payment authorization, provider timeout
+recovery, duplicate webhook handling, and safe reconciled payment status without external keys.
 
 See [the domain architecture](../docs/architecture/05-domain-layer.md) for implemented invariants, package boundaries, and remaining work. The domain types do not perform persistence, authenticated authorization, or external provider calls.

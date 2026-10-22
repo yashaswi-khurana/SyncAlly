@@ -9,8 +9,9 @@ import {
   suggestDealFacts,
   draftDealProposal,
   correctDealFact,
+  createAgreementFromReviewedTerms,
 } from "../api/client";
-import type { Deal, DealFact, DealMessage, Organization } from "../api/types";
+import type { AgreementVersion, Deal, DealFact, DealMessage, Organization } from "../api/types";
 import DealConversationReview from "./DealConversationReview";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -24,6 +25,7 @@ vi.mock("../api/client", async (importOriginal) => {
     suggestDealFacts: vi.fn(),
     draftDealProposal: vi.fn(),
     correctDealFact: vi.fn(),
+    createAgreementFromReviewedTerms: vi.fn(),
   };
 });
 
@@ -44,6 +46,7 @@ const mockedReviewDealFact = vi.mocked(reviewDealFact);
 const mockedSuggestDealFacts = vi.mocked(suggestDealFacts);
 const mockedDraftDealProposal = vi.mocked(draftDealProposal);
 const mockedCorrectDealFact = vi.mocked(correctDealFact);
+const mockedCreateAgreementFromReviewedTerms = vi.mocked(createAgreementFromReviewedTerms);
 
 function organization(id: string, legalName: string): Organization {
   return { id, legal_name: legalName, country_code: "US", role: "ADMIN" };
@@ -210,6 +213,7 @@ describe("DealConversationReview", () => {
   });
 
   it("runs suggestions only on request, lets a person edit and review them, and keeps proposal terms as a private-safe draft", async () => {
+    const onAgreementCreated = vi.fn();
     const sharedDescription = fact({
       id: "shared-description",
       field: "item_description",
@@ -251,8 +255,11 @@ describe("DealConversationReview", () => {
       delivery_date: "2026-12-01",
       status: "DRAFT",
     });
+    mockedCreateAgreementFromReviewedTerms.mockResolvedValue({
+      version_number: 1,
+    } as AgreementVersion);
 
-    render(<DealConversationReview deal={DEAL} />);
+    render(<DealConversationReview deal={DEAL} onAgreementCreated={onAgreementCreated} />);
 
     expect(await screen.findByText("We need delivery by November 1.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Fact suggestions for review")).not.toBeInTheDocument();
@@ -290,6 +297,20 @@ describe("DealConversationReview", () => {
     expect(within(proposal).queryByText("1.00")).not.toBeInTheDocument();
     expect(within(proposal).getByText(/does not create or approve an agreement/i)).toBeInTheDocument();
     expect(mockedDraftDealProposal).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
+    fireEvent.click(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" }));
+    await vi.waitFor(() => expect(mockedCreateAgreementFromReviewedTerms).toHaveBeenCalled());
+    expect(mockedCreateAgreementFromReviewedTerms).toHaveBeenCalledWith(DEAL.id, BUYER_ID, {
+      schema_version: 1,
+      description: "Organic cotton shirts",
+      quantity: "12",
+      unit: "boxes",
+      unit_price: "2.50",
+      currency: "USD",
+      delivery_destination: "Toronto",
+      delivery_date: "2026-12-01",
+    });
+    expect(onAgreementCreated).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("status")).toHaveTextContent("Agreement version 1");
   });
 
   it("clears local suggestion state when switching organizations", async () => {

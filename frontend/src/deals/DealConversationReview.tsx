@@ -33,6 +33,7 @@ type ConversationState =
 
 interface DealConversationReviewProps {
   deal: Deal;
+  onAgreementCreated?: () => void;
 }
 
 type FactFilter = "all" | "needs-review" | "confirmed" | "private";
@@ -67,7 +68,10 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-export default function DealConversationReview({ deal }: DealConversationReviewProps) {
+export default function DealConversationReview({
+  deal,
+  onAgreementCreated = () => {},
+}: DealConversationReviewProps) {
   const [organizationState, setOrganizationState] = useState<OrganizationState>({
     status: "loading",
   });
@@ -478,6 +482,7 @@ export default function DealConversationReview({ deal }: DealConversationReviewP
           onFactAdded={addSuggestedFact}
           onFactUpdated={updateSuggestedFact}
           onFactCorrected={replaceSuggestedFact}
+          onAgreementCreated={onAgreementCreated}
         />
       ) : null}
     </section>

@@ -14,6 +14,7 @@ import type {
   FactReviewAction,
   Organization,
   OrganizationMember,
+  PaymentAuthorization,
   PaymentStatus,
   ProposalSuggestion,
   TokenResponse,
@@ -156,6 +157,16 @@ export function listPaymentStatuses(dealId: string): Promise<PaymentStatus[]> {
   return apiRequest<PaymentStatus[]>(`/deals/${encodeURIComponent(dealId)}/payments`);
 }
 
+export function authorizeDealPayment(
+  dealId: string,
+  idempotencyKey: string,
+): Promise<PaymentAuthorization> {
+  return apiRequest<PaymentAuthorization>(`/deals/${encodeURIComponent(dealId)}/payments`, {
+    method: "POST",
+    body: JSON.stringify({ idempotency_key: idempotencyKey }),
+  });
+}
+
 export function getCommercialDocumentDraft(dealId: string): Promise<CommercialDocumentDraft> {
   return apiRequest<CommercialDocumentDraft>(
     `/deals/${encodeURIComponent(dealId)}/documents/commercial-draft`,
@@ -189,6 +200,23 @@ export function commitAgreementVersion(
   return apiRequest<AgreementVersion>(
     `/deals/${encodeURIComponent(dealId)}/agreements/${versionNumber}/commit`,
     { method: "POST", body: JSON.stringify({ terms_hash: termsHash }) },
+  );
+}
+
+export function createAgreementFromReviewedTerms(
+  dealId: string,
+  organizationId: string,
+  terms: Omit<ProposalSuggestion, "status">,
+): Promise<AgreementVersion> {
+  return apiRequest<AgreementVersion>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/from-reviewed-terms`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...terms,
+        organization_id: organizationId,
+      }),
+    },
   );
 }
 

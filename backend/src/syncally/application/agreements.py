@@ -23,6 +23,7 @@ from syncally.domain.agreements.obligations import (
     build_obligations,
     build_payment_milestones,
 )
+from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.errors import DomainError
 
@@ -74,6 +75,16 @@ class CreateAgreementDraftCommand:
     deal_id: UUID
     proposal_id: UUID
     user_id: UUID
+
+
+@dataclass(frozen=True)
+class CreateReviewedAgreementDraftCommand:
+    """Create an agreement candidate from the party-reviewed proposal terms."""
+
+    deal_id: UUID
+    author_organization_id: UUID
+    user_id: UUID
+    terms: TradeTerms
 
 
 @dataclass(frozen=True)
@@ -133,6 +144,11 @@ class AgreementRepository(Protocol):
         self, command: CreateAgreementDraftCommand, *, now: datetime
     ) -> Agreement:
         """Create the current, pending-approval agreement version from a proposal."""
+
+    def create_draft_from_reviewed_terms(
+        self, command: CreateReviewedAgreementDraftCommand, *, now: datetime
+    ) -> Agreement:
+        """Persist reviewed proposal terms and snapshot them in one transaction."""
 
     def get_current(self, deal_id: UUID) -> Agreement | None:
         """Load the deal's current immutable agreement version, if one exists."""
@@ -220,6 +236,19 @@ def create_agreement_draft(
 ) -> Agreement:
     """Snapshot a saved proposal into the deal's current agreement version."""
     return repository.create_draft(command, now=now or datetime.now(UTC))
+
+
+def create_reviewed_agreement_draft(
+    command: CreateReviewedAgreementDraftCommand,
+    repository: AgreementRepository,
+    *,
+    now: datetime | None = None,
+) -> Agreement:
+    """Validate the user's reviewed proposal, then persist it as an agreement draft."""
+    command.terms.validate_for_commit()
+    return repository.create_draft_from_reviewed_terms(
+        command, now=now or datetime.now(UTC)
+    )
 
 
 def get_current_agreement(

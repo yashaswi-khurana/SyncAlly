@@ -23,6 +23,7 @@ interface DealDetailPageProps {
 export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPageProps) {
   const [state, setState] = useState<DealState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
+  const [agreementReloadToken, setAgreementReloadToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,10 +165,19 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
           dealId={deal.id}
           buyerOrganizationId={deal.buyer_organization_id}
           sellerOrganizationId={deal.seller_organization_id}
+          reloadToken={agreementReloadToken}
+          onCommitted={() => setAgreementReloadToken((token) => token + 1)}
         />
-        <PaymentStatusPanel dealId={deal.id} />
+        <PaymentStatusPanel
+          dealId={deal.id}
+          sellerOrganizationId={deal.seller_organization_id}
+          reloadToken={agreementReloadToken}
+        />
         <CommercialDocumentPanel dealId={deal.id} />
-        <DealConversationReview deal={deal} />
+        <DealConversationReview
+          deal={deal}
+          onAgreementCreated={() => setAgreementReloadToken((token) => token + 1)}
+        />
       </div>
     </Reveal>
   );

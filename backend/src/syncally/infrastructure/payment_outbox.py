@@ -20,8 +20,12 @@ from syncally.application.payment_processing import (
     PaymentProcessingRepository,
     PaymentRetryableError,
     process_payment_intent,
+    reconcile_payment_intent,
 )
-from syncally.application.payments import PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE
+from syncally.application.payments import (
+    PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
+    PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+)
 from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.infrastructure.models import OutboxEvent
 
@@ -37,6 +41,7 @@ def _safe_error_location(error: BaseException) -> str:
 @dataclass(frozen=True, slots=True)
 class _ClaimedPaymentEvent:
     id: UUID
+    event_type: str
     payload: object
     lease_until: datetime
 
@@ -52,7 +57,14 @@ def _claim_statement(now: datetime):
     )
     return (
         select(OutboxEvent)
-        .where(OutboxEvent.event_type == PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE)
+        .where(
+            OutboxEvent.event_type.in_(
+                (
+                    PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
+                    PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+                )
+            )
+        )
         .where(or_(due_pending, expired_processing))
         .order_by(OutboxEvent.created_at, OutboxEvent.id)
         .limit(1)
@@ -72,7 +84,12 @@ def claim_next_payment_event(
         return None
     lease_until = now + _PAYMENT_EVENT_LEASE
     payload = dict(row.payload) if isinstance(row.payload, Mapping) else row.payload
-    event = _ClaimedPaymentEvent(id=row.id, payload=payload, lease_until=lease_until)
+    event = _ClaimedPaymentEvent(
+        id=row.id,
+        event_type=row.event_type,
+        payload=payload,
+        lease_until=lease_until,
+    )
     row.status = "PROCESSING"
     row.next_attempt_at = lease_until
     db.commit()
@@ -112,32 +129,60 @@ def dispatch_one_payment_event(
                 "PAYMENT_OUTBOX_PAYLOAD_INVALID",
                 "The payment outbox payload contains an invalid intent ID.",
             ) from error
-        process_payment_intent(payment_intent_id, repository, provider)
-        if notifier is not None:
-            work = repository.load(payment_intent_id)
-            if work is None:
+        if event.event_type == PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE:
+            process_payment_intent(payment_intent_id, repository, provider)
+            if notifier is not None:
+                work = repository.load(payment_intent_id)
+                if work is None:
+                    raise PaymentNeedsAction(
+                        "PAYMENT_INTENT_NOT_FOUND",
+                        "The payment intent disappeared before its invoice email could be sent.",
+                    )
+                if work.status in {
+                    PaymentIntentStatus.SENT,
+                    PaymentIntentStatus.PENDING,
+                    PaymentIntentStatus.PARTIALLY_PAID,
+                    PaymentIntentStatus.PAID,
+                }:
+                    if not work.provider_invoice_id:
+                        raise PaymentNeedsAction(
+                            "PAYMENT_PROVIDER_REFERENCE_MISSING",
+                            "The PayPal invoice ID is missing; inspect the payment before emailing.",
+                        )
+                    notice = provider.get_invoice_notice(work.provider_invoice_id)
+                    if notice.invoice_number != work.invoice_number or notice.amount != work.amount:
+                        raise PaymentNeedsAction(
+                            "PAYPAL_INVOICE_NOTICE_MISMATCH",
+                            "PayPal invoice details do not match the authorized payment; inspect manually.",
+                        )
+                    notifier.send_invoice_notice(notice)
+        else:
+            if event.event_type != PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE:
                 raise PaymentNeedsAction(
-                    "PAYMENT_INTENT_NOT_FOUND",
-                    "The payment intent disappeared before its invoice email could be sent.",
+                    "PAYMENT_OUTBOX_EVENT_UNSUPPORTED",
+                    "The payment outbox event type is unsupported; inspect it manually.",
                 )
-            if work.status in {
-                PaymentIntentStatus.SENT,
-                PaymentIntentStatus.PENDING,
-                PaymentIntentStatus.PARTIALLY_PAID,
-                PaymentIntentStatus.PAID,
-            }:
-                if not work.provider_invoice_id:
-                    raise PaymentNeedsAction(
-                        "PAYMENT_PROVIDER_REFERENCE_MISSING",
-                        "The PayPal invoice ID is missing; inspect the payment before emailing.",
-                    )
-                notice = provider.get_invoice_notice(work.provider_invoice_id)
-                if notice.invoice_number != work.invoice_number or notice.amount != work.amount:
-                    raise PaymentNeedsAction(
-                        "PAYPAL_INVOICE_NOTICE_MISMATCH",
-                        "PayPal invoice details do not match the authorized payment; inspect manually.",
-                    )
-                notifier.send_invoice_notice(notice)
+            raw_webhook_id = event.payload.get("webhook_event_id")
+            if not isinstance(raw_webhook_id, str):
+                raise PaymentNeedsAction(
+                    "PAYMENT_OUTBOX_PAYLOAD_INVALID",
+                    "The payment outbox payload is missing its webhook event ID.",
+                )
+            try:
+                webhook_event_id = UUID(raw_webhook_id)
+            except ValueError as error:
+                raise PaymentNeedsAction(
+                    "PAYMENT_OUTBOX_PAYLOAD_INVALID",
+                    "The payment outbox payload contains an invalid webhook event ID.",
+                ) from error
+            reconcile_payment_intent(
+                payment_intent_id,
+                outbox_event_id=event.id,
+                webhook_event_id=webhook_event_id,
+                lease_until=event.lease_until,
+                repository=repository,
+                provider=provider,
+            )
     except PaymentRetryableError as error:
         _finish_event(
             session_factory,

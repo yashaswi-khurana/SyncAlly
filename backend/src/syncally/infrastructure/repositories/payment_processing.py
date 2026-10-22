@@ -20,6 +20,7 @@ from syncally.application.payment_processing import (
     PaymentInvoiceRequest,
     PaymentNeedsAction,
     PaymentProcessingRepository,
+    PaymentRetryableError,
     PaymentWorkItem,
     payment_invoice_number,
 )
@@ -49,12 +50,15 @@ from syncally.domain.shared.identifiers import (
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.models import (
     AgreementVersion,
+    AuditEvent,
     Deal,
     Organization,
     OrganizationMember,
+    OutboxEvent,
     PaymentIntent,
     PaymentMilestone,
     User,
+    WebhookEvent,
 )
 
 SessionFactory = Callable[[], Session]
@@ -192,6 +196,196 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
             return {"failure_code": code, "failure_detail": detail}
 
         self._transition(payment_intent_id, transition)
+
+    def record_reconciliation(
+        self,
+        payment_intent_id: UUID,
+        payment_state: VerifiedProviderPaymentState,
+        *,
+        outbox_event_id: UUID,
+        webhook_event_id: UUID,
+        lease_until: datetime,
+    ) -> None:
+        """Apply provider truth and finish its webhook work in one transaction."""
+        now = datetime.now(UTC)
+        with self._session_factory() as db:
+            outbox_statement = select(OutboxEvent).where(
+                OutboxEvent.id == outbox_event_id,
+                OutboxEvent.status == "PROCESSING",
+                OutboxEvent.next_attempt_at == lease_until,
+            )
+            intent_statement = select(PaymentIntent).where(
+                PaymentIntent.id == payment_intent_id
+            )
+            webhook_statement = select(WebhookEvent).where(
+                WebhookEvent.id == webhook_event_id,
+                WebhookEvent.payment_intent_id == payment_intent_id,
+            )
+            if db.bind is not None and db.bind.dialect.name == "postgresql":
+                outbox_statement = outbox_statement.with_for_update()
+                intent_statement = intent_statement.with_for_update()
+                webhook_statement = webhook_statement.with_for_update()
+            outbox = db.scalar(outbox_statement)
+            if outbox is None:
+                return
+            row = db.scalar(intent_statement)
+            webhook = db.scalar(webhook_statement)
+            if row is None or webhook is None:
+                raise PaymentNeedsAction(
+                    "PAYMENT_RECONCILIATION_RECORD_MISSING",
+                    "The payment or webhook record is missing; inspect the reconciliation event.",
+                )
+
+            previous_status = row.status
+            try:
+                intent = _restore_domain_intent(db, row)
+                if intent.status is PaymentIntentStatus.PAID:
+                    if (
+                        payment_state.status is not VerifiedProviderPaymentStatus.PAID
+                        or payment_state.paid_amount.amount != row.amount
+                        or payment_state.paid_amount.currency != row.currency
+                    ):
+                        raise PaymentNeedsAction(
+                            "PAYMENT_TERMINAL_STATE_CONFLICT",
+                            "PayPal's current payment state conflicts with the saved paid state; inspect it manually.",
+                        )
+                elif intent.status in {
+                    PaymentIntentStatus.FAILED,
+                    PaymentIntentStatus.CANCELLED,
+                }:
+                    raise PaymentNeedsAction(
+                        "PAYMENT_TERMINAL_STATE_CONFLICT",
+                        "The saved payment is terminal and cannot be reconciled automatically.",
+                    )
+                else:
+                    intent.reconcile_provider_state(payment_state)
+            except (DomainError, ValueError, TypeError) as error:
+                raise PaymentNeedsAction(
+                    "PAYMENT_RECONCILIATION_REJECTED",
+                    "PayPal's current payment state conflicts with the saved payment; inspect it manually.",
+                ) from error
+
+            status_changed = intent.status is not PaymentIntentStatus(row.status)
+            amount_changed = intent.reconciled_amount != (
+                Money(row.reconciled_amount, row.currency)
+                if row.reconciled_amount is not None
+                else None
+            )
+            result = db.execute(
+                update(PaymentIntent)
+                .where(
+                    PaymentIntent.id == payment_intent_id,
+                    PaymentIntent.version == row.version,
+                    PaymentIntent.status == row.status,
+                )
+                .values(
+                    status=intent.status.value,
+                    provider_invoice_id=intent.provider_reference,
+                    reconciled_amount=(
+                        intent.reconciled_amount.amount if intent.reconciled_amount else None
+                    ),
+                    last_checked_at=now,
+                    last_reconciled_at=(
+                        now
+                        if payment_state.status is not VerifiedProviderPaymentStatus.UNKNOWN
+                        else row.last_reconciled_at
+                    ),
+                    version=row.version + 1,
+                )
+            )
+            if result.rowcount != 1:
+                raise PaymentRetryableError(
+                    "PAYMENT_STATE_CHANGED",
+                    "The payment state changed concurrently; fetch PayPal's current state and retry.",
+                )
+
+            db.add(
+                AuditEvent(
+                    aggregate_type="payment_intent",
+                    aggregate_id=payment_intent_id,
+                    event_type=(
+                        "PAYMENT_STATE_RECONCILED"
+                        if status_changed or amount_changed
+                        else "PAYMENT_RECONCILIATION_CHECKED"
+                    ),
+                    actor_type="PROVIDER",
+                    actor_id="PAYPAL",
+                    occurred_at=now,
+                    correlation_id=webhook.provider_event_id,
+                    payload={
+                        "previous_status": previous_status,
+                        "current_status": intent.status.value,
+                        "provider_status": payment_state.status.value,
+                        "paid_amount": str(payment_state.paid_amount.amount),
+                        "currency": payment_state.paid_amount.currency,
+                    },
+                )
+            )
+            webhook.processed = True
+            outbox.status = "DELIVERED"
+            outbox.delivered_at = now
+            outbox.next_attempt_at = None
+            outbox.error_detail = None
+            db.commit()
+
+    def record_reconciliation_failure(
+        self,
+        payment_intent_id: UUID,
+        *,
+        outbox_event_id: UUID,
+        webhook_event_id: UUID,
+        lease_until: datetime,
+        error_code: str,
+        error_detail: str,
+    ) -> None:
+        """Atomically retain a failed check without changing the last trusted state."""
+        now = datetime.now(UTC)
+        with self._session_factory() as db:
+            outbox_statement = select(OutboxEvent).where(
+                OutboxEvent.id == outbox_event_id,
+                OutboxEvent.status == "PROCESSING",
+                OutboxEvent.next_attempt_at == lease_until,
+            )
+            intent_statement = select(PaymentIntent).where(
+                PaymentIntent.id == payment_intent_id
+            )
+            webhook_statement = select(WebhookEvent).where(
+                WebhookEvent.id == webhook_event_id,
+                WebhookEvent.payment_intent_id == payment_intent_id,
+            )
+            if db.bind is not None and db.bind.dialect.name == "postgresql":
+                outbox_statement = outbox_statement.with_for_update()
+                intent_statement = intent_statement.with_for_update()
+                webhook_statement = webhook_statement.with_for_update()
+            outbox = db.scalar(outbox_statement)
+            if outbox is None:
+                return
+
+            intent = db.scalar(intent_statement)
+            webhook = db.scalar(webhook_statement)
+            db.add(
+                AuditEvent(
+                    aggregate_type="payment_intent",
+                    aggregate_id=payment_intent_id,
+                    event_type="PAYMENT_RECONCILIATION_NEEDS_ACTION",
+                    actor_type="SYSTEM",
+                    actor_id="payment-worker",
+                    occurred_at=now,
+                    correlation_id=(
+                        webhook.provider_event_id if webhook is not None else str(webhook_event_id)
+                    ),
+                    payload={
+                        "payment_status": intent.status if intent is not None else None,
+                        "error_code": error_code,
+                    },
+                )
+            )
+            if webhook is not None:
+                webhook.processed = True
+            outbox.status = "FAILED"
+            outbox.next_attempt_at = None
+            outbox.error_detail = error_detail
+            db.commit()
 
     def _invoice_request(
         self,

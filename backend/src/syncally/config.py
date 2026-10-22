@@ -122,10 +122,11 @@ settings = Settings()
 
 
 class PayPalSettings(BaseSettings):
-    """Credentials loaded only by the dedicated PayPal worker process."""
+    """PayPal Sandbox credentials shared by the webhook API and payment worker."""
 
     paypal_client_id: str = ""
     paypal_client_secret: SecretStr = SecretStr("")
+    paypal_webhook_id: str = ""
 
     model_config = SettingsConfigDict(
         env_file=_BACKEND_ENV_FILE,

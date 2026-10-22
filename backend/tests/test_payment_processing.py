@@ -12,6 +12,7 @@ from uuid import uuid4
 from syncally.application.payment_processing import (
     PAYPAL_REQUEST_ID_RETRY_WINDOW,
     PaymentInvoiceLineItem,
+    PaymentInvoiceReconciliation,
     PaymentInvoiceRequest,
     PaymentNeedsAction,
     PaymentOutcomeUnknown,
@@ -19,8 +20,13 @@ from syncally.application.payment_processing import (
     PaymentWorkItem,
     payment_invoice_number,
     process_payment_intent,
+    reconcile_payment_intent,
 )
-from syncally.domain.payments.intent import PaymentIntentStatus
+from syncally.domain.payments.intent import (
+    PaymentIntentStatus,
+    VerifiedProviderPaymentState,
+    VerifiedProviderPaymentStatus,
+)
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.paypal import PayPalSandboxInvoiceProvider, _provider_request_id
 
@@ -80,6 +86,7 @@ class FakeProcessingRepository:
         self.work = work
         self.calls: list[str] = []
         self.begin_create_conflict = False
+        self.reconciliation_failures = []
 
     def load(self, payment_intent_id):
         self.calls.append("load")
@@ -148,6 +155,19 @@ class FakeProcessingRepository:
             failure_detail=detail,
         )
 
+    def record_reconciliation_failure(
+        self,
+        payment_intent_id,
+        *,
+        outbox_event_id,
+        webhook_event_id,
+        lease_until,
+        error_code,
+        error_detail,
+    ):
+        self.calls.append("record_reconciliation_failure")
+        self.reconciliation_failures.append((error_code, error_detail))
+
 
 class FakeInvoiceProvider:
     def __init__(
@@ -189,6 +209,47 @@ class FakeInvoiceProvider:
 
 
 class PaymentProcessingTests(unittest.TestCase):
+    def test_reconciliation_rejects_mismatched_authorized_amount(self) -> None:
+        request = _request()
+        repository = FakeProcessingRepository(
+            _work_item(
+                request,
+                status=PaymentIntentStatus.SENT,
+                provider_invoice_id="paypal-invoice-1",
+            )
+        )
+
+        class MismatchedProvider(FakeInvoiceProvider):
+            def get_invoice_reconciliation(self, provider_invoice_id):
+                return PaymentInvoiceReconciliation(
+                    provider_invoice_id=provider_invoice_id,
+                    invoice_number=request.invoice_number,
+                    reference=request.reference,
+                    amount=Money(Decimal("11.00"), "USD"),
+                    payment_state=VerifiedProviderPaymentState(
+                        status=VerifiedProviderPaymentStatus.PAID,
+                        paid_amount=Money(Decimal("11.00"), "USD"),
+                        provider_reference=provider_invoice_id,
+                    ),
+                )
+
+        with self.assertRaises(PaymentNeedsAction) as raised:
+            reconcile_payment_intent(
+                request.payment_intent_id,
+                outbox_event_id=uuid4(),
+                webhook_event_id=uuid4(),
+                lease_until=datetime.now(UTC),
+                repository=repository,
+                provider=MismatchedProvider(),
+            )
+
+        self.assertEqual(raised.exception.code, "PAYPAL_RECONCILIATION_MISMATCH")
+        self.assertEqual(repository.work.status, PaymentIntentStatus.SENT)
+        self.assertEqual(repository.calls, ["load", "record_reconciliation_failure"])
+        self.assertEqual(
+            repository.reconciliation_failures[0][0], "PAYPAL_RECONCILIATION_MISMATCH"
+        )
+
     def test_authorized_intent_creates_and_sends_invoice(self) -> None:
         request = _request()
         repository = FakeProcessingRepository(_work_item(request))
@@ -403,6 +464,63 @@ class PaymentProcessingTests(unittest.TestCase):
 
 
 class PayPalSandboxAdapterTests(unittest.TestCase):
+    def test_webhook_signature_uses_the_registered_webhook_and_paypal_headers(self) -> None:
+        responses = [
+            (200, b'{"access_token":"test-token","expires_in":3600}'),
+            (200, b'{"verification_status":"SUCCESS"}'),
+        ]
+        sent_requests = []
+        provider = PayPalSandboxInvoiceProvider(
+            "sandbox-client",
+            "sandbox-secret",
+            send_request=lambda http_request: (
+                sent_requests.append(http_request) or responses.pop(0)
+            ),
+        )
+        headers = {
+            "paypal-auth-algo": "SHA256withRSA",
+            "paypal-cert-url": "https://api-m.sandbox.paypal.com/cert",
+            "paypal-transmission-id": "transmission-1",
+            "paypal-transmission-sig": "signature",
+            "paypal-transmission-time": "2026-10-22T10:00:00Z",
+        }
+        event = {"id": "event-1", "event_type": "INVOICING.INVOICE.PAID"}
+
+        self.assertTrue(provider.verify_webhook_signature(headers, event, "webhook-1"))
+
+        self.assertEqual(
+            sent_requests[1].full_url,
+            "https://api-m.sandbox.paypal.com/v1/notifications/verify-webhook-signature",
+        )
+        payload = json.loads(sent_requests[1].data)
+        self.assertEqual(payload["webhook_id"], "webhook-1")
+        self.assertEqual(payload["webhook_event"], event)
+        self.assertEqual(payload["transmission_sig"], "signature")
+
+    def test_reconciliation_uses_current_invoice_amount_and_does_not_trust_paid_event(self) -> None:
+        responses = [
+            (200, b'{"access_token":"test-token","expires_in":3600}'),
+            (
+                200,
+                b'{"id":"paypal-invoice-1","status":"PAID",'
+                b'"detail":{"invoice_number":"SA-test","reference":"intent-1"},'
+                b'"amount":{"currency_code":"USD","value":"10.00"},'
+                b'"payments":{"paid_amount":{"currency_code":"USD","value":"4.00"}}}',
+            ),
+        ]
+        provider = PayPalSandboxInvoiceProvider(
+            "sandbox-client",
+            "sandbox-secret",
+            send_request=lambda http_request: responses.pop(0),
+        )
+
+        state = provider.get_invoice_reconciliation("paypal-invoice-1")
+
+        self.assertEqual(state.payment_state.status, VerifiedProviderPaymentStatus.PARTIALLY_PAID)
+        self.assertEqual(state.payment_state.paid_amount.amount, Decimal("4.00"))
+        self.assertEqual(state.amount.amount, Decimal("10.00"))
+        self.assertEqual(state.reference, "intent-1")
+
     def test_create_and_send_use_sandbox_and_separate_idempotent_requests(self) -> None:
         request = _request()
         responses = [

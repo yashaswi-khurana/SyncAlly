@@ -28,6 +28,10 @@ from syncally.application.outbox import (
     build_deal_workflow_id,
     dispatch_outbox_event,
 )
+from syncally.application.payments import (
+    PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
+    PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+)
 from syncally.application.workflow_notifications import (
     DealWorkflowNotification,
     NotificationKind,
@@ -413,17 +417,22 @@ class OutboxDispatcherTests(unittest.TestCase):
         self.assertEqual(starter.calls[0]["workflow_id"], build_deal_workflow_id(self.deal.id))
         self.assertEqual(starter.calls[0]["notification"].kind, NotificationKind.DEAL_CREATED)
 
-    def test_payment_intent_authorized_rows_are_left_for_the_payment_worker(self) -> None:
-        # This dispatcher only knows Temporal/AGREEMENT_COMMITTED - claiming a
-        # payment event would permanently fail it before the payment worker
-        # (S7-03) ever gets a chance to consume it.
+    def test_payment_rows_are_left_for_the_payment_worker(self) -> None:
+        # Claiming a payment event here would permanently fail it before the
+        # payment worker gets a chance to consume it.
         row = self._pending_row()
-        row.event_type = "PAYMENT_INTENT_AUTHORIZED"
-        self.session.commit()
+        for event_type in (
+            PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
+            PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+        ):
+            row.event_type = event_type
+            self.session.commit()
 
-        self.assertIsNone(claim_next_pending_event(self.session))
-        self.assertFalse(dispatch_one_pending_event(self.session, FakeDealWorkflowStarter()))
-        self.assertEqual(self.session.scalar(select(OutboxEvent)).status, "PENDING")
+            self.assertIsNone(claim_next_pending_event(self.session))
+            self.assertFalse(
+                dispatch_one_pending_event(self.session, FakeDealWorkflowStarter())
+            )
+            self.assertEqual(self.session.scalar(select(OutboxEvent)).status, "PENDING")
 
     def test_unknown_event_type_is_a_permanent_error(self) -> None:
         starter = FakeDealWorkflowStarter()

@@ -25,15 +25,20 @@ from syncally.application.outbox import (
     PendingOutboxEvent,
     dispatch_outbox_event,
 )
-from syncally.application.payments import PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE
+from syncally.application.payments import (
+    PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
+    PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+)
 from syncally.infrastructure.models import OutboxEvent
 
 # This dispatcher only knows how to talk to Temporal: a different event type
 # it has never heard of still gets claimed and permanently failed (there's no
-# one else coming for it). Payment events are the one exception - a future
-# payment worker (S7-03) owns those rows, so this dispatcher must leave them
-# PENDING rather than claim and kill them first.
-_NOT_HANDLED_BY_THIS_DISPATCHER = (PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,)
+# one else coming for it). The payment worker owns these event types, so this
+# dispatcher must leave them PENDING.
+_NOT_HANDLED_BY_THIS_DISPATCHER = (
+    PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
+    PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+)
 
 
 def _claim_statement(*, now: datetime | None = None):

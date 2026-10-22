@@ -115,6 +115,16 @@ class PaymentInvoiceRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class PaymentInvoiceNotice:
+    """The recipient-safe details needed for a supplemental invoice email."""
+
+    invoice_number: str
+    amount: Money
+    recipient_email: str
+    recipient_view_url: str
+
+
+@dataclass(frozen=True, slots=True)
 class PaymentWorkItem:
     payment_intent_id: UUID
     status: PaymentIntentStatus
@@ -180,6 +190,14 @@ class PaymentInvoiceProvider(Protocol):
 
     def send_invoice(self, provider_invoice_id: str, payment_intent_id: UUID) -> None:
         """Send the persisted invoice ID as a separate operation."""
+
+    def get_invoice_notice(self, provider_invoice_id: str) -> PaymentInvoiceNotice:
+        """Load the provider's current recipient, amount, and invoice link."""
+
+
+class PaymentInvoiceNotifier(Protocol):
+    def send_invoice_notice(self, notice: PaymentInvoiceNotice) -> None:
+        """Send a supplemental email after the provider has accepted the invoice."""
 
 
 def payment_invoice_number(payment_intent_id: UUID) -> str:

@@ -560,6 +560,16 @@ payer details. The live Sandbox webhook round trip remains an environment check.
 - Repeated signals, outbox rows, webhooks, and worker restarts cannot create duplicate payment actions.
 - The normal test suite needs no external account or API key.
 
+**Implementation (issue #39):** `backend/tests/test_demo_lifecycle.py` drives the API,
+agreement commit, payment outbox worker, and webhook reconciliation with in-memory SQLite and
+fake AI, PayPal, and webhook adapters. It checks buyer/seller private-message isolation,
+outsider access, exact bilateral approval, idempotent agreement/payment retries, provider
+timeout recovery across worker instances, duplicate webhook handling, and payment status that
+omits invoice IDs and payer details. `backend/tests/test_local_workflow_smoke.py` adds two
+simultaneous commit requests against PostgreSQL and verifies one set of obligations, audit, and
+outbox effects, plus Temporal recovery after a worker restart. The PostgreSQL/Temporal check is
+opt-in; the normal suite needs no external services or credentials.
+
 ### S8-04 - Add safe logs and a recovery guide
 
 **Code area:** logging/metrics setup and operations docs.

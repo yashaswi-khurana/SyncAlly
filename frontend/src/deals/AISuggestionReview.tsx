@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { ApiError, correctDealFact, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
+import { ApiError, correctDealFact, createAgreementFromReviewedTerms, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
 import type { DealFact, FactReviewAction } from "../api/types";
 import {
   toFactSuggestionDraft,
@@ -16,6 +16,7 @@ interface AISuggestionReviewProps {
   onFactAdded: (fact: DealFact) => void;
   onFactUpdated: (fact: DealFact) => void;
   onFactCorrected: (replaced: DealFact, corrected: DealFact) => void;
+  onAgreementCreated?: () => void;
 }
 
 const PROPOSAL_FIELDS: Array<[keyof ProposalSuggestionDraft, string]> = [
@@ -41,11 +42,13 @@ export default function AISuggestionReview({
   onFactAdded,
   onFactUpdated,
   onFactCorrected,
+  onAgreementCreated = () => {},
 }: AISuggestionReviewProps) {
   const [factDrafts, setFactDrafts] = useState<FactSuggestionDraft[]>([]);
   const [proposal, setProposal] = useState<ProposalSuggestionDraft | null>(null);
   const [suggestionError, setSuggestionError] = useState("");
-  const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | null>(null);
+  const [agreementNotice, setAgreementNotice] = useState("");
+  const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | "agreement" | null>(null);
 
   async function runFactSuggestion() {
     setSuggestionError("");
@@ -69,10 +72,37 @@ export default function AISuggestionReview({
 
   async function runProposalDraft() {
     setSuggestionError("");
+    setAgreementNotice("");
     setPendingAction("proposal");
     try {
       const result = await draftDealProposal(dealId, organizationId);
       setProposal(toProposalDraft(result));
+    } catch (caught) {
+      setSuggestionError(describeError(caught));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function createReviewedAgreement() {
+    if (!proposal) return;
+    setSuggestionError("");
+    setAgreementNotice("");
+    setPendingAction("agreement");
+    try {
+      const agreement = await createAgreementFromReviewedTerms(dealId, organizationId, {
+        schema_version: proposal.schemaVersion,
+        description: proposal.description,
+        quantity: proposal.quantity,
+        unit: proposal.unit,
+        unit_price: proposal.unitPrice,
+        currency: proposal.currency,
+        delivery_destination: proposal.deliveryDestination,
+        delivery_date: proposal.deliveryDate || null,
+      });
+      setProposal(null);
+      setAgreementNotice(`Agreement version ${agreement.version_number} is ready for both parties to review.`);
+      onAgreementCreated();
     } catch (caught) {
       setSuggestionError(describeError(caught));
     } finally {
@@ -143,6 +173,7 @@ export default function AISuggestionReview({
         </button>
       </div>
       {suggestionError ? <p className="form-error" role="alert">{suggestionError}</p> : null}
+      {agreementNotice ? <p className="hint" role="status">{agreementNotice}</p> : null}
 
       {factDrafts.length > 0 ? (
         <div className="ai-suggestion-list" aria-label="Fact suggestions for review">
@@ -209,6 +240,15 @@ export default function AISuggestionReview({
           ))}
           <p className="proposal-currency">Currency: {proposal.currency}</p>
           <p className="hint">Editing this draft does not create or approve an agreement and cannot start a payment.</p>
+          <button
+            type="button"
+            className="button"
+            disabled={pendingAction !== null}
+            onClick={() => void createReviewedAgreement()}
+          >
+            {pendingAction === "agreement" ? "Saving agreement…" : "Send reviewed terms for bilateral approval"}
+          </button>
+          <p className="hint">Both parties must approve and commit this saved version before payment can begin.</p>
         </div>
       ) : null}
     </section>

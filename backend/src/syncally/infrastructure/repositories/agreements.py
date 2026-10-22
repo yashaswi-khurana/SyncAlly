@@ -26,6 +26,7 @@ from syncally.application.agreements import (
     AuditEventDraft,
     CommitAgreementCommand,
     CreateAgreementDraftCommand,
+    CreateReviewedAgreementDraftCommand,
     DuplicateApproval,
     OutboxEventDraft,
     ProposalNotFound,
@@ -35,6 +36,7 @@ from syncally.application.agreements import (
     WrongTermsHash,
     commit_agreement,
     create_agreement_draft,
+    create_reviewed_agreement_draft,
     record_approval,
 )
 from syncally.application.workflow_notifications import NotificationKind
@@ -45,12 +47,25 @@ from syncally.domain.agreements.obligations import ObligationDraft, PaymentMiles
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.deals.deal import DealStatus
+from syncally.domain.negotiation.proposal import (
+    DEFAULT_MAX_NEGOTIATION_ROUNDS,
+    NegotiationSubmissionOutcome,
+    ProposalStatus,
+)
+from syncally.domain.negotiation.proposal import (
+    NegotiationSession as DomainNegotiationSession,
+)
+from syncally.domain.negotiation.proposal import (
+    Proposal as DomainProposal,
+)
 from syncally.domain.shared.errors import InvalidTransition
 from syncally.domain.shared.identifiers import (
     AgreementId,
     AgreementVersionId,
     DealId,
+    NegotiationSessionId,
     OrganizationId,
+    ProposalId,
     UserId,
 )
 from syncally.infrastructure.models import (
@@ -58,6 +73,7 @@ from syncally.infrastructure.models import (
     Approval,
     AuditEvent,
     Deal,
+    NegotiationSession,
     Obligation,
     Organization,
     OrganizationMember,
@@ -198,6 +214,141 @@ class SqlAlchemyAgreementRepository:
         deal_row.version = domain_deal.version
         self._db.flush()
         return _agreement_to_domain(version_row, [])
+
+    def create_draft_from_reviewed_terms(
+        self, command: CreateReviewedAgreementDraftCommand, *, now: datetime
+    ) -> DomainAgreement:
+        """Persist the reviewed proposal and agreement snapshot atomically."""
+        deal_row = self._db.scalar(
+            select(Deal).where(Deal.id == command.deal_id).with_for_update()
+        )
+        if deal_row is None:
+            raise AgreementNotFound("Deal not found")
+        if not self._is_active_participant(deal_row, command.user_id):
+            raise AgreementAccessDenied("User must be an active member of a deal party")
+        if command.author_organization_id not in (
+            deal_row.buyer_organization_id,
+            deal_row.seller_organization_id,
+        ):
+            raise UnauthorizedApproval("Proposal author must be a party to this deal")
+        self._require_active_member(command.author_organization_id, command.user_id)
+        if (
+            command.terms.buyer_id != OrganizationId(deal_row.buyer_organization_id)
+            or command.terms.seller_id != OrganizationId(deal_row.seller_organization_id)
+        ):
+            raise AgreementVersionConflict("Proposal terms parties do not match the deal")
+
+        session_row = self._db.scalar(
+            select(NegotiationSession)
+            .where(NegotiationSession.deal_id == command.deal_id)
+            .with_for_update()
+        )
+        if session_row is None:
+            session_row = NegotiationSession(
+                deal_id=command.deal_id,
+                max_rounds=DEFAULT_MAX_NEGOTIATION_ROUNDS,
+                round_count=0,
+            )
+            self._db.add(session_row)
+            self._db.flush()
+
+        current_row = (
+            self._db.get(Proposal, session_row.current_proposal_id)
+            if session_row.current_proposal_id is not None
+            else None
+        )
+        current_proposal = None
+        if session_row.current_proposal_id is not None:
+            if current_row is None or current_row.deal_id != command.deal_id:
+                raise AgreementVersionConflict("Current negotiation proposal is unavailable")
+            try:
+                current_proposal = DomainProposal(
+                    id=ProposalId(current_row.id),
+                    deal_id=DealId(current_row.deal_id),
+                    author_organization_id=OrganizationId(
+                        current_row.author_organization_id
+                    ),
+                    terms=TradeTerms.from_canonical_json(current_row.terms_json),
+                    created_at=as_utc(current_row.created_at),
+                    based_on_proposal_id=(
+                        ProposalId(current_row.based_on_proposal_id)
+                        if current_row.based_on_proposal_id is not None
+                        else None
+                    ),
+                    expires_at=(
+                        as_utc(current_row.expires_at)
+                        if current_row.expires_at is not None
+                        else None
+                    ),
+                    status=ProposalStatus(current_row.status),
+                )
+            except (TypeError, ValueError) as error:
+                raise AgreementVersionConflict(
+                    "Current negotiation proposal has an unsupported state"
+                ) from error
+
+        proposal_id = uuid4()
+        domain_session = DomainNegotiationSession(
+            id=NegotiationSessionId(session_row.id),
+            deal_id=DealId(command.deal_id),
+            max_rounds=session_row.max_rounds,
+            round_count=session_row.round_count,
+            current_proposal_id=(
+                ProposalId(session_row.current_proposal_id)
+                if session_row.current_proposal_id is not None
+                else None
+            ),
+            escalated=session_row.escalated,
+        )
+        proposal = DomainProposal(
+            id=ProposalId(proposal_id),
+            deal_id=DealId(command.deal_id),
+            author_organization_id=OrganizationId(command.author_organization_id),
+            terms=command.terms,
+            created_at=now,
+            based_on_proposal_id=domain_session.current_proposal_id,
+        )
+        outcome = domain_session.submit(
+            proposal,
+            now=now,
+            current_proposal=current_proposal,
+        )
+        if outcome is NegotiationSubmissionOutcome.ESCALATION_REQUIRED:
+            raise AgreementVersionConflict("Negotiation requires human review")
+
+        if current_row is not None and current_proposal is not None:
+            current_row.status = current_proposal.status.value
+        proposal_number = self._next_proposal_number(command.deal_id)
+        self._db.add(
+            Proposal(
+                id=proposal_id,
+                deal_id=command.deal_id,
+                negotiation_session_id=session_row.id,
+                proposal_number=proposal_number,
+                author_organization_id=command.author_organization_id,
+                based_on_proposal_id=(
+                    proposal.based_on_proposal_id
+                    if proposal.based_on_proposal_id is not None
+                    else None
+                ),
+                terms_json=command.terms.to_storage_dict(),
+                terms_hash=command.terms.terms_hash,
+                status=proposal.status.value,
+                created_at=now,
+            )
+        )
+        session_row.round_count = domain_session.round_count
+        session_row.current_proposal_id = proposal_id
+        self._db.flush()
+
+        return self.create_draft(
+            CreateAgreementDraftCommand(
+                deal_id=command.deal_id,
+                proposal_id=proposal_id,
+                user_id=command.user_id,
+            ),
+            now=now,
+        )
 
     def get_current(self, deal_id: UUID) -> DomainAgreement | None:
         """Load the deal's current immutable version and its recorded decisions."""
@@ -414,6 +565,12 @@ class SqlAlchemyAgreementRepository:
         )
         return (highest or 0) + 1
 
+    def _next_proposal_number(self, deal_id: UUID) -> int:
+        highest = self._db.scalar(
+            select(func.max(Proposal.proposal_number)).where(Proposal.deal_id == deal_id)
+        )
+        return (highest or 0) + 1
+
     def _is_active_participant(self, deal_row: Deal, user_id: UUID) -> bool:
         is_member = self._db.scalar(
             select(OrganizationMember.id)
@@ -549,6 +706,25 @@ def create_agreement_draft_in_transaction(
     now = now or datetime.now(UTC)
     try:
         agreement = create_agreement_draft(command, SqlAlchemyAgreementRepository(db), now=now)
+        db.commit()
+        return agreement
+    except Exception:
+        db.rollback()
+        raise
+
+
+def create_reviewed_agreement_draft_in_transaction(
+    db: Session,
+    command: CreateReviewedAgreementDraftCommand,
+    *,
+    now: datetime | None = None,
+) -> DomainAgreement:
+    """Persist the party's reviewed proposal and agreement as one transaction."""
+    now = now or datetime.now(UTC)
+    try:
+        agreement = create_reviewed_agreement_draft(
+            command, SqlAlchemyAgreementRepository(db), now=now
+        )
         db.commit()
         return agreement
     except Exception:

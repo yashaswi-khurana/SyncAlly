@@ -63,8 +63,8 @@ test from `backend/`. It uses an isolated PostgreSQL schema and the running Temp
 service; it does not touch the demo records or require the API process:
 
 ```powershell
-$env:TEST_POSTGRES_URL = "postgresql+psycopg://syncally:syncally-local-only@localhost:5432/syncally"
-$env:SYNCALLY_TEMPORAL_ADDRESS = "localhost:7233"
+$env:TEST_POSTGRES_URL = "postgresql+psycopg://syncally:syncally-local-only@127.0.0.1:5432/syncally"
+$env:SYNCALLY_TEMPORAL_ADDRESS = "127.0.0.1:7233"
 python -m unittest discover -s tests -p test_local_workflow_smoke.py -v
 ```
 

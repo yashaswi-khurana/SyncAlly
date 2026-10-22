@@ -8,6 +8,7 @@ from syncally.infrastructure.repositories.agreements import (
     SqlAlchemyPaymentMilestoneRepository,
     commit_agreement_in_transaction,
     create_agreement_draft_in_transaction,
+    create_reviewed_agreement_draft_in_transaction,
     record_approval_in_transaction,
 )
 from syncally.infrastructure.repositories.communications import (
@@ -39,5 +40,6 @@ __all__ = [
     "authorize_payment_intent_in_transaction",
     "commit_agreement_in_transaction",
     "create_agreement_draft_in_transaction",
+    "create_reviewed_agreement_draft_in_transaction",
     "record_approval_in_transaction",
 ]

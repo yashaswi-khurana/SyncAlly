@@ -13,6 +13,8 @@ from syncally.domain.shared.identifiers import (
     ProposalId,
 )
 
+DEFAULT_MAX_NEGOTIATION_ROUNDS = 5
+
 
 class ProposalStatus(StrEnum):
     SUBMITTED = "SUBMITTED"

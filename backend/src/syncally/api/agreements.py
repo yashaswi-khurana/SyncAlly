@@ -10,7 +10,8 @@ error contract.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, NoReturn
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from syncally.application.agreements import (
     AmbiguousAgreementOrganization,
     CommitAgreementCommand,
     CreateAgreementDraftCommand,
+    CreateReviewedAgreementDraftCommand,
     DuplicateApproval,
     ProposalNotFound,
     RecordApprovalCommand,
@@ -44,13 +46,16 @@ from syncally.application.deals import (
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
+from syncally.domain.ai.contracts import AIContractError, ProposedTerms
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
+from syncally.domain.shared.identifiers import OrganizationId
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.repositories import (
     SqlAlchemyAgreementRepository,
     SqlAlchemyDealRepository,
     commit_agreement_in_transaction,
     create_agreement_draft_in_transaction,
+    create_reviewed_agreement_draft_in_transaction,
     record_approval_in_transaction,
 )
 
@@ -65,6 +70,22 @@ class CreateAgreementDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     proposal_id: UUID
+
+
+class CreateReviewedAgreementDraftRequest(BaseModel):
+    """Explicitly submit the user's reviewed AI draft for bilateral approval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = Field(ge=1)
+    description: str = Field(min_length=1, max_length=2_000)
+    quantity: Decimal
+    unit: str = Field(min_length=1, max_length=100)
+    unit_price: Decimal
+    currency: str = Field(min_length=3, max_length=3)
+    delivery_destination: str = Field(min_length=1, max_length=2_000)
+    delivery_date: date | None
+    organization_id: UUID | None = None
 
 
 class RecordApprovalRequest(BaseModel):
@@ -233,6 +254,59 @@ def create_agreement_draft_route(
         )
     except Exception as exc:
         _raise_agreement_error(exc)
+    return _to_agreement_response(agreement)
+
+
+@router.post(
+    "/from-reviewed-terms",
+    status_code=status.HTTP_201_CREATED,
+    response_model=AgreementVersionResponse,
+)
+def create_reviewed_agreement_draft_route(
+    deal_id: UUID,
+    payload: CreateReviewedAgreementDraftRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> AgreementVersionResponse:
+    """Save a reviewed proposal and create its agreement version atomically."""
+    try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        author_organization_id = resolve_party_organization(
+            actor, deal, payload.organization_id
+        )
+        proposed_terms = ProposedTerms(
+            schema_version=payload.schema_version,
+            description=payload.description,
+            quantity=payload.quantity,
+            unit=payload.unit,
+            unit_price=payload.unit_price,
+            currency=payload.currency,
+            delivery_destination=payload.delivery_destination,
+            delivery_date=payload.delivery_date,
+        )
+        terms = proposed_terms.to_trade_terms(
+            buyer_id=OrganizationId(deal.buyer_organization_id),
+            seller_id=OrganizationId(deal.seller_organization_id),
+        )
+        agreement = create_reviewed_agreement_draft_in_transaction(
+            db,
+            CreateReviewedAgreementDraftCommand(
+                deal_id=deal_id,
+                author_organization_id=author_organization_id,
+                user_id=actor.user_id,
+                terms=terms,
+            ),
+        )
+    except (AIContractError, InvariantViolation) as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Reviewed terms do not match the supported demo agreement: {error}",
+        ) from error
+    except Exception as error:
+        db.rollback()
+        _raise_agreement_error(error)
     return _to_agreement_response(agreement)
 
 

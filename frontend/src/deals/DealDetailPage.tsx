@@ -6,6 +6,8 @@ import Reveal from "../ui/Reveal";
 import DealConstellation from "./DealConstellation";
 import DealConversationReview from "./DealConversationReview";
 import AgreementReview from "./AgreementReview";
+import CommercialDocumentPanel from "./CommercialDocumentPanel";
+import PaymentStatusPanel from "./PaymentStatusPanel";
 
 type DealState =
   | { status: "loading" }
@@ -163,6 +165,8 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
           buyerOrganizationId={deal.buyer_organization_id}
           sellerOrganizationId={deal.seller_organization_id}
         />
+        <PaymentStatusPanel dealId={deal.id} />
+        <CommercialDocumentPanel dealId={deal.id} />
         <DealConversationReview deal={deal} />
       </div>
     </Reveal>

@@ -28,6 +28,7 @@ from syncally.application.payments import (
     PaymentIntentAuthorizationOutcome,
     PaymentIntentCommandMismatch,
     PaymentMilestoneNotFound,
+    PaymentStatusRecord,
     authorize_payment_intent,
 )
 from syncally.domain.agreements.agreement import AgreementStatus
@@ -160,6 +161,34 @@ class SqlAlchemyPaymentIntentRepository:
                 "An active payment intent already exists for this milestone"
             ) from error
         return PaymentIntentAuthorizationOutcome(intent_id=command.id, already_existed=False)
+
+    def list_for_agreement(self, agreement_version_id: UUID) -> list[PaymentStatusRecord]:
+        """Read status fields only; provider invoice IDs and secrets stay internal."""
+        rows = self._db.execute(
+            select(PaymentIntent, PaymentMilestoneRow)
+            .join(
+                PaymentMilestoneRow,
+                PaymentMilestoneRow.id == PaymentIntent.payment_milestone_id,
+            )
+            .where(PaymentIntent.agreement_version_id == agreement_version_id)
+            .order_by(PaymentMilestoneRow.sequence_number, PaymentIntent.created_at)
+        ).all()
+        return [
+            PaymentStatusRecord(
+                intent_id=intent.id,
+                milestone_sequence=milestone.sequence_number,
+                amount=Money(intent.amount, intent.currency),
+                status=intent.status,
+                reconciled_amount=(
+                    Money(intent.reconciled_amount, intent.currency)
+                    if intent.reconciled_amount is not None
+                    else None
+                ),
+                last_checked_at=intent.last_checked_at,
+                last_reconciled_at=intent.last_reconciled_at,
+            )
+            for intent, milestone in rows
+        ]
 
     def _matching_outcome_or_raise(
         self, existing: PaymentIntent | None, command: AuthorizePaymentIntentCommand

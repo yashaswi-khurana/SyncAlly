@@ -1,7 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getCurrentAgreement, getDeal, listDealFacts, listDealMessages, listOrganizations } from "../api/client";
+import {
+  ApiError,
+  getCommercialDocumentDraft,
+  getCurrentAgreement,
+  getDeal,
+  listDealFacts,
+  listDealMessages,
+  listOrganizations,
+  listPaymentStatuses,
+} from "../api/client";
 import type { Deal } from "../api/types";
 import DealDetailPage from "./DealDetailPage";
 
@@ -9,19 +18,23 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    getCommercialDocumentDraft: vi.fn(),
     getDeal: vi.fn(),
     getCurrentAgreement: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
     listOrganizations: vi.fn(),
+    listPaymentStatuses: vi.fn(),
   };
 });
 
 const mockedGetDeal = vi.mocked(getDeal);
+const mockedGetCommercialDocumentDraft = vi.mocked(getCommercialDocumentDraft);
 const mockedGetCurrentAgreement = vi.mocked(getCurrentAgreement);
 const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
 const mockedListOrganizations = vi.mocked(listOrganizations);
+const mockedListPaymentStatuses = vi.mocked(listPaymentStatuses);
 
 const DEAL: Deal = {
   id: "deal-1",
@@ -37,6 +50,10 @@ describe("DealDetailPage", () => {
   });
 
   beforeEach(() => {
+    mockedListPaymentStatuses.mockResolvedValue([]);
+    mockedGetCommercialDocumentDraft.mockRejectedValue(
+      new ApiError(409, "Agreement not committed"),
+    );
     mockedListDealFacts.mockResolvedValue([]);
     mockedListDealMessages.mockResolvedValue([]);
     mockedListOrganizations.mockResolvedValue([

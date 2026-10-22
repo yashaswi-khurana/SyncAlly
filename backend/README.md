@@ -149,7 +149,8 @@ The API uses the Sandbox app credentials and webhook ID to ask PayPal to verify
 each signature. It stores each verified event once and queues work only when
 the invoice belongs to a saved SyncAlly payment intent. The payment worker then
 fetches the current invoice and reconciles its amount, currency, and status;
-webhook payload status alone never marks a payment paid.
+webhook payload status alone never marks a payment paid. Stored event metadata is
+limited to the event ID, event type, and invoice ID; payer details are discarded.
 
 The worker creates a draft invoice and sends it as a separate PayPal request.
 It uses the buyer organization's sole active admin as the invoice contact; if

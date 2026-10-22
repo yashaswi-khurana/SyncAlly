@@ -6,12 +6,12 @@ import json
 from collections.abc import Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
 
 from syncally.application.payment_processing import PaymentNeedsAction, PaymentRetryableError
 from syncally.config import PayPalSettings
-from syncally.infrastructure.database import get_db
+from syncally.infrastructure.database import SessionLocal
 from syncally.infrastructure.paypal import PayPalSandboxInvoiceProvider
 from syncally.infrastructure.repositories.paypal_webhooks import record_paypal_webhook_event
 
@@ -41,10 +41,21 @@ def get_paypal_webhook_configuration() -> tuple[PayPalSandboxInvoiceProvider, st
     )
 
 
+def _persist_paypal_webhook_event(event: dict) -> bool:
+    """Persist the verified event in a worker-owned SQLAlchemy session."""
+    db = SessionLocal()
+    try:
+        return record_paypal_webhook_event(db, event)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @router.post("/paypal/invoicing", status_code=status.HTTP_202_ACCEPTED)
 async def receive_paypal_invoice_webhook(
     request: Request,
-    db: Session = Depends(get_db),
     configuration: tuple[PayPalSandboxInvoiceProvider, str] = Depends(
         get_paypal_webhook_configuration
     ),
@@ -63,7 +74,9 @@ async def receive_paypal_invoice_webhook(
 
     provider, webhook_id = configuration
     try:
-        verified = provider.verify_webhook_signature(headers, event, webhook_id)
+        verified = await run_in_threadpool(
+            provider.verify_webhook_signature, headers, event, webhook_id
+        )
     except PaymentRetryableError as error:
         raise HTTPException(status_code=503, detail=error.detail) from error
     except PaymentNeedsAction as error:
@@ -89,9 +102,8 @@ async def receive_paypal_invoice_webhook(
         raise HTTPException(status_code=400, detail="Invalid PayPal invoice event fields.")
 
     try:
-        inserted = record_paypal_webhook_event(db, event)
+        inserted = await run_in_threadpool(_persist_paypal_webhook_event, event)
     except SQLAlchemyError as error:
-        db.rollback()
         raise HTTPException(
             status_code=503,
             detail="PayPal webhook could not be saved; PayPal may retry delivery.",

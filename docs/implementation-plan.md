@@ -510,7 +510,9 @@ and writes reconciliation work to the payment outbox in the same transaction.
 The payment worker fetches the current invoice, checks its saved identity, amount,
 currency and payment progress, then commits the guarded intent update, audit row,
 webhook completion, and outbox completion together. Automated coverage uses fake
-PayPal responses; the live Sandbox webhook round trip remains an environment check.
+PayPal responses. Mismatches are audited and moved to manual action atomically
+without changing the last trusted payment state. Stored webhook metadata omits
+payer details. The live Sandbox webhook round trip remains an environment check.
 
 **Stage check:** The Sandbox flow authorizes, creates, sends, and checks one invoice. Tests cover timeouts, duplicate webhooks, and partial payments.
 

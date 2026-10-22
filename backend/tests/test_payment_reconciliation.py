@@ -277,6 +277,33 @@ class PaymentReconciliationRepositoryTests(unittest.TestCase):
             self.assertEqual(db.scalar(select(AuditEvent.id)), None)
             self.assertEqual(db.get(OutboxEvent, outbox.id).status, "PROCESSING")
 
+    def test_manual_action_failure_is_audited_with_webhook_and_outbox_together(self) -> None:
+        intent, outbox, webhook, lease_until = self._seed()
+
+        self.repository.record_reconciliation_failure(
+            intent.id,
+            outbox_event_id=outbox.id,
+            webhook_event_id=webhook.id,
+            lease_until=lease_until,
+            error_code="PAYPAL_RECONCILIATION_MISMATCH",
+            error_detail="PayPal invoice identity differs from the authorized payment.",
+        )
+
+        with self.session_factory() as db:
+            saved_intent = db.get(PaymentIntent, intent.id)
+            saved_outbox = db.get(OutboxEvent, outbox.id)
+            saved_webhook = db.get(WebhookEvent, webhook.id)
+            audit = db.scalar(select(AuditEvent))
+            self.assertEqual(saved_intent.status, PaymentIntentStatus.SENT.value)
+            self.assertIsNone(saved_intent.reconciled_amount)
+            self.assertEqual(saved_outbox.status, "FAILED")
+            self.assertIn("differs", saved_outbox.error_detail)
+            self.assertIsNone(saved_outbox.next_attempt_at)
+            self.assertTrue(saved_webhook.processed)
+            self.assertEqual(audit.event_type, "PAYMENT_RECONCILIATION_NEEDS_ACTION")
+            self.assertEqual(audit.payload["error_code"], "PAYPAL_RECONCILIATION_MISMATCH")
+            self.assertEqual(audit.payload["payment_status"], PaymentIntentStatus.SENT.value)
+
 
 if __name__ == "__main__":
     unittest.main()

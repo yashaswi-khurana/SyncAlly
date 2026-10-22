@@ -217,6 +217,18 @@ class PaymentProcessingRepository(Protocol):
     ) -> None:
         """Commit payment state, audit, webhook completion, and outbox completion together."""
 
+    def record_reconciliation_failure(
+        self,
+        payment_intent_id: UUID,
+        *,
+        outbox_event_id: UUID,
+        webhook_event_id: UUID,
+        lease_until: datetime,
+        error_code: str,
+        error_detail: str,
+    ) -> None:
+        """Atomically record a manual-action outcome without changing payment state."""
+
 
 class PaymentInvoiceProvider(Protocol):
     def find_invoice(self, lookup: PaymentInvoiceLookup) -> str | None:
@@ -444,39 +456,50 @@ def reconcile_payment_intent(
     provider: PaymentInvoiceProvider,
 ) -> None:
     """Use a verified webhook only to trigger a fresh, authoritative PayPal read."""
-    work = repository.load(payment_intent_id)
-    if work is None:
-        raise PaymentNeedsAction(
-            "PAYMENT_INTENT_NOT_FOUND",
-            "The payment intent no longer exists; inspect the webhook reconciliation event.",
-        )
-    if not work.provider_invoice_id:
-        raise PaymentNeedsAction(
-            "PAYMENT_PROVIDER_REFERENCE_MISSING",
-            "The PayPal invoice ID is missing; inspect the payment intent before reconciliation.",
-        )
+    try:
+        work = repository.load(payment_intent_id)
+        if work is None:
+            raise PaymentNeedsAction(
+                "PAYMENT_INTENT_NOT_FOUND",
+                "The payment intent no longer exists; inspect the webhook reconciliation event.",
+            )
+        if not work.provider_invoice_id:
+            raise PaymentNeedsAction(
+                "PAYMENT_PROVIDER_REFERENCE_MISSING",
+                "The PayPal invoice ID is missing; inspect the payment intent before reconciliation.",
+            )
 
-    result = provider.get_invoice_reconciliation(work.provider_invoice_id)
-    if (
-        result.provider_invoice_id != work.provider_invoice_id
-        or result.invoice_number != work.invoice_number
-        or result.reference != work.reference
-        or result.amount != work.amount
-        or result.payment_state.provider_reference != work.provider_invoice_id
-        or result.payment_state.paid_amount.currency != work.amount.currency
-    ):
-        raise PaymentNeedsAction(
-            "PAYPAL_RECONCILIATION_MISMATCH",
-            "PayPal invoice identity, amount, or currency differs from the authorized payment; inspect it manually.",
-        )
+        result = provider.get_invoice_reconciliation(work.provider_invoice_id)
+        if (
+            result.provider_invoice_id != work.provider_invoice_id
+            or result.invoice_number != work.invoice_number
+            or result.reference != work.reference
+            or result.amount != work.amount
+            or result.payment_state.provider_reference != work.provider_invoice_id
+            or result.payment_state.paid_amount.currency != work.amount.currency
+        ):
+            raise PaymentNeedsAction(
+                "PAYPAL_RECONCILIATION_MISMATCH",
+                "PayPal invoice identity, amount, or currency differs from the authorized payment; inspect it manually.",
+            )
 
-    repository.record_reconciliation(
-        payment_intent_id,
-        result.payment_state,
-        outbox_event_id=outbox_event_id,
-        webhook_event_id=webhook_event_id,
-        lease_until=lease_until,
-    )
+        repository.record_reconciliation(
+            payment_intent_id,
+            result.payment_state,
+            outbox_event_id=outbox_event_id,
+            webhook_event_id=webhook_event_id,
+            lease_until=lease_until,
+        )
+    except PaymentNeedsAction as error:
+        repository.record_reconciliation_failure(
+            payment_intent_id,
+            outbox_event_id=outbox_event_id,
+            webhook_event_id=webhook_event_id,
+            lease_until=lease_until,
+            error_code=error.code,
+            error_detail=error.detail,
+        )
+        raise
 
 
 def _request_id_retry_window_expired(started_at: datetime, now: datetime | None) -> bool:

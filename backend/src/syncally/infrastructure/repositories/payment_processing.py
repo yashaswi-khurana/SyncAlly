@@ -7,6 +7,7 @@ closed.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -60,8 +61,11 @@ from syncally.infrastructure.models import (
     User,
     WebhookEvent,
 )
+from syncally.operations import Operation, log_operation
 
 SessionFactory = Callable[[], Session]
+
+logger = logging.getLogger(__name__)
 
 
 class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
@@ -227,6 +231,12 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 webhook_statement = webhook_statement.with_for_update()
             outbox = db.scalar(outbox_statement)
             if outbox is None:
+                log_operation(
+                    logger,
+                    Operation.PAYMENT_LEASE_LOST,
+                    outbox_event_id=outbox_event_id,
+                    payment_intent_id=payment_intent_id,
+                )
                 return
             row = db.scalar(intent_statement)
             webhook = db.scalar(webhook_statement)
@@ -326,7 +336,17 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
             outbox.delivered_at = now
             outbox.next_attempt_at = None
             outbox.error_detail = None
+            fields = dict(
+                outbox_event_id=outbox.id,
+                payment_intent_id=payment_intent_id,
+                deal_id=row.deal_id,
+                event_type=outbox.event_type,
+                status=outbox.status,
+                retry_count=outbox.retry_count,
+                payment_status=intent.status.value,
+            )
             db.commit()
+            log_operation(logger, Operation.PAYMENT_OUTBOX_COMPLETED, **fields)
 
     def record_reconciliation_failure(
         self,
@@ -359,6 +379,12 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 webhook_statement = webhook_statement.with_for_update()
             outbox = db.scalar(outbox_statement)
             if outbox is None:
+                log_operation(
+                    logger,
+                    Operation.PAYMENT_LEASE_LOST,
+                    outbox_event_id=outbox_event_id,
+                    payment_intent_id=payment_intent_id,
+                )
                 return
 
             intent = db.scalar(intent_statement)
@@ -385,7 +411,19 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
             outbox.status = "FAILED"
             outbox.next_attempt_at = None
             outbox.error_detail = error_detail
+            fields = dict(
+                outbox_event_id=outbox.id,
+                payment_intent_id=payment_intent_id,
+                deal_id=intent.deal_id if intent is not None else None,
+                event_type=outbox.event_type,
+                status=outbox.status,
+                retry_count=outbox.retry_count,
+                payment_status=intent.status if intent is not None else None,
+                error_code=error_code,
+                failure_kind="PERMANENT",
+            )
             db.commit()
+            log_operation(logger, Operation.PAYMENT_OUTBOX_COMPLETED, level=logging.ERROR, **fields)
 
     def _invoice_request(
         self,
@@ -539,7 +577,13 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                     "PAYMENT_STATE_CHANGED",
                     "The payment state changed concurrently; reconcile the intent before retrying.",
                 )
+            fields = dict(
+                payment_intent_id=payment_intent_id,
+                deal_id=row.deal_id,
+                payment_status=intent.status.value,
+            )
             db.commit()
+            log_operation(logger, Operation.PAYMENT_STATE_CHANGED, **fields)
 
 
 def _restore_domain_intent(db: Session, row: PaymentIntent) -> DomainPaymentIntent:

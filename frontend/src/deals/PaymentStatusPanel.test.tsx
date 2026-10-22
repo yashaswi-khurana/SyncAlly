@@ -120,6 +120,30 @@ describe("PaymentStatusPanel", () => {
     expect(await screen.findByText(/no payment request is available/i)).toBeInTheDocument();
   });
 
+  it("reloads payment eligibility when the agreement reload token changes", async () => {
+    mockedListPaymentStatuses.mockResolvedValue([]);
+    mockedGetCurrentAgreement
+      .mockRejectedValueOnce(new ApiError(404, "Agreement not found"))
+      .mockResolvedValueOnce({ status: "COMMITTED" } as AgreementVersion);
+    mockedListOrganizations.mockResolvedValue([
+      { id: "seller-org-1", legal_name: "Seller Co", country_code: "CA", role: "ADMIN" },
+    ]);
+
+    const { rerender } = render(
+      <PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" reloadToken={0} />,
+    );
+
+    expect(await screen.findByText(/no payment request is available/i)).toBeInTheDocument();
+    expect(mockedGetCurrentAgreement).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" reloadToken={1} />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Create PayPal invoice request" })).toBeInTheDocument();
+    expect(mockedGetCurrentAgreement).toHaveBeenCalledTimes(2);
+  });
+
   it("lets a committed agreement's seller queue its payment request", async () => {
     mockedListPaymentStatuses.mockResolvedValue([]);
     mockedGetCurrentAgreement.mockResolvedValue({ status: "COMMITTED" } as AgreementVersion);

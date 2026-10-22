@@ -239,6 +239,21 @@ class DemoLifecycleTests(unittest.TestCase):
         self.assertTrue(any("900 USD" in body for body in ai_message_bodies))
         self.assertFalse(any("20 USD" in body for body in ai_message_bodies))
 
+        invalid_terms = {
+            key: value
+            for key, value in proposal_response.json().items()
+            if key != "status"
+        }
+        invalid_terms["quantity"] = "-1"
+        invalid_terms["organization_id"] = str(self.buyer.id)
+        invalid_response = self._request(
+            "POST",
+            f"/deals/{deal_id}/agreements/from-reviewed-terms",
+            json=invalid_terms,
+        )
+        self.assertEqual(invalid_response.status_code, 422, invalid_response.text)
+        self.assertIn("quantity must be positive", invalid_response.json()["detail"])
+
         agreement_response = self._request(
             "POST",
             f"/deals/{deal_id}/agreements/from-reviewed-terms",

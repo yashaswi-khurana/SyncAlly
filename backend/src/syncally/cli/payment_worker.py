@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session
 from syncally.config import GmailSettings, PayPalSettings, settings
 from syncally.infrastructure.database import SessionLocal
 from syncally.infrastructure.gmail import GmailSMTPInvoiceNotifier
-from syncally.infrastructure.payment_outbox import dispatch_pending_payment_events
+from syncally.infrastructure.payment_outbox import (
+    _safe_error_location,
+    dispatch_pending_payment_events,
+)
 from syncally.infrastructure.paypal import PayPalSandboxInvoiceProvider
 from syncally.infrastructure.repositories.payment_processing import (
     SqlAlchemyPaymentProcessingRepository,
@@ -70,8 +73,9 @@ def run_forever(
             )
         except Exception as error:
             logger.error(
-                "Payment worker iteration failed (%s); it will retry.",
+                "Payment worker iteration failed (%s at %s); it will retry.",
                 type(error).__name__,
+                _safe_error_location(error),
             )
         time.sleep(poll_interval)
 

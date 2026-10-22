@@ -79,6 +79,7 @@ class FakeProcessingRepository:
     def __init__(self, work: PaymentWorkItem) -> None:
         self.work = work
         self.calls: list[str] = []
+        self.begin_create_conflict = False
 
     def load(self, payment_intent_id):
         self.calls.append("load")
@@ -86,6 +87,13 @@ class FakeProcessingRepository:
 
     def begin_create(self, payment_intent_id, request_payload_hash):
         self.calls.append("begin_create")
+        if self.begin_create_conflict:
+            self.work = replace(
+                self.work,
+                status=PaymentIntentStatus.PROVIDER_CREATED,
+                provider_invoice_id="paypal-invoice-1",
+            )
+            raise PaymentNeedsAction("PAYMENT_STATE_CHANGED", "concurrent worker advanced state")
         self.work = replace(
             self.work,
             status=PaymentIntentStatus.CREATE_PENDING,
@@ -117,7 +125,11 @@ class FakeProcessingRepository:
         self.calls.append("mark_failure")
         self.work = replace(
             self.work,
-            status=PaymentIntentStatus.FAILED,
+            status=(
+                PaymentIntentStatus.PROVIDER_CREATED
+                if self.work.status is PaymentIntentStatus.PROVIDER_CREATED
+                else PaymentIntentStatus.FAILED
+            ),
             failure_code=code,
             failure_detail=detail,
         )
@@ -125,7 +137,7 @@ class FakeProcessingRepository:
     def mark_manual_action(self, payment_intent_id, code, detail):
         self.calls.append("mark_manual_action")
         status = self.work.status
-        if status in {PaymentIntentStatus.AUTHORIZED, PaymentIntentStatus.PROVIDER_CREATED}:
+        if status is PaymentIntentStatus.AUTHORIZED:
             status = PaymentIntentStatus.FAILED
         elif status is PaymentIntentStatus.CREATE_PENDING:
             status = PaymentIntentStatus.CREATE_UNKNOWN
@@ -144,10 +156,12 @@ class FakeInvoiceProvider:
         find_results=None,
         create_results=None,
         send_results=None,
+        invoice_status_results=None,
     ) -> None:
         self.find_results = list(find_results or [])
         self.create_results = list(create_results or [])
         self.send_results = list(send_results or [])
+        self.invoice_status_results = list(invoice_status_results or [])
         self.calls: list[str] = []
 
     @staticmethod
@@ -160,6 +174,10 @@ class FakeInvoiceProvider:
     def find_invoice(self, lookup):
         self.calls.append("find")
         return self._next(self.find_results, None)
+
+    def get_invoice_status(self, provider_invoice_id):
+        self.calls.append("get_status")
+        return self._next(self.invoice_status_results, "DRAFT")
 
     def create_invoice(self, request):
         self.calls.append("create")
@@ -202,7 +220,7 @@ class PaymentProcessingTests(unittest.TestCase):
 
         process_payment_intent(request.payment_intent_id, repository, provider)
 
-        self.assertEqual(provider.calls, ["create", "find", "send"])
+        self.assertEqual(provider.calls, ["create", "find", "get_status", "send"])
         self.assertEqual(repository.work.status, PaymentIntentStatus.SENT)
 
     def test_verified_not_found_allows_retry_after_search(self) -> None:
@@ -275,9 +293,41 @@ class PaymentProcessingTests(unittest.TestCase):
         with self.assertRaises(PaymentNeedsAction):
             process_payment_intent(original.payment_intent_id, repository, provider)
 
-        self.assertEqual(provider.calls, ["find"])
+        self.assertEqual(provider.calls, [])
         self.assertEqual(repository.work.status, PaymentIntentStatus.CREATE_UNKNOWN)
         self.assertEqual(repository.work.failure_code, "PAYMENT_INVOICE_REQUEST_CHANGED")
+
+    def test_unknown_create_with_found_paid_invoice_is_marked_sent_without_resending(self) -> None:
+        request = _request()
+        repository = FakeProcessingRepository(
+            _work_item(
+                request,
+                status=PaymentIntentStatus.CREATE_UNKNOWN,
+                request_payload_hash=request.payload_hash,
+                provider_create_started_at=datetime.now(UTC),
+            )
+        )
+        provider = FakeInvoiceProvider(
+            find_results=["paypal-invoice-1"],
+            invoice_status_results=["PAID"],
+        )
+
+        process_payment_intent(request.payment_intent_id, repository, provider)
+
+        self.assertEqual(provider.calls, ["find", "get_status"])
+        self.assertEqual(repository.work.status, PaymentIntentStatus.SENT)
+        self.assertEqual(repository.work.provider_invoice_id, "paypal-invoice-1")
+
+    def test_create_conflict_does_not_fail_invoice_created_by_another_worker(self) -> None:
+        request = _request()
+        repository = FakeProcessingRepository(_work_item(request))
+        repository.begin_create_conflict = True
+        provider = FakeInvoiceProvider()
+
+        process_payment_intent(request.payment_intent_id, repository, provider)
+
+        self.assertEqual(provider.calls, ["send"])
+        self.assertEqual(repository.work.status, PaymentIntentStatus.SENT)
 
     def test_permanent_create_failure_is_saved_for_manual_action(self) -> None:
         request = _request()
@@ -485,6 +535,64 @@ class PayPalSandboxAdapterTests(unittest.TestCase):
             sent_requests[1].full_url,
             "https://api-m.sandbox.paypal.com/v2/invoicing/search-invoices?page=1&page_size=2&total_required=true",
         )
+
+    def test_get_invoice_status_uses_the_sandbox_invoice_endpoint(self) -> None:
+        responses = [
+            (200, b'{"access_token":"test-token","expires_in":3600}'),
+            (200, b'{"id":"paypal-invoice-1","status":"PAID"}'),
+        ]
+        sent_requests = []
+        provider = PayPalSandboxInvoiceProvider(
+            "sandbox-client",
+            "sandbox-secret",
+            send_request=lambda http_request: (
+                sent_requests.append(http_request) or responses.pop(0)
+            ),
+        )
+
+        self.assertEqual(provider.get_invoice_status("paypal-invoice-1"), "PAID")
+        self.assertEqual(
+            sent_requests[1].full_url,
+            "https://api-m.sandbox.paypal.com/v2/invoicing/invoices/paypal-invoice-1",
+        )
+
+    def test_non_object_create_response_is_an_unknown_outcome(self) -> None:
+        responses = [
+            (200, b'{"access_token":"test-token","expires_in":3600}'),
+            (201, b'[]'),
+        ]
+        provider = PayPalSandboxInvoiceProvider(
+            "sandbox-client",
+            "sandbox-secret",
+            send_request=lambda http_request: responses.pop(0),
+        )
+
+        with self.assertRaises(PaymentOutcomeUnknown):
+            provider.create_invoice(_request())
+
+    def test_oauth_401_is_retryable_and_does_not_expose_credentials(self) -> None:
+        provider = PayPalSandboxInvoiceProvider(
+            "sandbox-client",
+            "sandbox-secret",
+            send_request=lambda http_request: (401, b'{"error":"invalid_client"}'),
+        )
+
+        with self.assertRaises(PaymentRetryableError) as raised:
+            provider.create_invoice(_request())
+
+        self.assertEqual(raised.exception.code, "PAYPAL_AUTH_FAILED")
+        self.assertNotIn("sandbox-secret", raised.exception.detail)
+
+    def test_unit_price_precision_is_checked_before_serializing(self) -> None:
+        request = _request()
+        item = replace(request.line_items[0], unit_price=Money(Decimal("5.001"), "USD"))
+        request = replace(request, line_items=(item,))
+        provider = PayPalSandboxInvoiceProvider("sandbox-client", "sandbox-secret")
+
+        with self.assertRaises(PaymentNeedsAction) as raised:
+            provider._invoice_payload(request)
+
+        self.assertEqual(raised.exception.code, "PAYPAL_INVOICE_ITEM_INVALID")
 
     def test_invoice_search_accepts_empty_results_with_zero_total(self) -> None:
         request = _request()

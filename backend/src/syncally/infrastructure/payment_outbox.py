@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,11 @@ from syncally.infrastructure.models import OutboxEvent
 
 logger = logging.getLogger(__name__)
 _PAYMENT_EVENT_LEASE = timedelta(minutes=5)
+
+
+def _safe_error_location(error: BaseException) -> str:
+    frames = traceback.extract_tb(error.__traceback__)[-5:]
+    return " -> ".join(f"{frame.name}:{frame.lineno}" for frame in frames) or "unknown location"
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,9 +161,10 @@ def dispatch_one_payment_event(
         # Avoid logging database parameters or provider bodies that may contain
         # private commercial details. The persisted message is intentionally generic.
         logger.error(
-            "Payment outbox event %s failed unexpectedly (%s)",
+            "Payment outbox event %s failed unexpectedly (%s at %s)",
             event.id,
             type(error).__name__,
+            _safe_error_location(error),
         )
         _finish_event(
             session_factory,

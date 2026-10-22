@@ -13,6 +13,7 @@ interface AgreementReviewProps {
   dealId: string;
   buyerOrganizationId: string;
   sellerOrganizationId: string;
+  reloadToken?: number;
 }
 
 type AgreementState =
@@ -45,6 +46,7 @@ export default function AgreementReview({
   dealId,
   buyerOrganizationId,
   sellerOrganizationId,
+  reloadToken = 0,
 }: AgreementReviewProps) {
   const [state, setState] = useState<AgreementState>({ status: "loading" });
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
@@ -83,7 +85,7 @@ export default function AgreementReview({
     return () => {
       cancelled = true;
     };
-  }, [dealId, buyerOrganizationId, sellerOrganizationId, reloadCount]);
+  }, [dealId, buyerOrganizationId, sellerOrganizationId, reloadCount, reloadToken]);
 
   async function decide(decision: "approve" | "reject") {
     if (state.status !== "ready") return;

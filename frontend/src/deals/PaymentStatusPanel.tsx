@@ -1,12 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { ApiError, listPaymentStatuses } from "../api/client";
+import {
+  ApiError,
+  authorizeDealPayment,
+  getCurrentAgreement,
+  listOrganizations,
+  listPaymentStatuses,
+} from "../api/client";
 import type { PaymentStatus } from "../api/types";
 
 type PaymentState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; payments: PaymentStatus[] };
+  | {
+      status: "ready";
+      payments: PaymentStatus[];
+      agreementCommitted: boolean;
+      sellerMember: boolean;
+    };
 
 function describeStatus(status: string): { label: string; detail: string } {
   switch (status) {
@@ -46,17 +57,36 @@ function displayAmount(amount: string, currency: string): string {
 
 interface PaymentStatusPanelProps {
   dealId: string;
+  sellerOrganizationId: string;
 }
 
-export default function PaymentStatusPanel({ dealId }: PaymentStatusPanelProps) {
+export default function PaymentStatusPanel({ dealId, sellerOrganizationId }: PaymentStatusPanelProps) {
   const [state, setState] = useState<PaymentState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
+  const [authorizing, setAuthorizing] = useState(false);
+  const [authorizationError, setAuthorizationError] = useState("");
+  const [authorizationNotice, setAuthorizationNotice] = useState("");
+  const idempotencyKey = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void listPaymentStatuses(dealId).then(
-      (payments) => {
-        if (!cancelled) setState({ status: "ready", payments });
+    void Promise.all([
+      listPaymentStatuses(dealId),
+      getCurrentAgreement(dealId).catch((caught: unknown) => {
+        if (caught instanceof ApiError && caught.status === 404) return null;
+        throw caught;
+      }),
+      listOrganizations(),
+    ]).then(
+      ([payments, agreement, organizations]) => {
+        if (!cancelled) {
+          setState({
+            status: "ready",
+            payments,
+            agreementCommitted: agreement?.status === "COMMITTED",
+            sellerMember: organizations.some((organization) => organization.id === sellerOrganizationId),
+          });
+        }
       },
       (caught: unknown) => {
         if (cancelled) return;
@@ -65,18 +95,41 @@ export default function PaymentStatusPanel({ dealId }: PaymentStatusPanelProps) 
           message:
             caught instanceof ApiError
               ? caught.message
-              : "Unable to load payment status. Please try again.",
+              : "Unable to load payment status and seller access. Please try again.",
         });
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [dealId, reloadCount]);
+  }, [dealId, reloadCount, sellerOrganizationId]);
 
   function retry() {
+    setAuthorizationError("");
+    setAuthorizationNotice("");
     setState({ status: "loading" });
     setReloadCount((count) => count + 1);
+  }
+
+  async function authorizePayment() {
+    if (state.status !== "ready" || !state.agreementCommitted || !state.sellerMember) return;
+    setAuthorizing(true);
+    setAuthorizationError("");
+    setAuthorizationNotice("");
+    idempotencyKey.current ??= crypto.randomUUID();
+    try {
+      await authorizeDealPayment(dealId, idempotencyKey.current);
+      idempotencyKey.current = null;
+      setAuthorizationNotice("The payment request is queued for the backend worker.");
+      setState({ status: "loading" });
+      setReloadCount((count) => count + 1);
+    } catch (caught) {
+      setAuthorizationError(
+        caught instanceof ApiError ? caught.message : "Unable to queue the payment request.",
+      );
+    } finally {
+      setAuthorizing(false);
+    }
   }
 
   return (
@@ -101,11 +154,24 @@ export default function PaymentStatusPanel({ dealId }: PaymentStatusPanelProps) 
         </div>
       ) : null}
       {state.status === "ready" && state.payments.length === 0 ? (
-        <p className="payment-status__message" role="status">
-          No payment request is available yet. The backend will show one after it creates a request
-          for a committed agreement. A browser return does not change this status.
-        </p>
+        <>
+          {state.agreementCommitted && state.sellerMember ? (
+            <div className="payment-status__message">
+              <p>The agreement is committed. The seller can authorize its payment milestone.</p>
+              <button type="button" className="button" disabled={authorizing} onClick={() => void authorizePayment()}>
+                {authorizing ? "Queuing payment request…" : "Create PayPal invoice request"}
+              </button>
+            </div>
+          ) : (
+            <p className="payment-status__message" role="status">
+              No payment request is available yet. A seller can authorize one after both parties
+              commit the agreement. A browser return does not change this status.
+            </p>
+          )}
+        </>
       ) : null}
+      {authorizationNotice ? <p className="payment-status__message" role="status">{authorizationNotice}</p> : null}
+      {authorizationError ? <p className="payment-status__message" role="alert">{authorizationError}</p> : null}
       {state.status === "ready" && state.payments.length > 0 ? (
         <div className="payment-status__list">
           {state.payments.map((payment) => {

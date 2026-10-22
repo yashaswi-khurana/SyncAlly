@@ -75,6 +75,12 @@ export interface PaymentStatus {
   last_reconciled_at: string | null;
 }
 
+export interface PaymentAuthorization {
+  id: string;
+  status: string;
+  already_existed: boolean;
+}
+
 export interface CommercialDocumentDraft {
   agreement_version_id: string;
   agreement_version_number: number;

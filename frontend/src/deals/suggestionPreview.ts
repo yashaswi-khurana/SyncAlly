@@ -10,6 +10,7 @@ export interface FactSuggestionDraft {
 }
 
 export interface ProposalSuggestionDraft {
+  schemaVersion: number;
   description: string;
   quantity: string;
   unit: string;
@@ -32,6 +33,7 @@ export function toFactSuggestionDraft(fact: DealFact): FactSuggestionDraft {
 
 export function toProposalDraft(proposal: ProposalSuggestion): ProposalSuggestionDraft {
   return {
+    schemaVersion: proposal.schema_version,
     description: proposal.description,
     quantity: proposal.quantity,
     unit: proposal.unit,

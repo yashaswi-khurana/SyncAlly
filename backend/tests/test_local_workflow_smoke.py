@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -132,9 +133,8 @@ class LocalWorkflowSmokeTests(unittest.IsolatedAsyncioTestCase):
             expected_version=1,
             expected_terms_hash=self.terms_hash,
         )
-        with Session(self.scoped_engine) as db:
-            committed = commit_agreement_in_transaction(db, command)
-        self.assertEqual(committed.status.value, "COMMITTED")
+        concurrent_results = await asyncio.to_thread(self._commit_concurrently, command)
+        self.assertEqual(concurrent_results, ["COMMITTED", "COMMITTED"])
         self.assertEqual(await self._dispatch_outbox(), 2)
 
         worker, executor = await self._start_worker()
@@ -250,6 +250,20 @@ class LocalWorkflowSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.version_id = version.id
             db.get(Deal, self.deal_id).current_agreement_version_id = version.id
             db.commit()
+
+    def _commit_concurrently(self, command: CommitAgreementCommand) -> list[str]:
+        start_gate = threading.Barrier(2)
+
+        def commit_once() -> str:
+            with Session(self.scoped_engine) as db:
+                # Both sessions contend for the same pending version. PostgreSQL's row lock
+                # and compare-and-swap must serialize the commit without duplicating effects.
+                start_gate.wait(timeout=10)
+                return commit_agreement_in_transaction(db, command).status.value
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(commit_once) for _ in range(2)]
+            return [future.result(timeout=20) for future in futures]
 
     async def _start_worker(self) -> tuple[Worker, ThreadPoolExecutor]:
         executor = ThreadPoolExecutor(max_workers=2)

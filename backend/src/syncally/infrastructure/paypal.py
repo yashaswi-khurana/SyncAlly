@@ -10,19 +10,20 @@ import time
 from collections.abc import Callable
 from decimal import Decimal
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from syncally.application.payment_processing import (
     PaymentInvoiceLookup,
+    PaymentInvoiceNotice,
     PaymentInvoiceProvider,
     PaymentInvoiceRequest,
     PaymentNeedsAction,
     PaymentOutcomeUnknown,
     PaymentRetryableError,
 )
-from syncally.domain.shared.money import canonical_decimal
+from syncally.domain.shared.money import Money, canonical_decimal
 
 PAYPAL_SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com"
 _PAYPAL_TIMEOUT_SECONDS = 15.0
@@ -48,13 +49,21 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
         self._token_lock = threading.Lock()
 
     def find_invoice(self, lookup: PaymentInvoiceLookup) -> str | None:
-        query = "?page=1&page_size=2"
+        query = "?page=1&page_size=2&total_required=true"
         response = self._api_request(
             "POST",
             f"/v2/invoicing/search-invoices{query}",
             {"invoice_number": lookup.invoice_number},
         )
         items = response.get("items")
+        total_items = response.get("total_items")
+        if (
+            items is None
+            and isinstance(total_items, int)
+            and not isinstance(total_items, bool)
+            and total_items == 0
+        ):
+            items = []
         if not isinstance(items, list):
             raise PaymentNeedsAction(
                 "PAYPAL_SEARCH_RESPONSE_INVALID",
@@ -124,6 +133,81 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
             {"send_to_invoicer": False, "send_to_recipient": True},
             request_id=_provider_request_id(payment_intent_id, "send"),
             may_have_effect=True,
+        )
+
+    def get_invoice_notice(self, provider_invoice_id: str) -> PaymentInvoiceNotice:
+        response = self._api_request(
+            "GET",
+            f"/v2/invoicing/invoices/{quote(provider_invoice_id, safe='')}",
+            None,
+        )
+        detail = response.get("detail")
+        if not isinstance(detail, dict):
+            detail = {}
+        metadata = detail.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        recipients = response.get("primary_recipients")
+        if not isinstance(recipients, list):
+            recipients = []
+        first_recipient = (
+            recipients[0]
+            if len(recipients) == 1 and isinstance(recipients[0], dict)
+            else {}
+        )
+        billing_info = first_recipient.get("billing_info")
+        if not isinstance(billing_info, dict):
+            billing_info = {}
+        recipient_email = billing_info.get("email_address")
+        amount = response.get("amount")
+        if not isinstance(amount, dict):
+            amount = {}
+        invoice_number = detail.get("invoice_number")
+        currency = amount.get("currency_code")
+        value = amount.get("value")
+        recipient_view_url = metadata.get("recipient_view_url")
+
+        try:
+            parsed_url = urlsplit(recipient_view_url)
+            host = parsed_url.hostname or ""
+            is_paypal_url = (
+                parsed_url.scheme == "https"
+                and (host == "paypal.com" or host.endswith(".paypal.com"))
+                and parsed_url.username is None
+                and parsed_url.password is None
+                and parsed_url.port in (None, 443)
+                and parsed_url.path.startswith("/")
+            )
+            parsed_amount = Decimal(str(value))
+        except (AttributeError, ArithmeticError, TypeError, ValueError):
+            is_paypal_url = False
+            parsed_amount = Decimal("0")
+
+        if (
+            not isinstance(recipient_email, str)
+            or recipient_email.count("@") != 1
+            or any(character.isspace() for character in recipient_email)
+            or not isinstance(invoice_number, str)
+            or re.fullmatch(r"[A-Za-z0-9._-]{1,25}", invoice_number) is None
+            or not isinstance(currency, str)
+            or len(currency) != 3
+            or not currency.isascii()
+            or not currency.isalpha()
+            or not parsed_amount.is_finite()
+            or parsed_amount <= 0
+            or not isinstance(recipient_view_url, str)
+            or not is_paypal_url
+        ):
+            raise PaymentNeedsAction(
+                "PAYPAL_INVOICE_NOTICE_INVALID",
+                "PayPal did not return complete, safe invoice details for the email notification.",
+            )
+
+        return PaymentInvoiceNotice(
+            invoice_number=invoice_number,
+            amount=Money(parsed_amount, currency),
+            recipient_email=recipient_email,
+            recipient_view_url=recipient_view_url,
         )
 
     def _invoice_payload(self, request: PaymentInvoiceRequest) -> dict:
@@ -212,17 +296,19 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
         self,
         method: str,
         path: str,
-        payload: dict,
+        payload: dict | None,
         *,
         request_id: str | None = None,
         may_have_effect: bool = False,
     ) -> dict:
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         headers = {
             "Accept": "application/json",
-            "Content-Type": "application/json",
             "Authorization": f"Bearer {self._access_token()}",
         }
+        body = None
+        if payload is not None:
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            headers["Content-Type"] = "application/json"
         if request_id:
             headers["PayPal-Request-Id"] = request_id
         request = Request(

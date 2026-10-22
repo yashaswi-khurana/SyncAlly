@@ -132,3 +132,17 @@ class PayPalSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+
+class GmailSettings(BaseSettings):
+    """Optional Gmail SMTP credentials loaded only by the payment worker."""
+
+    gmail_smtp_username: str = ""
+    gmail_app_password: SecretStr = SecretStr("")
+    gmail_from_email: str = ""
+
+    model_config = SettingsConfigDict(
+        env_file=_BACKEND_ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )

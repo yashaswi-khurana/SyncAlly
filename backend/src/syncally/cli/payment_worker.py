@@ -12,8 +12,9 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
-from syncally.config import PayPalSettings, settings
+from syncally.config import GmailSettings, PayPalSettings, settings
 from syncally.infrastructure.database import SessionLocal
+from syncally.infrastructure.gmail import GmailSMTPInvoiceNotifier
 from syncally.infrastructure.payment_outbox import dispatch_pending_payment_events
 from syncally.infrastructure.paypal import PayPalSandboxInvoiceProvider
 from syncally.infrastructure.repositories.payment_processing import (
@@ -29,6 +30,7 @@ def run_forever(
     batch_size: int,
     session_factory: Callable[[], Session] = SessionLocal,
     provider: PayPalSandboxInvoiceProvider | None = None,
+    notifier: GmailSMTPInvoiceNotifier | None = None,
 ) -> None:
     if provider is None:
         paypal_settings = PayPalSettings()
@@ -36,8 +38,27 @@ def run_forever(
             paypal_settings.paypal_client_id,
             paypal_settings.paypal_client_secret.get_secret_value(),
         )
+    if notifier is None:
+        gmail_settings = GmailSettings()
+        gmail_username = gmail_settings.gmail_smtp_username.strip()
+        gmail_password = gmail_settings.gmail_app_password.get_secret_value()
+        gmail_from_email = gmail_settings.gmail_from_email.strip()
+        gmail_has_configuration = bool(gmail_username or gmail_password or gmail_from_email)
+        if gmail_has_configuration:
+            if not gmail_username or not gmail_password:
+                raise ValueError(
+                    "GMAIL_SMTP_USERNAME and GMAIL_APP_PASSWORD must both be configured."
+                )
+            notifier = GmailSMTPInvoiceNotifier(
+                gmail_username,
+                gmail_password,
+                gmail_from_email or None,
+            )
     repository = SqlAlchemyPaymentProcessingRepository(session_factory)
-    logger.info("Starting PayPal Sandbox payment worker")
+    logger.info(
+        "Starting PayPal Sandbox payment worker (Gmail invoice email %s)",
+        "enabled" if notifier is not None else "disabled",
+    )
     while True:
         try:
             dispatch_pending_payment_events(
@@ -45,6 +66,7 @@ def run_forever(
                 repository,
                 provider,
                 batch_size=batch_size,
+                notifier=notifier,
             )
         except Exception as error:
             logger.error(

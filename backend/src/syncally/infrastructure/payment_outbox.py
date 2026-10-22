@@ -13,6 +13,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from syncally.application.payment_processing import (
+    PaymentInvoiceNotifier,
     PaymentInvoiceProvider,
     PaymentNeedsAction,
     PaymentProcessingRepository,
@@ -20,6 +21,7 @@ from syncally.application.payment_processing import (
     process_payment_intent,
 )
 from syncally.application.payments import PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE
+from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.infrastructure.models import OutboxEvent
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,7 @@ def dispatch_one_payment_event(
     repository: PaymentProcessingRepository,
     provider: PaymentInvoiceProvider,
     *,
+    notifier: PaymentInvoiceNotifier | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Claim one event, call PayPal outside database transactions, and persist its result."""
@@ -104,6 +107,31 @@ def dispatch_one_payment_event(
                 "The payment outbox payload contains an invalid intent ID.",
             ) from error
         process_payment_intent(payment_intent_id, repository, provider)
+        if notifier is not None:
+            work = repository.load(payment_intent_id)
+            if work is None:
+                raise PaymentNeedsAction(
+                    "PAYMENT_INTENT_NOT_FOUND",
+                    "The payment intent disappeared before its invoice email could be sent.",
+                )
+            if work.status in {
+                PaymentIntentStatus.SENT,
+                PaymentIntentStatus.PENDING,
+                PaymentIntentStatus.PARTIALLY_PAID,
+                PaymentIntentStatus.PAID,
+            }:
+                if not work.provider_invoice_id:
+                    raise PaymentNeedsAction(
+                        "PAYMENT_PROVIDER_REFERENCE_MISSING",
+                        "The PayPal invoice ID is missing; inspect the payment before emailing.",
+                    )
+                notice = provider.get_invoice_notice(work.provider_invoice_id)
+                if notice.invoice_number != work.invoice_number or notice.amount != work.amount:
+                    raise PaymentNeedsAction(
+                        "PAYPAL_INVOICE_NOTICE_MISMATCH",
+                        "PayPal invoice details do not match the authorized payment; inspect manually.",
+                    )
+                notifier.send_invoice_notice(notice)
     except PaymentRetryableError as error:
         _finish_event(
             session_factory,
@@ -157,10 +185,16 @@ def dispatch_pending_payment_events(
     provider: PaymentInvoiceProvider,
     *,
     batch_size: int,
+    notifier: PaymentInvoiceNotifier | None = None,
 ) -> int:
     processed = 0
     for _ in range(batch_size):
-        if not dispatch_one_payment_event(session_factory, repository, provider):
+        if not dispatch_one_payment_event(
+            session_factory,
+            repository,
+            provider,
+            notifier=notifier,
+        ):
             break
         processed += 1
     return processed

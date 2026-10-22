@@ -483,8 +483,22 @@ class PayPalSandboxAdapterTests(unittest.TestCase):
         self.assertEqual(result, "paypal-invoice-1")
         self.assertEqual(
             sent_requests[1].full_url,
-            "https://api-m.sandbox.paypal.com/v2/invoicing/search-invoices?page=1&page_size=2",
+            "https://api-m.sandbox.paypal.com/v2/invoicing/search-invoices?page=1&page_size=2&total_required=true",
         )
+
+    def test_invoice_search_accepts_empty_results_with_zero_total(self) -> None:
+        request = _request()
+        responses = [
+            (200, b'{"access_token":"test-token","expires_in":3600}'),
+            (200, b'{"total_items":0,"total_pages":0}'),
+        ]
+        provider = PayPalSandboxInvoiceProvider(
+            "sandbox-client",
+            "sandbox-secret",
+            send_request=lambda http_request: responses.pop(0),
+        )
+
+        self.assertIsNone(provider.find_invoice(request.lookup))
 
 
 if __name__ == "__main__":

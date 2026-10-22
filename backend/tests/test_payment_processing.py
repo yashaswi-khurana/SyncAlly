@@ -86,6 +86,7 @@ class FakeProcessingRepository:
         self.work = work
         self.calls: list[str] = []
         self.begin_create_conflict = False
+        self.reconciliation_failures = []
 
     def load(self, payment_intent_id):
         self.calls.append("load")
@@ -153,6 +154,19 @@ class FakeProcessingRepository:
             failure_code=code,
             failure_detail=detail,
         )
+
+    def record_reconciliation_failure(
+        self,
+        payment_intent_id,
+        *,
+        outbox_event_id,
+        webhook_event_id,
+        lease_until,
+        error_code,
+        error_detail,
+    ):
+        self.calls.append("record_reconciliation_failure")
+        self.reconciliation_failures.append((error_code, error_detail))
 
 
 class FakeInvoiceProvider:
@@ -231,6 +245,10 @@ class PaymentProcessingTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "PAYPAL_RECONCILIATION_MISMATCH")
         self.assertEqual(repository.work.status, PaymentIntentStatus.SENT)
+        self.assertEqual(repository.calls, ["load", "record_reconciliation_failure"])
+        self.assertEqual(
+            repository.reconciliation_failures[0][0], "PAYPAL_RECONCILIATION_MISMATCH"
+        )
 
     def test_authorized_intent_creates_and_sends_invoice(self) -> None:
         request = _request()

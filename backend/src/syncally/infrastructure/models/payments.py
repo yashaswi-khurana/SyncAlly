@@ -52,6 +52,7 @@ class PaymentMilestone(TimestampMixin, Base):
 # Kept as a literal here (not imported from the domain layer) to match this
 # file's existing CheckConstraint style of inlined status literals.
 _ACTIVE_PAYMENT_INTENT_WHERE = text("status NOT IN ('PAID', 'FAILED', 'CANCELLED')")
+_PAYMENT_INTENT_HAS_PROVIDER_INVOICE = text("provider_invoice_id IS NOT NULL")
 
 
 class PaymentIntent(TimestampMixin, Base):
@@ -66,6 +67,15 @@ class PaymentIntent(TimestampMixin, Base):
             unique=True,
             postgresql_where=_ACTIVE_PAYMENT_INTENT_WHERE,
             sqlite_where=_ACTIVE_PAYMENT_INTENT_WHERE,
+        ),
+        # A PayPal invoice can belong to only one local payment intent.
+        Index(
+            "ix_payment_intents_provider_invoice_unique",
+            "provider",
+            "provider_invoice_id",
+            unique=True,
+            postgresql_where=_PAYMENT_INTENT_HAS_PROVIDER_INVOICE,
+            sqlite_where=_PAYMENT_INTENT_HAS_PROVIDER_INVOICE,
         ),
     )
 

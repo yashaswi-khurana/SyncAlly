@@ -40,7 +40,14 @@ def record_paypal_webhook_event(db: Session, event: Mapping[str, Any]) -> bool:
         provider="PAYPAL",
         provider_event_id=event_id,
         event_type=event_type,
-        raw_payload=dict(event),
+        # The signature is already verified and reconciliation reads PayPal's
+        # current state. Keep only identifiers; the provider event can contain
+        # payer email and transaction details that are not needed here.
+        raw_payload={
+            "id": event_id,
+            "event_type": event_type,
+            "resource": {"id": invoice_id},
+        },
         payment_intent_id=intent.id if intent is not None else None,
         processed=intent is None,
     )

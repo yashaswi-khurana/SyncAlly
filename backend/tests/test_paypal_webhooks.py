@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import unittest
 from decimal import Decimal
+from unittest.mock import patch
 from uuid import uuid4
 
 import httpx
@@ -15,7 +17,6 @@ from sqlalchemy.pool import StaticPool
 
 from syncally.api.main import app
 from syncally.api.paypal_webhooks import get_paypal_webhook_configuration
-from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import Base, OutboxEvent, PaymentIntent, WebhookEvent
 
 
@@ -23,8 +24,10 @@ class FakeWebhookVerifier:
     def __init__(self, verified: bool) -> None:
         self.verified = verified
         self.calls = []
+        self.thread_ids = []
 
     def verify_webhook_signature(self, headers, event, webhook_id):
+        self.thread_ids.append(threading.get_ident())
         self.calls.append((headers, event, webhook_id))
         return self.verified
 
@@ -39,7 +42,12 @@ class PayPalWebhookRouteTests(unittest.TestCase):
         Base.metadata.create_all(self.engine)
         self.session_factory = lambda: Session(self.engine, expire_on_commit=False)
         self.verifier = FakeWebhookVerifier(True)
-        app.dependency_overrides[get_db] = self._get_db
+        self.loop_thread_ids = []
+        self.worker_thread_ids = []
+        self.session_local_patch = patch(
+            "syncally.api.paypal_webhooks.SessionLocal", self._worker_session
+        )
+        self.session_local_patch.start()
         app.dependency_overrides[get_paypal_webhook_configuration] = lambda: (
             self.verifier,
             "sandbox-webhook-id",
@@ -47,15 +55,17 @@ class PayPalWebhookRouteTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         app.dependency_overrides.clear()
+        self.session_local_patch.stop()
         Base.metadata.drop_all(self.engine)
         self.engine.dispose()
 
-    def _get_db(self):
-        with self.session_factory() as db:
-            yield db
+    def _worker_session(self) -> Session:
+        self.worker_thread_ids.append(threading.get_ident())
+        return self.session_factory()
 
     def _post(self, payload: dict) -> httpx.Response:
         async def send() -> httpx.Response:
+            self.loop_thread_ids.append(threading.get_ident())
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app),
                 base_url="http://test",
@@ -102,7 +112,11 @@ class PayPalWebhookRouteTests(unittest.TestCase):
         return {
             "id": event_id,
             "event_type": "INVOICING.INVOICE.PAID",
-            "resource": {"id": invoice_id, "status": "PAID"},
+            "resource": {
+                "id": invoice_id,
+                "status": "PAID",
+                "payer_email": "customer@example.com",
+            },
         }
 
     def test_invalid_signature_is_rejected_without_persisting_event(self) -> None:
@@ -133,10 +147,23 @@ class PayPalWebhookRouteTests(unittest.TestCase):
             queued = db.scalar(select(OutboxEvent))
             self.assertEqual(webhook.provider_event_id, "event-1")
             self.assertEqual(webhook.payment_intent_id, intent.id)
+            self.assertEqual(
+                webhook.raw_payload,
+                {
+                    "id": "event-1",
+                    "event_type": "INVOICING.INVOICE.PAID",
+                    "resource": {"id": "invoice-1"},
+                },
+            )
             self.assertEqual(queued.payload["payment_intent_id"], str(intent.id))
             self.assertEqual(queued.payload["webhook_event_id"], str(webhook.id))
             self.assertEqual(len(db.scalars(select(WebhookEvent)).all()), 1)
             self.assertEqual(len(db.scalars(select(OutboxEvent)).all()), 1)
+        self.assertTrue(self.loop_thread_ids)
+        self.assertTrue(self.worker_thread_ids)
+        self.assertTrue(self.verifier.thread_ids)
+        self.assertNotIn(self.loop_thread_ids[0], self.worker_thread_ids)
+        self.assertNotIn(self.loop_thread_ids[0], self.verifier.thread_ids)
 
     def test_verified_unmatched_invoice_is_recorded_without_payment_work(self) -> None:
         response = self._post(self._event("event-2", "other-invoice"))

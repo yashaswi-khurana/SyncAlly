@@ -20,6 +20,7 @@ from syncally.application.payment_processing import (
     PaymentInvoiceRequest,
     PaymentNeedsAction,
     PaymentProcessingRepository,
+    PaymentRetryableError,
     PaymentWorkItem,
     payment_invoice_number,
 )
@@ -293,9 +294,9 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 )
             )
             if result.rowcount != 1:
-                raise PaymentNeedsAction(
+                raise PaymentRetryableError(
                     "PAYMENT_STATE_CHANGED",
-                    "The payment state changed concurrently; reconcile the intent again.",
+                    "The payment state changed concurrently; fetch PayPal's current state and retry.",
                 )
 
             db.add(
@@ -325,6 +326,65 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
             outbox.delivered_at = now
             outbox.next_attempt_at = None
             outbox.error_detail = None
+            db.commit()
+
+    def record_reconciliation_failure(
+        self,
+        payment_intent_id: UUID,
+        *,
+        outbox_event_id: UUID,
+        webhook_event_id: UUID,
+        lease_until: datetime,
+        error_code: str,
+        error_detail: str,
+    ) -> None:
+        """Atomically retain a failed check without changing the last trusted state."""
+        now = datetime.now(UTC)
+        with self._session_factory() as db:
+            outbox_statement = select(OutboxEvent).where(
+                OutboxEvent.id == outbox_event_id,
+                OutboxEvent.status == "PROCESSING",
+                OutboxEvent.next_attempt_at == lease_until,
+            )
+            intent_statement = select(PaymentIntent).where(
+                PaymentIntent.id == payment_intent_id
+            )
+            webhook_statement = select(WebhookEvent).where(
+                WebhookEvent.id == webhook_event_id,
+                WebhookEvent.payment_intent_id == payment_intent_id,
+            )
+            if db.bind is not None and db.bind.dialect.name == "postgresql":
+                outbox_statement = outbox_statement.with_for_update()
+                intent_statement = intent_statement.with_for_update()
+                webhook_statement = webhook_statement.with_for_update()
+            outbox = db.scalar(outbox_statement)
+            if outbox is None:
+                return
+
+            intent = db.scalar(intent_statement)
+            webhook = db.scalar(webhook_statement)
+            db.add(
+                AuditEvent(
+                    aggregate_type="payment_intent",
+                    aggregate_id=payment_intent_id,
+                    event_type="PAYMENT_RECONCILIATION_NEEDS_ACTION",
+                    actor_type="SYSTEM",
+                    actor_id="payment-worker",
+                    occurred_at=now,
+                    correlation_id=(
+                        webhook.provider_event_id if webhook is not None else str(webhook_event_id)
+                    ),
+                    payload={
+                        "payment_status": intent.status if intent is not None else None,
+                        "error_code": error_code,
+                    },
+                )
+            )
+            if webhook is not None:
+                webhook.processed = True
+            outbox.status = "FAILED"
+            outbox.next_attempt_at = None
+            outbox.error_detail = error_detail
             db.commit()
 
     def _invoice_request(

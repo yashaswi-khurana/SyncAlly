@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from syncally.domain.payments.intent import PaymentIntentStatus
+from syncally.domain.payments.intent import PaymentIntentStatus, VerifiedProviderPaymentState
 from syncally.domain.shared.money import Money, canonical_decimal
 
 PAYPAL_REQUEST_ID_RETRY_WINDOW = timedelta(days=44)
@@ -140,6 +140,17 @@ class PaymentInvoiceNotice:
 
 
 @dataclass(frozen=True, slots=True)
+class PaymentInvoiceReconciliation:
+    """Current invoice identity and payment state fetched from PayPal."""
+
+    provider_invoice_id: str
+    invoice_number: str
+    reference: str
+    amount: Money
+    payment_state: VerifiedProviderPaymentState
+
+
+@dataclass(frozen=True, slots=True)
 class PaymentWorkItem:
     payment_intent_id: UUID
     status: PaymentIntentStatus
@@ -195,6 +206,29 @@ class PaymentProcessingRepository(Protocol):
     def mark_manual_action(self, payment_intent_id: UUID, code: str, detail: str) -> None:
         """Persist a safe manual-action message while preserving unknown outcomes."""
 
+    def record_reconciliation(
+        self,
+        payment_intent_id: UUID,
+        payment_state: VerifiedProviderPaymentState,
+        *,
+        outbox_event_id: UUID,
+        webhook_event_id: UUID,
+        lease_until: datetime,
+    ) -> None:
+        """Commit payment state, audit, webhook completion, and outbox completion together."""
+
+    def record_reconciliation_failure(
+        self,
+        payment_intent_id: UUID,
+        *,
+        outbox_event_id: UUID,
+        webhook_event_id: UUID,
+        lease_until: datetime,
+        error_code: str,
+        error_detail: str,
+    ) -> None:
+        """Atomically record a manual-action outcome without changing payment state."""
+
 
 class PaymentInvoiceProvider(Protocol):
     def find_invoice(self, lookup: PaymentInvoiceLookup) -> str | None:
@@ -202,6 +236,11 @@ class PaymentInvoiceProvider(Protocol):
 
     def get_invoice_status(self, provider_invoice_id: str) -> str:
         """Return the current PayPal status for a previously found invoice."""
+
+    def get_invoice_reconciliation(
+        self, provider_invoice_id: str
+    ) -> PaymentInvoiceReconciliation:
+        """Fetch and normalize the current invoice and paid amount from PayPal."""
 
     def create_invoice(self, request: PaymentInvoiceRequest) -> str:
         """Create a draft invoice using a stable provider request ID."""
@@ -405,6 +444,62 @@ def process_payment_intent(
         detail = f"Payment intent state {work.status.value} is not supported by the invoice worker."
         repository.mark_manual_action(payment_intent_id, "PAYMENT_STATE_UNSUPPORTED", detail)
         raise PaymentNeedsAction("PAYMENT_STATE_UNSUPPORTED", detail)
+
+
+def reconcile_payment_intent(
+    payment_intent_id: UUID,
+    *,
+    outbox_event_id: UUID,
+    webhook_event_id: UUID,
+    lease_until: datetime,
+    repository: PaymentProcessingRepository,
+    provider: PaymentInvoiceProvider,
+) -> None:
+    """Use a verified webhook only to trigger a fresh, authoritative PayPal read."""
+    try:
+        work = repository.load(payment_intent_id)
+        if work is None:
+            raise PaymentNeedsAction(
+                "PAYMENT_INTENT_NOT_FOUND",
+                "The payment intent no longer exists; inspect the webhook reconciliation event.",
+            )
+        if not work.provider_invoice_id:
+            raise PaymentNeedsAction(
+                "PAYMENT_PROVIDER_REFERENCE_MISSING",
+                "The PayPal invoice ID is missing; inspect the payment intent before reconciliation.",
+            )
+
+        result = provider.get_invoice_reconciliation(work.provider_invoice_id)
+        if (
+            result.provider_invoice_id != work.provider_invoice_id
+            or result.invoice_number != work.invoice_number
+            or result.reference != work.reference
+            or result.amount != work.amount
+            or result.payment_state.provider_reference != work.provider_invoice_id
+            or result.payment_state.paid_amount.currency != work.amount.currency
+        ):
+            raise PaymentNeedsAction(
+                "PAYPAL_RECONCILIATION_MISMATCH",
+                "PayPal invoice identity, amount, or currency differs from the authorized payment; inspect it manually.",
+            )
+
+        repository.record_reconciliation(
+            payment_intent_id,
+            result.payment_state,
+            outbox_event_id=outbox_event_id,
+            webhook_event_id=webhook_event_id,
+            lease_until=lease_until,
+        )
+    except PaymentNeedsAction as error:
+        repository.record_reconciliation_failure(
+            payment_intent_id,
+            outbox_event_id=outbox_event_id,
+            webhook_event_id=webhook_event_id,
+            lease_until=lease_until,
+            error_code=error.code,
+            error_detail=error.detail,
+        )
+        raise
 
 
 def _request_id_retry_window_expired(started_at: datetime, now: datetime | None) -> bool:

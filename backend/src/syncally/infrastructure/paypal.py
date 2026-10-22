@@ -7,7 +7,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
@@ -18,11 +18,17 @@ from syncally.application.payment_processing import (
     PaymentInvoiceLookup,
     PaymentInvoiceNotice,
     PaymentInvoiceProvider,
+    PaymentInvoiceReconciliation,
     PaymentInvoiceRequest,
     PaymentNeedsAction,
     PaymentOutcomeUnknown,
     PaymentRetryableError,
 )
+from syncally.domain.payments.intent import (
+    VerifiedProviderPaymentState,
+    VerifiedProviderPaymentStatus,
+)
+from syncally.domain.shared.errors import DomainError
 from syncally.domain.shared.money import Money, canonical_decimal
 
 PAYPAL_SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com"
@@ -157,6 +163,128 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
                 "PayPal returned no usable invoice status; reconcile the invoice manually.",
             )
         return status
+
+    def verify_webhook_signature(
+        self,
+        headers: Mapping[str, str],
+        event: Mapping[str, object],
+        webhook_id: str,
+    ) -> bool:
+        """Ask PayPal to verify the signed transmission for this registered webhook."""
+        field_names = {
+            "paypal-auth-algo": "auth_algo",
+            "paypal-cert-url": "cert_url",
+            "paypal-transmission-id": "transmission_id",
+            "paypal-transmission-sig": "transmission_sig",
+            "paypal-transmission-time": "transmission_time",
+        }
+        payload = {
+            name: headers.get(header_name, "")
+            for header_name, name in field_names.items()
+        }
+        payload["webhook_id"] = webhook_id
+        payload["webhook_event"] = dict(event)
+        result = self._api_request(
+            "POST", "/v1/notifications/verify-webhook-signature", payload
+        )
+        verification_status = result.get("verification_status")
+        if verification_status not in {"SUCCESS", "FAILURE"}:
+            raise PaymentNeedsAction(
+                "PAYPAL_WEBHOOK_VERIFICATION_INVALID",
+                "PayPal returned no usable webhook signature verification result.",
+            )
+        return verification_status == "SUCCESS"
+
+    def get_invoice_reconciliation(
+        self, provider_invoice_id: str
+    ) -> PaymentInvoiceReconciliation:
+        """Fetch the invoice's present status and aggregated paid amount."""
+        response = self._api_request(
+            "GET",
+            f"/v2/invoicing/invoices/{quote(provider_invoice_id, safe='')}",
+            None,
+        )
+        detail = response.get("detail")
+        amount = response.get("amount")
+        payments = response.get("payments")
+        paid_amount = payments.get("paid_amount") if isinstance(payments, dict) else None
+        if not isinstance(detail, dict) or not isinstance(amount, dict):
+            raise PaymentNeedsAction(
+                "PAYPAL_INVOICE_RESPONSE_INVALID",
+                "PayPal returned incomplete invoice details; reconcile the payment manually.",
+            )
+        invoice_id = response.get("id")
+        invoice_number = detail.get("invoice_number")
+        reference = detail.get("reference")
+        currency = amount.get("currency_code")
+        amount_value = amount.get("value")
+        invoice_status = response.get("status")
+        if (
+            not isinstance(invoice_id, str)
+            or not isinstance(invoice_number, str)
+            or not isinstance(reference, str)
+            or not isinstance(currency, str)
+            or not isinstance(amount_value, str)
+            or not isinstance(invoice_status, str)
+        ):
+            raise PaymentNeedsAction(
+                "PAYPAL_INVOICE_RESPONSE_INVALID",
+                "PayPal returned incomplete invoice identity or amount details; reconcile manually.",
+            )
+        try:
+            total_amount = Decimal(amount_value)
+            paid_currency = (
+                paid_amount.get("currency_code", currency)
+                if isinstance(paid_amount, dict)
+                else currency
+            )
+            paid_value = (
+                Decimal(str(paid_amount.get("value")))
+                if isinstance(paid_amount, dict)
+                else Decimal("0")
+            )
+            if not isinstance(paid_currency, str):
+                raise ValueError("PayPal returned an invalid payment currency")
+            if not total_amount.is_finite() or not paid_value.is_finite():
+                raise ValueError("PayPal returned a non-finite amount")
+            total = Money(total_amount, currency)
+            paid = Money(paid_value, paid_currency)
+        except (ArithmeticError, TypeError, ValueError, DomainError) as error:
+            raise PaymentNeedsAction(
+                "PAYPAL_INVOICE_AMOUNT_INVALID",
+                "PayPal returned invalid invoice payment amounts; reconcile manually.",
+            ) from error
+
+        if invoice_id != provider_invoice_id:
+            raise PaymentNeedsAction(
+                "PAYPAL_INVOICE_ID_MISMATCH",
+                "PayPal returned a different invoice than requested; reconcile manually.",
+            )
+
+        normalized_status = invoice_status.upper()
+        if normalized_status == "PAID" and paid.amount == total.amount:
+            payment_status = VerifiedProviderPaymentStatus.PAID
+        elif (
+            normalized_status in {"PAID", "PARTIALLY_PAID", "SENT", "SCHEDULED", "UNPAID", "PAYMENT_PENDING"}
+            and Decimal("0") < paid.amount < total.amount
+        ):
+            payment_status = VerifiedProviderPaymentStatus.PARTIALLY_PAID
+        elif normalized_status in {"SENT", "SCHEDULED", "UNPAID", "PAYMENT_PENDING"} and paid.amount == 0:
+            payment_status = VerifiedProviderPaymentStatus.PENDING
+        else:
+            payment_status = VerifiedProviderPaymentStatus.UNKNOWN
+
+        return PaymentInvoiceReconciliation(
+            provider_invoice_id=invoice_id,
+            invoice_number=invoice_number,
+            reference=reference,
+            amount=total,
+            payment_state=VerifiedProviderPaymentState(
+                status=payment_status,
+                paid_amount=paid,
+                provider_reference=invoice_id,
+            ),
+        )
 
     def get_invoice_notice(self, provider_invoice_id: str) -> PaymentInvoiceNotice:
         response = self._api_request(

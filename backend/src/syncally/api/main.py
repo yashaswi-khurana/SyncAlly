@@ -12,6 +12,7 @@ from syncally.api.auth import router as auth_router
 from syncally.api.conversations import router as conversations_router
 from syncally.api.deals import router as deals_router
 from syncally.api.organizations import router as organizations_router
+from syncally.api.paypal_webhooks import router as paypal_webhooks_router
 from syncally.infrastructure.database import get_db
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024
@@ -98,6 +99,7 @@ app.include_router(organizations_router)
 app.include_router(deals_router)
 app.include_router(conversations_router)
 app.include_router(agreements_router)
+app.include_router(paypal_webhooks_router)
 
 
 @app.get("/health", tags=["operations"])

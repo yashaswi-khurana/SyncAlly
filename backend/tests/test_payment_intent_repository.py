@@ -26,6 +26,7 @@ from syncally.application.payments import (
     UnauthorizedPaymentAuthorization,
 )
 from syncally.domain.agreements.agreement import ApprovalDecision
+from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.domain.shared.money import Money
@@ -45,6 +46,9 @@ from syncally.infrastructure.models import (
 from syncally.infrastructure.repositories.agreements import (
     SqlAlchemyAgreementRepository,
     commit_agreement_in_transaction,
+)
+from syncally.infrastructure.repositories.payment_processing import (
+    SqlAlchemyPaymentProcessingRepository,
 )
 from syncally.infrastructure.repositories.payments import (
     _is_idempotency_key_violation,
@@ -393,6 +397,82 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
             set(payload.keys()),
             {"payment_intent_id", "deal_id", "agreement_version_id", "payment_milestone_id"},
         )
+
+    def test_payment_worker_persists_each_provider_transition(self) -> None:
+        command = self._command(idempotency_key="intent-worker")
+        authorize_payment_intent_in_transaction(self.session, command)
+        with Session(self.engine) as db:
+            buyer_admin = db.scalar(
+                select(OrganizationMember).where(
+                    OrganizationMember.organization_id == self.buyer_org_id,
+                    OrganizationMember.user_id == self.buyer_user_id,
+                )
+            )
+            buyer_admin.role = "ADMIN"
+            db.commit()
+
+        repository = SqlAlchemyPaymentProcessingRepository(lambda: Session(self.engine))
+        work = repository.load(command.id)
+        self.assertIsNotNone(work)
+        self.assertEqual(work.status, PaymentIntentStatus.AUTHORIZED)
+        self.assertEqual(work.invoice_request.buyer_contact_email, "buyer@example.com")
+        request_hash = work.invoice_request.payload_hash
+
+        repository.begin_create(command.id, request_hash)
+        create_started_at = repository.load(command.id).provider_create_started_at
+        self.assertIsNotNone(create_started_at)
+        self.assertEqual(repository.load(command.id).status, PaymentIntentStatus.CREATE_PENDING)
+        repository.mark_create_unknown(command.id)
+        self.assertEqual(repository.load(command.id).status, PaymentIntentStatus.CREATE_UNKNOWN)
+        repository.reconcile_create_not_found(command.id)
+        self.assertEqual(repository.load(command.id).status, PaymentIntentStatus.AUTHORIZED)
+
+        repository.begin_create(command.id, request_hash)
+        self.assertEqual(repository.load(command.id).provider_create_started_at, create_started_at)
+        repository.record_provider_created(command.id, "paypal-invoice-1")
+        self.assertEqual(
+            repository.load(command.id).status,
+            PaymentIntentStatus.PROVIDER_CREATED,
+        )
+        repository.mark_sent(command.id)
+
+        with Session(self.engine) as db:
+            intent = db.get(PaymentIntent, command.id)
+            self.assertEqual(intent.status, PaymentIntentStatus.SENT.value)
+            self.assertEqual(intent.provider_invoice_id, "paypal-invoice-1")
+            self.assertEqual(intent.request_payload_hash, request_hash)
+            self.assertIsNotNone(intent.provider_create_started_at)
+            self.assertEqual(intent.version, 6)
+
+    def test_ambiguous_buyer_contact_is_not_guessed(self) -> None:
+        command = self._command(idempotency_key="intent-contact")
+        authorize_payment_intent_in_transaction(self.session, command)
+        with Session(self.engine) as db:
+            second_admin = User(email="buyer-admin-2@example.com", display_name="Second Admin")
+            db.add(second_admin)
+            db.flush()
+            db.add(
+                OrganizationMember(
+                    user_id=second_admin.id,
+                    organization_id=self.buyer_org_id,
+                    role="ADMIN",
+                    status="ACTIVE",
+                )
+            )
+            buyer_admin = db.scalar(
+                select(OrganizationMember).where(
+                    OrganizationMember.organization_id == self.buyer_org_id,
+                    OrganizationMember.user_id == self.buyer_user_id,
+                )
+            )
+            buyer_admin.role = "ADMIN"
+            db.commit()
+
+        repository = SqlAlchemyPaymentProcessingRepository(lambda: Session(self.engine))
+        work = repository.load(command.id)
+
+        self.assertIsNone(work.invoice_request)
+        self.assertEqual(work.request_error_code, "PAYMENT_BUYER_CONTACT_AMBIGUOUS")
 
 
 if __name__ == "__main__":

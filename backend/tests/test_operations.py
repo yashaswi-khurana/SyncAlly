@@ -91,6 +91,65 @@ class SafeOperationsTests(unittest.TestCase):
         self.assertNotIn("error_code", rows[1])
         self.assertEqual(len(rows), 4)
 
+    def test_allowlisted_payment_failures_keep_their_stable_codes(self):
+        codes = {
+            "GMAIL_SMTP_AUTH_FAILED",
+            "GMAIL_SMTP_REJECTED",
+            "GMAIL_SMTP_RECIPIENT_REJECTED",
+            "PAYMENT_AGREEMENT_INVALID",
+            "PAYMENT_AGREEMENT_MISMATCH",
+            "PAYMENT_AGREEMENT_NOT_FOUND",
+            "PAYMENT_FAILED",
+            "PAYMENT_INVOICE_DATA_UNAVAILABLE",
+            "PAYMENT_MILESTONE_NOT_FOUND",
+            "PAYMENT_ORGANIZATION_INACTIVE",
+            "PAYMENT_OUTBOX_EVENT_UNSUPPORTED",
+            "PAYMENT_RECONCILIATION_RECORD_MISSING",
+            "PAYMENT_STATE_INVALID",
+            "PAYMENT_STATE_UNSUPPORTED",
+            "PAYPAL_CREATE_RESPONSE_INCOMPLETE",
+            "PAYPAL_INVOICE_AMOUNT_INVALID",
+            "PAYPAL_INVOICE_DATA_INVALID",
+            "PAYPAL_INVOICE_ITEM_INVALID",
+            "PAYPAL_INVOICE_NOTICE_INVALID",
+            "PAYPAL_INVOICE_RESPONSE_INVALID",
+            "PAYPAL_INVOICE_STATUS_INVALID",
+            "PAYPAL_INVOICE_TOTAL_MISMATCH",
+            "PAYPAL_OAUTH_RESPONSE_INVALID",
+            "PAYPAL_RESPONSE_INVALID",
+            "PAYPAL_WEBHOOK_VERIFICATION_INVALID",
+        }
+        with captured_output() as output:
+            for code in sorted(codes):
+                log_operation(
+                    logging.getLogger("syncally.payment"),
+                    Operation.PAYMENT_OUTBOX_COMPLETED,
+                    error_code=code,
+                )
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual({row["error_code"] for row in rows}, codes)
+
+    def test_temporal_workflow_log_decoration_keeps_allowlisted_events(self):
+        details = {
+            "workflow_id": "deal/123/lifecycle",
+            "workflow_type": "DealWorkflow",
+            "run_id": "run-123",
+        }
+        messages = {
+            "Deal workflow wait expired; deal requires operational review": "workflow.wait_expired",
+            "Deal workflow refresh timed out at its deadline": "workflow.refresh_timed_out",
+        }
+
+        with captured_output() as output:
+            logger = logging.getLogger("temporalio.workflow")
+            for message in messages:
+                logger.warning(f"{message} ({details})")
+
+        formatted = output.getvalue()
+        rows = [json.loads(line) for line in formatted.splitlines()]
+        self.assertEqual([row["event"] for row in rows], list(messages.values()))
+        self.assertNotIn("deal/123", formatted)
+
     def test_api_success_rejections_and_unhandled_error_have_safe_correlated_outcome(self):
         def failed_db():
             raise RuntimeError(CANARY)

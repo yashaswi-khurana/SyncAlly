@@ -50,14 +50,28 @@ _PAYMENT_STATUSES = frozenset(
 )
 _ERROR_CODES = frozenset(
     {
+        "GMAIL_SMTP_AUTH_FAILED",
+        "GMAIL_SMTP_REJECTED",
+        "GMAIL_SMTP_RECIPIENT_REJECTED",
+        "PAYMENT_AGREEMENT_INVALID",
+        "PAYMENT_AGREEMENT_MISMATCH",
+        "PAYMENT_AGREEMENT_NOT_FOUND",
+        "PAYMENT_FAILED",
+        "PAYMENT_INVOICE_DATA_UNAVAILABLE",
+        "PAYMENT_MILESTONE_NOT_FOUND",
+        "PAYMENT_ORGANIZATION_INACTIVE",
+        "PAYMENT_OUTBOX_EVENT_UNSUPPORTED",
         "PAYMENT_OUTBOX_PAYLOAD_INVALID",
         "PAYMENT_INTENT_NOT_FOUND",
         "PAYMENT_PROVIDER_REFERENCE_MISSING",
+        "PAYMENT_RECONCILIATION_RECORD_MISSING",
         "PAYPAL_INVOICE_NOTICE_MISMATCH",
         "PAYMENT_INVOICE_REQUEST_CHANGED",
         "PAYMENT_CREATE_TIME_UNKNOWN",
         "PAYMENT_CREATE_RETRY_WINDOW_EXPIRED",
         "PAYMENT_PROVIDER_STATE_UNSUPPORTED",
+        "PAYMENT_STATE_INVALID",
+        "PAYMENT_STATE_UNSUPPORTED",
         "PAYMENT_BUYER_CONTACT_MISSING",
         "PAYMENT_BUYER_CONTACT_AMBIGUOUS",
         "PAYMENT_RECONCILIATION_REJECTED",
@@ -67,6 +81,17 @@ _ERROR_CODES = frozenset(
         "PAYPAL_INVOICE_MATCH_AMBIGUOUS",
         "PAYPAL_SEARCH_RESPONSE_INVALID",
         "PAYPAL_INVOICE_ID_MISMATCH",
+        "PAYPAL_CREATE_RESPONSE_INCOMPLETE",
+        "PAYPAL_INVOICE_AMOUNT_INVALID",
+        "PAYPAL_INVOICE_DATA_INVALID",
+        "PAYPAL_INVOICE_ITEM_INVALID",
+        "PAYPAL_INVOICE_NOTICE_INVALID",
+        "PAYPAL_INVOICE_RESPONSE_INVALID",
+        "PAYPAL_INVOICE_STATUS_INVALID",
+        "PAYPAL_INVOICE_TOTAL_MISMATCH",
+        "PAYPAL_OAUTH_RESPONSE_INVALID",
+        "PAYPAL_RESPONSE_INVALID",
+        "PAYPAL_WEBHOOK_VERIFICATION_INVALID",
         "PAYPAL_AUTH_FAILED",
         "PAYMENT_PROVIDER_REFERENCE_CONFLICT",
         "PAYMENT_STATE_CHANGED",
@@ -121,9 +146,12 @@ class SafeOperationalFormatter(logging.Formatter):
             ),
             "event": event.value if approved else "log.redacted",
         }
-        if not approved and isinstance(record.msg, str) and record.msg in _WORKFLOW_MESSAGES:
-            output["event"] = _WORKFLOW_MESSAGES[record.msg]
-            approved = True
+        if not approved and isinstance(record.msg, str):
+            for message, mapped_event in _WORKFLOW_MESSAGES.items():
+                if record.msg.startswith(message):
+                    output["event"] = mapped_event
+                    approved = True
+                    break
         current_id = _uuid(correlation_id.get())
         if current_id is not None:
             output["correlation_id"] = current_id

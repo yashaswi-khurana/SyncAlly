@@ -142,6 +142,15 @@ environment, then run this separate process:
 python -m syncally.cli.payment_worker
 ```
 
+For payment status updates, register an HTTPS webhook URL ending in
+`/webhooks/paypal/invoicing` on that same Sandbox REST app and subscribe it to
+the invoice events. Set `PAYPAL_WEBHOOK_ID` to the webhook ID shown by PayPal.
+The API uses the Sandbox app credentials and webhook ID to ask PayPal to verify
+each signature. It stores each verified event once and queues work only when
+the invoice belongs to a saved SyncAlly payment intent. The payment worker then
+fetches the current invoice and reconciles its amount, currency, and status;
+webhook payload status alone never marks a payment paid.
+
 The worker creates a draft invoice and sends it as a separate PayPal request.
 It uses the buyer organization's sole active admin as the invoice contact; if
 that contact is missing or ambiguous, the intent is marked for manual action.

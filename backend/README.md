@@ -134,6 +134,41 @@ python -m uvicorn syncally.api.main:app --reload
 python -m syncally.workflows.worker
 ```
 
+To process authorized payment intents, set `PAYPAL_CLIENT_ID` and
+`PAYPAL_CLIENT_SECRET` to the PayPal **Sandbox** app credentials in the local
+environment, then run this separate process:
+
+```text
+python -m syncally.cli.payment_worker
+```
+
+The worker creates a draft invoice and sends it as a separate PayPal request.
+It uses the buyer organization's sole active admin as the invoice contact; if
+that contact is missing or ambiguous, the intent is marked for manual action.
+PayPal Sandbox notifications do not reach real inboxes. To send a separate
+email copy with the PayPal invoice link, configure `GMAIL_SMTP_USERNAME` and
+`GMAIL_APP_PASSWORD` in the local `.env` before processing the payment. Create
+an App Password on a Google account with 2-Step Verification enabled; do not
+use the account's regular password. `GMAIL_FROM_EMAIL` is optional and defaults
+to the SMTP username. Gmail delivery is disabled when these settings are empty.
+
+The Gmail copy runs after PayPal accepts the invoice. If SMTP delivery needs a
+retry, the durable payment outbox retries it without creating or sending a
+second PayPal invoice. Keep PayPal and Gmail credentials in the local `.env` or
+deployment secret store. Do not put them in source control, database rows, or
+frontend/AI configuration. Automated tests use fake providers and do not
+require PayPal or Gmail credentials.
+
+To email an invoice that was already sent before Gmail was configured, run this
+one-time command with its PayPal Sandbox invoice ID:
+
+```text
+python -m syncally.cli.email_invoice INV2-...
+```
+
+It reads the recipient and invoice link from PayPal, then sends only the Gmail
+copy; it does not send or recreate the PayPal invoice.
+
 Configure `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_TASK_QUEUE` in
 the environment. The relay sends only deal/agreement IDs. Failed deliveries use
 a persisted exponential retry delay with jitter (up to five minutes); malformed

@@ -131,6 +131,9 @@ for the contract, configuration, and commands.
 - Keep the API and workflow worker as separate process entry points over shared application and domain code.
 - Add infrastructure definitions only alongside verified local setup instructions.
 
+See [the operations and recovery guide](docs/operations.md) for safe logs, health
+checks, stuck work and ambiguous PayPal outcomes.
+
 ## License
 
 SyncAlly is licensed under the [MIT License](LICENSE).

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,14 +27,10 @@ from syncally.application.payments import (
 )
 from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.infrastructure.models import OutboxEvent
+from syncally.operations import Operation, log_operation
 
 logger = logging.getLogger(__name__)
 _PAYMENT_EVENT_LEASE = timedelta(minutes=5)
-
-
-def _safe_error_location(error: BaseException) -> str:
-    frames = traceback.extract_tb(error.__traceback__)[-5:]
-    return " -> ".join(f"{frame.name}:{frame.lineno}" for frame in frames) or "unknown location"
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,9 +186,9 @@ def dispatch_one_payment_event(
             error_detail=error.detail,
             retry=True,
             now=now,
+            error_code=error.code,
         )
     except PaymentNeedsAction as error:
-        logger.error("Payment outbox event %s needs manual action (%s)", event.id, error.code)
         _finish_event(
             session_factory,
             event,
@@ -201,16 +196,11 @@ def dispatch_one_payment_event(
             error_detail=error.detail,
             retry=False,
             now=now,
+            error_code=error.code,
         )
-    except Exception as error:
+    except Exception:
         # Avoid logging database parameters or provider bodies that may contain
         # private commercial details. The persisted message is intentionally generic.
-        logger.error(
-            "Payment outbox event %s failed unexpectedly (%s at %s)",
-            event.id,
-            type(error).__name__,
-            _safe_error_location(error),
-        )
         _finish_event(
             session_factory,
             event,
@@ -260,6 +250,7 @@ def _finish_event(
     error_detail: str | None,
     retry: bool,
     now: datetime | None,
+    error_code: str | None = None,
 ) -> None:
     now = now or datetime.now(UTC)
     with session_factory() as db:
@@ -271,6 +262,9 @@ def _finish_event(
             )
         )
         if row is None:
+            # Reconciliation commits its own guarded outcome and logs it there.
+            if event.event_type != PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE:
+                log_operation(logger, Operation.PAYMENT_LEASE_LOST, outbox_event_id=event.id)
             return
         row.status = status
         row.error_detail = error_detail
@@ -283,4 +277,17 @@ def _finish_event(
             row.next_attempt_at = now + timedelta(seconds=uniform(delay / 2, delay))
         else:
             row.next_attempt_at = None
+        fields = dict(
+            outbox_event_id=row.id,
+            event_type=row.event_type,
+            status=row.status,
+            retry_count=row.retry_count,
+            next_attempt_at=row.next_attempt_at,
+            error_code=error_code,
+            failure_kind="PERMANENT" if status == "FAILED" else "TRANSIENT" if retry else None,
+        )
+        if isinstance(event.payload, Mapping):
+            fields["payment_intent_id"] = event.payload.get("payment_intent_id")
         db.commit()
+        level = {"FAILED": logging.ERROR, "PENDING": logging.WARNING}.get(status, logging.INFO)
+        log_operation(logger, Operation.PAYMENT_OUTBOX_COMPLETED, level=level, **fields)

@@ -16,13 +16,13 @@ from syncally.config import GmailSettings, PayPalSettings, settings
 from syncally.infrastructure.database import SessionLocal
 from syncally.infrastructure.gmail import GmailSMTPInvoiceNotifier
 from syncally.infrastructure.payment_outbox import (
-    _safe_error_location,
     dispatch_pending_payment_events,
 )
 from syncally.infrastructure.paypal import PayPalSandboxInvoiceProvider
 from syncally.infrastructure.repositories.payment_processing import (
     SqlAlchemyPaymentProcessingRepository,
 )
+from syncally.operations import Operation, configure_logging, log_operation
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +58,7 @@ def run_forever(
                 gmail_from_email or None,
             )
     repository = SqlAlchemyPaymentProcessingRepository(session_factory)
-    logger.info(
-        "Starting PayPal Sandbox payment worker (Gmail invoice email %s)",
-        "enabled" if notifier is not None else "disabled",
-    )
+    log_operation(logger, Operation.WORKER_STARTED, worker="payment")
     while True:
         try:
             dispatch_pending_payment_events(
@@ -71,21 +68,21 @@ def run_forever(
                 batch_size=batch_size,
                 notifier=notifier,
             )
-        except Exception as error:
-            logger.error(
-                "Payment worker iteration failed (%s at %s); it will retry.",
-                type(error).__name__,
-                _safe_error_location(error),
-            )
+        except Exception:
+            log_operation(logger, Operation.WORKER_FAILED, level=logging.ERROR, worker="payment")
         time.sleep(poll_interval)
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    run_forever(
-        poll_interval=settings.outbox_poll_interval_seconds,
-        batch_size=settings.outbox_batch_size,
-    )
+    configure_logging()
+    try:
+        run_forever(
+            poll_interval=settings.outbox_poll_interval_seconds,
+            batch_size=settings.outbox_batch_size,
+        )
+    except Exception:
+        log_operation(logger, Operation.WORKER_FAILED, level=logging.CRITICAL, worker="payment")
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

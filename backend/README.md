@@ -190,8 +190,9 @@ copy; it does not send or recreate the PayPal invoice.
 Configure `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_TASK_QUEUE` in
 the environment. The relay sends only deal/agreement IDs. Failed deliveries use
 a persisted exponential retry delay with jitter (up to five minutes); malformed
-events become `FAILED` for inspection. After correcting a failed event, reset its
-status to `PENDING` and clear `next_attempt_at` to retry immediately.
+events become `FAILED` for inspection. Use the [operations and recovery guide](../docs/operations.md) to inspect and
+recover work. Its guarded Temporal-only retry procedure does not apply to payment
+events or processed reconciliation webhooks.
 
 To include the PostgreSQL concurrency test, set `TEST_POSTGRES_URL` to a test
 database URL and run the test suite. The test creates and removes its own isolated
@@ -209,3 +210,6 @@ lifecycle, both parties' private messages, seller-only payment authorization, pr
 recovery, duplicate webhook handling, and safe reconciled payment status without external keys.
 
 See [the domain architecture](../docs/architecture/05-domain-layer.md) for implemented invariants, package boundaries, and remaining work. The domain types do not perform persistence, authenticated authorization, or external provider calls.
+
+Operational logging, correlation IDs, privacy limits, health checks and payment-safe
+recovery procedures are documented in [the operations guide](../docs/operations.md).

@@ -83,6 +83,7 @@ class PaymentIntent(TimestampMixin, Base):
     provider_invoice_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     request_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_create_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reconciled_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     last_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

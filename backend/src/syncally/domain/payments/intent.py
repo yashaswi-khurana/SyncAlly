@@ -1,5 +1,7 @@
 """Authorized payment intent with explicit ambiguous-outcome reconciliation."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -107,6 +109,36 @@ class PaymentIntent:
         if self.seller_organization_id == self.payer_organization_id:
             raise InvariantViolation("Payment intent seller and payer must differ")
 
+    @classmethod
+    def restore(
+        cls,
+        *,
+        id: PaymentIntentId,
+        milestone: PaymentMilestone,
+        seller_organization_id: OrganizationId,
+        payer_organization_id: OrganizationId,
+        authorized_by: UserId,
+        idempotency_key: str,
+        created_at: datetime,
+        status: PaymentIntentStatus,
+        provider_reference: str | None = None,
+        reconciled_amount: Money | None = None,
+    ) -> PaymentIntent:
+        """Rehydrate a persisted intent before applying a state transition."""
+        intent = cls(
+            id=id,
+            milestone=milestone,
+            seller_organization_id=seller_organization_id,
+            payer_organization_id=payer_organization_id,
+            authorized_by=authorized_by,
+            idempotency_key=idempotency_key,
+            created_at=created_at,
+            provider_reference=provider_reference,
+            reconciled_amount=reconciled_amount,
+        )
+        intent._status = PaymentIntentStatus(status)
+        return intent
+
     def begin_create(self) -> None:
         if self.status is PaymentIntentStatus.CREATE_UNKNOWN:
             raise InvalidTransition("Reconcile the unknown provider outcome before retrying")
@@ -120,12 +152,24 @@ class PaymentIntent:
         self._status = PaymentIntentStatus.CREATE_UNKNOWN
 
     def record_provider_created(self, provider_reference: str) -> None:
-        if self.status is not PaymentIntentStatus.CREATE_PENDING:
-            raise InvalidTransition("Provider creation requires a pending create")
+        if self.status not in {
+            PaymentIntentStatus.CREATE_PENDING,
+            PaymentIntentStatus.CREATE_UNKNOWN,
+        }:
+            raise InvalidTransition("Provider creation requires a pending or reconciled create")
         if not provider_reference.strip():
             raise InvariantViolation("Provider reference is required")
         self.provider_reference = provider_reference
         self._status = PaymentIntentStatus.PROVIDER_CREATED
+
+    def mark_failed(self) -> None:
+        if self.status not in {
+            PaymentIntentStatus.AUTHORIZED,
+            PaymentIntentStatus.CREATE_PENDING,
+            PaymentIntentStatus.PROVIDER_CREATED,
+        }:
+            raise InvalidTransition(f"Cannot mark a payment failed from {self.status}")
+        self._status = PaymentIntentStatus.FAILED
 
     def mark_sent(self) -> None:
         if self.status is not PaymentIntentStatus.PROVIDER_CREATED:

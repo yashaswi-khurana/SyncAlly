@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from jwt.algorithms import HMACAlgorithm, get_default_algorithms
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_JWT_ALGORITHMS = get_default_algorithms()
@@ -119,3 +119,16 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+class PayPalSettings(BaseSettings):
+    """Credentials loaded only by the dedicated PayPal worker process."""
+
+    paypal_client_id: str = ""
+    paypal_client_secret: SecretStr = SecretStr("")
+
+    model_config = SettingsConfigDict(
+        env_file=_BACKEND_ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )

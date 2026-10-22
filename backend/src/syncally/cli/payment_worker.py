@@ -1,0 +1,66 @@
+"""Standalone worker for payment authorization outbox events.
+
+Run with python -m syncally.cli.payment_worker. PayPal credentials are read
+only by this process from its environment.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable
+
+from sqlalchemy.orm import Session
+
+from syncally.config import PayPalSettings, settings
+from syncally.infrastructure.database import SessionLocal
+from syncally.infrastructure.payment_outbox import dispatch_pending_payment_events
+from syncally.infrastructure.paypal import PayPalSandboxInvoiceProvider
+from syncally.infrastructure.repositories.payment_processing import (
+    SqlAlchemyPaymentProcessingRepository,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def run_forever(
+    *,
+    poll_interval: float,
+    batch_size: int,
+    session_factory: Callable[[], Session] = SessionLocal,
+    provider: PayPalSandboxInvoiceProvider | None = None,
+) -> None:
+    if provider is None:
+        paypal_settings = PayPalSettings()
+        provider = PayPalSandboxInvoiceProvider(
+            paypal_settings.paypal_client_id,
+            paypal_settings.paypal_client_secret.get_secret_value(),
+        )
+    repository = SqlAlchemyPaymentProcessingRepository(session_factory)
+    logger.info("Starting PayPal Sandbox payment worker")
+    while True:
+        try:
+            dispatch_pending_payment_events(
+                session_factory,
+                repository,
+                provider,
+                batch_size=batch_size,
+            )
+        except Exception as error:
+            logger.error(
+                "Payment worker iteration failed (%s); it will retry.",
+                type(error).__name__,
+            )
+        time.sleep(poll_interval)
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    run_forever(
+        poll_interval=settings.outbox_poll_interval_seconds,
+        batch_size=settings.outbox_batch_size,
+    )
+
+
+if __name__ == "__main__":
+    main()

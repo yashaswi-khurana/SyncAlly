@@ -4,6 +4,7 @@ import type {
   CreateOrganizationInput,
   AgreementApproval,
   AgreementVersion,
+  CommercialDocumentDraft,
   Deal,
   DealFact,
   DealMessage,
@@ -13,6 +14,7 @@ import type {
   FactReviewAction,
   Organization,
   OrganizationMember,
+  PaymentStatus,
   ProposalSuggestion,
   TokenResponse,
 } from "./types";
@@ -147,6 +149,16 @@ export function getDeal(dealId: string): Promise<Deal> {
 export function getCurrentAgreement(dealId: string): Promise<AgreementVersion> {
   return apiRequest<AgreementVersion>(
     `/deals/${encodeURIComponent(dealId)}/agreements/current`,
+  );
+}
+
+export function listPaymentStatuses(dealId: string): Promise<PaymentStatus[]> {
+  return apiRequest<PaymentStatus[]>(`/deals/${encodeURIComponent(dealId)}/payments`);
+}
+
+export function getCommercialDocumentDraft(dealId: string): Promise<CommercialDocumentDraft> {
+  return apiRequest<CommercialDocumentDraft>(
+    `/deals/${encodeURIComponent(dealId)}/documents/commercial-draft`,
   );
 }
 

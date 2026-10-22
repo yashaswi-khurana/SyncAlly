@@ -1,9 +1,7 @@
-"""Persist an authorized payment intent and its outbox hand-off atomically.
+"""Payment authorization and status use cases, independent of providers and databases.
 
-This is the persistence boundary only: no PayPal call happens here or in the
-transaction that wraps it (see ``infrastructure/repositories/payments.py``).
-A later worker (S7-03) reads the outbox row this writes and talks to PayPal;
-reconciling its response back onto the intent is a separate concern too.
+Authorization saves an intent and its outbox hand-off atomically. A later worker
+talks to PayPal and reconciles provider responses back onto the intent.
 """
 
 from __future__ import annotations
@@ -13,7 +11,16 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
-from syncally.application.agreements import OutboxEventDraft, OutboxRepository
+from syncally.application.agreements import (
+    AgreementNotFound,
+    AgreementRepository,
+    OutboxEventDraft,
+    OutboxRepository,
+    get_current_agreement,
+)
+from syncally.application.deals import DealRepository
+from syncally.application.identity import ActorContext
+from syncally.domain.agreements.agreement import AgreementStatus
 from syncally.domain.shared.errors import DomainError
 from syncally.domain.shared.money import Money
 
@@ -36,6 +43,26 @@ class UnauthorizedPaymentAuthorization(DomainError):
 
 class IdempotencyKeyReused(DomainError):
     """The idempotency key already belongs to a different payment authorization."""
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentStatusRecord:
+    """Safe persisted payment fields needed by a deal status screen."""
+
+    intent_id: UUID
+    milestone_sequence: int
+    amount: Money
+    status: str
+    reconciled_amount: Money | None
+    last_checked_at: datetime | None
+    last_reconciled_at: datetime | None
+
+
+class PaymentStatusRepository(Protocol):
+    """Read the latest persisted payment summary per milestone."""
+
+    def list_for_agreement(self, agreement_version_id: UUID) -> list[PaymentStatusRecord]:
+        """Return current milestone statuses without provider invoice secrets."""
 
 
 PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE = "PAYMENT_INTENT_AUTHORIZED"
@@ -132,3 +159,25 @@ def authorize_payment_intent(
         )
     )
     return outcome
+
+
+def list_current_payment_statuses(
+    actor: ActorContext,
+    deal_id: UUID,
+    deal_repository: DealRepository,
+    agreement_repository: AgreementRepository,
+    payment_repository: PaymentStatusRepository,
+) -> list[PaymentStatusRecord]:
+    """Read the current agreement's saved payment state for an active participant."""
+    try:
+        agreement = get_current_agreement(
+            actor,
+            deal_id,
+            deal_repository,
+            agreement_repository,
+        )
+    except AgreementNotFound:
+        return []
+    if agreement.status is not AgreementStatus.COMMITTED:
+        return []
+    return payment_repository.list_for_agreement(agreement.version_id)

@@ -4,6 +4,7 @@ import asyncio
 import json
 import unittest
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -29,6 +30,8 @@ from syncally.infrastructure.models import (
     Organization,
     OrganizationMember,
     OutboxEvent,
+    PaymentIntent,
+    PaymentMilestone,
     Proposal,
     User,
 )
@@ -157,6 +160,14 @@ class AgreementRouteTests(unittest.TestCase):
 
     def _get_current(self):
         return self._request("GET", f"/deals/{self.deal.id}/agreements/current")
+
+    def _commit_current_agreement(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.assertEqual(self._create_draft().status_code, 201)
+        self.assertEqual(self._approve(1).status_code, 200)
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        self.assertEqual(self._approve(1).status_code, 200)
+        self.assertEqual(self._commit(1).status_code, 200)
 
     def _add_pending_version(self, version_number: int, *, make_current: bool) -> AgreementVersion:
         version = AgreementVersion(
@@ -456,6 +467,122 @@ class AgreementRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("reload", response.json()["detail"])
+
+    def test_payment_status_is_backend_owned_and_omits_invoice_secrets(self) -> None:
+        self._commit_current_agreement()
+        milestone = self.session.scalar(
+            select(PaymentMilestone).where(PaymentMilestone.deal_id == self.deal.id)
+        )
+        self.session.add(
+            PaymentIntent(
+                deal_id=self.deal.id,
+                agreement_version_id=self.deal.current_agreement_version_id,
+                payment_milestone_id=milestone.id,
+                seller_organization_id=self.seller.id,
+                payer_organization_id=self.buyer.id,
+                authorized_by=self.seller_user.id,
+                amount=milestone.amount,
+                currency=milestone.currency,
+                status="PARTIALLY_PAID",
+                provider_invoice_id="private-invoice-token",
+                idempotency_key="private-idempotency-key",
+                reconciled_amount=Decimal("40"),
+                failure_detail="private provider response",
+            )
+        )
+        self.session.commit()
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+
+        response = self._request("GET", f"/deals/{self.deal.id}/payments")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()[0]["status"], "PARTIALLY_PAID")
+        self.assertEqual(response.json()[0]["reconciled_amount"], "40")
+        self.assertNotIn("provider_invoice_id", response.json()[0])
+        self.assertNotIn("private-", response.text)
+        self.assertNotIn("provider response", response.text)
+
+    def test_payment_status_is_empty_until_a_committed_agreement_exists(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.assertEqual(self._create_draft().status_code, 201)
+
+        response = self._request("GET", f"/deals/{self.deal.id}/payments")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), [])
+
+    def test_payment_status_returns_only_the_latest_attempt_per_milestone(self) -> None:
+        self._commit_current_agreement()
+        milestone = self.session.scalar(
+            select(PaymentMilestone).where(PaymentMilestone.deal_id == self.deal.id)
+        )
+        common = {
+            "deal_id": self.deal.id,
+            "agreement_version_id": self.deal.current_agreement_version_id,
+            "payment_milestone_id": milestone.id,
+            "seller_organization_id": self.seller.id,
+            "payer_organization_id": self.buyer.id,
+            "authorized_by": self.seller_user.id,
+            "amount": milestone.amount,
+            "currency": milestone.currency,
+        }
+        self.session.add_all(
+            [
+                PaymentIntent(
+                    **common,
+                    status="FAILED",
+                    idempotency_key="older-failed-attempt",
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+                PaymentIntent(
+                    **common,
+                    status="SENT",
+                    idempotency_key="latest-sent-attempt",
+                    created_at=datetime(2026, 1, 2, tzinfo=UTC),
+                ),
+            ]
+        )
+        self.session.commit()
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+
+        response = self._request("GET", f"/deals/{self.deal.id}/payments")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()), 1)
+        self.assertEqual(response.json()[0]["status"], "SENT")
+
+    def test_commercial_document_requires_commit_and_uses_committed_terms(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.assertEqual(self._create_draft().status_code, 201)
+        unavailable = self._request(
+            "GET", f"/deals/{self.deal.id}/documents/commercial-draft"
+        )
+        self.assertEqual(unavailable.status_code, 409)
+
+        self._approve(1)
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        self._approve(1)
+        self._commit(1)
+
+        response = self._request(
+            "GET", f"/deals/{self.deal.id}/documents/commercial-draft"
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["agreement_version_number"], 1)
+        self.assertIn(self.terms.terms_hash, response.json()["content"])
+        self.assertIn("DRAFT - FOR REVIEW ONLY", response.json()["content"])
+
+    def test_payment_and_document_reads_hide_deals_from_nonparticipants(self) -> None:
+        self._authenticate(self._actor(self.outsider_user, self.outsider))
+
+        payment_response = self._request("GET", f"/deals/{self.deal.id}/payments")
+        document_response = self._request(
+            "GET", f"/deals/{self.deal.id}/documents/commercial-draft"
+        )
+
+        self.assertEqual(payment_response.status_code, 404)
+        self.assertEqual(document_response.status_code, 404)
 
 
 if __name__ == "__main__":

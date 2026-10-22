@@ -163,7 +163,7 @@ class SqlAlchemyPaymentIntentRepository:
         return PaymentIntentAuthorizationOutcome(intent_id=command.id, already_existed=False)
 
     def list_for_agreement(self, agreement_version_id: UUID) -> list[PaymentStatusRecord]:
-        """Read status fields only; provider invoice IDs and secrets stay internal."""
+        """Read each milestone's latest status; provider invoice fields stay internal."""
         rows = self._db.execute(
             select(PaymentIntent, PaymentMilestoneRow)
             .join(
@@ -171,8 +171,15 @@ class SqlAlchemyPaymentIntentRepository:
                 PaymentMilestoneRow.id == PaymentIntent.payment_milestone_id,
             )
             .where(PaymentIntent.agreement_version_id == agreement_version_id)
-            .order_by(PaymentMilestoneRow.sequence_number, PaymentIntent.created_at)
+            .order_by(
+                PaymentMilestoneRow.sequence_number,
+                PaymentIntent.created_at.desc(),
+                PaymentIntent.id.desc(),
+            )
         ).all()
+        latest_by_milestone = {}
+        for intent, milestone in rows:
+            latest_by_milestone.setdefault(milestone.id, (intent, milestone))
         return [
             PaymentStatusRecord(
                 intent_id=intent.id,
@@ -187,7 +194,7 @@ class SqlAlchemyPaymentIntentRepository:
                 last_checked_at=intent.last_checked_at,
                 last_reconciled_at=intent.last_reconciled_at,
             )
-            for intent, milestone in rows
+            for intent, milestone in latest_by_milestone.values()
         ]
 
     def _matching_outcome_or_raise(

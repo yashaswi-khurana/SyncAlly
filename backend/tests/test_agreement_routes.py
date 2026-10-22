@@ -511,6 +511,46 @@ class AgreementRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), [])
 
+    def test_payment_status_returns_only_the_latest_attempt_per_milestone(self) -> None:
+        self._commit_current_agreement()
+        milestone = self.session.scalar(
+            select(PaymentMilestone).where(PaymentMilestone.deal_id == self.deal.id)
+        )
+        common = {
+            "deal_id": self.deal.id,
+            "agreement_version_id": self.deal.current_agreement_version_id,
+            "payment_milestone_id": milestone.id,
+            "seller_organization_id": self.seller.id,
+            "payer_organization_id": self.buyer.id,
+            "authorized_by": self.seller_user.id,
+            "amount": milestone.amount,
+            "currency": milestone.currency,
+        }
+        self.session.add_all(
+            [
+                PaymentIntent(
+                    **common,
+                    status="FAILED",
+                    idempotency_key="older-failed-attempt",
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+                PaymentIntent(
+                    **common,
+                    status="SENT",
+                    idempotency_key="latest-sent-attempt",
+                    created_at=datetime(2026, 1, 2, tzinfo=UTC),
+                ),
+            ]
+        )
+        self.session.commit()
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+
+        response = self._request("GET", f"/deals/{self.deal.id}/payments")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()), 1)
+        self.assertEqual(response.json()[0]["status"], "SENT")
+
     def test_commercial_document_requires_commit_and_uses_committed_terms(self) -> None:
         self._authenticate(self._actor(self.buyer_user, self.buyer))
         self.assertEqual(self._create_draft().status_code, 201)

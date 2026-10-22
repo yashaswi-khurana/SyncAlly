@@ -59,10 +59,10 @@ class PaymentStatusRecord:
 
 
 class PaymentStatusRepository(Protocol):
-    """Read persisted payment summaries for one committed agreement version."""
+    """Read the latest persisted payment summary per milestone."""
 
     def list_for_agreement(self, agreement_version_id: UUID) -> list[PaymentStatusRecord]:
-        """Return payment status summaries, without provider invoice secrets."""
+        """Return current milestone statuses without provider invoice secrets."""
 
 
 PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE = "PAYMENT_INTENT_AUTHORIZED"

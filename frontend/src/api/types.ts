@@ -64,6 +64,24 @@ export interface AgreementApproval {
   created_at: string;
 }
 
+export interface PaymentStatus {
+  id: string;
+  milestone_sequence: number;
+  amount: string;
+  currency: string;
+  status: string;
+  reconciled_amount: string | null;
+  last_checked_at: string | null;
+  last_reconciled_at: string | null;
+}
+
+export interface CommercialDocumentDraft {
+  agreement_version_id: string;
+  agreement_version_number: number;
+  terms_hash: string;
+  content: string;
+}
+
 export type ViewerRole = "BUYER" | "SELLER" | "BOTH";
 
 export interface DealSummary extends Deal {

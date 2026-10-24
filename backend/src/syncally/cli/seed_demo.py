@@ -27,9 +27,13 @@ DEMO_IDENTITIES = (
 )
 
 
-def _password_for(identity: DemoIdentity, supplied_password: str | None) -> str:
+def _password_for(
+    identity: DemoIdentity, supplied_password: str | None, *, allow_prompt: bool
+) -> str:
     if supplied_password is not None:
         password = supplied_password
+    elif not allow_prompt:
+        raise ValueError(f"A password must be supplied for {identity.email}")
     else:
         password = getpass.getpass(f"Set password for {identity.email} (12+ characters): ")
         confirmation = getpass.getpass("Confirm password: ")
@@ -43,9 +47,11 @@ def _password_for(identity: DemoIdentity, supplied_password: str | None) -> str:
 def seed_demo_data(
     db: Session,
     passwords: tuple[str | None, str | None] = (None, None),
+    *,
+    allow_prompt: bool = True,
 ) -> None:
     """Idempotently create demo users, organizations, and admin memberships."""
-    if settings.app_env.lower() not in {"development", "test"}:
+    if not settings.is_local_environment:
         raise RuntimeError("Demo seeding is only allowed in development or test")
     try:
         for identity, supplied_password in zip(DEMO_IDENTITIES, passwords, strict=True):
@@ -54,7 +60,11 @@ def seed_demo_data(
                 user = User(
                     email=identity.email,
                     display_name=identity.display_name,
-                    password_hash=hash_password(_password_for(identity, supplied_password)),
+                    password_hash=hash_password(
+                        _password_for(
+                            identity, supplied_password, allow_prompt=allow_prompt
+                        )
+                    ),
                     status="ACTIVE",
                 )
                 db.add(user)
@@ -63,7 +73,11 @@ def seed_demo_data(
                 if user.status != "ACTIVE":
                     user.status = "ACTIVE"
                 if user.password_hash is None:
-                    user.password_hash = hash_password(_password_for(identity, supplied_password))
+                    user.password_hash = hash_password(
+                        _password_for(
+                            identity, supplied_password, allow_prompt=allow_prompt
+                        )
+                    )
 
             organization = db.scalar(
                 select(Organization).where(
@@ -106,7 +120,7 @@ def seed_demo_data(
 
 def main() -> None:
     """Prompt for any missing demo passwords and seed the configured database."""
-    if settings.app_env.lower() not in {"development", "test"}:
+    if not settings.is_local_environment:
         raise SystemExit("Demo seeding is only allowed in development or test")
     with SessionLocal() as db:
         seed_demo_data(db)

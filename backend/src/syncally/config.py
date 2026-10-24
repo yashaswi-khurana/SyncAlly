@@ -64,7 +64,6 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = 30
     max_organizations_per_user: int = 5
     dev_auth_user_id: str | None = None
-    enable_dev_endpoints: bool = False
     temporal_address: str = "localhost:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "syncally-deals"
@@ -74,9 +73,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":
-        local_environment = self.is_local_environment
-        if self.enable_dev_endpoints and not local_environment:
-            raise ValueError("ENABLE_DEV_ENDPOINTS is only allowed in development/test")
+        local_environment = self.app_env.lower() in {"development", "test"}
         if not self.database_url.strip():
             if local_environment:
                 self.database_url = "postgresql+psycopg://localhost:5432/syncally"
@@ -113,10 +110,6 @@ class Settings(BaseSettings):
         if not local_environment and not self.temporal_tls:
             raise ValueError("TEMPORAL_TLS must be enabled outside development/test")
         return self
-
-    @property
-    def is_local_environment(self) -> bool:
-        return self.app_env.strip().lower() in {"development", "test"}
 
     model_config = SettingsConfigDict(
         env_file=_BACKEND_ENV_FILE,

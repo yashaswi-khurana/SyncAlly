@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 import httpx
 import jwt
-from pydantic import ValidationError
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -20,7 +19,7 @@ from sqlalchemy.pool import StaticPool
 from syncally.api.main import app
 from syncally.application.passwords import verify_password
 from syncally.cli.seed_demo import DEMO_IDENTITIES, seed_demo_data
-from syncally.config import Settings, settings
+from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     AgreementVersion,
@@ -73,10 +72,8 @@ class DevRoutesTests(unittest.TestCase):
         self.db = Session(self.engine, expire_on_commit=False)
         self.env_patch = patch.object(settings, "app_env", "test")
         self.secret_patch = patch.object(settings, "jwt_secret", _TEST_JWT_SECRET)
-        self.dev_endpoints_patch = patch.object(settings, "enable_dev_endpoints", True)
         self.env_patch.start()
         self.secret_patch.start()
-        self.dev_endpoints_patch.start()
         seed_demo_data(self.db, (_BUYER_PASSWORD, _SELLER_PASSWORD))
         app.dependency_overrides.clear()
         app.dependency_overrides[get_db] = lambda: self.db
@@ -85,7 +82,6 @@ class DevRoutesTests(unittest.TestCase):
         app.dependency_overrides.clear()
         self.env_patch.stop()
         self.secret_patch.stop()
-        self.dev_endpoints_patch.stop()
         self.db.close()
         Base.metadata.drop_all(self.engine)
         self.engine.dispose()
@@ -126,6 +122,63 @@ class DevRoutesTests(unittest.TestCase):
         self.db.add(deal)
         self.db.commit()
         return deal
+
+    def _create_external_organization(self, legal_name: str) -> Organization:
+        organization = Organization(
+            legal_name=legal_name,
+            country_code="GB",
+            status="ACTIVE",
+        )
+        self.db.add(organization)
+        self.db.commit()
+        return organization
+
+    def _create_deal(self, buyer_organization_id: Any, seller_organization_id: Any) -> Deal:
+        deal = Deal(
+            buyer_organization_id=buyer_organization_id,
+            seller_organization_id=seller_organization_id,
+        )
+        self.db.add(deal)
+        self.db.commit()
+        return deal
+
+    def _add_deal_activity(self, deal: Deal, participant_organization_id: Any) -> None:
+        author = self._user(_BUYER_EMAIL)
+        conversation = Conversation(
+            deal_id=deal.id,
+            participant_organization_id=participant_organization_id,
+        )
+        self.db.add(conversation)
+        self.db.flush()
+        self.db.add(
+            Message(
+                conversation_id=conversation.id,
+                author_user_id=author.id,
+                body="Activity outside the demo scope",
+                visibility="SHAREABLE",
+                source_type="USER",
+            )
+        )
+        self.db.add_all(
+            [
+                OutboxEvent(
+                    aggregate_type="deal",
+                    aggregate_id=deal.id,
+                    event_type="deal.preserved_test",
+                    payload={"deal_id": str(deal.id)},
+                ),
+                AuditEvent(
+                    aggregate_type="deal",
+                    aggregate_id=deal.id,
+                    event_type="deal.preserved_test",
+                    actor_type="USER",
+                    actor_id=str(author.id),
+                    occurred_at=datetime.now(UTC),
+                    payload={"deal_id": str(deal.id)},
+                ),
+            ]
+        )
+        self.db.commit()
 
     def _create_full_demo_graph(self) -> Deal:
         buyer = self._user(_BUYER_EMAIL)
@@ -370,13 +423,10 @@ class DevRoutesTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404, response.text)
 
-    def test_dev_endpoints_are_forbidden_when_not_explicitly_enabled(self) -> None:
+    def test_dev_endpoints_are_forbidden_outside_dev_and_test(self) -> None:
         self._create_minimal_deal()
 
-        with (
-            patch.object(settings, "app_env", "development"),
-            patch.object(settings, "enable_dev_endpoints", False),
-        ):
+        with patch.object(settings, "app_env", "staging"):
             switch_response = self._request(
                 "POST", "/dev/switch-role", json={"target_role": "BUYER"}
             )
@@ -385,19 +435,6 @@ class DevRoutesTests(unittest.TestCase):
         for response in (switch_response, reset_response):
             self.assertEqual(response.status_code, 403, response.text)
         self.assertEqual(self.db.scalar(select(func.count()).select_from(Deal)), 1)
-
-    def test_enabling_dev_endpoints_outside_local_environments_is_rejected(self) -> None:
-        with self.assertRaises(ValidationError) as raised:
-            Settings(
-                _env_file=None,
-                app_env="production",
-                database_url="postgresql+psycopg://configured.example/syncally",
-                jwt_secret="SBLsd2xA2yUll_ixIwVOvnukFtR4o8MwjZKlIWyG4_8",
-                temporal_tls=True,
-                enable_dev_endpoints=True,
-            )
-
-        self.assertIn("ENABLE_DEV_ENDPOINTS", str(raised.exception))
 
     def test_dev_endpoints_are_forbidden_in_production(self) -> None:
         self._create_minimal_deal()
@@ -429,7 +466,7 @@ class DevRoutesTests(unittest.TestCase):
         self.assertEqual(body["status"], "success")
         self.assertEqual(
             body["message"],
-            "All local deal data cleared; demo identities and organizations restored.",
+            "Demo deal data cleared; demo identities and organizations restored.",
         )
         self.assertEqual(
             body["deleted"],
@@ -509,6 +546,86 @@ class DevRoutesTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(self.db.scalar(select(func.count()).select_from(Deal)), 1)
+
+    def test_reset_demo_preserves_unrelated_organization_data(self) -> None:
+        external_buyer = self._create_external_organization("External Buyer Co")
+        external_seller = self._create_external_organization("External Seller Co")
+        external_deal = self._create_deal(external_buyer.id, external_seller.id)
+        self._add_deal_activity(external_deal, external_buyer.id)
+        self._create_full_demo_graph()
+
+        response = self._request("POST", "/dev/reset-demo")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            self.db.scalar(
+                select(func.count()).select_from(Deal).where(Deal.id == external_deal.id)
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.db.scalar(
+                select(func.count())
+                .select_from(Conversation)
+                .where(Conversation.deal_id == external_deal.id)
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.db.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.aggregate_id == external_deal.id)
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.db.scalar(
+                select(func.count())
+                .select_from(OutboxEvent)
+                .where(OutboxEvent.aggregate_id == external_deal.id)
+            ),
+            1,
+        )
+
+    def test_reset_demo_preserves_deals_with_non_demo_party(self) -> None:
+        demo_buyer = self._organization("Demo Buyer Co")
+        external_seller = self._create_external_organization("External Seller Co")
+        mixed_deal = self._create_deal(demo_buyer.id, external_seller.id)
+        self._add_deal_activity(mixed_deal, demo_buyer.id)
+        self._create_minimal_deal()
+
+        response = self._request("POST", "/dev/reset-demo")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            self.db.scalar(
+                select(func.count()).select_from(Deal).where(Deal.id == mixed_deal.id)
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.db.scalar(
+                select(func.count())
+                .select_from(Conversation)
+                .where(Conversation.deal_id == mixed_deal.id)
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.db.scalar(select(func.count()).select_from(Deal)), 1
+        )
+
+    def test_reset_demo_is_idempotent(self) -> None:
+        self._create_full_demo_graph()
+
+        first = self._request("POST", "/dev/reset-demo")
+        second = self._request("POST", "/dev/reset-demo")
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first.json()["deleted"]["deals"], 1)
+        self.assertTrue(all(count == 0 for count in second.json()["deleted"].values()))
 
 
 if __name__ == "__main__":

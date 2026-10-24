@@ -11,6 +11,7 @@ from syncally.api.agreements import router as agreements_router
 from syncally.api.auth import router as auth_router
 from syncally.api.conversations import router as conversations_router
 from syncally.api.deals import router as deals_router
+from syncally.api.dev import router as dev_router
 from syncally.api.documents import router as documents_router
 from syncally.api.operations import OperationalFastAPI
 from syncally.api.organizations import router as organizations_router
@@ -101,6 +102,7 @@ async def validation_exception_handler(
 
 app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=MAX_REQUEST_BODY_BYTES)
 app.include_router(auth_router)
+app.include_router(dev_router)
 app.include_router(organizations_router)
 app.include_router(deals_router)
 app.include_router(conversations_router)

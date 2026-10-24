@@ -98,25 +98,6 @@ refresh token after a retry, which cannot match replacements created by this ver
 For local development/test only, `DEV_AUTH_USER_ID` may be configured and sent as
 `X-Dev-User-Id`; this shortcut is rejected by configuration outside those environments.
 
-## Development-only routes
-
-The destructive sandbox helpers are disabled by default and require
-`ENABLE_DEV_ENDPOINTS=true` together with `APP_ENV=development` or `APP_ENV=test`.
-Startup rejects the configuration when the flag is enabled in any other environment.
-Neither route is authenticated, so keep them disabled on shared or production databases.
-
-- `POST /dev/switch-role` with `{ "target_role": "BUYER" | "SELLER" | "ADMIN" }` mints
-  tokens for the seeded demo identity.
-- `POST /dev/reset-demo` is **not scoped to demo organizations**. It unconditionally
-  deletes all deal-domain data in the configured database (deals, conversations,
-  messages, constraints, negotiations, proposals, agreements, approvals, obligations,
-  payment milestones, payment intents, webhook events, outbox events, and audit events)
-  for every organization, then re-applies the demo seed to restore only the demo
-  identities and organizations. The audit trail and outbox history are destroyed.
-
-Use `POST /dev/reset-demo` only against a disposable local database. Running it on a
-shared development or QA database wipes unrelated scenarios and their audit trail.
-
 The domain package contains framework-independent organization and membership records,
 deal lifecycle rules, negotiation, canonical trade terms, bilateral agreement approval,
 and payment intent state.

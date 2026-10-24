@@ -36,3 +36,7 @@ uploads/
 .vscode/
 .DS_Store
 Thumbs.db
+
+.agents
+docs/strategy
+skills

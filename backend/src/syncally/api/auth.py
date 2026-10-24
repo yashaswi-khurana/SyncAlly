@@ -229,7 +229,7 @@ def refresh_access_token(payload: RefreshRequest, db: Session = Depends(get_db))
 
 def _development_actor(request: Request) -> UUID | None:
     """Allow a configured local identity without weakening non-local environments."""
-    if not settings.is_local_environment or not settings.dev_auth_user_id:
+    if settings.app_env.lower() not in {"development", "test"} or not settings.dev_auth_user_id:
         return None
     if request.headers.get("X-Dev-User-Id") != settings.dev_auth_user_id:
         return None

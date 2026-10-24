@@ -177,7 +177,7 @@ def get_communication_repository(
 
 def get_ai_suggestion_provider() -> AISuggestionProvider:
     """Use the deterministic demo provider locally; require a chosen provider elsewhere."""
-    if settings.app_env.lower() not in {"development", "test"}:
+    if not settings.is_local_environment:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI suggestions are not configured",

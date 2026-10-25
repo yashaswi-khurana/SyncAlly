@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -155,6 +155,33 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _case_insensitive_prefix(
+    db: Session, column: ColumnElement[str], prefix: str
+) -> ColumnElement[bool]:
+    """Match a prefix ignoring case, including non-ASCII letters on SQLite.
+
+    PostgreSQL indexes ``lower(legal_name)``, so comparing against ``lower()``
+    keeps the prefix filter on that index; ``ILIKE`` cannot use it. SQLite
+    implements ``lower()`` (which SQLAlchemy's ``ilike`` relies on) with
+    ASCII-only folding, so it compares against a Unicode-aware function
+    registered on the connection instead.
+    """
+    escaped_prefix = _escape_like(prefix)
+    if db.get_bind().dialect.name != "sqlite":
+        # Fold the pattern in SQL too: Python's lower() disagrees with PostgreSQL's
+        # for some scripts (e.g. "İ", "Σ"), which would drop valid matches.
+        return func.lower(column).like(func.lower(f"{escaped_prefix}%"), escape="\\")
+
+    dbapi_connection = db.connection().connection.dbapi_connection
+    dbapi_connection.create_function(
+        "syncally_casefold",
+        1,
+        lambda value: value.casefold() if isinstance(value, str) else value,
+        deterministic=True,
+    )
+    return func.syncally_casefold(column).like(f"{escaped_prefix.casefold()}%", escape="\\")
+
+
 @router.get(
     "/directory",
     response_model=list[OrganizationDirectoryItem],
@@ -167,19 +194,23 @@ def list_organization_directory(
     db: Session = Depends(get_db),
 ) -> list[dict[str, UUID | str]]:
     """List active organizations in the public directory with optional prefix search."""
+    # PostgreSQL indexes lower(legal_name), so filter and order on the same
+    # expression; a plain legal_name sort would not match the index.
+    name_order = func.lower(Organization.legal_name)
+    if db.get_bind().dialect.name != "postgresql":
+        name_order = Organization.legal_name
+
     stmt = (
         select(Organization.id, Organization.legal_name, Organization.country_code)
         .where(Organization.status == "ACTIVE")
-        .order_by(Organization.legal_name.asc(), Organization.id.asc())
+        .order_by(name_order.asc(), Organization.id.asc())
         .limit(limit)
         .offset(offset)
     )
     if q is not None:
         clean_q = q.strip()
         if clean_q:
-            stmt = stmt.where(
-                Organization.legal_name.ilike(f"{_escape_like(clean_q)}%", escape="\\")
-            )
+            stmt = stmt.where(_case_insensitive_prefix(db, Organization.legal_name, clean_q))
 
     rows = db.execute(stmt).all()
     return [

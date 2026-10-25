@@ -35,7 +35,7 @@ router = APIRouter(prefix="/deals/{deal_id}/payments", tags=["payments"])
 
 
 class PaymentStatusResponse(BaseModel):
-    """Safe payment summary; provider invoice IDs and links are intentionally omitted."""
+    """Safe payment summary including invoice link and retry diagnostics."""
 
     id: UUID
     milestone_sequence: int
@@ -45,6 +45,12 @@ class PaymentStatusResponse(BaseModel):
     reconciled_amount: str | None
     last_checked_at: datetime | None
     last_reconciled_at: datetime | None
+    invoice_url: str | None = None
+    recipient_email: str | None = None
+    recipient_name: str | None = None
+    retry_count: int = 0
+    next_retry_at: datetime | None = None
+    failure_reason: str | None = None
 
 
 class AuthorizePaymentRequest(BaseModel):
@@ -176,6 +182,12 @@ def list_payment_statuses_route(
             ),
             last_checked_at=payment.last_checked_at,
             last_reconciled_at=payment.last_reconciled_at,
+            invoice_url=getattr(payment, "invoice_url", None),
+            recipient_email=getattr(payment, "recipient_email", None),
+            recipient_name=getattr(payment, "recipient_name", None),
+            retry_count=getattr(payment, "retry_count", 0),
+            next_retry_at=getattr(payment, "next_retry_at", None),
+            failure_reason=getattr(payment, "failure_reason", None),
         )
         for payment in payments
     ]

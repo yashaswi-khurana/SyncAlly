@@ -5,15 +5,36 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    column,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from syncally.infrastructure.models.base import UUID_TYPE, Base
 from syncally.infrastructure.models.mixins import TimestampMixin
 
+_ORGANIZATION_ACTIVE_WHERE = text("status = 'ACTIVE'")
+
 
 class Organization(TimestampMixin, Base):
     __tablename__ = "organizations"
+    __table_args__ = (
+        Index(
+            "ix_organizations_active_legal_name_lower",
+            func.lower(column("legal_name")),
+            postgresql_ops={None: "text_pattern_ops"},
+            postgresql_where=_ORGANIZATION_ACTIVE_WHERE,
+            sqlite_where=_ORGANIZATION_ACTIVE_WHERE,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     legal_name: Mapped[str] = mapped_column(Text, nullable=False)

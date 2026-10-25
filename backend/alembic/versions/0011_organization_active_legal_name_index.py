@@ -49,6 +49,7 @@ def downgrade() -> None:
             op.drop_index(
                 _INDEX_NAME,
                 table_name=_TABLE,
+                if_exists=True,
                 postgresql_concurrently=True,
             )
     else:

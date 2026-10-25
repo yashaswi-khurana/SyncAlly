@@ -6,12 +6,14 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from syncally.api.auth import get_current_actor
 from syncally.api.main import app
+from syncally.api.organizations import _case_insensitive_prefix
 from syncally.application.identity import ActorContext
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
@@ -144,6 +146,46 @@ class OrganizationDirectoryTests(unittest.TestCase):
         data = response.json()
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["id"], str(andean.id))
+
+    def test_directory_search_case_insensitive_non_ascii(self) -> None:
+        self._authenticate()
+        accented = self._create_org("École Normale", "FR")
+        self._create_org("Ecole NORMALE", "FR")
+        lowercase_accent = self._create_org("Fundación Andina", "CO")
+
+        # Lowercase query must match uppercase non-ASCII letters in the name
+        response = self._request("GET", "/organizations/directory", params={"q": "école"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in response.json()], [str(accented.id)])
+
+        # Uppercase query must match lowercase non-ASCII letters as well
+        response = self._request("GET", "/organizations/directory", params={"q": "FUNDACIÓN"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["id"] for item in response.json()], [str(lowercase_accent.id)]
+        )
+
+    def test_directory_search_compiles_to_indexed_expression_on_postgres(self) -> None:
+        engine = create_engine("postgresql+psycopg://localhost/syncally")
+        try:
+            expression = _case_insensitive_prefix(
+                Session(engine), Organization.legal_name, "Andean"
+            )
+            sql = str(
+                select(Organization.id)
+                .where(expression)
+                .compile(
+                    dialect=postgresql.dialect(),
+                    compile_kwargs={"literal_binds": True},
+                )
+            )
+        finally:
+            engine.dispose()
+
+        # The partial index is on lower(legal_name); ILIKE cannot use it, and the
+        # prefix must be folded by the database rather than by Python.
+        self.assertIn("lower(organizations.legal_name) LIKE lower('Andean", sql)
+        self.assertNotIn("ILIKE", sql)
 
     def test_directory_prefix_search_does_not_match_infix(self) -> None:
         self._authenticate()

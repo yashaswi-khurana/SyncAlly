@@ -1,6 +1,7 @@
 import { getAccessToken } from "./tokenStore";
 import type {
   CreateDealInput,
+  CreateMessageInput,
   CreateOrganizationInput,
   AgreementApproval,
   AgreementVersion,
@@ -218,6 +219,21 @@ export function createAgreementFromReviewedTerms(
       }),
     },
   );
+}
+
+export function createDealMessage(
+  dealId: string,
+  input: CreateMessageInput,
+  options?: { signal?: AbortSignal },
+): Promise<DealMessage> {
+  // source_type is derived by the server from the verified actor; sending it would
+  // fail once the request schema forbids unknown fields.
+  const { body, visibility, source_reference, organization_id } = input;
+  return apiRequest<DealMessage>(`/deals/${encodeURIComponent(dealId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ body, visibility, source_reference, organization_id }),
+    signal: options?.signal,
+  });
 }
 
 export function listDealMessages(

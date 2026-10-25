@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +38,12 @@ class CreateOrganizationRequest(BaseModel):
 
 class AddOrganizationMemberRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
+
+
+class OrganizationDirectoryItem(BaseModel):
+    id: UUID
+    legal_name: str
+    country_code: str
 
 
 def _active_admin_membership(
@@ -141,6 +147,48 @@ def list_my_organizations(
             "role": role,
         }
         for organization, role in rows
+    ]
+
+
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE/ILIKE special wildcard and escape characters."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+@router.get(
+    "/directory",
+    response_model=list[OrganizationDirectoryItem],
+    dependencies=[Depends(get_current_actor)],
+)
+def list_organization_directory(
+    q: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10000),
+    db: Session = Depends(get_db),
+) -> list[dict[str, UUID | str]]:
+    """List active organizations in the public directory with optional prefix search."""
+    stmt = (
+        select(Organization.id, Organization.legal_name, Organization.country_code)
+        .where(Organization.status == "ACTIVE")
+        .order_by(Organization.legal_name.asc(), Organization.id.asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    if q is not None:
+        clean_q = q.strip()
+        if clean_q:
+            stmt = stmt.where(
+                Organization.legal_name.ilike(f"{_escape_like(clean_q)}%", escape="\\")
+            )
+
+    rows = db.execute(stmt).all()
+    return [
+        {
+            "id": row.id,
+            "legal_name": row.legal_name,
+            "country_code": row.country_code,
+        }
+        for row in rows
     ]
 
 

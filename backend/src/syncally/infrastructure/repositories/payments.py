@@ -14,10 +14,11 @@ savepoint is needed to isolate the failed insert.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -48,6 +49,7 @@ from syncally.infrastructure.models import (
     Deal,
     Organization,
     OrganizationMember,
+    OutboxEvent,
     PaymentIntent,
     User,
 )
@@ -56,6 +58,36 @@ from syncally.infrastructure.repositories.agreements import SqlAlchemyOutboxRepo
 
 _PAYMENT_INTENT_AUTHORIZED_STATUS = "AUTHORIZED"
 _ONE_ACTIVE_PER_MILESTONE_INDEX = "ix_payment_intents_one_active_per_milestone"
+
+
+@dataclass(frozen=True, slots=True)
+class ExtendedPaymentStatusRecord(PaymentStatusRecord):
+    """Extended payment status record with buyer contact, retry diagnostics, and invoice link."""
+
+    invoice_url: str | None = None
+    recipient_email: str | None = None
+    recipient_name: str | None = None
+    retry_count: int = 0
+    next_retry_at: datetime | None = None
+    failure_reason: str | None = None
+
+
+def _build_invoice_url(
+    provider: str, provider_invoice_id: str | None, status: str | None = None
+) -> str | None:
+    if not provider_invoice_id:
+        return None
+    raw_id = provider_invoice_id.strip()
+    if raw_id.startswith("private-"):
+        return None
+    if status in ("PAID", "CANCELLED"):
+        return None
+    if raw_id.startswith("http://") or raw_id.startswith("https://"):
+        return raw_id
+    if provider.upper() == "PAYPAL":
+        clean_id = raw_id.lstrip("#")
+        return f"https://www.sandbox.paypal.com/invoice/p/#{clean_id}"
+    return None
 
 
 def _violated_constraint_name(error: IntegrityError) -> str | None:
@@ -163,7 +195,7 @@ class SqlAlchemyPaymentIntentRepository:
         return PaymentIntentAuthorizationOutcome(intent_id=command.id, already_existed=False)
 
     def list_for_agreement(self, agreement_version_id: UUID) -> list[PaymentStatusRecord]:
-        """Read each milestone's latest status; provider invoice fields stay internal."""
+        """Read each milestone's latest status with buyer contact and retry diagnostics."""
         rows = self._db.execute(
             select(PaymentIntent, PaymentMilestoneRow)
             .join(
@@ -177,25 +209,106 @@ class SqlAlchemyPaymentIntentRepository:
                 PaymentIntent.id.desc(),
             )
         ).all()
-        latest_by_milestone = {}
+        if not rows:
+            return []
+
+        latest_by_milestone: dict[UUID, tuple[PaymentIntent, PaymentMilestoneRow]] = {}
         for intent, milestone in rows:
             latest_by_milestone.setdefault(milestone.id, (intent, milestone))
-        return [
-            PaymentStatusRecord(
-                intent_id=intent.id,
-                milestone_sequence=milestone.sequence_number,
-                amount=Money(intent.amount, intent.currency),
-                status=intent.status,
-                reconciled_amount=(
-                    Money(intent.reconciled_amount, intent.currency)
-                    if intent.reconciled_amount is not None
-                    else None
-                ),
-                last_checked_at=intent.last_checked_at,
-                last_reconciled_at=intent.last_reconciled_at,
+
+        intents = [intent for intent, _ in latest_by_milestone.values()]
+        intent_ids = [intent.id for intent in intents]
+        payer_org_ids = {intent.payer_organization_id for intent in intents}
+
+        outbox_by_intent: dict[UUID, OutboxEvent] = {}
+        if intent_ids:
+            outbox_rows = self._db.execute(
+                select(OutboxEvent)
+                .where(
+                    OutboxEvent.aggregate_type == "payment_intent",
+                    OutboxEvent.aggregate_id.in_(intent_ids),
+                )
+                .order_by(
+                    case((OutboxEvent.status.in_(("RETRYING", "PROCESSING", "PENDING")), 0), else_=1),
+                    OutboxEvent.created_at.desc(),
+                    OutboxEvent.id.desc(),
+                )
+            ).scalars().all()
+            for outbox in outbox_rows:
+                outbox_by_intent.setdefault(outbox.aggregate_id, outbox)
+
+        contact_by_org: dict[UUID, tuple[str | None, str | None]] = {}
+        if payer_org_ids:
+            org_rows = self._db.execute(
+                select(Organization.id, Organization.legal_name)
+                .where(Organization.id.in_(payer_org_ids))
+            ).all()
+            for org_id, legal_name in org_rows:
+                contact_by_org[org_id] = (None, legal_name)
+
+            member_rows = self._db.execute(
+                select(
+                    OrganizationMember.organization_id,
+                    User.display_name,
+                    User.email,
+                )
+                .join(User, User.id == OrganizationMember.user_id)
+                .where(
+                    OrganizationMember.organization_id.in_(payer_org_ids),
+                    OrganizationMember.status == "ACTIVE",
+                    User.status == "ACTIVE",
+                )
+                .order_by(
+                    case((OrganizationMember.role == "ADMIN", 0), else_=1),
+                    User.id,
+                )
+            ).all()
+            for org_id, display_name, email in member_rows:
+                current_email, _ = contact_by_org.get(org_id, (None, None))
+                if current_email is None:
+                    contact_by_org[org_id] = (email, display_name)
+
+        records: list[PaymentStatusRecord] = []
+        for intent, milestone in latest_by_milestone.values():
+            outbox = outbox_by_intent.get(intent.id)
+            recipient_email, recipient_name = contact_by_org.get(
+                intent.payer_organization_id, (None, None)
             )
-            for intent, milestone in latest_by_milestone.values()
-        ]
+
+            failure_reason = intent.failure_code
+            if failure_reason is None and intent.status == "FAILED":
+                failure_reason = intent.failure_detail or (outbox.error_detail if outbox else None)
+            elif failure_reason is None and outbox and outbox.status in ("FAILED", "DEAD_LETTER"):
+                failure_reason = outbox.error_detail
+
+            next_retry_at = outbox.next_attempt_at if outbox is not None else None
+            if next_retry_at is not None and next_retry_at.tzinfo is None:
+                next_retry_at = next_retry_at.replace(tzinfo=UTC)
+
+            records.append(
+                ExtendedPaymentStatusRecord(
+                    intent_id=intent.id,
+                    milestone_sequence=milestone.sequence_number,
+                    amount=Money(intent.amount, intent.currency),
+                    status=intent.status,
+                    reconciled_amount=(
+                        Money(intent.reconciled_amount, intent.currency)
+                        if intent.reconciled_amount is not None
+                        else None
+                    ),
+                    last_checked_at=intent.last_checked_at,
+                    last_reconciled_at=intent.last_reconciled_at,
+                    invoice_url=_build_invoice_url(
+                        intent.provider, intent.provider_invoice_id, intent.status
+                    ),
+                    recipient_email=recipient_email,
+                    recipient_name=recipient_name,
+                    retry_count=outbox.retry_count if outbox is not None else 0,
+                    next_retry_at=next_retry_at,
+                    failure_reason=failure_reason,
+                )
+            )
+        return records
 
     def _matching_outcome_or_raise(
         self, existing: PaymentIntent | None, command: AuthorizePaymentIntentCommand

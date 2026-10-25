@@ -727,5 +727,493 @@ class PayPalSandboxAdapterTests(unittest.TestCase):
         self.assertIsNone(provider.find_invoice(request.lookup))
 
 
+class PaymentStatusExtendedModelTests(unittest.TestCase):
+    """Test extended PaymentStatusResponse and SqlAlchemyPaymentIntentRepository query mapping."""
+
+    def setUp(self) -> None:
+        import asyncio
+        import httpx
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from sqlalchemy.pool import StaticPool
+        from syncally.api.auth import get_current_actor
+        from syncally.api.main import app
+        from syncally.api.payments import PaymentStatusResponse
+        from syncally.application.identity import ActorContext
+        from syncally.infrastructure.database import get_db
+        from syncally.infrastructure.models import (
+            AgreementVersion,
+            Approval,
+            Base,
+            Deal,
+            NegotiationSession,
+            Organization,
+            OrganizationMember,
+            OutboxEvent,
+            PaymentIntent,
+            PaymentMilestone,
+            Proposal,
+            User,
+        )
+        from syncally.infrastructure.repositories.payments import (
+            ExtendedPaymentStatusRecord,
+            SqlAlchemyPaymentIntentRepository,
+        )
+
+        self.engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(self.engine)
+        self.session = Session(self.engine)
+
+        self.buyer_org = Organization(legal_name="Buyer Corp", country_code="US")
+        self.seller_org = Organization(legal_name="Seller Corp", country_code="CA")
+        self.buyer_admin = User(email="buyer-admin@example.com", display_name="Buyer Admin")
+        self.seller_admin = User(email="seller-admin@example.com", display_name="Seller Admin")
+        self.outsider_user = User(email="outsider@example.com", display_name="Outsider")
+        self.outsider_org = Organization(legal_name="Outsider Corp", country_code="US")
+
+        self.session.add_all([
+            self.buyer_org,
+            self.seller_org,
+            self.outsider_org,
+            self.buyer_admin,
+            self.seller_admin,
+            self.outsider_user,
+        ])
+        self.session.flush()
+
+        self.session.add_all([
+            OrganizationMember(
+                organization_id=self.buyer_org.id,
+                user_id=self.buyer_admin.id,
+                role="ADMIN",
+                status="ACTIVE",
+            ),
+            OrganizationMember(
+                organization_id=self.seller_org.id,
+                user_id=self.seller_admin.id,
+                role="ADMIN",
+                status="ACTIVE",
+            ),
+            OrganizationMember(
+                organization_id=self.outsider_org.id,
+                user_id=self.outsider_user.id,
+                role="ADMIN",
+                status="ACTIVE",
+            ),
+        ])
+        self.deal = Deal(
+            buyer_organization_id=self.buyer_org.id,
+            seller_organization_id=self.seller_org.id,
+            status="AGREED",
+            version=1,
+        )
+        self.session.add(self.deal)
+        self.session.flush()
+
+        negotiation = NegotiationSession(deal_id=self.deal.id, max_rounds=5)
+        self.session.add(negotiation)
+        self.session.flush()
+
+        self.proposal = Proposal(
+            deal_id=self.deal.id,
+            negotiation_session_id=negotiation.id,
+            proposal_number=1,
+            author_organization_id=self.buyer_org.id,
+            terms_json={},
+            terms_hash="terms-hash-1",
+            status="SUBMITTED",
+        )
+        self.session.add(self.proposal)
+        self.session.flush()
+
+        from test_domain_fixes import build_terms
+        from syncally.domain.shared.identifiers import OrganizationId
+
+        terms = build_terms(
+            buyer_id=OrganizationId(self.buyer_org.id),
+            seller_id=OrganizationId(self.seller_org.id),
+        )
+
+        self.agreement = AgreementVersion(
+            deal_id=self.deal.id,
+            proposal_id=self.proposal.id,
+            version_number=1,
+            terms_hash=terms.terms_hash,
+            canonical_terms_json=json.loads(terms.canonical_json()),
+            status="COMMITTED",
+            created_by=self.buyer_admin.id,
+            committed_at=datetime(2026, 10, 25, 10, 0, tzinfo=UTC),
+        )
+        self.session.add(self.agreement)
+        self.session.flush()
+
+        self.session.add_all([
+            Approval(
+                deal_id=self.deal.id,
+                agreement_version_id=self.agreement.id,
+                organization_id=self.buyer_org.id,
+                user_id=self.buyer_admin.id,
+                decision="APPROVE",
+                terms_hash=terms.terms_hash,
+            ),
+            Approval(
+                deal_id=self.deal.id,
+                agreement_version_id=self.agreement.id,
+                organization_id=self.seller_org.id,
+                user_id=self.seller_admin.id,
+                decision="APPROVE",
+                terms_hash=terms.terms_hash,
+            ),
+        ])
+        self.session.flush()
+
+        self.deal.current_agreement_version_id = self.agreement.id
+
+        self.milestone = PaymentMilestone(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            sequence_number=1,
+            payer_organization_id=self.buyer_org.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            trigger_type="IMMEDIATE",
+            due_condition="ON_SIGNING",
+            status="PENDING",
+        )
+        self.session.add(self.milestone)
+        self.session.flush()
+
+    def tearDown(self) -> None:
+        from syncally.api.main import app
+        app.dependency_overrides.clear()
+        self.session.close()
+        from syncally.infrastructure.models import Base
+        Base.metadata.drop_all(self.engine)
+        self.engine.dispose()
+
+    def test_payment_status_response_defaults_and_fields(self) -> None:
+        from syncally.api.payments import PaymentStatusResponse
+        intent_id = uuid4()
+        response = PaymentStatusResponse(
+            id=intent_id,
+            milestone_sequence=1,
+            amount="100.00",
+            currency="USD",
+            status="AUTHORIZED",
+            reconciled_amount=None,
+            last_checked_at=None,
+            last_reconciled_at=None,
+        )
+        self.assertEqual(response.id, intent_id)
+        self.assertIsNone(response.invoice_url)
+        self.assertIsNone(response.recipient_email)
+        self.assertIsNone(response.recipient_name)
+        self.assertEqual(response.retry_count, 0)
+        self.assertIsNone(response.next_retry_at)
+        self.assertIsNone(response.failure_reason)
+
+    def test_payment_status_response_full_fields(self) -> None:
+        from syncally.api.payments import PaymentStatusResponse
+        intent_id = uuid4()
+        next_retry = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+        response = PaymentStatusResponse(
+            id=intent_id,
+            milestone_sequence=1,
+            amount="100.00",
+            currency="USD",
+            status="SENT",
+            reconciled_amount="50.00",
+            last_checked_at=None,
+            last_reconciled_at=None,
+            invoice_url="https://www.sandbox.paypal.com/invoice/p/#paypal-invoice-1",
+            recipient_email="buyer-admin@example.com",
+            recipient_name="Buyer Admin",
+            retry_count=2,
+            next_retry_at=next_retry,
+            failure_reason="PAYPAL_TIMEOUT",
+        )
+        self.assertEqual(response.invoice_url, "https://www.sandbox.paypal.com/invoice/p/#paypal-invoice-1")
+        self.assertEqual(response.recipient_email, "buyer-admin@example.com")
+        self.assertEqual(response.recipient_name, "Buyer Admin")
+        self.assertEqual(response.retry_count, 2)
+        self.assertEqual(response.next_retry_at, next_retry)
+        self.assertEqual(response.failure_reason, "PAYPAL_TIMEOUT")
+
+    def test_repository_list_for_agreement_maps_invoice_url_and_buyer_info(self) -> None:
+        from syncally.infrastructure.models import OutboxEvent, PaymentIntent
+        from syncally.infrastructure.repositories.payments import SqlAlchemyPaymentIntentRepository
+
+        intent = PaymentIntent(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            payment_milestone_id=self.milestone.id,
+            seller_organization_id=self.seller_org.id,
+            payer_organization_id=self.buyer_org.id,
+            authorized_by=self.seller_admin.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status="SENT",
+            provider="PAYPAL",
+            provider_invoice_id="paypal-invoice-1",
+            idempotency_key="intent-key-1",
+        )
+        self.session.add(intent)
+        self.session.flush()
+
+        next_retry = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+        outbox = OutboxEvent(
+            aggregate_type="payment_intent",
+            aggregate_id=intent.id,
+            event_type="PAYMENT_INTENT_AUTHORIZED",
+            payload={"payment_intent_id": str(intent.id)},
+            status="RETRYING",
+            retry_count=3,
+            next_attempt_at=next_retry,
+        )
+        self.session.add(outbox)
+        self.session.commit()
+
+        repo = SqlAlchemyPaymentIntentRepository(self.session)
+        records = repo.list_for_agreement(self.agreement.id)
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record.intent_id, intent.id)
+        self.assertEqual(record.invoice_url, "https://www.sandbox.paypal.com/invoice/p/#paypal-invoice-1")
+        self.assertEqual(record.recipient_email, "buyer-admin@example.com")
+        self.assertEqual(record.recipient_name, "Buyer Admin")
+        self.assertEqual(record.retry_count, 3)
+        self.assertEqual(record.next_retry_at, next_retry)
+        self.assertIsNone(record.failure_reason)
+
+    def test_repository_list_for_agreement_omits_uncreated_invoice_url(self) -> None:
+        from syncally.infrastructure.models import PaymentIntent
+        from syncally.infrastructure.repositories.payments import SqlAlchemyPaymentIntentRepository
+
+        intent = PaymentIntent(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            payment_milestone_id=self.milestone.id,
+            seller_organization_id=self.seller_org.id,
+            payer_organization_id=self.buyer_org.id,
+            authorized_by=self.seller_admin.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status="AUTHORIZED",
+            provider="PAYPAL",
+            provider_invoice_id=None,
+            idempotency_key="intent-key-uncreated",
+        )
+        self.session.add(intent)
+        self.session.commit()
+
+        repo = SqlAlchemyPaymentIntentRepository(self.session)
+        records = repo.list_for_agreement(self.agreement.id)
+
+        self.assertEqual(len(records), 1)
+        self.assertIsNone(records[0].invoice_url)
+
+    def test_repository_list_for_agreement_strips_leading_hash_in_invoice_id(self) -> None:
+        from syncally.infrastructure.models import PaymentIntent
+        from syncally.infrastructure.repositories.payments import SqlAlchemyPaymentIntentRepository
+
+        intent = PaymentIntent(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            payment_milestone_id=self.milestone.id,
+            seller_organization_id=self.seller_org.id,
+            payer_organization_id=self.buyer_org.id,
+            authorized_by=self.seller_admin.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status="SENT",
+            provider="PAYPAL",
+            provider_invoice_id="#paypal-invoice-hash",
+            idempotency_key="intent-key-hash",
+        )
+        self.session.add(intent)
+        self.session.commit()
+
+        repo = SqlAlchemyPaymentIntentRepository(self.session)
+        records = repo.list_for_agreement(self.agreement.id)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(
+            records[0].invoice_url,
+            "https://www.sandbox.paypal.com/invoice/p/#paypal-invoice-hash",
+        )
+
+    def test_repository_list_for_agreement_prioritizes_active_retrying_outbox_event(self) -> None:
+        from syncally.infrastructure.models import OutboxEvent, PaymentIntent
+        from syncally.infrastructure.repositories.payments import SqlAlchemyPaymentIntentRepository
+
+        intent = PaymentIntent(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            payment_milestone_id=self.milestone.id,
+            seller_organization_id=self.seller_org.id,
+            payer_organization_id=self.buyer_org.id,
+            authorized_by=self.seller_admin.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status="CREATE_PENDING",
+            provider="PAYPAL",
+            provider_invoice_id=None,
+            idempotency_key="intent-key-active-retry",
+        )
+        self.session.add(intent)
+        self.session.flush()
+
+        retry_time = datetime(2026, 10, 26, 16, 0, tzinfo=UTC)
+        # Add an older retrying event and a newer delivered event
+        self.session.add_all([
+            OutboxEvent(
+                aggregate_type="payment_intent",
+                aggregate_id=intent.id,
+                event_type="PAYMENT_INTENT_AUTHORIZED",
+                payload={"payment_intent_id": str(intent.id)},
+                status="RETRYING",
+                retry_count=4,
+                next_attempt_at=retry_time,
+                error_detail="Connection reset by peer",
+                created_at=datetime(2026, 10, 25, 12, 0, tzinfo=UTC),
+            ),
+            OutboxEvent(
+                aggregate_type="payment_intent",
+                aggregate_id=intent.id,
+                event_type="PAYPAL_WEBHOOK_RECONCILIATION_REQUESTED",
+                payload={"payment_intent_id": str(intent.id)},
+                status="DELIVERED",
+                retry_count=0,
+                next_attempt_at=None,
+                created_at=datetime(2026, 10, 25, 13, 0, tzinfo=UTC),
+            ),
+        ])
+        self.session.commit()
+
+        repo = SqlAlchemyPaymentIntentRepository(self.session)
+        records = repo.list_for_agreement(self.agreement.id)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].retry_count, 4)
+        self.assertEqual(records[0].next_retry_at, retry_time)
+        self.assertIsNone(records[0].invoice_url)
+
+    def test_repository_list_for_agreement_maps_failure_reason(self) -> None:
+        from syncally.infrastructure.models import PaymentIntent
+        from syncally.infrastructure.repositories.payments import SqlAlchemyPaymentIntentRepository
+
+        intent = PaymentIntent(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            payment_milestone_id=self.milestone.id,
+            seller_organization_id=self.seller_org.id,
+            payer_organization_id=self.buyer_org.id,
+            authorized_by=self.seller_admin.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status="FAILED",
+            provider="PAYPAL",
+            provider_invoice_id=None,
+            idempotency_key="intent-key-failed",
+            failure_code="PAYPAL_INVALID_REQUEST",
+            failure_detail="Account restricted",
+        )
+        self.session.add(intent)
+        self.session.commit()
+
+        repo = SqlAlchemyPaymentIntentRepository(self.session)
+        records = repo.list_for_agreement(self.agreement.id)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].failure_reason, "PAYPAL_INVALID_REQUEST")
+
+    def test_route_get_payments_exposed_to_both_seller_and_buyer(self) -> None:
+        import asyncio
+        import httpx
+        from syncally.api.auth import get_current_actor
+        from syncally.api.main import app
+        from syncally.application.identity import ActorContext
+        from syncally.infrastructure.database import get_db
+        from syncally.infrastructure.models import OutboxEvent, PaymentIntent
+
+        intent = PaymentIntent(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            payment_milestone_id=self.milestone.id,
+            seller_organization_id=self.seller_org.id,
+            payer_organization_id=self.buyer_org.id,
+            authorized_by=self.seller_admin.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status="SENT",
+            provider="PAYPAL",
+            provider_invoice_id="paypal-invoice-99",
+            idempotency_key="intent-route-test",
+        )
+        self.session.add(intent)
+        self.session.flush()
+
+        outbox = OutboxEvent(
+            aggregate_type="payment_intent",
+            aggregate_id=intent.id,
+            event_type="PAYMENT_INTENT_AUTHORIZED",
+            payload={"payment_intent_id": str(intent.id)},
+            status="PENDING",
+            retry_count=1,
+            next_attempt_at=datetime(2026, 10, 26, 15, 0, tzinfo=UTC),
+        )
+        self.session.add(outbox)
+        self.session.commit()
+
+        app.dependency_overrides[get_db] = lambda: self.session
+
+        async def make_request(actor: ActorContext) -> httpx.Response:
+            app.dependency_overrides[get_current_actor] = lambda: actor
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                return await client.get(f"/deals/{self.deal.id}/payments")
+
+        # 1. Seller member request
+        seller_actor = ActorContext(self.seller_admin.id, frozenset([self.seller_org.id]))
+        seller_response = asyncio.run(make_request(seller_actor))
+        self.assertEqual(seller_response.status_code, 200, seller_response.text)
+        seller_data = seller_response.json()
+        self.assertEqual(len(seller_data), 1)
+        self.assertEqual(
+            seller_data[0]["invoice_url"],
+            "https://www.sandbox.paypal.com/invoice/p/#paypal-invoice-99",
+        )
+        self.assertEqual(seller_data[0]["recipient_email"], "buyer-admin@example.com")
+        self.assertEqual(seller_data[0]["recipient_name"], "Buyer Admin")
+        self.assertEqual(seller_data[0]["retry_count"], 1)
+        self.assertEqual(seller_data[0]["next_retry_at"], "2026-10-26T15:00:00Z")
+
+        # 2. Buyer member request
+        buyer_actor = ActorContext(self.buyer_admin.id, frozenset([self.buyer_org.id]))
+        buyer_response = asyncio.run(make_request(buyer_actor))
+        self.assertEqual(buyer_response.status_code, 200, buyer_response.text)
+        buyer_data = buyer_response.json()
+        self.assertEqual(len(buyer_data), 1)
+        self.assertEqual(
+            buyer_data[0]["invoice_url"],
+            "https://www.sandbox.paypal.com/invoice/p/#paypal-invoice-99",
+        )
+        self.assertEqual(buyer_data[0]["recipient_email"], "buyer-admin@example.com")
+        self.assertEqual(buyer_data[0]["recipient_name"], "Buyer Admin")
+        self.assertEqual(buyer_data[0]["retry_count"], 1)
+
+        # 3. Outsider request returns 404
+        outsider_actor = ActorContext(self.outsider_user.id, frozenset([self.outsider_org.id]))
+        outsider_response = asyncio.run(make_request(outsider_actor))
+        self.assertEqual(outsider_response.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

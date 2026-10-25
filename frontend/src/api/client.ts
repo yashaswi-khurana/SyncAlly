@@ -1,6 +1,7 @@
 import { getAccessToken } from "./tokenStore";
 import type {
   CreateDealInput,
+  CreateMessageInput,
   CreateOrganizationInput,
   AgreementApproval,
   AgreementVersion,
@@ -22,8 +23,19 @@ import type {
 
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
 
+/**
+ * Upper bound for any API call. Matches the backend's provider timeout so a
+ * request cannot outlive the server-side work it is waiting on.
+ */
+export const API_REQUEST_TIMEOUT_MS = 30_000;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isAbortError(error: unknown): boolean {
+  // Name check instead of `instanceof DOMException` so errors from another realm still match.
+  return isRecord(error) && error["name"] === "AbortError";
 }
 
 function describeDetail(detail: unknown): string | null {
@@ -85,20 +97,52 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  let response: Response;
-  try {
-    response = await fetch(`${apiBaseUrl()}${path}`, { ...init, headers });
-  } catch {
-    throw new ApiError(0, null, "Unable to reach the SyncAlly API. Check that it is running.");
+  // Compose the caller's signal with a deadline so a stalled connection cannot
+  // hang the UI forever. The caller's abort reason is preserved for identity.
+  const callerSignal = init.signal;
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) {
+    controller.abort(callerSignal.reason);
   }
+  callerSignal?.addEventListener("abort", forwardAbort, { once: true });
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, API_REQUEST_TIMEOUT_MS);
 
-  if (!response.ok) {
-    throw new ApiError(response.status, await readErrorDetail(response));
+  try {
+    const response = await fetch(`${apiBaseUrl()}${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, await readErrorDetail(response));
+    }
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    // Caller cancellation wins over the deadline if both landed together.
+    if (timedOut && !callerSignal?.aborted) {
+      throw new ApiError(0, null, "The SyncAlly API took too long to respond. Please try again.");
+    }
+    // Caller-initiated cancellation is not an outage: keep the abort error intact so
+    // callers can distinguish it (name === "AbortError" or their own signal state).
+    if (callerSignal?.aborted || isAbortError(error)) {
+      throw error;
+    }
+    throw new ApiError(0, null, "Unable to reach the SyncAlly API. Check that it is running.");
+  } finally {
+    clearTimeout(deadline);
+    callerSignal?.removeEventListener("abort", forwardAbort);
   }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return (await response.json()) as T;
 }
 
 export function login(email: string, password: string): Promise<TokenResponse> {
@@ -218,6 +262,30 @@ export function createAgreementFromReviewedTerms(
       }),
     },
   );
+}
+
+export function createDealMessage(
+  dealId: string,
+  input: CreateMessageInput,
+  options?: { signal?: AbortSignal },
+): Promise<DealMessage> {
+  // source_type is forwarded as supplied. The server currently derives it from the
+  // verified actor and ignores this field, so it has no effect until the endpoint
+  // accepts it.
+  const { body, visibility, idempotency_key, source_type, source_reference, organization_id } =
+    input;
+  return apiRequest<DealMessage>(`/deals/${encodeURIComponent(dealId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      body,
+      visibility,
+      idempotency_key,
+      source_type,
+      source_reference,
+      organization_id,
+    }),
+    signal: options?.signal,
+  });
 }
 
 export function listDealMessages(

@@ -163,6 +163,22 @@ export interface CreateDealInput {
   seller_organization_id: string;
 }
 
+/**
+ * Payload for `POST /deals/{deal_id}/messages`.
+ *
+ * The server derives the author and the stored `source_type` from the verified
+ * access token; `source_type` is forwarded so the client stays compatible if
+ * the endpoint starts accepting it. `organization_id` disambiguates the acting
+ * party for users who are members of both the buyer and seller organizations.
+ */
+export interface CreateMessageInput {
+  body: string;
+  visibility: Visibility;
+  source_type?: string;
+  source_reference?: string;
+  organization_id?: string;
+}
+
 export interface CreateOrganizationInput {
   legal_name: string;
   country_code: string;

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, listDeals } from "../api/client";
+import { ApiError, listDeals, listOrganizations } from "../api/client";
 import type { DealSummary } from "../api/types";
 import DealsPage from "./DealsPage";
 
@@ -10,10 +10,12 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     listDeals: vi.fn(),
+    listOrganizations: vi.fn(),
   };
 });
 
 const mockedListDeals = vi.mocked(listDeals);
+const mockedListOrganizations = vi.mocked(listOrganizations);
 
 function deal(overrides: Partial<DealSummary> = {}): DealSummary {
   return {
@@ -53,9 +55,14 @@ describe("DealsPage", () => {
     expect(
       await screen.findByRole("heading", { name: "Deals shared with you" }),
     ).toBeInTheDocument();
+    expect(mockedListOrganizations).not.toHaveBeenCalled();
+    expect(screen.queryByText(/loading your organizations/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Organization IDs" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Create an organization" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /could not load your organizations/i }),
     ).not.toBeInTheDocument();
   });
 

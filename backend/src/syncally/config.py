@@ -53,7 +53,9 @@ def _is_weak_jwt_secret(secret: str) -> bool:
 
 
 class Settings(BaseSettings):
-    app_env: str = "development"
+    # Fail closed when a deployment forgets to set APP_ENV. Local .env files
+    # should opt into development explicitly.
+    app_env: str = "production"
     debug: bool = False
     database_url: str = ""
     jwt_secret: str = ""

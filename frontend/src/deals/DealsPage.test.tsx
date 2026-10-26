@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, listDeals, listOrganizations } from "../api/client";
-import type { DealSummary, Organization } from "../api/types";
+import type { DealSummary } from "../api/types";
 import DealsPage from "./DealsPage";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -29,21 +29,7 @@ function deal(overrides: Partial<DealSummary> = {}): DealSummary {
   };
 }
 
-function organization(overrides: Partial<Organization> = {}): Organization {
-  return {
-    id: "33333333-3333-3333-3333-333333333333",
-    legal_name: "Demo Seller Co",
-    country_code: "US",
-    role: "ADMIN",
-    ...overrides,
-  };
-}
-
 describe("DealsPage", () => {
-  beforeEach(() => {
-    mockedListOrganizations.mockResolvedValue([organization()]);
-  });
-
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -61,13 +47,23 @@ describe("DealsPage", () => {
     expect(screen.getByText("You are the buyer")).toBeInTheDocument();
   });
 
-  it("shows the signed-in organization IDs to share", async () => {
+  it("does not render organization management panels on the deals workspace", async () => {
     mockedListDeals.mockResolvedValue([]);
 
     render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
 
-    expect(await screen.findByText("Demo Seller Co (US)")).toBeInTheDocument();
-    expect(screen.getByText("33333333-3333-3333-3333-333333333333")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Deals shared with you" }),
+    ).toBeInTheDocument();
+    expect(mockedListOrganizations).not.toHaveBeenCalled();
+    expect(screen.queryByText(/loading your organizations/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Organization IDs" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Create an organization" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /could not load your organizations/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("labels the seller party on a shared deal", async () => {

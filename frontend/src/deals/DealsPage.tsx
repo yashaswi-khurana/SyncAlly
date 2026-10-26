@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import { ApiError, listDeals } from "../api/client";
 import type { DealSummary, ViewerRole } from "../api/types";
-import OrganizationsPanel from "../organizations/OrganizationsPanel";
 import Reveal from "../ui/Reveal";
 
 type DealsState =
@@ -141,10 +140,6 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
       </Reveal>
 
       <Reveal delay={80}>{renderDeals()}</Reveal>
-
-      <Reveal delay={120}>
-        <OrganizationsPanel />
-      </Reveal>
     </div>
   );
 }

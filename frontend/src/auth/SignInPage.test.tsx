@@ -43,6 +43,7 @@ describe("SignInPage", () => {
 
   it("quick-fills the demo email without assuming the provisioned password", () => {
     vi.stubEnv("VITE_ENABLE_DEMO_QUICK_FILL", "true");
+    vi.stubEnv("VITE_APP_ENV", "development");
     render(<SignInPage onSignIn={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Demo Buyer" }));
@@ -52,6 +53,17 @@ describe("SignInPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Demo Seller" }));
     expect(screen.getByLabelText("Email")).toHaveValue("seller@syncally.demo");
     expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  it("only shows demo quick-fill in development or test environments", () => {
+    vi.stubEnv("VITE_ENABLE_DEMO_QUICK_FILL", "true");
+    vi.stubEnv("VITE_APP_ENV", "production");
+    const { rerender } = render(<SignInPage onSignIn={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Demo Buyer" })).not.toBeInTheDocument();
+
+    vi.stubEnv("VITE_APP_ENV", "test");
+    rerender(<SignInPage onSignIn={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Demo Buyer" })).toBeInTheDocument();
   });
 
   it("signs in and passes the tokens to the caller", async () => {

@@ -6,7 +6,9 @@ import type { TokenResponse } from "../api/types";
 import TradeFlowScene from "../deals/TradeFlowScene";
 
 function demoQuickFillEnabled() {
-  return import.meta.env.VITE_ENABLE_DEMO_QUICK_FILL === "true";
+  const appEnvironment = import.meta.env.VITE_APP_ENV?.trim().toLowerCase();
+  const supportsDemoAccounts = appEnvironment === "development" || appEnvironment === "test";
+  return import.meta.env.VITE_ENABLE_DEMO_QUICK_FILL === "true" && supportsDemoAccounts;
 }
 
 interface SignInPageProps {

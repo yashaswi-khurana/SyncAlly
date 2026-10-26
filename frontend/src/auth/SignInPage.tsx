@@ -21,6 +21,13 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  function fillDemo(role: "buyer" | "seller") {
+    setEmail(`${role}@syncally.demo`);
+    setPassword("correct-horse-battery");
+    setFieldErrors({});
+    setFormError(null);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -74,21 +81,21 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
 
       <section className="auth-hero" aria-labelledby="auth-title">
         <div className="auth-hero__meta">
-          <span className="eyebrow">A shared record for both sides</span>
+          <span className="eyebrow">Cross-border trade on autopilot</span>
           <span className="auth-hero__edition">BUYER ↔ SELLER</span>
         </div>
         <h1 id="auth-title">
-          When terms matter,<br />
-          <span>keep the whole conversation.</span>
+          Cross-Border Trade<br />
+          <span>on Autopilot.</span>
         </h1>
         <p className="auth-hero__lede">
-          Read the conversation alongside source-linked facts. Each organization reviews the facts
-          it owns, with private details kept to that side.
+          Turn a buyer and seller conversation into a clear, mutually approved deal—with invoicing
+          ready to follow.
         </p>
 
         <div className="auth-diagram" aria-label="Conversation to suggested facts to owner review">
           <div className="auth-diagram__topline">
-            <span>THE RECORD PATH</span>
+            <span>HOW IT WORKS</span>
             <span>01 — 03</span>
           </div>
           <div className="auth-diagram__drawing" aria-hidden="true">
@@ -96,23 +103,31 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           </div>
           <div className="auth-diagram__labels">
             <div>
-              <span>01 / INPUT</span>
-              <strong>Conversation</strong>
+              <span>01 / DISCUSS</span>
+              <strong>Discuss &amp; Extract Terms</strong>
             </div>
             <div>
-              <span>02 / RECORD</span>
-              <strong>Suggested facts</strong>
+              <span>02 / APPROVE</span>
+              <strong>Cryptographic Bilateral Approval</strong>
             </div>
             <div>
-              <span>03 / REVIEW</span>
-              <strong>Owner review</strong>
+              <span>03 / INVOICE</span>
+              <strong>Automated PayPal Invoicing</strong>
             </div>
           </div>
         </div>
         <div className="auth-hero__footnote">
           <span className="auth-hero__footnote-mark" aria-hidden="true">↳</span>
-          <span>Reviewing a fact records a decision; it does not commit an agreement.</span>
+          <span>Both parties approve the same terms before an invoice is created.</span>
         </div>
+        <section className="auth-benefits" aria-labelledby="why-syncally">
+          <h2 id="why-syncally">Why SyncAlly</h2>
+          <ul>
+            <li><strong>Guaranteed consensus</strong><span>One agreed version, approved by both sides.</span></li>
+            <li><strong>Private by design</strong><span>Keep internal terms private; share only what the deal needs.</span></li>
+            <li><strong>Immutable audit record</strong><span>Every approval stays traceable.</span></li>
+          </ul>
+        </section>
       </section>
 
       <aside className="card auth-card" aria-labelledby="sign-in-heading">
@@ -125,6 +140,13 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           Sign in with a provisioned buyer or seller account. Public registration is turned off.
         </p>
         <form className="form" onSubmit={handleSubmit} noValidate>
+          <div className="auth-demo-fill" aria-label="Quick-fill demo accounts">
+            <span>TRY THE LOCAL DEMO</span>
+            <div>
+              <button type="button" onClick={() => fillDemo("buyer")}>Demo Buyer</button>
+              <button type="button" onClick={() => fillDemo("seller")}>Demo Seller</button>
+            </div>
+          </div>
           <div className="field">
             <label htmlFor="email">Email</label>
             <input

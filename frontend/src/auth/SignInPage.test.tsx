@@ -29,6 +29,23 @@ describe("SignInPage", () => {
     expect(mockedLogin).not.toHaveBeenCalled();
   });
 
+  it("explains the trade flow and quick-fills either local demo account", () => {
+    render(<SignInPage onSignIn={vi.fn()} />);
+
+    expect(screen.getByRole("heading", { name: "Cross-Border Trade on Autopilot." })).toBeInTheDocument();
+    expect(screen.getByText("Cryptographic Bilateral Approval")).toBeInTheDocument();
+    expect(screen.getByText("Automated PayPal Invoicing")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Why SyncAlly" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Demo Buyer" }));
+    expect(screen.getByLabelText("Email")).toHaveValue("buyer@syncally.demo");
+    expect(screen.getByLabelText("Password")).toHaveValue("correct-horse-battery");
+
+    fireEvent.click(screen.getByRole("button", { name: "Demo Seller" }));
+    expect(screen.getByLabelText("Email")).toHaveValue("seller@syncally.demo");
+    expect(screen.getByLabelText("Password")).toHaveValue("correct-horse-battery");
+  });
+
   it("signs in and passes the tokens to the caller", async () => {
     const tokens = {
       access_token: "access-token",

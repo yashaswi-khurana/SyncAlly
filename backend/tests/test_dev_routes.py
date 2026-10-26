@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
+from uuid import UUID
 
 import httpx
 import jwt
@@ -16,6 +17,7 @@ from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from syncally.api.auth import _encode_access_token
 from syncally.api.main import app
 from syncally.application.passwords import verify_password
 from syncally.cli.seed_demo import DEMO_IDENTITIES, seed_demo_data
@@ -75,6 +77,8 @@ class DevRoutesTests(unittest.TestCase):
         self.env_patch.start()
         self.secret_patch.start()
         seed_demo_data(self.db, (_BUYER_PASSWORD, _SELLER_PASSWORD))
+        self.buyer_user_id = self._user(_BUYER_EMAIL).id
+        self.seller_user_id = self._user(_SELLER_EMAIL).id
         app.dependency_overrides.clear()
         app.dependency_overrides[get_db] = lambda: self.db
 
@@ -87,14 +91,26 @@ class DevRoutesTests(unittest.TestCase):
         self.engine.dispose()
 
     def _request(
-        self, method: str, path: str, *, json: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        authenticated: bool = True,
+        user_id: UUID | None = None,
     ) -> httpx.Response:
+        headers = None
+        if authenticated:
+            headers = {
+                "Authorization": f"Bearer {_encode_access_token(user_id or self.buyer_user_id)}"
+            }
+
         async def send() -> httpx.Response:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app),
                 base_url="http://test",
             ) as client:
-                return await client.request(method, path, json=json)
+                return await client.request(method, path, json=json, headers=headers)
 
         return asyncio.run(send())
 
@@ -102,6 +118,42 @@ class DevRoutesTests(unittest.TestCase):
         user = self.db.scalar(select(User).where(User.email == email))
         assert user is not None
         return user
+
+    def test_dev_endpoints_require_an_authenticated_demo_admin(self) -> None:
+        deal = self._create_minimal_deal()
+
+        unauthenticated_switch = self._request(
+            "POST",
+            "/dev/switch-role",
+            json={"target_role": "SELLER"},
+            authenticated=False,
+        )
+        unauthenticated_reset = self._request(
+            "POST", "/dev/reset-demo", authenticated=False
+        )
+
+        self.assertEqual(unauthenticated_switch.status_code, 401)
+        self.assertEqual(unauthenticated_reset.status_code, 401)
+        self.assertEqual(self.db.scalar(select(func.count()).select_from(Deal)), 1)
+        self.assertIsNotNone(self.db.get(Deal, deal.id))
+
+        outsider = User(
+            email="outsider@example.test",
+            display_name="Outsider",
+            password_hash="unused-test-hash",
+            status="ACTIVE",
+        )
+        self.db.add(outsider)
+        self.db.commit()
+        forbidden = self._request(
+            "POST",
+            "/dev/switch-role",
+            json={"target_role": "SELLER"},
+            user_id=outsider.id,
+        )
+
+        self.assertEqual(forbidden.status_code, 403, forbidden.text)
+        self.assertEqual(self.db.scalar(select(func.count()).select_from(Deal)), 1)
 
     def _organization(self, legal_name: str) -> Organization:
         organization = self.db.scalar(
@@ -418,7 +470,10 @@ class DevRoutesTests(unittest.TestCase):
         self.db.commit()
 
         response = self._request(
-            "POST", "/dev/switch-role", json={"target_role": "BUYER"}
+            "POST",
+            "/dev/switch-role",
+            json={"target_role": "BUYER"},
+            user_id=self.seller_user_id,
         )
 
         self.assertEqual(response.status_code, 404, response.text)
@@ -459,7 +514,9 @@ class DevRoutesTests(unittest.TestCase):
             for identity in DEMO_IDENTITIES
         }
 
-        response = self._request("POST", "/dev/reset-demo")
+        response = self._request(
+            "POST", "/dev/reset-demo", user_id=self.seller_user_id
+        )
 
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
@@ -542,7 +599,9 @@ class DevRoutesTests(unittest.TestCase):
         self.db.delete(self._user(_BUYER_EMAIL))
         self.db.commit()
 
-        response = self._request("POST", "/dev/reset-demo")
+        response = self._request(
+            "POST", "/dev/reset-demo", user_id=self.seller_user_id
+        )
 
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(self.db.scalar(select(func.count()).select_from(Deal)), 1)

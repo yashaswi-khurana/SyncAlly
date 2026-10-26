@@ -6,7 +6,13 @@ import { useHashRoute } from "./app/useHashRoute";
 import CreateDealPage from "./deals/CreateDealPage";
 import DealDetailPage from "./deals/DealDetailPage";
 import DealsPage from "./deals/DealsPage";
-import { navigateToCreateDeal, navigateToDeal, navigateToDeals } from "./router";
+import OrganizationsSettingsPage from "./organizations/OrganizationsSettingsPage";
+import {
+  navigateToCreateDeal,
+  navigateToDeal,
+  navigateToDeals,
+  navigateToOrganizations,
+} from "./router";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
 
 export default function App() {
@@ -24,6 +30,8 @@ export default function App() {
   }
 
   const isCreate = route.name === "create";
+  const isOrganizations = route.name === "organizations";
+  const isWorkspace = route.name === "deals" || route.name === "deal";
 
   return (
     <div className="app-shell">
@@ -43,7 +51,7 @@ export default function App() {
         <nav className="site-nav__links" aria-label="Primary">
           <button
             type="button"
-            className={`nav-link${!isCreate ? " is-active" : ""}`}
+            className={`nav-link${isWorkspace ? " is-active" : ""}`}
             onClick={navigateToDeals}
           >
             Workspace
@@ -54,6 +62,13 @@ export default function App() {
             onClick={navigateToCreateDeal}
           >
             New deal
+          </button>
+          <button
+            type="button"
+            className={`nav-link${isOrganizations ? " is-active" : ""}`}
+            onClick={navigateToOrganizations}
+          >
+            Organizations
           </button>
         </nav>
         <div className="site-nav__meta">
@@ -73,6 +88,8 @@ export default function App() {
           />
         ) : route.name === "create" ? (
           <CreateDealPage onCreated={navigateToDeal} />
+        ) : route.name === "organizations" ? (
+          <OrganizationsSettingsPage />
         ) : (
           <DealsPage onOpenDeal={navigateToDeal} onCreateDeal={navigateToCreateDeal} />
         )}

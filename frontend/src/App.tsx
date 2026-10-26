@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import SignInPage from "./auth/SignInPage";
 import { useSession } from "./auth/useSession";
 import { useHashRoute } from "./app/useHashRoute";
@@ -5,10 +7,17 @@ import CreateDealPage from "./deals/CreateDealPage";
 import DealDetailPage from "./deals/DealDetailPage";
 import DealsPage from "./deals/DealsPage";
 import { navigateToCreateDeal, navigateToDeal, navigateToDeals } from "./router";
+import DevRoleSwitcher from "./ui/DevRoleSwitcher";
 
 export default function App() {
   const { accessToken, signIn, signOut } = useSession();
   const route = useHashRoute();
+  const [sessionVersion, setSessionVersion] = useState(0);
+
+  function refreshSessionView() {
+    navigateToDeals();
+    setSessionVersion((version) => version + 1);
+  }
 
   if (!accessToken) {
     return <SignInPage onSignIn={signIn} />;
@@ -55,7 +64,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="app-main">
+      <main className="app-main" key={sessionVersion}>
         {route.name === "deal" ? (
           <DealDetailPage
             key={route.dealId}
@@ -77,6 +86,7 @@ export default function App() {
           </div>
         </div>
       </footer>
+      <DevRoleSwitcher onSessionChanged={refreshSessionView} />
     </div>
   );
 }

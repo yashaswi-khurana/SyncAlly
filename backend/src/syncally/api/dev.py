@@ -7,15 +7,18 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_validator
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 # Reuse the production login pipeline so dev tokens cannot drift from real claims or TTLs.
-from syncally.api.auth import TokenResponse, _issue_tokens
+from syncally.api.auth import TokenResponse, _decode_token, _issue_tokens, bearer_scheme
 from syncally.cli.seed_demo import DEMO_IDENTITIES, seed_demo_data
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.demo_lifecycle import lock_demo_reset
+from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.models import (
     AgreementVersion,
     Approval,
@@ -28,6 +31,7 @@ from syncally.infrastructure.models import (
     NegotiationSession,
     Obligation,
     Organization,
+    OrganizationMember,
     OutboxEvent,
     PaymentIntent,
     PaymentMilestone,
@@ -55,10 +59,50 @@ def _require_dev_environment() -> None:
         )
 
 
+def _require_demo_admin(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> None:
+    """Require a bearer token belonging to an active seeded demo administrator."""
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    actor = resolve_actor(db, _decode_token(credentials.credentials))
+    if actor is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User is inactive or does not exist",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    has_demo_admin_membership = db.scalar(
+        select(User.id)
+        .join(OrganizationMember, OrganizationMember.user_id == User.id)
+        .where(
+            User.id == actor.user_id,
+            User.email.in_([identity.email for identity in DEMO_IDENTITIES]),
+            User.status == "ACTIVE",
+            OrganizationMember.organization_id.in_(actor.organization_ids),
+            OrganizationMember.status == "ACTIVE",
+            OrganizationMember.role == "ADMIN",
+        )
+        .limit(1)
+    )
+    if has_demo_admin_membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An active demo administrator session is required",
+        )
+
+
 router = APIRouter(
     prefix="/dev",
     tags=["development"],
-    dependencies=[Depends(_require_dev_environment)],
+    dependencies=[Depends(_require_dev_environment), Depends(_require_demo_admin)],
 )
 
 
@@ -168,6 +212,10 @@ def reset_demo(db: Session = Depends(get_db)) -> DevResetResponse:
     organizations. Deals involving any non-demo organization, and their audit and
     outbox rows, are left untouched.
     """
+    # Hold this transaction lock through the destructive transaction and the
+    # idempotent seed commit below. Deal creation and the payment worker use the
+    # same lock for demo-owned data.
+    lock_demo_reset(db)
     _require_seeded_demo_identities(db)
 
     organization_ids = _demo_organization_ids(db)

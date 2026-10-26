@@ -103,7 +103,7 @@ describe("App", () => {
       await screen.findByRole("heading", { name: "Deals shared with you" }),
     ).toBeInTheDocument();
     expect(mockedListDeals).toHaveBeenCalledTimes(1);
-    expect(mockedListOrganizations).toHaveBeenCalled();
+    expect(mockedListOrganizations).toHaveBeenCalledTimes(1);
   });
 
   it("shows the create flow when the create route is requested", async () => {
@@ -114,6 +114,47 @@ describe("App", () => {
 
     expect(await screen.findByLabelText("Buyer organization")).toBeInTheDocument();
     expect(mockedListOrganizations).toHaveBeenCalled();
+  });
+
+  it("navigates to the organizations settings page when clicking Organizations in the nav", async () => {
+    setAccessToken("access-token");
+
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Deals shared with you" });
+    const organizationsLink = screen.getByRole("button", { name: "Organizations" });
+    fireEvent.click(organizationsLink);
+
+    expect(window.location.hash).toBe("#/settings/organizations");
+    expect(
+      await screen.findByRole("heading", { name: "Organization IDs" }),
+    ).toBeInTheDocument();
+    expect(mockedListOrganizations).toHaveBeenCalledTimes(2);
+    expect(organizationsLink).toHaveClass("is-active");
+  });
+
+  it("shows the organizations settings page when the settings route is requested directly", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/settings/organizations";
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Organization IDs" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Demo Buyer Co (US)")).toBeInTheDocument();
+    expect(mockedListOrganizations).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles query parameters on the organizations route gracefully", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/settings/organizations?invited=true";
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Organization IDs" }),
+    ).toBeInTheDocument();
   });
 
   it("returns to the deals workspace after resetting from a deal route", async () => {

@@ -17,6 +17,7 @@ from syncally.api.auth import TokenResponse, _decode_token, _issue_tokens, beare
 from syncally.cli.seed_demo import DEMO_IDENTITIES, seed_demo_data
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.demo_lifecycle import lock_demo_reset
 from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.models import (
     AgreementVersion,
@@ -211,6 +212,10 @@ def reset_demo(db: Session = Depends(get_db)) -> DevResetResponse:
     organizations. Deals involving any non-demo organization, and their audit and
     outbox rows, are left untouched.
     """
+    # Hold this transaction lock through the destructive transaction and the
+    # idempotent seed commit below. Deal creation and the payment worker use the
+    # same lock for demo-owned data.
+    lock_demo_reset(db)
     _require_seeded_demo_identities(db)
 
     organization_ids = _demo_organization_ids(db)

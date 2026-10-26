@@ -14,6 +14,11 @@ export default function App() {
   const route = useHashRoute();
   const [sessionVersion, setSessionVersion] = useState(0);
 
+  function refreshSessionView() {
+    navigateToDeals();
+    setSessionVersion((version) => version + 1);
+  }
+
   if (!accessToken) {
     return <SignInPage onSignIn={signIn} />;
   }
@@ -81,7 +86,7 @@ export default function App() {
           </div>
         </div>
       </footer>
-      <DevRoleSwitcher onSessionChanged={() => setSessionVersion((version) => version + 1)} />
+      <DevRoleSwitcher onSessionChanged={refreshSessionView} />
     </div>
   );
 }

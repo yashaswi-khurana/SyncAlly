@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -7,6 +7,7 @@ vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
   return {
     ...actual,
+    apiRequest: vi.fn(),
     login: vi.fn(),
     listOrganizations: vi.fn(),
     listPaymentStatuses: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("./api/client", async (importOriginal) => {
 
 import {
   ApiError,
+  apiRequest,
   getCommercialDocumentDraft,
   getCurrentAgreement,
   getDeal,
@@ -34,6 +36,7 @@ import {
 import { clearAccessToken, setAccessToken } from "./api/tokenStore";
 
 const mockedGetDeal = vi.mocked(getDeal);
+const mockedApiRequest = vi.mocked(apiRequest);
 const mockedGetCurrentAgreement = vi.mocked(getCurrentAgreement);
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
@@ -47,6 +50,7 @@ describe("App", () => {
     vi.clearAllMocks();
     clearAccessToken();
     window.location.hash = "";
+    vi.stubGlobal("confirm", vi.fn(() => true));
     mockedListDeals.mockResolvedValue([]);
     mockedListPaymentStatuses.mockResolvedValue([]);
     mockedGetCommercialDocumentDraft.mockRejectedValue(
@@ -57,7 +61,7 @@ describe("App", () => {
     mockedListOrganizations.mockResolvedValue([
       {
         id: "11111111-1111-1111-1111-111111111111",
-        legal_name: "Buyer Co",
+        legal_name: "Demo Buyer Co",
         country_code: "US",
         role: "ADMIN",
       },
@@ -109,6 +113,28 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByLabelText("Buyer organization")).toBeInTheDocument();
-    expect(mockedListOrganizations).toHaveBeenCalledTimes(1);
+    expect(mockedListOrganizations).toHaveBeenCalled();
+  });
+
+  it("returns to the deals workspace after resetting from a deal route", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/deals/deal-42";
+    mockedGetDeal.mockResolvedValue({
+      id: "deal-42",
+      buyer_organization_id: "11111111-1111-1111-1111-111111111111",
+      seller_organization_id: "22222222-2222-2222-2222-222222222222",
+      status: "DRAFT",
+      version: 0,
+    });
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
+    mockedApiRequest.mockResolvedValue({ message: "Demo data cleared" });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Acting as Buyer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset Demo Data" }));
+
+    expect(await screen.findByRole("heading", { name: "Deals shared with you" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/deals");
   });
 });

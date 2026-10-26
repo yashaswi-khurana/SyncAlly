@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { apiRequest } from "../api/client";
-import { setTokens } from "../api/tokenStore";
+import { apiRequest, listOrganizations } from "../api/client";
+import { getAccessToken, setTokens } from "../api/tokenStore";
 import type { TokenResponse } from "../api/types";
 
 const SWITCHER_ENABLED =
@@ -9,12 +9,7 @@ const SWITCHER_ENABLED =
   (import.meta.env as ImportMetaEnv & { VITE_ENABLE_DEV_SWITCHER?: string })
     .VITE_ENABLE_DEV_SWITCHER === "true";
 
-type DemoRole = "Buyer" | "Seller";
-const ACTIVE_DEMO_ROLE_KEY = "syncally.devRole";
-
-function getInitialRole(): DemoRole {
-  return window.localStorage.getItem(ACTIVE_DEMO_ROLE_KEY) === "Seller" ? "Seller" : "Buyer";
-}
+type DemoRole = "Buyer" | "Seller" | "Admin";
 
 interface DevRoleSwitcherProps {
   onSessionChanged: () => void;
@@ -22,13 +17,58 @@ interface DevRoleSwitcherProps {
 
 export default function DevRoleSwitcher({ onSessionChanged }: DevRoleSwitcherProps) {
   const [open, setOpen] = useState(false);
-  const [role, setRole] = useState<DemoRole>(getInitialRole);
+  const [role, setRole] = useState<DemoRole>("Admin");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
+
+  useEffect(() => {
+    if (!SWITCHER_ENABLED) return;
+
+    let disposed = false;
+
+    async function syncRoleFromSession() {
+      const sessionToken = getAccessToken();
+      if (!sessionToken) {
+        setRole("Admin");
+        return;
+      }
+
+      try {
+        const organizations = await listOrganizations();
+        if (disposed || getAccessToken() !== sessionToken) return;
+        if (organizations.some((organization) => organization.legal_name === "Demo Seller Co")) {
+          setRole("Seller");
+        } else if (
+          organizations.some((organization) => organization.legal_name === "Demo Buyer Co")
+        ) {
+          setRole("Buyer");
+        } else {
+          setRole("Admin");
+        }
+      } catch {
+        // Keep the neutral label if the authenticated identity cannot be loaded.
+      }
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === "syncally.accessToken") {
+        void syncRoleFromSession();
+      }
+    };
+
+    void syncRoleFromSession();
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      disposed = true;
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
 
   if (!SWITCHER_ENABLED) return null;
 
   async function switchRole(targetRole: DemoRole) {
+    const sessionToken = getAccessToken();
+    if (!sessionToken) return;
     setBusy(true);
     setFeedback("");
     try {
@@ -36,8 +76,8 @@ export default function DevRoleSwitcher({ onSessionChanged }: DevRoleSwitcherPro
         method: "POST",
         body: JSON.stringify({ target_role: targetRole.toUpperCase() }),
       });
+      if (getAccessToken() !== sessionToken) return;
       setTokens(tokens);
-      window.localStorage.setItem(ACTIVE_DEMO_ROLE_KEY, targetRole);
       setRole(targetRole);
       onSessionChanged();
       setFeedback(`Switched to ${targetRole}.`);

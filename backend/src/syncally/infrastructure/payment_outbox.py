@@ -26,6 +26,7 @@ from syncally.application.payments import (
     PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
 )
 from syncally.domain.payments.intent import PaymentIntentStatus
+from syncally.infrastructure.demo_lifecycle import lock_demo_payment_processing
 from syncally.infrastructure.models import OutboxEvent
 from syncally.operations import Operation, log_operation
 
@@ -105,6 +106,38 @@ def dispatch_one_payment_event(
     if event is None:
         return False
 
+    # The lock-owning session stays open across provider calls and persistence.
+    # A reset either waits for this work or wins first, in which case the worker
+    # observes the deleted intent and cannot create its invoice.
+    with session_factory() as lock_db:
+        if isinstance(event.payload, Mapping):
+            raw_intent_id = event.payload.get("payment_intent_id")
+            if isinstance(raw_intent_id, str):
+                try:
+                    payment_intent_id = UUID(raw_intent_id)
+                except ValueError:
+                    pass
+                else:
+                    lock_demo_payment_processing(lock_db, payment_intent_id)
+        return _process_claimed_payment_event(
+            session_factory,
+            event,
+            repository,
+            provider,
+            notifier=notifier,
+            now=now,
+        )
+
+
+def _process_claimed_payment_event(
+    session_factory: Callable[[], Session],
+    event: _ClaimedPaymentEvent,
+    repository: PaymentProcessingRepository,
+    provider: PaymentInvoiceProvider,
+    *,
+    notifier: PaymentInvoiceNotifier | None,
+    now: datetime | None,
+) -> bool:
     try:
         if not isinstance(event.payload, Mapping):
             raise PaymentNeedsAction(

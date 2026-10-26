@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext
 from syncally.application.passwords import verify_password as _verify_password
+from syncally.cli.seed_demo import DEMO_IDENTITIES
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.identity import resolve_actor
@@ -141,6 +142,11 @@ def _issue_tokens(db: Session, user_id: UUID, now: datetime) -> TokenResponse:
 @router.post("/login", response_model=TokenResponse)
 def login(payload: CredentialsRequest, db: Session = Depends(get_db)) -> TokenResponse:
     email = payload.email.strip().lower()
+    local_environment = settings.app_env.strip().lower() in {"development", "test"}
+    demo_emails = {identity.email for identity in DEMO_IDENTITIES}
+    if not local_environment and email in demo_emails:
+        raise _unauthorized("Invalid email or password")
+
     user = db.scalar(select(User).where(User.email == email, User.status == "ACTIVE"))
     if user is None or not _verify_password(payload.password, user.password_hash):
         raise _unauthorized("Invalid email or password")

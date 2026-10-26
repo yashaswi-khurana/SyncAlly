@@ -17,6 +17,7 @@ const mockedLogin = vi.mocked(login);
 describe("SignInPage", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("validates required fields before calling the API", async () => {
@@ -29,7 +30,7 @@ describe("SignInPage", () => {
     expect(mockedLogin).not.toHaveBeenCalled();
   });
 
-  it("explains the trade flow and quick-fills either local demo account", () => {
+  it("explains the trade flow and hides demo quick-fill unless enabled", () => {
     render(<SignInPage onSignIn={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "Cross-Border Trade on Autopilot." })).toBeInTheDocument();
@@ -37,13 +38,20 @@ describe("SignInPage", () => {
     expect(screen.getByText("Automated PayPal Invoicing")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Why SyncAlly" })).toBeInTheDocument();
 
+    expect(screen.queryByRole("button", { name: "Demo Buyer" })).not.toBeInTheDocument();
+  });
+
+  it("quick-fills the demo email without assuming the provisioned password", () => {
+    vi.stubEnv("VITE_ENABLE_DEMO_QUICK_FILL", "true");
+    render(<SignInPage onSignIn={vi.fn()} />);
+
     fireEvent.click(screen.getByRole("button", { name: "Demo Buyer" }));
     expect(screen.getByLabelText("Email")).toHaveValue("buyer@syncally.demo");
-    expect(screen.getByLabelText("Password")).toHaveValue("correct-horse-battery");
+    expect(screen.getByLabelText("Password")).toHaveValue("");
 
     fireEvent.click(screen.getByRole("button", { name: "Demo Seller" }));
     expect(screen.getByLabelText("Email")).toHaveValue("seller@syncally.demo");
-    expect(screen.getByLabelText("Password")).toHaveValue("correct-horse-battery");
+    expect(screen.getByLabelText("Password")).toHaveValue("");
   });
 
   it("signs in and passes the tokens to the caller", async () => {

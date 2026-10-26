@@ -5,6 +5,10 @@ import { ApiError, login } from "../api/client";
 import type { TokenResponse } from "../api/types";
 import TradeFlowScene from "../deals/TradeFlowScene";
 
+function demoQuickFillEnabled() {
+  return import.meta.env.VITE_ENABLE_DEMO_QUICK_FILL === "true";
+}
+
 interface SignInPageProps {
   onSignIn: (tokens: TokenResponse) => void;
 }
@@ -23,7 +27,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
 
   function fillDemo(role: "buyer" | "seller") {
     setEmail(`${role}@syncally.demo`);
-    setPassword("correct-horse-battery");
+    setPassword("");
     setFieldErrors({});
     setFormError(null);
   }
@@ -140,13 +144,16 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           Sign in with a provisioned buyer or seller account. Public registration is turned off.
         </p>
         <form className="form" onSubmit={handleSubmit} noValidate>
-          <div className="auth-demo-fill" aria-label="Quick-fill demo accounts">
-            <span>TRY THE LOCAL DEMO</span>
-            <div>
-              <button type="button" onClick={() => fillDemo("buyer")}>Demo Buyer</button>
-              <button type="button" onClick={() => fillDemo("seller")}>Demo Seller</button>
+          {demoQuickFillEnabled() ? (
+            <div className="auth-demo-fill" aria-label="Quick-fill demo accounts">
+              <span>TRY THE LOCAL DEMO</span>
+              <div>
+                <button type="button" onClick={() => fillDemo("buyer")}>Demo Buyer</button>
+                <button type="button" onClick={() => fillDemo("seller")}>Demo Seller</button>
+              </div>
+              <small>Enter the password configured for your local demo account.</small>
             </div>
-          </div>
+          ) : null}
           <div className="field">
             <label htmlFor="email">Email</label>
             <input

@@ -2980,6 +2980,12 @@ body::after {
   letter-spacing: 0.13em;
 }
 
+.auth-demo-fill small {
+  color: rgba(247, 244, 236, 0.55);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
 .auth-demo-fill > div {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3114,6 +3120,8 @@ body::after {
 
 @media (max-width: 900px) {
   .auth-layout {
+    display: flex;
+    flex-direction: column;
     align-items: stretch;
     background-image:
       linear-gradient(rgba(24, 39, 34, 0.035) 1px, transparent 1px),
@@ -3126,6 +3134,11 @@ body::after {
     max-width: 680px;
     justify-self: center;
   }
+
+  .auth-masthead { order: 0; }
+  .auth-hero { order: 1; }
+  .auth-card { order: 2; }
+  .auth-footer { order: 3; }
 
   .auth-diagram__drawing { height: 140px; }
 }

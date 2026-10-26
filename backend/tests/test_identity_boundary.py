@@ -106,6 +106,27 @@ class IdentityBoundaryTests(unittest.TestCase):
         self.assertEqual(wrong_password.exception.status_code, 401)
         self.assertEqual(wrong_password.exception.detail, "Invalid email or password")
 
+    def test_login_rejects_demo_identities_outside_local_environments(self) -> None:
+        class UnexpectedDatabaseAccess:
+            def scalar(self, _query: object) -> None:
+                self.fail("Production demo login must be rejected before reading users")
+
+            def fail(self, message: str) -> None:
+                raise AssertionError(message)
+
+        with patch("syncally.api.auth.settings.app_env", "production"):
+            with self.assertRaises(HTTPException) as rejected:
+                login(
+                    CredentialsRequest(
+                        email="buyer@syncally.demo",
+                        password="any-provisioned-password",
+                    ),
+                    UnexpectedDatabaseAccess(),  # type: ignore[arg-type]
+                )
+
+        self.assertEqual(rejected.exception.status_code, 401)
+        self.assertEqual(rejected.exception.detail, "Invalid email or password")
+
     def test_login_refresh_and_replay_revoke_persisted_token_family(self) -> None:
         engine = create_engine(
             "sqlite+pysqlite:///:memory:",

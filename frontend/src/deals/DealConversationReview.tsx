@@ -6,6 +6,7 @@ import {
   listDealMessages,
   listOrganizations,
   reviewDealFact,
+  updateFactVisibility,
 } from "../api/client";
 import type {
   Deal,
@@ -79,6 +80,7 @@ export default function DealConversationReview({
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
   const [pendingFactId, setPendingFactId] = useState<string | null>(null);
+  const [pendingVisibilityFactId, setPendingVisibilityFactId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ factId: string; message: string } | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
@@ -204,6 +206,27 @@ export default function DealConversationReview({
       setActionError({ factId: fact.id, message: describeError(caught) });
     } finally {
       setPendingFactId(null);
+    }
+  }
+
+  async function toggleFactVisibility(fact: DealFact) {
+    const nextVisibility = fact.visibility === "PRIVATE" ? "SHAREABLE" : "PRIVATE";
+    setPendingVisibilityFactId(fact.id);
+    setActionError(null);
+    try {
+      const updatedFact = await updateFactVisibility(deal.id, fact.id, nextVisibility);
+      setConversationState((current) =>
+        current?.status === "ready" && current.organizationId === activeOrganizationId
+          ? {
+              ...current,
+              facts: current.facts.map((item) => (item.id === updatedFact.id ? updatedFact : item)),
+            }
+          : current,
+      );
+    } catch (caught) {
+      setActionError({ factId: fact.id, message: describeError(caught) });
+    } finally {
+      setPendingVisibilityFactId(null);
     }
   }
 
@@ -388,8 +411,9 @@ export default function DealConversationReview({
         ) : (
           <ul className="fact-list" aria-label="Deal facts">
             {filteredFacts.map((fact) => {
+              const isOwner = fact.owner_organization_id === activeOrganizationId;
               const canReview =
-                fact.owner_organization_id === activeOrganizationId &&
+                isOwner &&
                 REVIEWABLE_STATUSES.has(fact.status);
               const sourceMessageId = fact.source_message_id;
               const sourceMessageIndex = visibleMessages.findIndex(
@@ -408,8 +432,24 @@ export default function DealConversationReview({
                     </p>
                     <div className="communication-badges">
                       <span className={`badge badge--${fact.visibility.toLowerCase()}`}>
-                        {readable(fact.visibility)}
+                        {fact.visibility === "PRIVATE"
+                          ? "🔒 Private to your org"
+                          : "🌐 Shared with counterparty"}
                       </span>
+                      {isOwner ? (
+                        <button
+                          type="button"
+                          className="button secondary button--compact"
+                          disabled={pendingFactId !== null || pendingVisibilityFactId !== null}
+                          onClick={() => void toggleFactVisibility(fact)}
+                        >
+                          {pendingVisibilityFactId === fact.id
+                            ? "Updating…"
+                            : fact.visibility === "PRIVATE"
+                              ? "Make Shareable"
+                              : "Make Private"}
+                        </button>
+                      ) : null}
                       <span className={`badge badge--status-${fact.status.toLowerCase()}`}>
                         {readable(fact.status)}
                         {fact.status === "EXTRACTED" ? " · unconfirmed" : ""}

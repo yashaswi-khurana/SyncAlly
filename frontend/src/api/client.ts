@@ -19,6 +19,7 @@ import type {
   PaymentStatus,
   ProposalSuggestion,
   TokenResponse,
+  Visibility,
 } from "./types";
 
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
@@ -347,5 +348,19 @@ export function correctDealFact(
   return apiRequest<FactCorrectionResult>(
     `/deals/${encodeURIComponent(dealId)}/facts/${encodeURIComponent(factId)}`,
     { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
+export function updateFactVisibility(
+  dealId: string,
+  factId: string,
+  visibility: Visibility,
+): Promise<DealFact> {
+  return apiRequest<DealFact>(
+    `/deals/${encodeURIComponent(dealId)}/facts/${encodeURIComponent(factId)}/visibility`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ visibility }),
+    },
   );
 }

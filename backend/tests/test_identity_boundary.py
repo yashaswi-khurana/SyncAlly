@@ -446,9 +446,12 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         self.assertEqual(configured.jwt_secret, secret)
 
-    def test_clean_checkout_settings_use_local_defaults(self) -> None:
-        local_settings = Settings(_env_file=None)
+    def test_missing_app_environment_fails_closed(self) -> None:
+        self.assertEqual(Settings.model_fields["app_env"].default, "production")
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None)
 
+        local_settings = Settings(_env_file=None, app_env="development")
         self.assertEqual(local_settings.app_env, "development")
         self.assertEqual(local_settings.database_url, "postgresql+psycopg://localhost:5432/syncally")
 

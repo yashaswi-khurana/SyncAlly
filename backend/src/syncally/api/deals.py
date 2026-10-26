@@ -25,6 +25,7 @@ from syncally.application.identity import ActorContext
 from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
 from syncally.infrastructure.repositories import SqlAlchemyDealRepository
 
 router = APIRouter(prefix="/deals", tags=["deals"])
@@ -97,9 +98,13 @@ def create_deal_route(
     payload: CreateDealRequest,
     actor: ActorContext = Depends(get_current_actor),
     repository: DealRepository = Depends(get_deal_repository),
+    db: Session = Depends(get_db),
 ) -> DealResponse:
     """Create a draft deal for the buyer organization the actor belongs to."""
     try:
+        lock_demo_deal_creation(
+            db, payload.buyer_organization_id, payload.seller_organization_id
+        )
         deal = create_deal(
             actor,
             CreateDealCommand(

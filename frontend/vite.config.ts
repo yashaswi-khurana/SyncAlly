@@ -2,7 +2,7 @@ import { loadEnv } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
-const API_PATH_PREFIXES = ["/auth", "/organizations", "/deals"];
+const API_PATH_PREFIXES = ["/auth", "/dev", "/organizations", "/deals"];
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");

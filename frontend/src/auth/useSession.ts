@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 
-import { clearAccessToken, getAccessToken, setAccessToken } from "../api/tokenStore";
+import { clearAccessToken, getAccessToken, setTokens } from "../api/tokenStore";
 import type { TokenResponse } from "../api/types";
 
 export interface Session {
@@ -13,7 +13,7 @@ export function useSession(): Session {
   const [accessToken, setAccessTokenState] = useState<string | null>(() => getAccessToken());
 
   const signIn = useCallback((tokens: TokenResponse) => {
-    setAccessToken(tokens.access_token);
+    setTokens(tokens);
     setAccessTokenState(tokens.access_token);
   }, []);
 

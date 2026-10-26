@@ -1,5 +1,90 @@
 /* SyncAlly web app — an ink-and-paper trade register. */
 
+.dev-role-switcher {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 100;
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  font-family: var(--body);
+}
+
+.dev-role-switcher__pill,
+.dev-role-switcher__menu button {
+  border: 1px solid rgba(247, 244, 236, 0.2);
+  background: #1b2b26;
+  color: #f7f4ec;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dev-role-switcher__pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 15px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(24, 39, 34, 0.22);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.dev-role-switcher__indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9bb37f;
+  box-shadow: 0 0 9px rgba(155, 179, 127, 0.7);
+}
+
+.dev-role-switcher__menu {
+  display: grid;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid rgba(247, 244, 236, 0.16);
+  border-radius: 8px;
+  background: #1b2b26;
+  box-shadow: 0 12px 32px rgba(24, 39, 34, 0.28);
+}
+
+.dev-role-switcher__menu button {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  font-size: 0.78rem;
+}
+
+.dev-role-switcher__menu button:hover:not(:disabled),
+.dev-role-switcher__menu button:focus-visible {
+  background: rgba(247, 244, 236, 0.1);
+}
+
+.dev-role-switcher__menu button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.dev-role-switcher__pill:focus-visible,
+.dev-role-switcher__menu button:focus-visible {
+  outline: 2px solid #ef9a78;
+  outline-offset: 2px;
+}
+
+.dev-role-switcher__toast {
+  max-width: min(340px, calc(100vw - 40px));
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(24, 39, 34, 0.16);
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
 :root {
   --bg: #e9e5db;
   --bg-deep: #dfd9cc;

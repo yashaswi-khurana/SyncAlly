@@ -8,12 +8,14 @@ request as authority. Message bodies are never written to logs.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import logging
+from datetime import UTC, date, datetime
 from typing import NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
@@ -43,6 +45,7 @@ from syncally.application.conversations import (
     select_ai_context,
 )
 from syncally.application.identity import ActorContext
+from syncally.application.workflow_notifications import NotificationKind
 from syncally.config import settings
 from syncally.domain.ai.contracts import (
     AI_SCHEMA_VERSION,
@@ -56,10 +59,14 @@ from syncally.domain.conversations import Constraint, Message, Visibility
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.models import AuditEvent, Constraint as ConstraintModel
 from syncally.infrastructure.repositories import (
     CommunicationScopeError,
     SqlAlchemyCommunicationRepository,
 )
+from syncally.infrastructure.workflow_notifications import queue_deal_workflow_notification
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/deals/{deal_id}", tags=["conversations"])
 
@@ -166,6 +173,10 @@ class CorrectFactRequest(BaseModel):
 class FactCorrectionResponse(BaseModel):
     replaced_fact: ConstraintResponse
     corrected_fact: ConstraintResponse
+
+
+class UpdateFactVisibilityRequest(BaseModel):
+    visibility: Visibility
 
 
 def get_communication_repository(
@@ -357,7 +368,14 @@ def _to_message_response(message: Message) -> MessageResponse:
     )
 
 
-def _to_constraint_response(constraint: Constraint) -> ConstraintResponse:
+def _to_constraint_response(constraint: Constraint | ConstraintModel) -> ConstraintResponse:
+    kind = constraint.kind if isinstance(constraint.kind, str) else constraint.kind.value
+    status_str = constraint.status if isinstance(constraint.status, str) else constraint.status.value
+    visibility = (
+        constraint.visibility
+        if isinstance(constraint.visibility, str)
+        else constraint.visibility.value
+    )
     return ConstraintResponse(
         id=constraint.id,
         deal_id=constraint.deal_id,
@@ -365,9 +383,9 @@ def _to_constraint_response(constraint: Constraint) -> ConstraintResponse:
         field=constraint.field,
         typed_value=constraint.typed_value,
         currency_or_unit=constraint.currency_or_unit,
-        kind=constraint.kind.value,
-        status=constraint.status.value,
-        visibility=constraint.visibility.value,
+        kind=kind,
+        status=status_str,
+        visibility=visibility,
         source_message_id=constraint.source_message_id,
         source_span=constraint.source_span,
         confirmed_by=constraint.confirmed_by,
@@ -568,3 +586,82 @@ def clarify_fact_route(
         repository=repository,
         db=db,
     )
+
+
+@router.patch("/facts/{fact_id}/visibility", response_model=ConstraintResponse)
+def update_fact_visibility_route(
+    deal_id: UUID,
+    fact_id: UUID,
+    payload: UpdateFactVisibilityRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+    db: Session = Depends(get_db),
+) -> ConstraintResponse:
+    """Update visibility of an extracted fact only for an authorized owner organization member."""
+    deal = repository.get_deal_for_participant(deal_id, actor.user_id)
+    if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+
+    row = db.scalar(
+        select(ConstraintModel)
+        .where(
+            ConstraintModel.id == fact_id,
+            ConstraintModel.deal_id == deal_id,
+        )
+        .with_for_update()
+    )
+    if row is None or row.owner_organization_id not in (
+        deal.buyer_organization_id,
+        deal.seller_organization_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fact not found")
+
+    if row.owner_organization_id not in actor.organization_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an authorized member of the owner organization can modify fact visibility",
+        )
+
+    try:
+        previous_visibility = row.visibility
+        if previous_visibility != payload.visibility.value:
+            row.visibility = payload.visibility.value
+            row.version += 1
+            audit_event = AuditEvent(
+                aggregate_type="deal_fact",
+                aggregate_id=row.id,
+                event_type="FACT_VISIBILITY_UPDATED",
+                actor_type="USER",
+                actor_id=str(actor.user_id),
+                occurred_at=datetime.now(UTC),
+                payload={
+                    "deal_id": str(deal_id),
+                    "fact_id": str(row.id),
+                    "previous_visibility": previous_visibility,
+                    "new_visibility": row.visibility,
+                    "owner_organization_id": str(row.owner_organization_id),
+                },
+            )
+            db.add(audit_event)
+            queue_deal_workflow_notification(
+                db,
+                deal_id=deal_id,
+                record_id=row.id,
+                kind=NotificationKind.CONSTRAINT_CHANGED,
+            )
+            logger.info(
+                "Fact %s visibility updated from %s to %s for deal %s by user %s",
+                row.id,
+                previous_visibility,
+                row.visibility,
+                deal_id,
+                actor.user_id,
+            )
+
+        db.commit()
+        db.refresh(row)
+    except Exception:
+        db.rollback()
+        raise
+
+    return _to_constraint_response(row)

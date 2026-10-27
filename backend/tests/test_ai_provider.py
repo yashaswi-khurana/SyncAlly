@@ -4,19 +4,27 @@ import ast
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from syncally.api.conversations import (
+    FactSuggestionResponse,
+    _fact_suggestion_guidance,
+    _missing_trade_fields,
+)
 from syncally.application.ai import (
     AIPermanentError,
     AIRetryPolicy,
     AISuggestionProvider,
     AITransientError,
+    FactExtractionRequest,
     draft_proposal,
     extract_facts,
+    extract_facts_from_context,
     parse_extracted_facts,
     parse_proposed_terms,
 )
-from syncally.application.conversations import CommunicationNotFound
+from syncally.application.conversations import AiContext, CommunicationNotFound
 from syncally.application.identity import ActorContext
 from syncally.domain.ai.contracts import (
     AI_SCHEMA_VERSION,
@@ -27,6 +35,7 @@ from syncally.domain.ai.contracts import (
 from syncally.domain.conversations import (
     Constraint,
     ConstraintKind,
+    ConstraintStatus,
     Message,
     MessageSourceType,
     Visibility,
@@ -40,6 +49,7 @@ from syncally.domain.shared.identifiers import (
     OrganizationId,
     UserId,
 )
+from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.fake import DeterministicFakeAIProvider
 
 _AI_MODULE_FILES = (
@@ -225,6 +235,180 @@ class AISuggestionProviderTests(unittest.TestCase):
             policy=policy,
             sleep=lambda _seconds: None,
         )
+
+    def _demo_context(self, body: str) -> AiContext:
+        message = self._message(self.buyer_conversation_id, Visibility.PRIVATE, body)
+        return AiContext(
+            deal_id=self.deal.id,
+            organization_id=self.buyer_id,
+            messages=(message,),
+            constraints=(),
+        )
+
+    def _demo_extract(self, body: str) -> tuple[ExtractedFact, ...]:
+        context = self._demo_context(body)
+        return DemoAISuggestionProvider().extract_facts(
+            FactExtractionRequest(context), timeout_seconds=1.0
+        )
+
+    def test_demo_provider_extracts_colloquial_trade_terms(self) -> None:
+        facts = self._demo_extract(
+            "We're buying 1,000 bags of coffee at USD 45/unit; "
+            "please deliver at Port of Seattle by November 15, 2026."
+        )
+        values = {fact.field.value: fact.value for fact in facts}
+
+        self.assertEqual(values["item_description"], "coffee")
+        self.assertEqual(values["quantity"], "1000")
+        self.assertEqual(values["unit"], "bags")
+        self.assertEqual(values["unit_price"], "45")
+        self.assertEqual(values["delivery_destination"], "Port of Seattle")
+        self.assertEqual(values["delivery_date"], "2026-11-15")
+
+    def test_colloquial_demo_facts_pass_grounding_validation(self) -> None:
+        messages = (
+            "We're buying 1,000 bags of coffee at $45 each; "
+            "ship to Port of Seattle by November 15, 2026.",
+            "Item: copper wire at 45 dollars.",
+            "Item: steel at USD 45.",
+            "Item: rice at 45 USD/unit.",
+            "Item: beans at 45 each.",
+            "Order of 50 tons of grain; destination: Toronto, 2026-11-15.",
+            "Order of grain; ship to Toronto by Nov 15 2026.",
+        )
+        provider = DemoAISuggestionProvider()
+        for body in messages:
+            with self.subTest(body=body):
+                result = extract_facts_from_context(self._demo_context(body), provider)
+                self.assertIs(result.result.status, ValidationStatus.VALID)
+                self.assertTrue(result.candidates)
+
+    def test_demo_provider_recognizes_price_and_quantity_variants(self) -> None:
+        examples = (
+            ("item: copper wire at $45", "45"),
+            ("item: copper wire costs 45 dollars", "45"),
+            ("item: copper wire priced at 45 USD/unit", "45"),
+            ("item: copper wire at 45 each", "45"),
+            (
+                "Item: Widget, 12 boxes at USD 2.50, deliver to Toronto by 2026-12-01.",
+                "2.50",
+            ),
+        )
+        for message, expected_price in examples:
+            with self.subTest(message=message):
+                facts = self._demo_extract(message)
+                values = {fact.field.value: fact.value for fact in facts}
+                self.assertEqual(values["unit_price"], expected_price)
+
+        quantities = ("500 units", "1,000 cases", "50 tons", "200 bags")
+        for quantity in quantities:
+            with self.subTest(quantity=quantity):
+                facts = self._demo_extract(f"Order of grain, quantity {quantity}.")
+                values = {fact.field.value: fact.value for fact in facts}
+                self.assertEqual(values["quantity"], quantity.split()[0].replace(",", ""))
+
+    def test_demo_provider_recognizes_item_destination_and_date_phrasings(self) -> None:
+        examples = (
+            ("Order of steel rods; ship to Toronto by Nov 15 2026.", "steel rods", "Toronto"),
+            ("Supplying cocoa beans, destination: Accra, 2026-11-15.", "cocoa beans", "Accra"),
+            ("We are buying rice; deliver at Port Klang by Nov 15 2026.", "rice", "Port Klang"),
+        )
+        for message, expected_item, expected_destination in examples:
+            with self.subTest(message=message):
+                facts = self._demo_extract(message)
+                values = {fact.field.value: fact.value for fact in facts}
+                self.assertEqual(values["item_description"], expected_item)
+                self.assertEqual(values["delivery_destination"], expected_destination)
+                self.assertEqual(values["delivery_date"], "2026-11-15")
+
+    def test_demo_provider_leaves_ranges_unknown_and_keeps_qualified_terms(self) -> None:
+        range_messages = (
+            "Item: steel, 500-600 units at $45-$50, ship to Toronto by November 15, 2026.",
+            "Item: steel, 500 to 600 units at USD 45 to 50, ship to Toronto by November 15, 2026.",
+            "Item: steel, between 500 and 600 units at between $45 and $50, "
+            "ship to Toronto by November 15, 2026.",
+            "Item: steel, about 500 units at about $45 each.",
+            "Item: steel, at least 500 units for $45+ each.",
+            "Item: steel, up to 500 cases priced at $45 maximum.",
+            "Item: steel, 500 or 600 units at $45 or $50.",
+            "Item: steel, 500 units and up at $45 and up.",
+        )
+        for message in range_messages:
+            with self.subTest(message=message):
+                values = {fact.field.value: fact.value for fact in self._demo_extract(message)}
+                self.assertNotIn("quantity", values)
+                self.assertNotIn("unit", values)
+                self.assertNotIn("unit_price", values)
+
+        values = {
+            fact.field.value: fact.value
+            for fact in self._demo_extract(
+                "Item: steel, 1.5 metric tons at USD 45 per unit; "
+                "destination: New York, NY; delivery by November 15, 2026."
+            )
+        }
+        self.assertEqual(values["quantity"], "1.5")
+        self.assertEqual(values["unit"], "metric tons")
+        self.assertEqual(values["delivery_destination"], "New York, NY")
+
+    def test_demo_provider_skips_ranges_but_keeps_later_exact_values(self) -> None:
+        message = (
+            "Item: steel, tentative 500-600 units and $45-$50; "
+            "final quantity 550 units at USD 47 each."
+        )
+        result = extract_facts_from_context(
+            self._demo_context(message), DemoAISuggestionProvider()
+        )
+
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        values = {candidate.fact.field.value: candidate.fact.value for candidate in result.candidates}
+        self.assertEqual(values["quantity"], "550")
+        self.assertEqual(values["unit"], "units")
+        self.assertEqual(values["unit_price"], "47")
+
+        qualified = extract_facts_from_context(
+            self._demo_context(
+                "Item: steel, about 500 units and about $45; "
+                "final quantity 450 units at $47 each."
+            ),
+            DemoAISuggestionProvider(),
+        )
+        values = {
+            candidate.fact.field.value: candidate.fact.value for candidate in qualified.candidates
+        }
+        self.assertEqual(values["quantity"], "450")
+        self.assertEqual(values["unit_price"], "47")
+
+    def test_demo_provider_does_not_treat_a_currency_code_as_a_region(self) -> None:
+        values = {
+            fact.field.value: fact.value
+            for fact in self._demo_extract("Item: steel; destination: Toronto, USD 45 each.")
+        }
+
+        self.assertEqual(values["delivery_destination"], "Toronto")
+        self.assertEqual(values["unit_price"], "45")
+
+    def test_fact_suggestion_response_reports_missing_trade_fields(self) -> None:
+        detected = [
+            SimpleNamespace(field="item_description", status=ConstraintStatus.EXTRACTED),
+            SimpleNamespace(field="quantity", status=ConstraintStatus.CONFIRMED),
+            SimpleNamespace(field="unit_price", status=ConstraintStatus.REJECTED),
+        ]
+        missing = _missing_trade_fields(detected)
+        response = FactSuggestionResponse(
+            status="VALID",
+            issues=[],
+            facts=[],
+            missing_fields=missing,
+            guidance_message=_fact_suggestion_guidance(missing),
+        )
+
+        self.assertEqual(
+            response.missing_fields,
+            ["unit", "unit_price", "delivery_destination", "delivery_date"],
+        )
+        self.assertIn("unit price", response.guidance_message)
+        self.assertIn("YYYY-MM-DD", response.guidance_message)
 
     def test_deterministic_fake_satisfies_the_port_contract(self) -> None:
         provider = DeterministicFakeAIProvider()

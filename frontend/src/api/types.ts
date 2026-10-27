@@ -150,6 +150,15 @@ export type FactStatus =
   | "REJECTED"
   | "SUPERSEDED";
 
+export interface CreateDealFactInput {
+  organization_id: string;
+  field: string;
+  typed_value: string;
+  currency_or_unit: string | null;
+  kind: DealFact["kind"];
+  visibility: Visibility;
+}
+
 export interface DealMessage {
   id: string;
   conversation_id: string;

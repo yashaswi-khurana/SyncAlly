@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 from syncally.application.identity import ActorContext
 from syncally.domain.conversations import (
     Constraint,
+    ConstraintKind,
     ConstraintStatus,
     Conversation,
     Message,
@@ -266,6 +267,61 @@ def add_message(
         created_at=now or datetime.now(UTC),
     )
     return repository.add_message(message)
+
+
+@dataclass(frozen=True)
+class CreateManualConstraintCommand:
+    """A user-entered fact attributed to one authorized deal organization."""
+
+    field: str
+    typed_value: str
+    visibility: Visibility
+    organization_id: UUID | None = None
+    currency_or_unit: str | None = None
+    kind: ConstraintKind = ConstraintKind.INFORMATIONAL
+
+
+def create_manual_constraint(
+    actor: ActorContext,
+    deal_id: UUID,
+    command: CreateManualConstraintCommand,
+    repository: CommunicationRepository,
+    *,
+    now: datetime | None = None,
+) -> Constraint:
+    """Create an auditable fact sourced from a message authored by the actor."""
+    deal = _load_deal_for_participant(actor, deal_id, repository)
+    organization_id = resolve_participant_organization(actor, deal, command.organization_id)
+    timestamp = now or datetime.now(UTC)
+    conversation = repository.get_or_create_conversation(deal_id, organization_id)
+    source_text = f"Manual term entry — {command.field}: {command.typed_value}"
+    source_message = repository.add_message(
+        Message(
+            id=MessageId(uuid4()),
+            conversation_id=ConversationId(conversation.id),
+            author_user_id=UserId(actor.user_id),
+            author_agent_id=None,
+            body=source_text,
+            visibility=command.visibility,
+            source_type=MessageSourceType.USER,
+            source_reference="manual-term-entry",
+            created_at=timestamp,
+        )
+    )
+    constraint = Constraint(
+        id=ConstraintId(uuid4()),
+        deal_id=DealId(deal_id),
+        owner_organization_id=OrganizationId(organization_id),
+        field=command.field,
+        typed_value=command.typed_value,
+        currency_or_unit=command.currency_or_unit,
+        kind=command.kind,
+        visibility=command.visibility,
+        source_message_id=MessageId(source_message.id),
+        source_span=command.typed_value,
+        created_at=timestamp,
+    )
+    return repository.add_constraint(constraint)
 
 
 def list_visible_messages(

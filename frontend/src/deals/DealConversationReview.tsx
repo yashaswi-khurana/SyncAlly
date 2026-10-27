@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   ApiError,
@@ -213,11 +213,10 @@ export default function DealConversationReview({
     };
   }, [activeOrganizationId, deal.id, reloadCount]);
 
-  const isMutatingRef = useRef(false);
-  isMutatingRef.current = pendingFactId !== null || pendingVisibilityFactId !== null;
+  const conversationReady = conversationState?.status === "ready";
 
   useEffect(() => {
-    if (!activeOrganizationId || conversationState?.status !== "ready") {
+    if (!activeOrganizationId || !conversationReady) {
       return;
     }
 
@@ -225,7 +224,7 @@ export default function DealConversationReview({
     let inFlight = false;
 
     const revalidate = async () => {
-      if (cancelled || inFlight || isMutatingRef.current) {
+      if (cancelled || inFlight || pendingFactId !== null || pendingVisibilityFactId !== null) {
         return;
       }
       if (typeof document !== "undefined" && document.hidden) {
@@ -289,8 +288,10 @@ export default function DealConversationReview({
     };
   }, [
     activeOrganizationId,
+    conversationReady,
     deal.id,
-    conversationState?.status === "ready",
+    pendingFactId,
+    pendingVisibilityFactId,
     revalidateIntervalMs,
   ]);
 
@@ -344,6 +345,19 @@ export default function DealConversationReview({
     setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
       ? { ...current, facts: [...current.facts.filter((item) => item.id !== fact.id), fact] }
       : current);
+    if (
+      fact.source_message_id
+      && currentConversation
+      && !currentConversation.messages.some((message) => message.id === fact.source_message_id)
+    ) {
+      void listDealMessages(deal.id, activeOrganizationId).then((messages) => {
+        setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
+          ? { ...current, messages }
+          : current);
+      }).catch(() => {
+        // The fact remains saved; message refresh can be retried by reloading the conversation.
+      });
+    }
   }
 
   function updateSuggestedFact(fact: DealFact) {
@@ -628,6 +642,7 @@ export default function DealConversationReview({
           key={`${deal.id}:${activeOrganizationId}`}
           dealId={deal.id}
           organizationId={activeOrganizationId}
+          facts={currentConversation.facts}
           onTraceSource={traceSourceMessage}
           onFactAdded={addSuggestedFact}
           onFactUpdated={updateSuggestedFact}

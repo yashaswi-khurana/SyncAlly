@@ -45,6 +45,15 @@ class ConstraintRepository(Protocol):
     def get_deal_for_participant(self, deal_id: UUID, user_id: UUID) -> Deal | None:
         """Load a deal only when the user is an active member of a party."""
 
+    def lock_deal_for_fact_persistence(
+        self, deal_id: UUID, user_id: UUID
+    ) -> Deal | None:
+        """Lock the deal through transaction commit while fact signatures are saved.
+
+        Concurrent fact-suggestion requests for one deal serialize on this row so
+        their signature reads and inserts cannot race each other.
+        """
+
     def get_constraint_for_deal(
         self, deal_id: UUID, constraint_id: UUID, user_id: UUID
     ) -> Constraint | None:

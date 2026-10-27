@@ -2,9 +2,11 @@
 
 import unittest
 from datetime import UTC, datetime
+from unittest.mock import Mock
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -91,6 +93,17 @@ class DealRepositoryTests(unittest.TestCase):
         self.assertTrue(repository.active_organization_exists(buyer.id))
         self.assertFalse(repository.active_organization_exists(inactive.id))
         self.assertFalse(repository.active_organization_exists(uuid4()))
+
+    def test_fact_persistence_lock_compiles_to_postgresql_for_update(self) -> None:
+        db = Mock()
+        db.scalar.return_value = None
+        repository = SqlAlchemyDealRepository(db)
+
+        repository.get_for_participant(uuid4(), uuid4(), for_update=True)
+
+        statement = db.scalar.call_args.args[0]
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        self.assertIn("FOR UPDATE", sql)
 
     def test_add_rejects_missing_buyer_or_seller_reference_without_partial_deal(self) -> None:
         _, buyer, seller = self._seed_participants()

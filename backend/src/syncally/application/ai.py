@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from syncally.application.conversations import (
+    MAX_PAGE_SIZE,
     AiContext,
     CommunicationNotFound,
     CommunicationRepository,
@@ -297,7 +298,12 @@ def persist_fact_candidates(
     now: datetime | None = None,
 ) -> tuple[Constraint, ...]:
     """Save validated candidates as private, unconfirmed facts for human review."""
-    deal = repository.get_deal_for_participant(deal_id, actor.user_id)
+    should_write = result.result.status is ValidationStatus.VALID and bool(result.candidates)
+    deal = (
+        repository.lock_deal_for_fact_persistence(deal_id, actor.user_id)
+        if should_write
+        else repository.get_deal_for_participant(deal_id, actor.user_id)
+    )
     if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
         raise CommunicationNotFound("Deal not found")
     if result.result.status is not ValidationStatus.VALID:
@@ -309,7 +315,7 @@ def persist_fact_candidates(
         fact
         for owner_id in candidate_owners
         if owner_id in actor.organization_ids
-        for fact in repository.list_constraints(deal_id, owner_id, limit=500, offset=0)
+        for fact in _list_all_constraints_for_owner(repository, deal_id, owner_id)
     ]
     existing_by_signature = {
         (fact.owner_organization_id, fact.source_message_id, fact.field, fact.typed_value): fact
@@ -352,6 +358,22 @@ def persist_fact_candidates(
         saved.append(repository.add_constraint(fact))
         existing_by_signature[signature] = fact
     return tuple(saved)
+
+
+def _list_all_constraints_for_owner(
+    repository: CommunicationRepository, deal_id: UUID, owner_id: UUID
+) -> list[Constraint]:
+    """Page through all visible facts so old signatures cannot be duplicated."""
+    constraints: list[Constraint] = []
+    offset = 0
+    while True:
+        page = repository.list_constraints(
+            deal_id, owner_id, limit=MAX_PAGE_SIZE, offset=offset
+        )
+        constraints.extend(page)
+        if len(page) < MAX_PAGE_SIZE:
+            return constraints
+        offset += len(page)
 
 
 def _rejected_fact_result(code: str, message: str) -> FactExtractionResult:

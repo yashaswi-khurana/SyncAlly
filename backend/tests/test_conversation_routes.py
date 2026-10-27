@@ -247,6 +247,72 @@ class ConversationRouteTests(unittest.TestCase):
         self.assertEqual(body["source_type"], "USER")
         self.assertEqual(body["source_reference"], "upload:buyer-doc-7")
 
+    def test_create_manual_fact_is_audited_and_shared_only_when_requested(self) -> None:
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/facts",
+            json={
+                "organization_id": str(self.buyer.id),
+                "field": "unit_price",
+                "typed_value": "2.50",
+                "currency_or_unit": "USD",
+                "visibility": "SHAREABLE",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["owner_organization_id"], str(self.buyer.id))
+        self.assertEqual(body["field"], "unit_price")
+        self.assertEqual(body["typed_value"], "2.50")
+        self.assertEqual(body["currency_or_unit"], "USD")
+        self.assertEqual(body["kind"], "INFORMATIONAL")
+        self.assertEqual(body["status"], "EXTRACTED")
+        self.assertEqual(body["visibility"], "SHAREABLE")
+        self.assertIsNotNone(body["source_message_id"])
+
+        source_messages = self._request(
+            "GET", f"/deals/{self.deal.id}/messages?organization_id={self.buyer.id}"
+        )
+        self.assertEqual(source_messages.status_code, 200, source_messages.text)
+        source = next(
+            message
+            for message in source_messages.json()
+            if message["id"] == body["source_message_id"]
+        )
+        self.assertEqual(source["body"], "Manual term entry — unit_price: 2.50")
+        self.assertEqual(source["visibility"], "SHAREABLE")
+
+        self._authenticate(self._seller_actor())
+        visible_facts = self._request(
+            "GET", f"/deals/{self.deal.id}/facts?organization_id={self.seller.id}"
+        )
+        self.assertEqual(visible_facts.status_code, 200, visible_facts.text)
+        self.assertIn(body["id"], {item["id"] for item in visible_facts.json()})
+        visible_messages = self._request(
+            "GET", f"/deals/{self.deal.id}/messages?organization_id={self.seller.id}"
+        )
+        self.assertEqual(visible_messages.status_code, 200, visible_messages.text)
+        self.assertIn(body["source_message_id"], {item["id"] for item in visible_messages.json()})
+
+    def test_create_manual_fact_rejects_an_organization_the_actor_cannot_select(self) -> None:
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/facts",
+            json={
+                "organization_id": str(self.outsider.id),
+                "field": "delivery_date",
+                "typed_value": "2026-11-15",
+                "visibility": "PRIVATE",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403, response.text)
+
     def test_ai_suggestions_are_explicit_scoped_persisted_and_reviewable(self) -> None:
         source = self._message(
             self.buyer_conversation,

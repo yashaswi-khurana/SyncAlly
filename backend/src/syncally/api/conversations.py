@@ -36,9 +36,11 @@ from syncally.application.conversations import (
     ConcurrentConstraintUpdate,
     ConstraintNotFound,
     ConstraintReviewAction,
+    CreateManualConstraintCommand,
     OrganizationAccessDenied,
     add_message,
     correct_constraint,
+    create_manual_constraint,
     list_visible_constraints,
     list_visible_messages,
     review_constraint,
@@ -55,7 +57,13 @@ from syncally.domain.ai.contracts import (
     SourceReference,
     ValidationResult,
 )
-from syncally.domain.conversations import Constraint, ConstraintStatus, Message, Visibility
+from syncally.domain.conversations import (
+    Constraint,
+    ConstraintKind,
+    ConstraintStatus,
+    Message,
+    Visibility,
+)
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.database import get_db
@@ -181,6 +189,29 @@ class CorrectFactRequest(BaseModel):
     @classmethod
     def strip_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+
+class CreateFactRequest(BaseModel):
+    """A user-entered fact; source attribution is created by the server."""
+
+    organization_id: UUID | None = None
+    field: str = Field(min_length=1, max_length=100)
+    typed_value: str = Field(min_length=1, max_length=2000)
+    currency_or_unit: str | None = Field(default=None, max_length=32)
+    kind: ConstraintKind = ConstraintKind.INFORMATIONAL
+    visibility: Visibility
+
+    @field_validator("field", "typed_value", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("currency_or_unit", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
 
 class FactCorrectionResponse(BaseModel):
@@ -596,6 +627,46 @@ def list_facts_route(
     ) as exc:
         _raise_review_error(exc)
     return [_to_constraint_response(constraint) for constraint in constraints]
+
+
+@router.post(
+    "/facts",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ConstraintResponse,
+)
+def create_fact_route(
+    deal_id: UUID,
+    payload: CreateFactRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+    db: Session = Depends(get_db),
+) -> ConstraintResponse:
+    """Create a user-entered fact for an organization the actor may represent."""
+    try:
+        constraint = create_manual_constraint(
+            actor,
+            deal_id,
+            CreateManualConstraintCommand(
+                field=payload.field,
+                typed_value=payload.typed_value,
+                currency_or_unit=payload.currency_or_unit,
+                kind=payload.kind,
+                visibility=payload.visibility,
+                organization_id=payload.organization_id,
+            ),
+            repository,
+        )
+    except (
+        CommunicationNotFound,
+        OrganizationAccessDenied,
+        AmbiguousOrganization,
+        InvariantViolation,
+        CommunicationScopeError,
+    ) as exc:
+        db.rollback()
+        _raise_review_error(exc)
+    db.commit()
+    return _to_constraint_response(constraint)
 
 
 def _review_fact(

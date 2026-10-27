@@ -18,6 +18,7 @@ import type {
   PaymentAuthorization,
   PaymentStatus,
   ProposalSuggestion,
+  ReviewedProposalTerms,
   TokenResponse,
   Visibility,
 } from "./types";
@@ -251,7 +252,7 @@ export function commitAgreementVersion(
 export function createAgreementFromReviewedTerms(
   dealId: string,
   organizationId: string,
-  terms: Omit<ProposalSuggestion, "status">,
+  terms: ReviewedProposalTerms,
 ): Promise<AgreementVersion> {
   return apiRequest<AgreementVersion>(
     `/deals/${encodeURIComponent(dealId)}/agreements/from-reviewed-terms`,

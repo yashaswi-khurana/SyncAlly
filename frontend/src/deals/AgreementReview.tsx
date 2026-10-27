@@ -8,6 +8,7 @@ import {
   recordAgreementDecision,
 } from "../api/client";
 import type { AgreementApproval, AgreementVersion, Organization } from "../api/types";
+import { paymentTimingLabel } from "../api/types";
 
 interface AgreementReviewProps {
   dealId: string;
@@ -189,6 +190,17 @@ export default function AgreementReview({
           ? approvalFor(agreement.approvals, selectedOrganizationId)
           : undefined;
         const canDecide = agreement.status === "PENDING_APPROVAL";
+        // Prefer the explicit, hashed projection; fall back to the nested terms
+        // so a cached payload from before that field existed still renders.
+        const paymentTiming = agreement.payment_trigger && agreement.payment_due_condition
+          ? [{
+              trigger: agreement.payment_trigger,
+              dueCondition: agreement.payment_due_condition,
+            }]
+          : agreement.terms.payment_terms.map((term) => ({
+              trigger: term.trigger,
+              dueCondition: term.due_condition,
+            }));
         const bothApproved = buyerApproval?.decision === "APPROVE"
           && sellerApproval?.decision === "APPROVE"
           && buyerApproval.terms_hash === agreement.terms_hash
@@ -218,6 +230,31 @@ export default function AgreementReview({
               </p>
             ) : null}
 
+            {paymentTiming.length > 0 ? (
+              <div className="agreement-terms" aria-label="Payment timing summary">
+                <h3>Payment timing</h3>
+                {paymentTiming.map((term, index) => (
+                  <dl
+                    className="agreement-terms__item"
+                    key={`${term.trigger}-${term.dueCondition}-${index}`}
+                  >
+                    <div>
+                      <dt>Payment Timing</dt>
+                      <dd>{paymentTimingLabel(term.trigger)}</dd>
+                    </div>
+                    <div>
+                      <dt>Due Condition</dt>
+                      <dd>{term.dueCondition}</dd>
+                    </div>
+                  </dl>
+                ))}
+                <p className="hint">
+                  Both parties review these exact terms before signing. The terms hash above
+                  covers them.
+                </p>
+              </div>
+            ) : null}
+
             <div className="agreement-terms" aria-label={`Agreement version ${agreement.version_number} terms`}>
               <h3>Trade terms</h3>
               {agreement.terms.line_items.map((item, index) => (
@@ -238,8 +275,8 @@ export default function AgreementReview({
               {agreement.terms.payment_terms.map((term, index) => (
                 <dl className="agreement-terms__item" key={`${term.trigger}-${index}`}>
                   <div><dt>Payment amount</dt><dd>{term.amount.amount} {term.amount.currency}</dd></div>
-                  <div><dt>Payment trigger</dt><dd>{term.trigger.replaceAll("_", " ")}</dd></div>
-                  <div><dt>Due condition</dt><dd>{term.due_condition}</dd></div>
+                  <div><dt>Payment Timing (contract text)</dt><dd>{term.trigger.replaceAll("_", " ")}</dd></div>
+                  <div><dt>Due Condition (contract text)</dt><dd>{term.due_condition}</dd></div>
                 </dl>
               ))}
               <dl className="agreement-terms__item">

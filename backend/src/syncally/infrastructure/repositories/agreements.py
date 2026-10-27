@@ -171,13 +171,8 @@ class SqlAlchemyAgreementRepository:
         if terms.terms_hash != proposal_row.terms_hash:
             raise AgreementVersionConflict("Proposal terms do not match their recorded hash")
 
-        pending_version_id = self._db.scalar(
-            select(AgreementVersion.id).where(
-                AgreementVersion.deal_id == command.deal_id,
-                AgreementVersion.status == AgreementStatus.PENDING_APPROVAL.value,
-            )
-        )
-        if pending_version_id is not None:
+        pending_version = self._pending_version(command.deal_id)
+        if pending_version is not None:
             raise AgreementVersionConflict(
                 "A pending agreement version already exists for this deal"
             )
@@ -237,6 +232,25 @@ class SqlAlchemyAgreementRepository:
             or command.terms.seller_id != OrganizationId(deal_row.seller_organization_id)
         ):
             raise AgreementVersionConflict("Proposal terms parties do not match the deal")
+
+        pending_version = self._pending_version(command.deal_id)
+        if (
+            pending_version is not None
+            and pending_version.terms_hash == command.terms.terms_hash
+        ):
+            # Idempotent replay: an identical submission after a lost response
+            # (or a concurrent identical submit) already saved exactly these
+            # terms. Return that version instead of creating a duplicate
+            # proposal or reporting a conflict. Genuinely different terms still
+            # fall through to the pending-version conflict.
+            approval_rows = list(
+                self._db.scalars(
+                    select(Approval).where(
+                        Approval.agreement_version_id == pending_version.id
+                    )
+                )
+            )
+            return _agreement_to_domain(pending_version, approval_rows)
 
         session_row = self._db.scalar(
             select(NegotiationSession)
@@ -548,6 +562,19 @@ class SqlAlchemyAgreementRepository:
 
         self._db.flush()
         return agreement, True
+
+    def _pending_version(self, deal_id: UUID) -> AgreementVersion | None:
+        """Return the deal's pending agreement version, if one exists.
+
+        Draft creation allows at most one pending version per deal; both the
+        conflict check and the reviewed-terms replay rely on that invariant.
+        """
+        return self._db.scalar(
+            select(AgreementVersion).where(
+                AgreementVersion.deal_id == deal_id,
+                AgreementVersion.status == AgreementStatus.PENDING_APPROVAL.value,
+            )
+        )
 
     def _get_version(self, deal_id: UUID, version_number: int) -> AgreementVersion | None:
         return self._db.scalar(

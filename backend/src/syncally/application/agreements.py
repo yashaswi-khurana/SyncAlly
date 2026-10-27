@@ -148,7 +148,11 @@ class AgreementRepository(Protocol):
     def create_draft_from_reviewed_terms(
         self, command: CreateReviewedAgreementDraftCommand, *, now: datetime
     ) -> Agreement:
-        """Persist reviewed proposal terms and snapshot them in one transaction."""
+        """Persist reviewed proposal terms and snapshot them in one transaction.
+
+        A replay whose terms match the deal's pending version returns that
+        version instead of creating a duplicate proposal or raising a conflict.
+        """
 
     def get_current(self, deal_id: UUID) -> Agreement | None:
         """Load the deal's current immutable agreement version, if one exists."""

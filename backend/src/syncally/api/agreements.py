@@ -16,7 +16,7 @@ from typing import Any, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
@@ -46,6 +46,7 @@ from syncally.application.deals import (
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
+from syncally.domain.agreements.trade_terms import SUPPORTED_DEMO_PAYMENT_TRIGGER
 from syncally.domain.ai.contracts import AIContractError, ProposedTerms
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
@@ -85,7 +86,34 @@ class CreateReviewedAgreementDraftRequest(BaseModel):
     currency: str = Field(min_length=3, max_length=3)
     delivery_destination: str = Field(min_length=1, max_length=2_000)
     delivery_date: date | None
+    # Rollout shim: clients deployed before this field existed omit it, and during
+    # a backend-first rollout they still reach new instances. Omission is
+    # unambiguous because the demo contract supports exactly one trigger, and
+    # ``ProposedTerms.to_trade_terms()`` derives that same trigger regardless of
+    # this acknowledgement. An explicit unsupported value is still rejected.
+    # Make the field required once every client sends it.
+    payment_trigger: str = Field(
+        default=SUPPORTED_DEMO_PAYMENT_TRIGGER, min_length=1, max_length=100
+    )
     organization_id: UUID | None = None
+
+    @field_validator("payment_trigger")
+    @classmethod
+    def supported_payment_trigger(cls, value: str) -> str:
+        """Reject a timing the demo contract cannot build, instead of silently ignoring it.
+
+        The proposer explicitly picks the trigger; the due condition is derived
+        from it by ``ProposedTerms.to_trade_terms()``, so it is not accepted here.
+        """
+        trigger = value.strip().casefold()
+        if trigger != SUPPORTED_DEMO_PAYMENT_TRIGGER:
+            # Never interpolate the submitted value: the 422 handler strips
+            # Pydantic's ``input`` field but keeps ``msg``, so echoing it here
+            # would reflect caller-supplied text despite the redaction contract.
+            raise ValueError(
+                f"Unsupported payment timing; supported: {SUPPORTED_DEMO_PAYMENT_TRIGGER}"
+            )
+        return trigger
 
 
 class RecordApprovalRequest(BaseModel):
@@ -129,6 +157,12 @@ class AgreementVersionResponse(BaseModel):
     terms_hash: str
     status: str
     terms: dict[str, Any]
+    # Read projection of the single demo payment obligation. Both parties read
+    # the same version row, so they always see the same timing. ``None`` when a
+    # version carries zero or several payment terms - then ``terms`` is the
+    # authoritative list and the review screens render every entry.
+    payment_trigger: str | None = None
+    payment_due_condition: str | None = None
     created_at: datetime
     committed_at: datetime | None = None
     approvals: list[ApprovalResponse] = Field(default_factory=list)
@@ -145,12 +179,16 @@ def get_agreement_repository(db: Session = Depends(get_db)) -> SqlAlchemyAgreeme
 
 
 def _to_agreement_response(agreement: Agreement) -> AgreementVersionResponse:
+    payment_terms = agreement.terms.payment_terms
+    single_payment = payment_terms[0] if len(payment_terms) == 1 else None
     return AgreementVersionResponse(
         deal_id=agreement.deal_id,
         version_number=agreement.version_number,
         terms_hash=agreement.terms_hash,
         status=agreement.status.value,
         terms=agreement.terms.to_storage_dict(),
+        payment_trigger=single_payment.trigger if single_payment else None,
+        payment_due_condition=single_payment.due_condition if single_payment else None,
         created_at=agreement.created_at,
         committed_at=agreement.committed_at,
         approvals=[
@@ -275,6 +313,8 @@ def create_reviewed_agreement_draft_route(
         author_organization_id = resolve_party_organization(
             actor, deal, payload.organization_id
         )
+        # payment_trigger is already pinned to the supported demo trigger by the
+        # request validator; the domain contract derives the due condition from it.
         proposed_terms = ProposedTerms(
             schema_version=payload.schema_version,
             description=payload.description,

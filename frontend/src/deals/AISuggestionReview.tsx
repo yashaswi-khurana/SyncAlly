@@ -1,13 +1,17 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { ApiError, correctDealFact, createAgreementFromReviewedTerms, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
-import type { DealFact, FactReviewAction, PaymentTrigger, ReviewedProposalTerms } from "../api/types";
+import { ApiError, apiRequest, correctDealFact, createAgreementFromReviewedTerms, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
+import type { DealFact, FactReviewAction, PaymentTrigger, ReviewedProposalTerms, Visibility } from "../api/types";
 import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import {
+  REQUIRED_TRADE_FIELDS,
+  guidanceForMissingTradeFields,
+  requiredTradeField,
   toFactSuggestionDraft,
   toProposalDraft,
   type FactSuggestionDraft,
   type ProposalSuggestionDraft,
+  type RequiredTradeField,
 } from "./suggestionPreview";
 
 interface AISuggestionReviewProps {
@@ -36,6 +40,10 @@ function describeError(caught: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
+function createFactPath(dealId: string): string {
+  return `/deals/${encodeURIComponent(dealId)}/facts`;
+}
+
 export default function AISuggestionReview({
   dealId,
   organizationId,
@@ -47,6 +55,16 @@ export default function AISuggestionReview({
 }: AISuggestionReviewProps) {
   const [factDrafts, setFactDrafts] = useState<FactSuggestionDraft[]>([]);
   const [factSuggestionGuidance, setFactSuggestionGuidance] = useState("");
+  const [missingFields, setMissingFields] = useState<RequiredTradeField[]>(
+    REQUIRED_TRADE_FIELDS.map(({ key }) => key),
+  );
+  const [hasFactSuggestionRun, setHasFactSuggestionRun] = useState(false);
+  const [manualEntryOpen, setManualEntryOpen] = useState(false);
+  const [manualField, setManualField] = useState<RequiredTradeField>("item_description");
+  const [manualValue, setManualValue] = useState("");
+  const [manualCurrencyOrUnit, setManualCurrencyOrUnit] = useState("");
+  const [manualVisibility, setManualVisibility] = useState<Visibility>("PRIVATE");
+  const [manualError, setManualError] = useState("");
   const [proposal, setProposal] = useState<ProposalSuggestionDraft | null>(null);
   // The AI draft never picks the payment timing for a human; the proposer confirms it here.
   const [paymentTrigger, setPaymentTrigger] = useState<PaymentTrigger>(
@@ -54,11 +72,55 @@ export default function AISuggestionReview({
   );
   const [suggestionError, setSuggestionError] = useState("");
   const [agreementNotice, setAgreementNotice] = useState("");
-  const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | "agreement" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | "agreement" | "manual" | null>(null);
+  const manualTriggerRef = useRef<HTMLButtonElement>(null);
+  const factSuggestionButtonRef = useRef<HTMLButtonElement>(null);
+  const manualDialogRef = useRef<HTMLElement>(null);
+  const manualFieldRef = useRef<HTMLSelectElement>(null);
+
+  useEffect(() => {
+    if (!manualEntryOpen) return;
+
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const fallbackFocus = factSuggestionButtonRef.current;
+    manualFieldRef.current?.focus();
+    function keepDialogKeyboardFocus(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setManualEntryOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = manualDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", keepDialogKeyboardFocus);
+    return () => {
+      document.removeEventListener("keydown", keepDialogKeyboardFocus);
+      if (previousFocus?.isConnected) previousFocus.focus();
+      else fallbackFocus?.focus();
+    };
+  }, [manualEntryOpen]);
 
   const selectedPaymentTiming = SUPPORTED_PAYMENT_TIMING.find(
     (option) => option.trigger === paymentTrigger,
   ) ?? SUPPORTED_PAYMENT_TIMING[0];
+  const currentFactGuidance = hasFactSuggestionRun
+    ? guidanceForMissingTradeFields(missingFields)
+    : factSuggestionGuidance;
 
   async function runFactSuggestion() {
     setSuggestionError("");
@@ -69,6 +131,13 @@ export default function AISuggestionReview({
       const drafts = result.facts.map(toFactSuggestionDraft);
       setFactDrafts(drafts);
       setFactSuggestionGuidance(result.guidance_message);
+      setHasFactSuggestionRun(true);
+      const serverMissing = new Set(result.missing_fields.map(requiredTradeField).filter(
+        (field): field is RequiredTradeField => field !== null,
+      ));
+      setMissingFields(REQUIRED_TRADE_FIELDS
+        .filter(({ key }) => serverMissing.has(key))
+        .map(({ key }) => key));
       result.facts.forEach(onFactAdded);
       if (result.status !== "VALID") {
         setSuggestionError(result.issues.map((issue) => issue.message).join("; "));
@@ -135,6 +204,22 @@ export default function AISuggestionReview({
     try {
       const updated = await reviewDealFact(dealId, draft.fact.id, action);
       setFactDrafts((current) => current.map((item) => item.fact.id === updated.id ? toFactSuggestionDraft(updated) : item));
+      const field = requiredTradeField(updated.field);
+      if (field) {
+        setMissingFields((current) => {
+          if (action === "confirm") return current.filter((item) => item !== field);
+          if (action === "reject") {
+            const anotherActiveFact = factDrafts.some((item) =>
+              item.fact.id !== updated.id
+              && item.fact.status !== "REJECTED"
+              && item.fact.status !== "SUPERSEDED"
+              && requiredTradeField(item.field) === field,
+            );
+            return anotherActiveFact || current.includes(field) ? current : [...current, field];
+          }
+          return current;
+        });
+      }
       onFactUpdated(updated);
     } catch (caught) {
       const error = describeError(caught);
@@ -154,6 +239,22 @@ export default function AISuggestionReview({
       setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id
         ? toFactSuggestionDraft(result.corrected_fact)
         : item));
+      const previousField = requiredTradeField(result.replaced_fact.field);
+      const correctedField = requiredTradeField(result.corrected_fact.field);
+      setMissingFields((current) => {
+        const next = new Set(current);
+        if (previousField && previousField !== correctedField) {
+          const anotherActiveFact = factDrafts.some((item) =>
+            item.fact.id !== draft.fact.id
+            && item.fact.status !== "REJECTED"
+            && item.fact.status !== "SUPERSEDED"
+            && requiredTradeField(item.field) === previousField,
+          );
+          if (!anotherActiveFact) next.add(previousField);
+        }
+        if (correctedField) next.delete(correctedField);
+        return REQUIRED_TRADE_FIELDS.filter(({ key }) => next.has(key)).map(({ key }) => key);
+      });
       onFactCorrected(result.replaced_fact, result.corrected_fact);
     } catch (caught) {
       const error = describeError(caught);
@@ -165,6 +266,44 @@ export default function AISuggestionReview({
     return draft.field !== draft.fact.field
       || draft.value !== draft.fact.typed_value
       || draft.currencyOrUnit !== draft.fact.currency_or_unit;
+  }
+
+  async function addManualFact(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = manualValue.trim();
+    if (!value) {
+      setManualError("Enter a value for this term.");
+      return;
+    }
+
+    setManualError("");
+    setPendingAction("manual");
+    try {
+      const fact = await apiRequest<DealFact>(createFactPath(dealId), {
+        method: "POST",
+        body: JSON.stringify({
+          organization_id: organizationId,
+          field: manualField,
+          typed_value: value,
+          currency_or_unit: manualCurrencyOrUnit.trim() || null,
+          kind: "INFORMATIONAL",
+          visibility: manualVisibility,
+          source_span: "Manually entered by the user.",
+        }),
+      });
+      setFactDrafts((current) => [...current.filter((item) => item.fact.id !== fact.id), toFactSuggestionDraft(fact)]);
+      setMissingFields((current) => current.filter((field) => field !== manualField));
+      setHasFactSuggestionRun(true);
+      onFactAdded(fact);
+      setManualEntryOpen(false);
+      setManualValue("");
+      setManualCurrencyOrUnit("");
+      setManualVisibility("PRIVATE");
+    } catch (caught) {
+      setManualError(describeError(caught));
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   return (
@@ -179,8 +318,40 @@ export default function AISuggestionReview({
       <p className="muted">
         Demo AI suggestions run only after you request them. Extracted facts are saved as private, unconfirmed candidates for this organization. Draft edits never approve an agreement or start a payment.
       </p>
+      <section className="terms-readiness" aria-labelledby={`terms-readiness-heading-${dealId}`}>
+        <h3 id={`terms-readiness-heading-${dealId}`}>Terms Readiness Checklist</h3>
+        <ul className="terms-readiness__list">
+          {REQUIRED_TRADE_FIELDS.map(({ key, label }) => {
+            const missing = missingFields.includes(key);
+            return (
+              <li className={missing ? "terms-readiness__item terms-readiness__item--missing" : "terms-readiness__item terms-readiness__item--ready"} key={key}>
+                <span className="terms-readiness__icon" aria-hidden="true">{missing ? "●" : "✓"}</span>
+                <span>{label}</span>
+                <span className="visually-hidden">{missing ? "Missing" : "Detected"}</span>
+              </li>
+            );
+          })}
+        </ul>
+        {hasFactSuggestionRun && (factDrafts.length === 0 || missingFields.length > 0) ? (
+          <div className="terms-readiness__manual">
+            <p>Don't see your terms? Add them manually.</p>
+            <button
+              ref={manualTriggerRef}
+              type="button"
+              className="button secondary button--compact"
+              disabled={pendingAction !== null}
+              onClick={() => {
+                setManualError("");
+                setManualEntryOpen(true);
+              }}
+            >
+              + Add Term Manually
+            </button>
+          </div>
+        ) : null}
+      </section>
       <div className="ai-review-actions">
-        <button type="button" className="button" disabled={pendingAction !== null} onClick={() => void runFactSuggestion()}>
+        <button ref={factSuggestionButtonRef} type="button" className="button" disabled={pendingAction !== null} onClick={() => void runFactSuggestion()}>
           {pendingAction === "facts" ? "Extracting facts..." : "Suggest facts from this side's messages"}
         </button>
         <button type="button" className="button secondary" disabled={pendingAction !== null} onClick={() => void runProposalDraft()}>
@@ -188,8 +359,57 @@ export default function AISuggestionReview({
         </button>
       </div>
       {suggestionError ? <p className="form-error" role="alert">{suggestionError}</p> : null}
-      {factSuggestionGuidance ? <p className="hint" role="status">{factSuggestionGuidance}</p> : null}
+      {currentFactGuidance ? <p className="hint" role="status">{currentFactGuidance}</p> : null}
       {agreementNotice ? <p className="hint" role="status">{agreementNotice}</p> : null}
+      {manualEntryOpen ? (
+        <div className="manual-fact-modal-backdrop">
+          <section
+            className="manual-fact-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`manual-fact-heading-${dealId}`}
+            aria-describedby={`manual-fact-description-${dealId}`}
+            ref={manualDialogRef}
+            tabIndex={-1}
+          >
+            <div className="panel-head">
+              <h3 id={`manual-fact-heading-${dealId}`}>Add a term manually</h3>
+              <button type="button" className="button secondary button--compact" onClick={() => setManualEntryOpen(false)}>Close</button>
+            </div>
+            <p id={`manual-fact-description-${dealId}`} className="muted">Add one trade detail for this organization. You can review it with the other fact suggestions.</p>
+            <form className="manual-fact-form" onSubmit={(event) => void addManualFact(event)}>
+              <div className="field">
+                <label htmlFor={`manual-fact-field-${dealId}`}>Term type</label>
+                <select id={`manual-fact-field-${dealId}`} ref={manualFieldRef} value={manualField} onChange={(event) => setManualField(event.target.value as RequiredTradeField)}>
+                  {REQUIRED_TRADE_FIELDS.map(({ key, label }) => <option key={key} value={key}>{label}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor={`manual-fact-value-${dealId}`}>Value</label>
+                <textarea id={`manual-fact-value-${dealId}`} value={manualValue} maxLength={2000} rows={3} required onChange={(event) => setManualValue(event.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor={`manual-fact-unit-${dealId}`}>Currency or unit (optional)</label>
+                <input id={`manual-fact-unit-${dealId}`} value={manualCurrencyOrUnit} maxLength={32} onChange={(event) => setManualCurrencyOrUnit(event.target.value)} placeholder="For example, USD or bags" />
+              </div>
+              <div className="field">
+                <label htmlFor={`manual-fact-visibility-${dealId}`}>Visibility</label>
+                <select id={`manual-fact-visibility-${dealId}`} value={manualVisibility} onChange={(event) => setManualVisibility(event.target.value as Visibility)}>
+                  <option value="PRIVATE">Private to this organization</option>
+                  <option value="SHAREABLE">Share with both parties</option>
+                </select>
+              </div>
+              {manualError ? <p className="form-error" role="alert">{manualError}</p> : null}
+              <div className="fact-actions">
+                <button type="button" className="button secondary button--compact" disabled={pendingAction === "manual"} onClick={() => setManualEntryOpen(false)}>Cancel</button>
+                <button type="submit" className="button button--compact" disabled={pendingAction !== null}>
+                  {pendingAction === "manual" ? "Adding term..." : "Add term"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
 
       {factDrafts.length > 0 ? (
         <div className="ai-suggestion-list" aria-label="Fact suggestions for review">

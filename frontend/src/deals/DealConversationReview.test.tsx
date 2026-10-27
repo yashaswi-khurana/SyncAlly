@@ -397,6 +397,36 @@ describe("DealConversationReview", () => {
     expect(mockedUpdateFactVisibility).toHaveBeenCalledWith(DEAL.id, "fact-toggle-1", "PRIVATE");
   });
 
+  it("disables fact review actions while a visibility update is pending", async () => {
+    const testFact = fact({ id: "fact-visibility-race", visibility: "PRIVATE" });
+    mockedListDealFacts.mockResolvedValue([testFact]);
+    let resolveVisibility: (updated: DealFact) => void = () => {};
+    mockedUpdateFactVisibility.mockImplementation(
+      () =>
+        new Promise<DealFact>((resolve) => {
+          resolveVisibility = resolve;
+        }),
+    );
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    const factCard = await screen.findByRole("article", { name: "Delivery date: 2026-11-01" });
+    fireEvent.click(within(factCard).getByRole("button", { name: "Make Shareable" }));
+
+    const confirmButton = within(factCard).getByRole("button", { name: "Confirm" });
+    expect(within(factCard).getByRole("button", { name: "Reject" })).toBeDisabled();
+    expect(within(factCard).getByRole("button", { name: "Ask for clarification" })).toBeDisabled();
+    expect(confirmButton).toBeDisabled();
+
+    fireEvent.click(confirmButton);
+    expect(mockedReviewDealFact).not.toHaveBeenCalled();
+
+    resolveVisibility({ ...testFact, visibility: "SHAREABLE", version: 1 });
+
+    expect(await within(factCard).findByRole("button", { name: "Make Private" })).toBeInTheDocument();
+    expect(within(factCard).getByRole("button", { name: "Confirm" })).toBeEnabled();
+  });
+
   it("shows error when visibility toggle request fails", async () => {
     const testFact = fact({ id: "fact-fail-1", visibility: "PRIVATE" });
     mockedListDealFacts.mockResolvedValue([testFact]);
@@ -416,5 +446,96 @@ describe("DealConversationReview", () => {
       await screen.findByText("Only an authorized member of the owner organization can modify fact visibility"),
     ).toBeInTheDocument();
     expect(within(factCard).getByText("🔒 Private to your org")).toBeInTheDocument();
+  });
+
+  it("revalidates and removes private facts from open counterparty sessions on window focus or visibility change", async () => {
+    const sharedFact = fact({
+      id: "fact-shared-1",
+      owner_organization_id: BUYER_ID,
+      field: "Warranty period",
+      typed_value: "24 months",
+      visibility: "SHAREABLE",
+    });
+
+    mockedListOrganizations.mockResolvedValue([
+      organization(SELLER_ID, "Seller Co"),
+    ]);
+    mockedListDealMessages.mockResolvedValue([
+      message({ body: "Seller message" }),
+    ]);
+    mockedListDealFacts.mockResolvedValueOnce([sharedFact]);
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    expect(await screen.findByText("Warranty period")).toBeInTheDocument();
+    expect(screen.getByText("24 months")).toBeInTheDocument();
+    expect(screen.getByText("🌐 Shared with counterparty")).toBeInTheDocument();
+
+    mockedListDealFacts.mockResolvedValue([]);
+
+    fireEvent(window, new Event("focus"));
+
+    await vi.waitFor(() => {
+      expect(screen.queryByText("Warranty period")).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("No facts are available for this organization yet."),
+    ).toBeInTheDocument();
+  });
+
+  it("periodically revalidates facts in an open session", async () => {
+    const initialFact = fact({
+      id: "fact-p1",
+      field: "Delivery date",
+      typed_value: "2026-11-01",
+      visibility: "SHAREABLE",
+    });
+    const newFact = fact({
+      id: "fact-p2",
+      field: "Payment terms",
+      typed_value: "Net 30",
+      visibility: "SHAREABLE",
+    });
+
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"),
+    ]);
+    mockedListDealMessages.mockResolvedValue([message()]);
+    mockedListDealFacts.mockResolvedValueOnce([initialFact]);
+
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={50} />);
+
+    expect(await screen.findByText("Delivery date")).toBeInTheDocument();
+
+    mockedListDealFacts.mockResolvedValue([initialFact, newFact]);
+
+    expect(await screen.findByText("Payment terms")).toBeInTheDocument();
+    expect(screen.getByText("Net 30")).toBeInTheDocument();
+  });
+
+  it("silently tolerates background revalidation errors without wiping open conversation view", async () => {
+    const initialFact = fact({
+      id: "fact-err-test",
+      field: "Payment terms",
+      typed_value: "Net 60",
+      visibility: "SHAREABLE",
+    });
+
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"),
+    ]);
+    mockedListDealMessages.mockResolvedValue([message()]);
+    mockedListDealFacts.mockResolvedValueOnce([initialFact]);
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    expect(await screen.findByText("Payment terms")).toBeInTheDocument();
+
+    mockedListDealFacts.mockRejectedValue(new Error("Network disconnect"));
+
+    fireEvent(window, new Event("focus"));
+
+    expect(screen.getByText("Payment terms")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

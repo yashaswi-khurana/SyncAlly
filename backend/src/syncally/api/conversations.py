@@ -59,7 +59,18 @@ from syncally.domain.conversations import Constraint, Message, Visibility
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.database import get_db
-from syncally.infrastructure.models import AuditEvent, Constraint as ConstraintModel
+from syncally.infrastructure.models import (
+    AuditEvent,
+    Organization,
+    OrganizationMember,
+    User,
+)
+from syncally.infrastructure.models import (
+    Constraint as ConstraintModel,
+)
+from syncally.infrastructure.models import (
+    Message as MessageModel,
+)
 from syncally.infrastructure.repositories import (
     CommunicationScopeError,
     SqlAlchemyCommunicationRepository,
@@ -622,9 +633,37 @@ def update_fact_visibility_route(
             detail="Only an authorized member of the owner organization can modify fact visibility",
         )
 
+    membership_id = db.scalar(
+        select(OrganizationMember.id)
+        .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .join(User, User.id == OrganizationMember.user_id)
+        .where(
+            OrganizationMember.organization_id == row.owner_organization_id,
+            OrganizationMember.user_id == actor.user_id,
+            OrganizationMember.status == "ACTIVE",
+            Organization.status == "ACTIVE",
+            User.status == "ACTIVE",
+        )
+        .with_for_update(of=OrganizationMember)
+    )
+    if membership_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an authorized member of the owner organization can modify fact visibility",
+        )
+
     try:
         previous_visibility = row.visibility
         if previous_visibility != payload.visibility.value:
+            if payload.visibility == Visibility.SHAREABLE and row.source_message_id is not None:
+                source_visibility = db.scalar(
+                    select(MessageModel.visibility).where(MessageModel.id == row.source_message_id)
+                )
+                if source_visibility != Visibility.SHAREABLE.value:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="A shareable fact cannot cite a private message",
+                    )
             row.visibility = payload.visibility.value
             row.version += 1
             audit_event = AuditEvent(

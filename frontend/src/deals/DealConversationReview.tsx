@@ -363,7 +363,7 @@ export default function DealConversationReview({
 
   return (
     <section className="communication-grid" aria-label="Deal conversation and fact review">
-      <section className="card communication-card" aria-labelledby="conversation-heading">
+      <section className="card communication-card communication-card--transcript" aria-labelledby="conversation-heading">
         <div className="panel-head">
           <div>
             <span className="eyebrow">Deal messages</span>
@@ -419,7 +419,7 @@ export default function DealConversationReview({
                 </button>
               </div>
             ) : (
-              <ol className="message-list" aria-label="Conversation messages">
+              <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
                 {visibleMessages.length === 0 ? (
                   <li className="empty-state">No messages yet.</li>
                 ) : (
@@ -452,7 +452,7 @@ export default function DealConversationReview({
         )}
       </section>
 
-      <section className="card communication-card" aria-labelledby="fact-review-heading">
+      <section className="card communication-card communication-card--facts" aria-labelledby="fact-review-heading">
         <div className="panel-head">
           <div>
             <span className="eyebrow">Extracted details</span>
@@ -519,7 +519,7 @@ export default function DealConversationReview({
         ) : filteredFacts.length === 0 ? (
           <p className="empty-state">No facts match this view for the selected organization.</p>
         ) : (
-          <ul className="fact-list" aria-label="Deal facts">
+          <ul className="fact-list" aria-label="Deal facts" tabIndex={0}>
             {filteredFacts.map((fact) => {
               const isOwner = fact.owner_organization_id === activeOrganizationId;
               const canReview =

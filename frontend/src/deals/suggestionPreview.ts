@@ -44,6 +44,22 @@ export function guidanceForMissingTradeFields(fields: RequiredTradeField[]): str
   return `Add the missing details: ${labels.join(", ")}. Suggested format: “Order of [item], [quantity] [unit] at USD [price] each, ship to [city or port] by YYYY-MM-DD.”`;
 }
 
+export function missingRequiredTradeFields(
+  facts: DealFact[],
+  serverMissingFields: RequiredTradeField[] | null,
+): RequiredTradeField[] {
+  return REQUIRED_TRADE_FIELDS
+    .filter(({ key }) => {
+      if (serverMissingFields !== null) return serverMissingFields.includes(key);
+      const matchingFacts = facts.filter((fact) => requiredTradeField(fact.field) === key);
+      if (matchingFacts.length > 0) {
+        return !matchingFacts.some((fact) => fact.status === "EXTRACTED" || fact.status === "CONFIRMED");
+      }
+      return true;
+    })
+    .map(({ key }) => key);
+}
+
 export interface FactSuggestionDraft {
   fact: DealFact;
   field: string;

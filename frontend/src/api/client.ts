@@ -6,6 +6,7 @@ import type {
   AgreementApproval,
   AgreementVersion,
   CommercialDocumentDraft,
+  CreateDealFactInput,
   Deal,
   DealFact,
   DealMessage,
@@ -303,6 +304,13 @@ export function listDealMessages(
 export function listDealFacts(dealId: string, organizationId: string): Promise<DealFact[]> {
   const query = new URLSearchParams({ organization_id: organizationId });
   return apiRequest<DealFact[]>(`/deals/${encodeURIComponent(dealId)}/facts?${query.toString()}`);
+}
+
+export function createDealFact(dealId: string, input: CreateDealFactInput): Promise<DealFact> {
+  return apiRequest<DealFact>(`/deals/${encodeURIComponent(dealId)}/facts`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export function reviewDealFact(

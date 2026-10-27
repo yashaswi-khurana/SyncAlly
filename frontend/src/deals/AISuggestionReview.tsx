@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ApiError, apiRequest, correctDealFact, createAgreementFromReviewedTerms, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
+import { ApiError, correctDealFact, createAgreementFromReviewedTerms, createDealFact, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
 import type { DealFact, FactReviewAction, PaymentTrigger, ReviewedProposalTerms, Visibility } from "../api/types";
 import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import {
   REQUIRED_TRADE_FIELDS,
   guidanceForMissingTradeFields,
+  missingRequiredTradeFields,
   requiredTradeField,
   toFactSuggestionDraft,
   toProposalDraft,
@@ -17,6 +18,7 @@ import {
 interface AISuggestionReviewProps {
   dealId: string;
   organizationId: string;
+  facts: DealFact[];
   onTraceSource: (messageId: string) => void;
   onFactAdded: (fact: DealFact) => void;
   onFactUpdated: (fact: DealFact) => void;
@@ -40,13 +42,10 @@ function describeError(caught: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
-function createFactPath(dealId: string): string {
-  return `/deals/${encodeURIComponent(dealId)}/facts`;
-}
-
 export default function AISuggestionReview({
   dealId,
   organizationId,
+  facts,
   onTraceSource,
   onFactAdded,
   onFactUpdated,
@@ -54,10 +53,9 @@ export default function AISuggestionReview({
   onAgreementCreated = () => {},
 }: AISuggestionReviewProps) {
   const [factDrafts, setFactDrafts] = useState<FactSuggestionDraft[]>([]);
+  const [factOverrides, setFactOverrides] = useState<Record<string, DealFact>>({});
   const [factSuggestionGuidance, setFactSuggestionGuidance] = useState("");
-  const [missingFields, setMissingFields] = useState<RequiredTradeField[]>(
-    REQUIRED_TRADE_FIELDS.map(({ key }) => key),
-  );
+  const [serverMissingFields, setServerMissingFields] = useState<RequiredTradeField[] | null>(null);
   const [hasFactSuggestionRun, setHasFactSuggestionRun] = useState(false);
   const [manualEntryOpen, setManualEntryOpen] = useState(false);
   const [manualField, setManualField] = useState<RequiredTradeField>("item_description");
@@ -73,6 +71,7 @@ export default function AISuggestionReview({
   const [suggestionError, setSuggestionError] = useState("");
   const [agreementNotice, setAgreementNotice] = useState("");
   const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | "agreement" | "manual" | null>(null);
+  const factStateRevisionRef = useRef(0);
   const manualTriggerRef = useRef<HTMLButtonElement>(null);
   const factSuggestionButtonRef = useRef<HTMLButtonElement>(null);
   const manualDialogRef = useRef<HTMLElement>(null);
@@ -81,8 +80,8 @@ export default function AISuggestionReview({
   useEffect(() => {
     if (!manualEntryOpen) return;
 
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const fallbackFocus = factSuggestionButtonRef.current;
+    const focusReturnTarget = manualTriggerRef.current ?? fallbackFocus;
     manualFieldRef.current?.focus();
     function keepDialogKeyboardFocus(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -110,7 +109,7 @@ export default function AISuggestionReview({
     document.addEventListener("keydown", keepDialogKeyboardFocus);
     return () => {
       document.removeEventListener("keydown", keepDialogKeyboardFocus);
-      if (previousFocus?.isConnected) previousFocus.focus();
+      if (focusReturnTarget?.isConnected) focusReturnTarget.focus();
       else fallbackFocus?.focus();
     };
   }, [manualEntryOpen]);
@@ -118,16 +117,28 @@ export default function AISuggestionReview({
   const selectedPaymentTiming = SUPPORTED_PAYMENT_TIMING.find(
     (option) => option.trigger === paymentTrigger,
   ) ?? SUPPORTED_PAYMENT_TIMING[0];
+  const knownFactsById = new Map(facts.map((fact) => [fact.id, fact]));
+  for (const draft of factDrafts) {
+    const current = knownFactsById.get(draft.fact.id);
+    if (!current || draft.fact.version >= current.version) knownFactsById.set(draft.fact.id, draft.fact);
+  }
+  for (const fact of Object.values(factOverrides)) {
+    const current = knownFactsById.get(fact.id);
+    if (!current || fact.version >= current.version) knownFactsById.set(fact.id, fact);
+  }
+  const missingFields = missingRequiredTradeFields([...knownFactsById.values()], serverMissingFields);
   const currentFactGuidance = hasFactSuggestionRun
     ? guidanceForMissingTradeFields(missingFields)
     : factSuggestionGuidance;
 
   async function runFactSuggestion() {
+    const revisionAtStart = factStateRevisionRef.current;
     setSuggestionError("");
     setFactSuggestionGuidance("");
     setPendingAction("facts");
     try {
       const result = await suggestDealFacts(dealId, organizationId);
+      if (revisionAtStart !== factStateRevisionRef.current) return;
       const drafts = result.facts.map(toFactSuggestionDraft);
       setFactDrafts(drafts);
       setFactSuggestionGuidance(result.guidance_message);
@@ -135,7 +146,7 @@ export default function AISuggestionReview({
       const serverMissing = new Set(result.missing_fields.map(requiredTradeField).filter(
         (field): field is RequiredTradeField => field !== null,
       ));
-      setMissingFields(REQUIRED_TRADE_FIELDS
+      setServerMissingFields(REQUIRED_TRADE_FIELDS
         .filter(({ key }) => serverMissing.has(key))
         .map(({ key }) => key));
       result.facts.forEach(onFactAdded);
@@ -199,35 +210,25 @@ export default function AISuggestionReview({
   }
 
   async function reviewFact(draft: FactSuggestionDraft, action: FactReviewAction) {
+    factStateRevisionRef.current += 1;
     updateFact(draft.fact.id, {});
     setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id ? { ...item, pending: true } : item));
     try {
       const updated = await reviewDealFact(dealId, draft.fact.id, action);
+      setServerMissingFields(null);
       setFactDrafts((current) => current.map((item) => item.fact.id === updated.id ? toFactSuggestionDraft(updated) : item));
-      const field = requiredTradeField(updated.field);
-      if (field) {
-        setMissingFields((current) => {
-          if (action === "confirm") return current.filter((item) => item !== field);
-          if (action === "reject") {
-            const anotherActiveFact = factDrafts.some((item) =>
-              item.fact.id !== updated.id
-              && item.fact.status !== "REJECTED"
-              && item.fact.status !== "SUPERSEDED"
-              && requiredTradeField(item.field) === field,
-            );
-            return anotherActiveFact || current.includes(field) ? current : [...current, field];
-          }
-          return current;
-        });
-      }
+      setFactOverrides((current) => ({ ...current, [updated.id]: updated }));
       onFactUpdated(updated);
     } catch (caught) {
       const error = describeError(caught);
       setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id ? { ...item, pending: false, error } : item));
+    } finally {
+      factStateRevisionRef.current += 1;
     }
   }
 
   async function saveCorrection(draft: FactSuggestionDraft) {
+    factStateRevisionRef.current += 1;
     setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id ? { ...item, pending: true, error: "" } : item));
     try {
       const result = await correctDealFact(dealId, draft.fact.id, {
@@ -236,29 +237,21 @@ export default function AISuggestionReview({
         typed_value: draft.value,
         currency_or_unit: draft.currencyOrUnit,
       });
+      setServerMissingFields(null);
       setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id
         ? toFactSuggestionDraft(result.corrected_fact)
         : item));
-      const previousField = requiredTradeField(result.replaced_fact.field);
-      const correctedField = requiredTradeField(result.corrected_fact.field);
-      setMissingFields((current) => {
-        const next = new Set(current);
-        if (previousField && previousField !== correctedField) {
-          const anotherActiveFact = factDrafts.some((item) =>
-            item.fact.id !== draft.fact.id
-            && item.fact.status !== "REJECTED"
-            && item.fact.status !== "SUPERSEDED"
-            && requiredTradeField(item.field) === previousField,
-          );
-          if (!anotherActiveFact) next.add(previousField);
-        }
-        if (correctedField) next.delete(correctedField);
-        return REQUIRED_TRADE_FIELDS.filter(({ key }) => next.has(key)).map(({ key }) => key);
-      });
+      setFactOverrides((current) => ({
+        ...current,
+        [result.replaced_fact.id]: result.replaced_fact,
+        [result.corrected_fact.id]: result.corrected_fact,
+      }));
       onFactCorrected(result.replaced_fact, result.corrected_fact);
     } catch (caught) {
       const error = describeError(caught);
       setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id ? { ...item, pending: false, error } : item));
+    } finally {
+      factStateRevisionRef.current += 1;
     }
   }
 
@@ -277,22 +270,20 @@ export default function AISuggestionReview({
     }
 
     setManualError("");
+    factStateRevisionRef.current += 1;
     setPendingAction("manual");
     try {
-      const fact = await apiRequest<DealFact>(createFactPath(dealId), {
-        method: "POST",
-        body: JSON.stringify({
-          organization_id: organizationId,
-          field: manualField,
-          typed_value: value,
-          currency_or_unit: manualCurrencyOrUnit.trim() || null,
-          kind: "INFORMATIONAL",
-          visibility: manualVisibility,
-          source_span: "Manually entered by the user.",
-        }),
+      const fact = await createDealFact(dealId, {
+        organization_id: organizationId,
+        field: manualField,
+        typed_value: value,
+        currency_or_unit: manualCurrencyOrUnit.trim() || null,
+        kind: "INFORMATIONAL",
+        visibility: manualVisibility,
       });
+      setServerMissingFields(null);
       setFactDrafts((current) => [...current.filter((item) => item.fact.id !== fact.id), toFactSuggestionDraft(fact)]);
-      setMissingFields((current) => current.filter((field) => field !== manualField));
+      setFactOverrides((current) => ({ ...current, [fact.id]: fact }));
       setHasFactSuggestionRun(true);
       onFactAdded(fact);
       setManualEntryOpen(false);
@@ -302,6 +293,7 @@ export default function AISuggestionReview({
     } catch (caught) {
       setManualError(describeError(caught));
     } finally {
+      factStateRevisionRef.current += 1;
       setPendingAction(null);
     }
   }
@@ -332,7 +324,7 @@ export default function AISuggestionReview({
             );
           })}
         </ul>
-        {hasFactSuggestionRun && (factDrafts.length === 0 || missingFields.length > 0) ? (
+        {factDrafts.length === 0 || missingFields.length > 0 ? (
           <div className="terms-readiness__manual">
             <p>Don't see your terms? Add them manually.</p>
             <button

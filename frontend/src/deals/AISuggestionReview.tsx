@@ -1,8 +1,8 @@
 import { useState } from "react";
 
 import { ApiError, correctDealFact, createAgreementFromReviewedTerms, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
-import type { DealFact, FactReviewAction, ReviewedProposalTerms } from "../api/types";
-import { paymentDueConditionLabel, SUPPORTED_PAYMENT_TIMING } from "../api/types";
+import type { DealFact, FactReviewAction, PaymentTrigger, ReviewedProposalTerms } from "../api/types";
+import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import {
   toFactSuggestionDraft,
   toProposalDraft,
@@ -48,7 +48,9 @@ export default function AISuggestionReview({
   const [factDrafts, setFactDrafts] = useState<FactSuggestionDraft[]>([]);
   const [proposal, setProposal] = useState<ProposalSuggestionDraft | null>(null);
   // The AI draft never picks the payment timing for a human; the proposer confirms it here.
-  const [paymentTrigger, setPaymentTrigger] = useState(SUPPORTED_PAYMENT_TIMING[0].trigger);
+  const [paymentTrigger, setPaymentTrigger] = useState<PaymentTrigger>(
+    SUPPORTED_PAYMENT_TIMING[0].trigger,
+  );
   const [suggestionError, setSuggestionError] = useState("");
   const [agreementNotice, setAgreementNotice] = useState("");
   const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | "agreement" | null>(null);
@@ -254,7 +256,11 @@ export default function AISuggestionReview({
             <select
               id={`proposal-${dealId}-payment-trigger`}
               value={paymentTrigger}
-              onChange={(event) => setPaymentTrigger(event.target.value)}
+              onChange={(event) => {
+                if (isPaymentTrigger(event.target.value)) {
+                  setPaymentTrigger(event.target.value);
+                }
+              }}
             >
               {SUPPORTED_PAYMENT_TIMING.map((option) => (
                 <option key={option.trigger} value={option.trigger}>{option.label}</option>
@@ -262,7 +268,7 @@ export default function AISuggestionReview({
             </select>
           </div>
           <p className="hint">
-            Due condition: {paymentDueConditionLabel(selectedPaymentTiming.dueCondition)}
+            Due condition: {selectedPaymentTiming.dueCondition}
           </p>
           <p className="hint">Editing this draft does not create or approve an agreement and cannot start a payment.</p>
           <button

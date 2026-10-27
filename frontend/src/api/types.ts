@@ -24,26 +24,32 @@ export type AgreementStatus = "PENDING_APPROVAL" | "COMMITTED" | "SUPERSEDED" | 
 /**
  * One payment timing the trade contract supports.
  *
- * `trigger` and `dueCondition` are the canonical strings the backend stores and
- * hashes; `label` and `dueConditionLabel` are the wording reviewers read. They
- * live here, next to the API types, so the proposal draft and the agreement
- * review cannot drift apart and both parties always read the same sentence.
+ * `trigger` and `dueCondition` mirror the canonical strings the backend stores
+ * and hashes. `label` only reformats the machine trigger for reading; the due
+ * condition is always rendered verbatim from the agreement, so a review screen
+ * can never promise more than the hashed text (e.g. an "immediately" that the
+ * agreement does not contain).
  */
 export interface PaymentTimingOption {
   trigger: string;
   label: string;
   dueCondition: string;
-  dueConditionLabel: string;
 }
 
-export const SUPPORTED_PAYMENT_TIMING: readonly PaymentTimingOption[] = [
+export const SUPPORTED_PAYMENT_TIMING = [
   {
     trigger: "seller_invoice",
     label: "Upon Seller Invoice",
     dueCondition: "when seller invoices",
-    dueConditionLabel: "Payable immediately upon invoice receipt",
   },
-];
+] as const satisfies readonly PaymentTimingOption[];
+
+/** A trigger a proposal may actually send; anything else cannot compile. */
+export type PaymentTrigger = (typeof SUPPORTED_PAYMENT_TIMING)[number]["trigger"];
+
+export function isPaymentTrigger(value: string): value is PaymentTrigger {
+  return SUPPORTED_PAYMENT_TIMING.some((option) => option.trigger === value);
+}
 
 export function paymentTimingLabel(trigger: string): string {
   const normalized = trigger.trim().toLowerCase();
@@ -53,14 +59,6 @@ export function paymentTimingLabel(trigger: string): string {
   return normalized
     .replaceAll("_", " ")
     .replace(/\b[a-z]/g, (character) => character.toUpperCase());
-}
-
-export function paymentDueConditionLabel(dueCondition: string): string {
-  const normalized = dueCondition.trim().toLowerCase();
-  const supported = SUPPORTED_PAYMENT_TIMING.find(
-    (option) => option.dueCondition === normalized,
-  );
-  return supported ? supported.dueConditionLabel : normalized || "Not specified";
 }
 
 export interface AgreementLineItem {
@@ -205,11 +203,14 @@ export interface ProposalSuggestion {
 /**
  * Body of `POST /deals/{deal_id}/agreements/from-reviewed-terms`.
  *
- * The proposer confirms the payment timing explicitly; the server rejects a
- * trigger outside `SUPPORTED_PAYMENT_TIMING` and derives the due condition.
+ * `payment_trigger` is required from this client: the proposer confirms the
+ * timing, and the server rejects an unsupported value. The server only accepts
+ * an omitted field from older clients during rollout, where the sole supported
+ * timing is unambiguous. The due condition is derived from the trigger by the
+ * domain contract.
  */
 export interface ReviewedProposalTerms extends Omit<ProposalSuggestion, "status"> {
-  payment_trigger: string;
+  payment_trigger: PaymentTrigger;
 }
 
 export interface FactCorrectionResult {

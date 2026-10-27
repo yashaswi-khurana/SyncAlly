@@ -251,7 +251,13 @@ describe("DealConversationReview", () => {
       source_message_id: "message-1",
       source_span: "12 boxes",
     });
-    mockedSuggestDealFacts.mockResolvedValue({ status: "VALID", issues: [], facts: [suggested] });
+    mockedSuggestDealFacts.mockResolvedValue({
+      status: "VALID",
+      issues: [],
+      facts: [suggested],
+      missing_fields: ["unit_price", "delivery_destination", "delivery_date"],
+      guidance_message: "Add the missing details: unit price, delivery destination, delivery date.",
+    });
     mockedReviewDealFact.mockImplementation(async (_dealId, factId) => ({
       ...suggested,
       id: factId,
@@ -287,6 +293,9 @@ describe("DealConversationReview", () => {
     expect(within(suggestion).getByLabelText("Fact label")).toHaveValue("quantity");
     expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("12");
     expect(within(suggestion).getByRole("blockquote")).toHaveTextContent("12 boxes");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Add the missing details: unit price, delivery destination, delivery date.",
+    );
 
     fireEvent.change(within(suggestion).getByLabelText("Suggested value"), {
       target: { value: "24" },
@@ -328,7 +337,8 @@ describe("DealConversationReview", () => {
       payment_trigger: "seller_invoice",
     });
     expect(onAgreementCreated).toHaveBeenCalledOnce();
-    expect(await screen.findByRole("status")).toHaveTextContent("Agreement version 1");
+    expect(await screen.findByText("Agreement version 1 is ready for both parties to review."))
+      .toBeInTheDocument();
   });
 
   it("clears local suggestion state when switching organizations", async () => {
@@ -342,6 +352,8 @@ describe("DealConversationReview", () => {
     mockedSuggestDealFacts.mockImplementation(async (_dealId, organizationId) => ({
       status: "VALID",
       issues: [],
+      missing_fields: [],
+      guidance_message: "All required trade details were found.",
       facts: [fact({
         id: `${organizationId}-candidate`,
         owner_organization_id: organizationId,

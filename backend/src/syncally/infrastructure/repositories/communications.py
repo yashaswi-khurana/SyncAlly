@@ -407,6 +407,14 @@ class SqlAlchemyCommunicationRepository:
         """Load a deal only when the user is an active member of a deal party."""
         return SqlAlchemyDealRepository(self._db).get_for_participant(deal_id, user_id)
 
+    def lock_deal_for_fact_persistence(
+        self, deal_id: UUID, user_id: UUID
+    ) -> DomainDeal | None:
+        """Serialize same-deal fact checks until the caller commits its inserts."""
+        return SqlAlchemyDealRepository(self._db).get_for_participant(
+            deal_id, user_id, for_update=True
+        )
+
     def get_constraint_for_deal(
         self, deal_id: UUID, constraint_id: UUID, user_id: UUID
     ) -> DomainConstraint | None:

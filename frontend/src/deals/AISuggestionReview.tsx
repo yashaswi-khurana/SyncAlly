@@ -46,6 +46,7 @@ export default function AISuggestionReview({
   onAgreementCreated = () => {},
 }: AISuggestionReviewProps) {
   const [factDrafts, setFactDrafts] = useState<FactSuggestionDraft[]>([]);
+  const [factSuggestionGuidance, setFactSuggestionGuidance] = useState("");
   const [proposal, setProposal] = useState<ProposalSuggestionDraft | null>(null);
   // The AI draft never picks the payment timing for a human; the proposer confirms it here.
   const [paymentTrigger, setPaymentTrigger] = useState<PaymentTrigger>(
@@ -61,11 +62,13 @@ export default function AISuggestionReview({
 
   async function runFactSuggestion() {
     setSuggestionError("");
+    setFactSuggestionGuidance("");
     setPendingAction("facts");
     try {
       const result = await suggestDealFacts(dealId, organizationId);
       const drafts = result.facts.map(toFactSuggestionDraft);
       setFactDrafts(drafts);
+      setFactSuggestionGuidance(result.guidance_message);
       result.facts.forEach(onFactAdded);
       if (result.status !== "VALID") {
         setSuggestionError(result.issues.map((issue) => issue.message).join("; "));
@@ -185,6 +188,7 @@ export default function AISuggestionReview({
         </button>
       </div>
       {suggestionError ? <p className="form-error" role="alert">{suggestionError}</p> : null}
+      {factSuggestionGuidance ? <p className="hint" role="status">{factSuggestionGuidance}</p> : null}
       {agreementNotice ? <p className="hint" role="status">{agreementNotice}</p> : null}
 
       {factDrafts.length > 0 ? (

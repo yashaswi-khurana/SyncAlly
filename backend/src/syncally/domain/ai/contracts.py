@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
@@ -448,6 +448,12 @@ def _validate_fact_value(
 
 _DECIMAL_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?")
 _UNIT_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9 -]{0,31}")
+_NATURAL_DATE_PATTERN = re.compile(
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+    r"Dec(?:ember)?)\s+\d{1,2},?\s+20\d{2}\b",
+    re.IGNORECASE,
+)
 
 
 def _validate_unit(value: Any) -> None:
@@ -462,39 +468,82 @@ def _fact_value_is_supported_by_quote(fact: ExtractedFact, quote: str) -> bool:
         if fact.currency_or_unit is not None:
             return _number_with_unit_is_present(fact.value, fact.currency_or_unit, quote)
         return _contains_numeric_token(fact.value, quote)
-    if fact.field is FactField.UNIT or fact.field is FactField.DELIVERY_DATE:
+    if fact.field is FactField.UNIT:
         return _contains_token(fact.value, quote)
+    if fact.field is FactField.DELIVERY_DATE:
+        return _date_value_is_present(fact.value, quote)
     return fact.value.casefold() in quote.casefold()
 
 
 def _contains_numeric_token(value: str, text: str) -> bool:
-    token = re.escape(value)
+    token = _numeric_pattern(value)
     return re.search(rf"(?<![\w.,+-]){token}(?![\w.,])", text) is not None
 
 
 def _contains_token(value: str, text: str) -> bool:
-    token = re.escape(value.strip())
+    token = _flexible_whitespace_pattern(value.strip())
     return re.search(rf"(?<![A-Za-z0-9]){token}(?![A-Za-z0-9])", text, re.IGNORECASE) is not None
 
 
+def _date_value_is_present(value: str, text: str) -> bool:
+    parsed_value = date.fromisoformat(value)
+    if _contains_token(value, text):
+        return True
+    for match in _NATURAL_DATE_PATTERN.finditer(text):
+        raw_date = match.group(0).replace(",", "")
+        for format_string in ("%B %d %Y", "%b %d %Y"):
+            try:
+                if datetime.strptime(raw_date, format_string).date() == parsed_value:
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
 def _number_with_currency_is_present(value: str, currency: str, text: str) -> bool:
-    number = re.escape(value)
+    number = _numeric_pattern(value)
     currency_token = re.escape(currency)
-    pattern = (
+    alternatives = [
         rf"(?<![A-Za-z]){currency_token}\s*{number}(?![\w.,])"
         rf"|(?<![\w.,+-]){number}\s*{currency_token}(?![A-Za-z])"
-    )
+    ]
+    if currency == SUPPORTED_DEMO_CURRENCY:
+        alternatives.extend(
+            (
+                rf"(?<![\w.,+-])\$\s*{number}(?![\w.,])",
+                rf"(?<![\w.,+-]){number}\s*dollars?\b",
+                rf"\bat\s+(?:{currency_token}\s*)?\$?{number}\s+each\b",
+            )
+        )
+    pattern = "|".join(alternatives)
     return re.search(pattern, text, re.IGNORECASE) is not None
 
 
 def _number_with_unit_is_present(value: str, unit: str, text: str) -> bool:
-    number = re.escape(value)
-    unit_token = re.escape(unit.strip())
+    number = _numeric_pattern(value)
+    unit_token = _flexible_whitespace_pattern(unit.strip())
     pattern = (
         rf"(?<![\w.,+-]){number}\s+{unit_token}(?![A-Za-z0-9])"
         rf"|(?<![A-Za-z0-9]){unit_token}\s+{number}(?![\w.,])"
     )
     return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def _flexible_whitespace_pattern(value: str) -> str:
+    """Match normalized multiword terms against irregular source whitespace."""
+    return r"\s+".join(re.escape(part) for part in value.split())
+
+
+def _numeric_pattern(value: str) -> str:
+    """Match a normalized decimal with or without standard thousands separators."""
+    integer, separator, fractional = value.partition(".")
+    grouped_integer = f"{int(integer):,}"
+    integer_pattern = re.escape(integer)
+    if grouped_integer != integer:
+        integer_pattern = rf"(?:{integer_pattern}|{re.escape(grouped_integer)})"
+    if separator:
+        return rf"{integer_pattern}\.{re.escape(fractional)}"
+    return integer_pattern
 
 
 def _check_keys(payload: Mapping[str, Any], allowed: set[str]) -> None:

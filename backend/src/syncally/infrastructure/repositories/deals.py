@@ -98,10 +98,15 @@ class SqlAlchemyDealRepository:
         row = self._db.get(Deal, deal_id)
         return _to_domain(row) if row is not None else None
 
-    def get_for_participant(self, deal_id: UUID, user_id: UUID) -> DomainDeal | None:
-        row = self._db.scalar(
-            select(Deal).where(Deal.id == deal_id, _active_participation(user_id))
+    def get_for_participant(
+        self, deal_id: UUID, user_id: UUID, *, for_update: bool = False
+    ) -> DomainDeal | None:
+        statement = select(Deal).where(
+            Deal.id == deal_id, _active_participation(user_id)
         )
+        if for_update:
+            statement = statement.with_for_update()
+        row = self._db.scalar(statement)
         return _to_domain(row) if row is not None else None
 
     def list_for_participant(self, user_id: UUID) -> list[DomainDeal]:

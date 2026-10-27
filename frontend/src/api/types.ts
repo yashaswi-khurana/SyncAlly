@@ -139,6 +139,8 @@ export interface FactSuggestionResult {
   status: "VALID" | "INVALID" | "NEEDS_CLARIFICATION";
   issues: Array<{ schema_version: number; code: string; path: string; message: string }>;
   facts: DealFact[];
+  missing_fields: string[];
+  guidance_message: string;
 }
 
 export interface ProposalSuggestion {

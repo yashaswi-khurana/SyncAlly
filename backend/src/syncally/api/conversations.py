@@ -233,7 +233,11 @@ _REQUIRED_PROPOSAL_FIELDS = (
 
 def _missing_trade_fields(constraints: tuple[Constraint, ...] | list[Constraint]) -> list[str]:
     """List required draft fields that are not represented by known deal facts."""
-    ignored_statuses = {ConstraintStatus.REJECTED, ConstraintStatus.SUPERSEDED}
+    ignored_statuses = {
+        ConstraintStatus.NEEDS_CLARIFICATION,
+        ConstraintStatus.REJECTED,
+        ConstraintStatus.SUPERSEDED,
+    }
     present = {
         constraint.field.casefold().replace(" ", "_")
         for constraint in constraints
@@ -265,6 +269,30 @@ def _fact_suggestion_guidance(missing_fields: list[str]) -> str:
     )
 
 
+def _list_all_visible_constraints(
+    actor: ActorContext,
+    deal_id: UUID,
+    organization_id: UUID,
+    repository: CommunicationRepository,
+) -> list[Constraint]:
+    """Read every page after extraction so guidance reflects current visible facts."""
+    constraints: list[Constraint] = []
+    offset = 0
+    while True:
+        page = list_visible_constraints(
+            actor,
+            deal_id,
+            repository,
+            organization_id=organization_id,
+            limit=MAX_PAGE_SIZE,
+            offset=offset,
+        )
+        constraints.extend(page)
+        if len(page) < MAX_PAGE_SIZE:
+            return constraints
+        offset += len(page)
+
+
 @router.post("/ai/facts", response_model=FactSuggestionResponse)
 def suggest_facts_route(
     deal_id: UUID,
@@ -281,6 +309,9 @@ def suggest_facts_route(
         result = extract_facts_from_context(context, provider)
         facts = persist_fact_candidates(actor, deal_id, result, repository)
         db.commit()
+        current_constraints = _list_all_visible_constraints(
+            actor, deal_id, context.organization_id, repository
+        )
     except AITransientError as exc:
         db.rollback()
         raise HTTPException(
@@ -299,7 +330,7 @@ def suggest_facts_route(
         db.rollback()
         raise
 
-    missing_fields = _missing_trade_fields([*context.constraints, *facts])
+    missing_fields = _missing_trade_fields(current_constraints)
     return FactSuggestionResponse(
         status=result.result.status.value,
         issues=_validation_issue_responses(result.result),

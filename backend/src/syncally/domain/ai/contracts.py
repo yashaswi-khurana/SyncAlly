@@ -481,7 +481,7 @@ def _contains_numeric_token(value: str, text: str) -> bool:
 
 
 def _contains_token(value: str, text: str) -> bool:
-    token = re.escape(value.strip())
+    token = _flexible_whitespace_pattern(value.strip())
     return re.search(rf"(?<![A-Za-z0-9]){token}(?![A-Za-z0-9])", text, re.IGNORECASE) is not None
 
 
@@ -521,12 +521,17 @@ def _number_with_currency_is_present(value: str, currency: str, text: str) -> bo
 
 def _number_with_unit_is_present(value: str, unit: str, text: str) -> bool:
     number = _numeric_pattern(value)
-    unit_token = re.escape(unit.strip())
+    unit_token = _flexible_whitespace_pattern(unit.strip())
     pattern = (
         rf"(?<![\w.,+-]){number}\s+{unit_token}(?![A-Za-z0-9])"
         rf"|(?<![A-Za-z0-9]){unit_token}\s+{number}(?![\w.,])"
     )
     return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def _flexible_whitespace_pattern(value: str) -> str:
+    """Match normalized multiword terms against irregular source whitespace."""
+    return r"\s+".join(re.escape(part) for part in value.split())
 
 
 def _numeric_pattern(value: str) -> str:

@@ -52,7 +52,7 @@ _QUALIFIER_PREFIX = re.compile(
 )
 _QUALIFIER_SUFFIX = re.compile(
     rf"^\s*(?:(?:{_UNIT}|USD(?:\s*/\s*[\w-]+)?|dollars?)\s*)?[,;:]?\s*"
-    r"(?:\+|(?:or\s+)?(?:more|less|minimum|maximum|at least|at most|above|below|"
+    r"(?:\+|or\s+so\b|(?:or\s+)?(?:more|less|minimum|maximum|at least|at most|above|below|"
     r"and\s+up|"
     r"greater|fewer|higher|lower)\b)",
     re.I,
@@ -66,20 +66,61 @@ _USD_PRICE = re.compile(
     rf")",
     re.I,
 )
+_FEE_BEFORE_AMOUNT = re.compile(
+    r"\b(?:fee|charge|cost|tax|duty|levy|surcharge|penalty)\b"
+    r"(?:\s+(?:is|of|at|was|will\s+be|fixed\s+at))?"
+    r"\s*(?::|=)?\s*(?:\(\s*)?$",
+    re.I,
+)
+_FEE_AFTER_AMOUNT = re.compile(
+    r"^\s*(?:(?:delivery|shipping|handling|service|processing|customs|transaction|bank)\s+)?"
+    r"(?:fee|charge|cost|tax|duty|levy|surcharge|penalty)\b",
+    re.I,
+)
+_ITEM_VALUE = r"(?:\d{1,3}(?:,\d{3})+|\d+\.\d+|[^,.;\n]){1,200}"
 _ITEM_PATTERNS = (
     re.compile(
-        r"\b(?:item|product)\s*:\s*(?P<value>(?:\d{1,3},\d{3}|[^,.;\n]){1,200})", re.I
+        rf"\b(?:item|product)\s*:\s*(?P<value>{_ITEM_VALUE})", re.I
     ),
     re.compile(
         r"\b(?:order\s+of|buying|supplying)\s+"
-        r"(?P<value>(?:\d{1,3},\d{3}|[^,.;\n]){1,200})",
+        rf"(?P<value>{_ITEM_VALUE})",
         re.I,
     ),
 )
+_REGION_NAMES = (
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
+    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana",
+    "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
+    "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
+    "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina",
+    "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania",
+    "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas",
+    "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin",
+    "Wyoming", "District of Columbia", "Alberta", "British Columbia", "Manitoba",
+    "New Brunswick", "Newfoundland and Labrador", "Northwest Territories",
+    "Nova Scotia", "Nunavut", "Ontario", "Prince Edward Island", "Quebec",
+    "Saskatchewan", "Yukon",
+)
+_REGION_CODES = (
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI",
+    "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI",
+    "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC",
+    "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT",
+    "VT", "VA", "WA", "WV", "WI", "WY", "DC", "AB", "BC", "MB", "NB",
+    "NL", "NT", "NS", "NU", "ON", "PE", "QC", "SK", "YT",
+)
+_REGION_NAME_PATTERN = "|".join(
+    re.escape(region) for region in sorted(_REGION_NAMES, key=len, reverse=True)
+)
+_REGION_CODE_PATTERN = "|".join(_REGION_CODES)
 _DESTINATION = re.compile(
     r"\b(?:ship(?:ping)?\s+to|deliver(?:y|ing)?\s+(?:to|at)|destination\s*:)\s*"
-    r"(?P<value>[^,.;\n]{1,200}(?:,\s*[A-Z]{2,3}\b"
-    r"(?=\s*(?:[,.;\n]|$|\b(?:by|on)\b)))*)",
+    r"(?P<value>"
+    r"(?:(?!\b(?:at|for|by|on|price|priced|cost|fee)\b)[^,.;\n]){1,120}?"
+    rf"(?:,\s*(?:(?i:{_REGION_NAME_PATTERN})|(?-i:{_REGION_CODE_PATTERN}))\b)?"
+    r")(?=\s*(?:[,.;\n]|$|\b(?:at|for|by|on|price|priced|cost|fee)\b))",
     re.I,
 )
 _DATE = re.compile(
@@ -96,7 +137,22 @@ _ITEM_CLAUSE = re.compile(
     r"destination\s*:|by\b).*$",
     re.I,
 )
-_DESTINATION_CLAUSE = re.compile(r"\s+(?:by\b|on\b).*$", re.I)
+_DESTINATION_CLAUSE = re.compile(
+    r"(?<![,])\s+(?:at\b|for\b|by\b|on\b|price\b|priced\b|cost\b|fee\b).*$", re.I
+)
+_DELIVERY_TERM = re.compile(
+    r"\b(?:deliver(?:ed|ing)?|ship(?:ped|ping)?|shipment|arrival|"
+    r"arrive(?:d|s|ing)?|destination)\b|"
+    r"\bdelivery\s+(?:date|deadline|due|is|by|on|before)\b",
+    re.I,
+)
+_DATE_RELATION = re.compile(r"\b(?:by|before|on|date|deadline|due|is)\b", re.I)
+_DESTINATION_DATE_PREFIX = re.compile(
+    r"\b(?:destination\s*:|ship(?:ping)?\s+to|deliver(?:y|ing)?\s+(?:to|at))"
+    r"\s*[^,.;\n]{1,120},\s*$",
+    re.I,
+)
+_DELIVERY_DATE_AFTER = re.compile(r"^\s*(?:is\s+)?(?:the\s+)?delivery\s+date\b", re.I)
 
 
 class DemoAISuggestionProvider:
@@ -138,6 +194,10 @@ class DemoAISuggestionProvider:
                     if value is not None
                 )
                 if _is_ambiguous_numeric_term(body, *price_match.span(amount_group)):
+                    continue
+                prefix = body[max(0, price_match.start() - 80):price_match.start()]
+                suffix = body[price_match.end():price_match.end() + 80]
+                if _FEE_BEFORE_AMOUNT.search(prefix) or _FEE_AFTER_AMOUNT.match(suffix):
                     continue
                 amount = price_match.group(amount_group).replace(",", "")
                 extracted.append(
@@ -233,26 +293,32 @@ class DemoAISuggestionProvider:
 
     @classmethod
     def _append_date(cls, facts: list[ExtractedFact], message_id, body: str) -> None:
-        match = _DATE.search(body)
-        if not match:
-            return
-        raw_date = match.group("value")
-        try:
-            normalized = date.fromisoformat(raw_date)
-        except ValueError:
-            normalized = None
-            for format_string in ("%B %d %Y", "%b %d %Y"):
-                try:
-                    normalized = datetime.strptime(
-                        raw_date.replace(",", ""), format_string
-                    ).date()
-                    break
-                except ValueError:
-                    continue
-        if normalized is not None:
-            facts.append(
-                cls._fact(FactField.DELIVERY_DATE, normalized.isoformat(), message_id, match.group(0))
-            )
+        for match in _DATE.finditer(body):
+            if not _is_delivery_date_context(body, *match.span("value")):
+                continue
+            raw_date = match.group("value")
+            try:
+                normalized = date.fromisoformat(raw_date)
+            except ValueError:
+                normalized = None
+                for format_string in ("%B %d %Y", "%b %d %Y"):
+                    try:
+                        normalized = datetime.strptime(
+                            raw_date.replace(",", ""), format_string
+                        ).date()
+                        break
+                    except ValueError:
+                        continue
+            if normalized is not None:
+                facts.append(
+                    cls._fact(
+                        FactField.DELIVERY_DATE,
+                        normalized.isoformat(),
+                        message_id,
+                        match.group(0),
+                    )
+                )
+                return
 
     @staticmethod
     def _fact(
@@ -287,3 +353,22 @@ def _is_ambiguous_numeric_term(body: str, start: int, end: int) -> bool:
     if _QUALIFIER_PREFIX.search(body[:start]):
         return True
     return _QUALIFIER_SUFFIX.match(body[end:]) is not None
+
+
+def _is_delivery_date_context(body: str, start: int, end: int) -> bool:
+    """Require a delivery or shipment cue so unrelated event dates stay untyped."""
+    sentence_start = max(
+        body.rfind(mark, 0, start) for mark in (";", ".", "!", "?", "\n")
+    ) + 1
+    sentence_end = min(
+        (position for mark in (";", ".", "!", "?", "\n")
+         if (position := body.find(mark, end)) >= 0),
+        default=len(body),
+    )
+    before = body[sentence_start:start]
+    after = body[end:sentence_end]
+    if _DELIVERY_TERM.search(before) and _DATE_RELATION.search(before):
+        return True
+    if _DESTINATION_DATE_PREFIX.search(before):
+        return True
+    return _DELIVERY_DATE_AFTER.search(after) is not None

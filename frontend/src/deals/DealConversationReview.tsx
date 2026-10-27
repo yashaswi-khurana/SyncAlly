@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -6,6 +6,7 @@ import {
   listDealMessages,
   listOrganizations,
   reviewDealFact,
+  updateFactVisibility,
 } from "../api/client";
 import type {
   Deal,
@@ -34,6 +35,7 @@ type ConversationState =
 interface DealConversationReviewProps {
   deal: Deal;
   onAgreementCreated?: () => void;
+  revalidateIntervalMs?: number;
 }
 
 type FactFilter = "all" | "needs-review" | "confirmed" | "private";
@@ -42,6 +44,33 @@ const REVIEWABLE_STATUSES = new Set<DealFact["status"]>([
   "EXTRACTED",
   "NEEDS_CLARIFICATION",
 ]);
+
+function areFactsEqual(a: DealFact[], b: DealFact[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i++) {
+    const factA = a[i];
+    const factB = b[i];
+    if (
+      factA.id !== factB.id ||
+      factA.version !== factB.version ||
+      factA.visibility !== factB.visibility ||
+      factA.status !== factB.status ||
+      factA.typed_value !== factB.typed_value ||
+      factA.currency_or_unit !== factB.currency_or_unit ||
+      factA.kind !== factB.kind ||
+      factA.field !== factB.field ||
+      factA.source_span !== factB.source_span ||
+      factA.source_message_id !== factB.source_message_id ||
+      factA.confirmed_by !== factB.confirmed_by ||
+      factA.confirmed_at !== factB.confirmed_at
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
@@ -71,6 +100,7 @@ function formatTimestamp(value: string): string {
 export default function DealConversationReview({
   deal,
   onAgreementCreated = () => {},
+  revalidateIntervalMs = 4000,
 }: DealConversationReviewProps) {
   const [organizationState, setOrganizationState] = useState<OrganizationState>({
     status: "loading",
@@ -79,6 +109,7 @@ export default function DealConversationReview({
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
   const [pendingFactId, setPendingFactId] = useState<string | null>(null);
+  const [pendingVisibilityFactId, setPendingVisibilityFactId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ factId: string; message: string } | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
@@ -182,6 +213,87 @@ export default function DealConversationReview({
     };
   }, [activeOrganizationId, deal.id, reloadCount]);
 
+  const isMutatingRef = useRef(false);
+  isMutatingRef.current = pendingFactId !== null || pendingVisibilityFactId !== null;
+
+  useEffect(() => {
+    if (!activeOrganizationId || conversationState?.status !== "ready") {
+      return;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const revalidate = async () => {
+      if (cancelled || inFlight || isMutatingRef.current) {
+        return;
+      }
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
+
+      inFlight = true;
+      try {
+        const freshFacts = await listDealFacts(deal.id, activeOrganizationId);
+        if (!cancelled) {
+          setConversationState((current) => {
+            if (current?.status !== "ready" || current.organizationId !== activeOrganizationId) {
+              return current;
+            }
+            if (areFactsEqual(current.facts, freshFacts)) {
+              return current;
+            }
+            return { ...current, facts: freshFacts };
+          });
+        }
+      } catch {
+        // Silently tolerate background revalidation errors so active review UI is not disrupted
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId =
+      revalidateIntervalMs > 0 && typeof window !== "undefined"
+        ? window.setInterval(revalidate, revalidateIntervalMs)
+        : null;
+
+    const onWindowFocus = () => {
+      void revalidate();
+    };
+
+    const onVisibilityChange = () => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        void revalidate();
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", onWindowFocus);
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+
+    return () => {
+      cancelled = true;
+      if (intervalId !== null && typeof window !== "undefined") {
+        window.clearInterval(intervalId);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", onWindowFocus);
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+    };
+  }, [
+    activeOrganizationId,
+    deal.id,
+    conversationState?.status === "ready",
+    revalidateIntervalMs,
+  ]);
+
   function retryConversation() {
     setConversationState(null);
     setReloadCount((count) => count + 1);
@@ -204,6 +316,27 @@ export default function DealConversationReview({
       setActionError({ factId: fact.id, message: describeError(caught) });
     } finally {
       setPendingFactId(null);
+    }
+  }
+
+  async function toggleFactVisibility(fact: DealFact) {
+    const nextVisibility = fact.visibility === "PRIVATE" ? "SHAREABLE" : "PRIVATE";
+    setPendingVisibilityFactId(fact.id);
+    setActionError(null);
+    try {
+      const updatedFact = await updateFactVisibility(deal.id, fact.id, nextVisibility);
+      setConversationState((current) =>
+        current?.status === "ready" && current.organizationId === activeOrganizationId
+          ? {
+              ...current,
+              facts: current.facts.map((item) => (item.id === updatedFact.id ? updatedFact : item)),
+            }
+          : current,
+      );
+    } catch (caught) {
+      setActionError({ factId: fact.id, message: describeError(caught) });
+    } finally {
+      setPendingVisibilityFactId(null);
     }
   }
 
@@ -388,8 +521,9 @@ export default function DealConversationReview({
         ) : (
           <ul className="fact-list" aria-label="Deal facts">
             {filteredFacts.map((fact) => {
+              const isOwner = fact.owner_organization_id === activeOrganizationId;
               const canReview =
-                fact.owner_organization_id === activeOrganizationId &&
+                isOwner &&
                 REVIEWABLE_STATUSES.has(fact.status);
               const sourceMessageId = fact.source_message_id;
               const sourceMessageIndex = visibleMessages.findIndex(
@@ -408,8 +542,24 @@ export default function DealConversationReview({
                     </p>
                     <div className="communication-badges">
                       <span className={`badge badge--${fact.visibility.toLowerCase()}`}>
-                        {readable(fact.visibility)}
+                        {fact.visibility === "PRIVATE"
+                          ? "🔒 Private to your org"
+                          : "🌐 Shared with counterparty"}
                       </span>
+                      {isOwner ? (
+                        <button
+                          type="button"
+                          className="button secondary button--compact"
+                          disabled={pendingFactId !== null || pendingVisibilityFactId !== null}
+                          onClick={() => void toggleFactVisibility(fact)}
+                        >
+                          {pendingVisibilityFactId === fact.id
+                            ? "Updating…"
+                            : fact.visibility === "PRIVATE"
+                              ? "Make Shareable"
+                              : "Make Private"}
+                        </button>
+                      ) : null}
                       <span className={`badge badge--status-${fact.status.toLowerCase()}`}>
                         {readable(fact.status)}
                         {fact.status === "EXTRACTED" ? " · unconfirmed" : ""}
@@ -438,7 +588,7 @@ export default function DealConversationReview({
                         <button
                           type="button"
                           className="button button--compact"
-                          disabled={pendingFactId !== null}
+                          disabled={pendingFactId !== null || pendingVisibilityFactId !== null}
                           onClick={() => void reviewFact(fact, "confirm")}
                         >
                           {pendingFactId === fact.id ? "Saving…" : "Confirm"}
@@ -446,7 +596,7 @@ export default function DealConversationReview({
                         <button
                           type="button"
                           className="button secondary button--compact"
-                          disabled={pendingFactId !== null}
+                          disabled={pendingFactId !== null || pendingVisibilityFactId !== null}
                           onClick={() => void reviewFact(fact, "reject")}
                         >
                           Reject
@@ -455,7 +605,7 @@ export default function DealConversationReview({
                           <button
                             type="button"
                             className="button secondary button--compact"
-                            disabled={pendingFactId !== null}
+                            disabled={pendingFactId !== null || pendingVisibilityFactId !== null}
                             onClick={() => void reviewFact(fact, "clarify")}
                           >
                             Ask for clarification

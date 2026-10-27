@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ApiError,
   listDealFacts,
   listDealMessages,
   listOrganizations,
@@ -10,6 +11,7 @@ import {
   draftDealProposal,
   correctDealFact,
   createAgreementFromReviewedTerms,
+  updateFactVisibility,
 } from "../api/client";
 import type { AgreementVersion, Deal, DealFact, DealMessage, Organization } from "../api/types";
 import DealConversationReview from "./DealConversationReview";
@@ -26,6 +28,7 @@ vi.mock("../api/client", async (importOriginal) => {
     draftDealProposal: vi.fn(),
     correctDealFact: vi.fn(),
     createAgreementFromReviewedTerms: vi.fn(),
+    updateFactVisibility: vi.fn(),
   };
 });
 
@@ -47,6 +50,7 @@ const mockedSuggestDealFacts = vi.mocked(suggestDealFacts);
 const mockedDraftDealProposal = vi.mocked(draftDealProposal);
 const mockedCorrectDealFact = vi.mocked(correctDealFact);
 const mockedCreateAgreementFromReviewedTerms = vi.mocked(createAgreementFromReviewedTerms);
+const mockedUpdateFactVisibility = vi.mocked(updateFactVisibility);
 
 function organization(id: string, legalName: string): Organization {
   return { id, legal_name: legalName, country_code: "US", role: "ADMIN" };
@@ -130,11 +134,16 @@ describe("DealConversationReview", () => {
     expect(mockedListDealFacts).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
 
     const deliveryFact = screen.getByRole("article", { name: "Delivery date: 2026-11-01" });
-    expect(within(deliveryFact).getByText("private")).toBeInTheDocument();
+    expect(within(deliveryFact).getByText("🔒 Private to your org")).toBeInTheDocument();
+    expect(within(deliveryFact).getByRole("button", { name: "Make Shareable" })).toBeInTheDocument();
     expect(within(deliveryFact).getByText(/extracted · unconfirmed/i)).toBeInTheDocument();
     expect(
       screen.getByText(/confirming one records your review; it does not approve the deal/i),
     ).toBeInTheDocument();
+
+    const minQtyFact = screen.getByRole("article", { name: "Minimum quantity: 2026-11-01" });
+    expect(within(minQtyFact).getByText("🌐 Shared with counterparty")).toBeInTheDocument();
+    expect(within(minQtyFact).getByRole("button", { name: "Make Private" })).toBeInTheDocument();
 
     fireEvent.click(within(deliveryFact).getByRole("button", { name: "Confirm" }));
     expect(await within(deliveryFact).findByText("confirmed")).toBeInTheDocument();
@@ -200,6 +209,12 @@ describe("DealConversationReview", () => {
       within(screen.getByRole("article", { name: "Delivery date: Ships from Seattle" })).queryByRole(
         "button",
         { name: "Confirm" },
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("article", { name: "Delivery date: Ships from Seattle" })).queryByRole(
+        "button",
+        { name: /make private|make shareable/i },
       ),
     ).not.toBeInTheDocument();
 
@@ -345,5 +360,182 @@ describe("DealConversationReview", () => {
     expect(await screen.findByText("Seller-only note")).toBeInTheDocument();
     expect(screen.queryByLabelText("Suggested value")).not.toBeInTheDocument();
     expect(screen.queryByText("Buyer-only note", { selector: "blockquote" })).not.toBeInTheDocument();
+  });
+
+  it("toggles fact visibility between PRIVATE and SHAREABLE immediately in UI without page reload", async () => {
+    const testFact = fact({ id: "fact-toggle-1", visibility: "PRIVATE" });
+    mockedListDealFacts.mockResolvedValue([testFact]);
+    mockedUpdateFactVisibility.mockImplementation(async (_dealId, _factId, visibility) => ({
+      ...testFact,
+      visibility,
+      version: testFact.version + 1,
+    }));
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    expect(await screen.findByText("Delivery date")).toBeInTheDocument();
+    const factCard = screen.getByRole("article", { name: "Delivery date: 2026-11-01" });
+
+    // Initial state: PRIVATE
+    expect(within(factCard).getByText("🔒 Private to your org")).toBeInTheDocument();
+    const makeShareableBtn = within(factCard).getByRole("button", { name: "Make Shareable" });
+    expect(makeShareableBtn).toBeInTheDocument();
+
+    // Toggle to SHAREABLE
+    fireEvent.click(makeShareableBtn);
+
+    expect(await within(factCard).findByText("🌐 Shared with counterparty")).toBeInTheDocument();
+    expect(within(factCard).getByRole("button", { name: "Make Private" })).toBeInTheDocument();
+    expect(mockedUpdateFactVisibility).toHaveBeenCalledWith(DEAL.id, "fact-toggle-1", "SHAREABLE");
+
+    // Toggle back to PRIVATE
+    const makePrivateBtn = within(factCard).getByRole("button", { name: "Make Private" });
+    fireEvent.click(makePrivateBtn);
+
+    expect(await within(factCard).findByText("🔒 Private to your org")).toBeInTheDocument();
+    expect(within(factCard).getByRole("button", { name: "Make Shareable" })).toBeInTheDocument();
+    expect(mockedUpdateFactVisibility).toHaveBeenCalledWith(DEAL.id, "fact-toggle-1", "PRIVATE");
+  });
+
+  it("disables fact review actions while a visibility update is pending", async () => {
+    const testFact = fact({ id: "fact-visibility-race", visibility: "PRIVATE" });
+    mockedListDealFacts.mockResolvedValue([testFact]);
+    let resolveVisibility: (updated: DealFact) => void = () => {};
+    mockedUpdateFactVisibility.mockImplementation(
+      () =>
+        new Promise<DealFact>((resolve) => {
+          resolveVisibility = resolve;
+        }),
+    );
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    const factCard = await screen.findByRole("article", { name: "Delivery date: 2026-11-01" });
+    fireEvent.click(within(factCard).getByRole("button", { name: "Make Shareable" }));
+
+    const confirmButton = within(factCard).getByRole("button", { name: "Confirm" });
+    expect(within(factCard).getByRole("button", { name: "Reject" })).toBeDisabled();
+    expect(within(factCard).getByRole("button", { name: "Ask for clarification" })).toBeDisabled();
+    expect(confirmButton).toBeDisabled();
+
+    fireEvent.click(confirmButton);
+    expect(mockedReviewDealFact).not.toHaveBeenCalled();
+
+    resolveVisibility({ ...testFact, visibility: "SHAREABLE", version: 1 });
+
+    expect(await within(factCard).findByRole("button", { name: "Make Private" })).toBeInTheDocument();
+    expect(within(factCard).getByRole("button", { name: "Confirm" })).toBeEnabled();
+  });
+
+  it("shows error when visibility toggle request fails", async () => {
+    const testFact = fact({ id: "fact-fail-1", visibility: "PRIVATE" });
+    mockedListDealFacts.mockResolvedValue([testFact]);
+    mockedUpdateFactVisibility.mockRejectedValue(
+      new ApiError(403, "Only an authorized member of the owner organization can modify fact visibility"),
+    );
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    expect(await screen.findByText("Delivery date")).toBeInTheDocument();
+    const factCard = screen.getByRole("article", { name: "Delivery date: 2026-11-01" });
+    const makeShareableBtn = within(factCard).getByRole("button", { name: "Make Shareable" });
+
+    fireEvent.click(makeShareableBtn);
+
+    expect(
+      await screen.findByText("Only an authorized member of the owner organization can modify fact visibility"),
+    ).toBeInTheDocument();
+    expect(within(factCard).getByText("🔒 Private to your org")).toBeInTheDocument();
+  });
+
+  it("revalidates and removes private facts from open counterparty sessions on window focus or visibility change", async () => {
+    const sharedFact = fact({
+      id: "fact-shared-1",
+      owner_organization_id: BUYER_ID,
+      field: "Warranty period",
+      typed_value: "24 months",
+      visibility: "SHAREABLE",
+    });
+
+    mockedListOrganizations.mockResolvedValue([
+      organization(SELLER_ID, "Seller Co"),
+    ]);
+    mockedListDealMessages.mockResolvedValue([
+      message({ body: "Seller message" }),
+    ]);
+    mockedListDealFacts.mockResolvedValueOnce([sharedFact]);
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    expect(await screen.findByText("Warranty period")).toBeInTheDocument();
+    expect(screen.getByText("24 months")).toBeInTheDocument();
+    expect(screen.getByText("🌐 Shared with counterparty")).toBeInTheDocument();
+
+    mockedListDealFacts.mockResolvedValue([]);
+
+    fireEvent(window, new Event("focus"));
+
+    await vi.waitFor(() => {
+      expect(screen.queryByText("Warranty period")).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("No facts are available for this organization yet."),
+    ).toBeInTheDocument();
+  });
+
+  it("periodically revalidates facts in an open session", async () => {
+    const initialFact = fact({
+      id: "fact-p1",
+      field: "Delivery date",
+      typed_value: "2026-11-01",
+      visibility: "SHAREABLE",
+    });
+    const newFact = fact({
+      id: "fact-p2",
+      field: "Payment terms",
+      typed_value: "Net 30",
+      visibility: "SHAREABLE",
+    });
+
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"),
+    ]);
+    mockedListDealMessages.mockResolvedValue([message()]);
+    mockedListDealFacts.mockResolvedValueOnce([initialFact]);
+
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={50} />);
+
+    expect(await screen.findByText("Delivery date")).toBeInTheDocument();
+
+    mockedListDealFacts.mockResolvedValue([initialFact, newFact]);
+
+    expect(await screen.findByText("Payment terms")).toBeInTheDocument();
+    expect(screen.getByText("Net 30")).toBeInTheDocument();
+  });
+
+  it("silently tolerates background revalidation errors without wiping open conversation view", async () => {
+    const initialFact = fact({
+      id: "fact-err-test",
+      field: "Payment terms",
+      typed_value: "Net 60",
+      visibility: "SHAREABLE",
+    });
+
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"),
+    ]);
+    mockedListDealMessages.mockResolvedValue([message()]);
+    mockedListDealFacts.mockResolvedValueOnce([initialFact]);
+
+    render(<DealConversationReview deal={DEAL} />);
+
+    expect(await screen.findByText("Payment terms")).toBeInTheDocument();
+
+    mockedListDealFacts.mockRejectedValue(new Error("Network disconnect"));
+
+    fireEvent(window, new Event("focus"));
+
+    expect(screen.getByText("Payment terms")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

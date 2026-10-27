@@ -310,6 +310,8 @@ describe("DealConversationReview", () => {
     expect(within(proposal).getByLabelText("Item description")).toHaveValue("Organic cotton shirts");
     expect(within(proposal).getByLabelText("Unit price")).toHaveValue("2.50");
     expect(within(proposal).queryByText("1.00")).not.toBeInTheDocument();
+    // The draft preview repeats the canonical condition, not a stronger paraphrase.
+    expect(within(proposal).getByText("Due condition: when seller invoices")).toBeInTheDocument();
     expect(within(proposal).getByText(/does not create or approve an agreement/i)).toBeInTheDocument();
     expect(mockedDraftDealProposal).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
     fireEvent.click(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" }));

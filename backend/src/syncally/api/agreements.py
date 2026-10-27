@@ -86,6 +86,12 @@ class CreateReviewedAgreementDraftRequest(BaseModel):
     currency: str = Field(min_length=3, max_length=3)
     delivery_destination: str = Field(min_length=1, max_length=2_000)
     delivery_date: date | None
+    # Rollout shim: clients deployed before this field existed omit it, and during
+    # a backend-first rollout they still reach new instances. Omission is
+    # unambiguous because the demo contract supports exactly one trigger, and
+    # ``ProposedTerms.to_trade_terms()`` derives that same trigger regardless of
+    # this acknowledgement. An explicit unsupported value is still rejected.
+    # Make the field required once every client sends it.
     payment_trigger: str = Field(
         default=SUPPORTED_DEMO_PAYMENT_TRIGGER, min_length=1, max_length=100
     )
@@ -101,9 +107,11 @@ class CreateReviewedAgreementDraftRequest(BaseModel):
         """
         trigger = value.strip().casefold()
         if trigger != SUPPORTED_DEMO_PAYMENT_TRIGGER:
+            # Never interpolate the submitted value: the 422 handler strips
+            # Pydantic's ``input`` field but keeps ``msg``, so echoing it here
+            # would reflect caller-supplied text despite the redaction contract.
             raise ValueError(
-                f"Unsupported payment timing '{value}'; "
-                f"supported: {SUPPORTED_DEMO_PAYMENT_TRIGGER}"
+                f"Unsupported payment timing; supported: {SUPPORTED_DEMO_PAYMENT_TRIGGER}"
             )
         return trigger
 

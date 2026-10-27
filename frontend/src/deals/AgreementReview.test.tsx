@@ -133,6 +133,12 @@ describe("AgreementReview", () => {
     expect(screen.getByText("Desk")).toBeInTheDocument();
     expect(screen.getAllByText("Toronto")).toHaveLength(2);
     expect(screen.getByText(AGREEMENT.terms_hash)).toBeInTheDocument();
+    // Reviewers must read the exact condition the agreement stores and hashes,
+    // never a stronger paraphrase of it.
+    const paymentTiming = screen.getByLabelText("Payment timing summary");
+    expect(paymentTiming).toHaveTextContent("Upon Seller Invoice");
+    expect(paymentTiming).toHaveTextContent("when seller invoices");
+    expect(paymentTiming).not.toHaveTextContent(/immediately/i);
     expect(screen.queryByRole("button", { name: "Commit approved agreement" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Approve this version" }));
 

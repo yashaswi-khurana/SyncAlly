@@ -8,7 +8,7 @@ import {
   recordAgreementDecision,
 } from "../api/client";
 import type { AgreementApproval, AgreementVersion, Organization } from "../api/types";
-import { paymentDueConditionLabel, paymentTimingLabel } from "../api/types";
+import { paymentTimingLabel } from "../api/types";
 
 interface AgreementReviewProps {
   dealId: string;
@@ -244,7 +244,7 @@ export default function AgreementReview({
                     </div>
                     <div>
                       <dt>Due Condition</dt>
-                      <dd>{paymentDueConditionLabel(term.dueCondition)}</dd>
+                      <dd>{term.dueCondition}</dd>
                     </div>
                   </dl>
                 ))}

@@ -249,6 +249,129 @@ class AgreementRouteTests(unittest.TestCase):
         self.assertIsNotNone(stored_deal.current_agreement_version_id)
         self.assertEqual(stored_deal.version, 2)
 
+    def _reviewed_terms(self, **overrides: object) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "description": "Desk",
+            "quantity": "10",
+            "unit": "pieces",
+            "unit_price": "25.00",
+            "currency": "USD",
+            "delivery_destination": "Toronto",
+            "delivery_date": "2030-01-01",
+            "organization_id": str(self.buyer.id),
+            **overrides,
+        }
+
+    def test_reviewed_terms_accept_an_omitted_payment_timing_during_rollout(self) -> None:
+        # Older clients predate the field and may hit a new instance before the
+        # new frontend is served. Backend-first rollout must keep them working.
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=self._reviewed_terms(),
+        )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["payment_trigger"], "seller_invoice")
+        self.assertEqual(
+            response.json()["payment_due_condition"], "when seller invoices"
+        )
+
+    def test_reviewed_terms_reject_an_unsupported_payment_timing(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+
+        for unsupported in ("net_30", ""):
+            response = self._request(
+                "POST",
+                f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+                json=self._reviewed_terms(payment_trigger=unsupported),
+            )
+            self.assertEqual(response.status_code, 422, response.text)
+            self.assertEqual(
+                self.session.scalars(select(AgreementVersion)).all(),
+                [],
+                "an unsupported payment timing must not be saved",
+            )
+
+        confirmed = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=self._reviewed_terms(payment_trigger="  SELLER_INVOICE "),
+        )
+        self.assertEqual(confirmed.status_code, 201, confirmed.text)
+        self.assertEqual(confirmed.json()["payment_trigger"], "seller_invoice")
+        self.assertEqual(confirmed.json()["payment_due_condition"], "when seller invoices")
+
+    def test_reviewed_terms_retry_returns_the_saved_agreement(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        payload = self._reviewed_terms(payment_trigger="seller_invoice")
+
+        first = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=payload,
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+
+        # A lost response makes the proposer submit the identical terms again.
+        retry = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=payload,
+        )
+
+        self.assertEqual(retry.status_code, 201, retry.text)
+        self.assertEqual(retry.json()["version_number"], first.json()["version_number"])
+        self.assertEqual(retry.json()["terms_hash"], first.json()["terms_hash"])
+
+        self.session.expire_all()
+        self.assertEqual(
+            len(self.session.scalars(select(AgreementVersion)).all()),
+            1,
+            "a retry must not create a second agreement version",
+        )
+        self.assertEqual(
+            len(self.session.scalars(select(Proposal)).all()),
+            2,
+            "a retry must not create a second proposal",
+        )
+
+    def test_reviewed_terms_reject_different_terms_while_one_is_pending(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        unchanged = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=self._reviewed_terms(),
+        )
+        self.assertEqual(unchanged.status_code, 201, unchanged.text)
+
+        changed = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=self._reviewed_terms(description="Chair"),
+        )
+
+        self.assertEqual(changed.status_code, 409, changed.text)
+        self.session.expire_all()
+        self.assertEqual(len(self.session.scalars(select(AgreementVersion)).all()), 1)
+
+    def test_reviewed_terms_do_not_echo_an_unsupported_payment_trigger(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        submitted = "sk_live_TRIGGER_LEAK_PROBE_123"
+
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=self._reviewed_terms(payment_trigger=submitted),
+        )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertNotIn(submitted, response.text)
+        self.assertIn("seller_invoice", response.text)
+
     def test_create_draft_rejects_client_supplied_status(self) -> None:
         self._authenticate(self._actor(self.buyer_user, self.buyer))
 

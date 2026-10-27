@@ -55,7 +55,7 @@ from syncally.domain.ai.contracts import (
     SourceReference,
     ValidationResult,
 )
-from syncally.domain.conversations import Constraint, Message, Visibility
+from syncally.domain.conversations import Constraint, ConstraintStatus, Message, Visibility
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.database import get_db
@@ -151,6 +151,8 @@ class FactSuggestionResponse(BaseModel):
     status: str
     issues: list[ValidationIssueResponse]
     facts: list[ConstraintResponse]
+    missing_fields: list[str]
+    guidance_message: str
 
 
 class ProposalSuggestionResponse(BaseModel):
@@ -219,6 +221,78 @@ def _validation_issue_responses(result: ValidationResult) -> list[ValidationIssu
     ]
 
 
+_REQUIRED_PROPOSAL_FIELDS = (
+    ("description", frozenset({"description", "item_description"})),
+    ("quantity", frozenset({"quantity"})),
+    ("unit", frozenset({"unit"})),
+    ("unit_price", frozenset({"unit_price"})),
+    ("delivery_destination", frozenset({"delivery_destination"})),
+    ("delivery_date", frozenset({"delivery_date"})),
+)
+
+
+def _missing_trade_fields(constraints: tuple[Constraint, ...] | list[Constraint]) -> list[str]:
+    """List required draft fields that are not represented by known deal facts."""
+    ignored_statuses = {
+        ConstraintStatus.NEEDS_CLARIFICATION,
+        ConstraintStatus.REJECTED,
+        ConstraintStatus.SUPERSEDED,
+    }
+    present = {
+        constraint.field.casefold().replace(" ", "_")
+        for constraint in constraints
+        if constraint.status not in ignored_statuses
+    }
+    return [
+        proposal_field
+        for proposal_field, aliases in _REQUIRED_PROPOSAL_FIELDS
+        if not present.intersection(aliases)
+    ]
+
+
+def _fact_suggestion_guidance(missing_fields: list[str]) -> str:
+    if not missing_fields:
+        return "All required trade details were found. Review each fact before using a draft."
+    labels = {
+        "description": "item description",
+        "quantity": "quantity",
+        "unit": "unit",
+        "unit_price": "unit price",
+        "delivery_destination": "delivery destination",
+        "delivery_date": "delivery date",
+    }
+    missing = ", ".join(labels[field] for field in missing_fields)
+    return (
+        f"Add the missing details: {missing}. Suggested format: "
+        "‘Order of [item], [quantity] [unit] at USD [price] each, "
+        "ship to [city or port] by YYYY-MM-DD.’"
+    )
+
+
+def _list_all_visible_constraints(
+    actor: ActorContext,
+    deal_id: UUID,
+    organization_id: UUID,
+    repository: CommunicationRepository,
+) -> list[Constraint]:
+    """Read every page after extraction so guidance reflects current visible facts."""
+    constraints: list[Constraint] = []
+    offset = 0
+    while True:
+        page = list_visible_constraints(
+            actor,
+            deal_id,
+            repository,
+            organization_id=organization_id,
+            limit=MAX_PAGE_SIZE,
+            offset=offset,
+        )
+        constraints.extend(page)
+        if len(page) < MAX_PAGE_SIZE:
+            return constraints
+        offset += len(page)
+
+
 @router.post("/ai/facts", response_model=FactSuggestionResponse)
 def suggest_facts_route(
     deal_id: UUID,
@@ -235,6 +309,9 @@ def suggest_facts_route(
         result = extract_facts_from_context(context, provider)
         facts = persist_fact_candidates(actor, deal_id, result, repository)
         db.commit()
+        current_constraints = _list_all_visible_constraints(
+            actor, deal_id, context.organization_id, repository
+        )
     except AITransientError as exc:
         db.rollback()
         raise HTTPException(
@@ -253,10 +330,13 @@ def suggest_facts_route(
         db.rollback()
         raise
 
+    missing_fields = _missing_trade_fields(current_constraints)
     return FactSuggestionResponse(
         status=result.result.status.value,
         issues=_validation_issue_responses(result.result),
         facts=[_to_constraint_response(fact) for fact in facts],
+        missing_fields=missing_fields,
+        guidance_message=_fact_suggestion_guidance(missing_fields),
     )
 
 

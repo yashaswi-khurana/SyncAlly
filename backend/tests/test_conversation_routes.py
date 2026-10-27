@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from syncally.api.auth import get_current_actor
+from syncally.api.conversations import get_ai_suggestion_provider
 from syncally.api.main import app
 from syncally.application.identity import ActorContext
 from syncally.domain.conversations import (
@@ -265,6 +266,8 @@ class ConversationRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["status"], "VALID")
+        self.assertEqual(body["missing_fields"], [])
+        self.assertIn("All required trade details were found", body["guidance_message"])
         facts = body["facts"]
         self.assertEqual(
             {fact["field"] for fact in facts},
@@ -331,6 +334,82 @@ class ConversationRouteTests(unittest.TestCase):
             json={"organization_id": str(self.buyer.id)},
         )
         self.assertEqual(outsider_attempt.status_code, 404)
+
+    def test_fact_guidance_checks_constraints_beyond_the_first_page(self) -> None:
+        base_time = datetime(2025, 1, 1, tzinfo=UTC)
+        rows = [
+            ConstraintModel(
+                id=uuid4(),
+                deal_id=self.deal.id,
+                owner_organization_id=self.buyer.id,
+                field="conversation_note",
+                typed_value=f"note {index}",
+                kind=ConstraintKind.INFORMATIONAL.value,
+                status=ConstraintStatus.EXTRACTED.value,
+                visibility=Visibility.PRIVATE.value,
+                source_span=f"source note {index}",
+                created_at=base_time + timedelta(seconds=index),
+            )
+            for index in range(500)
+        ]
+        rows.append(
+            ConstraintModel(
+                id=uuid4(),
+                deal_id=self.deal.id,
+                owner_organization_id=self.buyer.id,
+                field="delivery_destination",
+                typed_value="Toronto",
+                kind=ConstraintKind.INFORMATIONAL.value,
+                status=ConstraintStatus.EXTRACTED.value,
+                visibility=Visibility.PRIVATE.value,
+                source_span="delivery destination Toronto",
+                created_at=base_time + timedelta(seconds=500),
+            )
+        )
+        self.session.add_all(rows)
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/ai/facts",
+            json={"organization_id": str(self.buyer.id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("delivery_destination", response.json()["missing_fields"])
+
+    def test_fact_guidance_reloads_visible_constraints_after_provider_runs(self) -> None:
+        source = self._message(
+            self.seller_conversation,
+            "Delivery destination is Vancouver.",
+            Visibility.SHAREABLE,
+            author_user_id=self.seller_user.id,
+        )
+        self.session.commit()
+
+        class AddsShareableDestination:
+            def extract_facts(_self, _request, *, timeout_seconds: float):
+                self._constraint(
+                    self.seller.id,
+                    "delivery_destination",
+                    Visibility.SHAREABLE,
+                    source_message=source,
+                )
+                self.session.commit()
+                return ()
+
+        app.dependency_overrides[get_ai_suggestion_provider] = AddsShareableDestination
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/ai/facts",
+            json={"organization_id": str(self.buyer.id)},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("delivery_destination", response.json()["missing_fields"])
 
     def test_add_message_creates_the_actor_organization_conversation(self) -> None:
         self._authenticate(self._seller_actor())

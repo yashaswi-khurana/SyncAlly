@@ -1166,13 +1166,15 @@ html.has-custom-cursor button {
 
 .communication-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: clamp(20px, 3vw, 28px);
   align-items: start;
+  min-width: 0;
 }
 
 .communication-card {
   min-width: 0;
+  max-width: 100%;
   padding: clamp(22px, 3vw, 34px);
   border-color: rgba(219, 220, 221, 0.12);
   border-radius: 20px;
@@ -1226,6 +1228,27 @@ html.has-custom-cursor button {
   margin: 20px 0 0;
   padding: 0;
   list-style: none;
+}
+
+/* Keep expanding fact/suggestion content inside its own column instead of
+   stretching the page or shifting the conversation transcript. */
+.communication-card--transcript .message-list,
+.communication-card--facts .fact-list {
+  max-height: 75vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 12px;
+}
+
+.fact-list > li {
+  min-width: 0;
+}
+
+.communication-card--transcript .message-list:focus-visible,
+.communication-card--facts .fact-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
 }
 
 .message-list > li,
@@ -1306,6 +1329,14 @@ html.has-custom-cursor button {
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* Long field names, quotes and metric labels must never widen a grid column. */
+.communication-meta > *,
+.fact-source__quote,
+.review-metric__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .fact-value {
@@ -1528,6 +1559,15 @@ html.has-custom-cursor button {
 
   .communication-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Let the page scroll naturally on tablet/mobile: no nested scroll traps. */
+  .communication-card--transcript .message-list,
+  .communication-card--facts .fact-list {
+    max-height: none;
+    overflow-y: visible;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
   }
 
   .auth-layout {

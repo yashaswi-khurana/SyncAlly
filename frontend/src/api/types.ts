@@ -21,6 +21,48 @@ export interface Deal {
 
 export type AgreementStatus = "PENDING_APPROVAL" | "COMMITTED" | "SUPERSEDED" | "VOIDED";
 
+/**
+ * One payment timing the trade contract supports.
+ *
+ * `trigger` and `dueCondition` are the canonical strings the backend stores and
+ * hashes; `label` and `dueConditionLabel` are the wording reviewers read. They
+ * live here, next to the API types, so the proposal draft and the agreement
+ * review cannot drift apart and both parties always read the same sentence.
+ */
+export interface PaymentTimingOption {
+  trigger: string;
+  label: string;
+  dueCondition: string;
+  dueConditionLabel: string;
+}
+
+export const SUPPORTED_PAYMENT_TIMING: readonly PaymentTimingOption[] = [
+  {
+    trigger: "seller_invoice",
+    label: "Upon Seller Invoice",
+    dueCondition: "when seller invoices",
+    dueConditionLabel: "Payable immediately upon invoice receipt",
+  },
+];
+
+export function paymentTimingLabel(trigger: string): string {
+  const normalized = trigger.trim().toLowerCase();
+  const supported = SUPPORTED_PAYMENT_TIMING.find((option) => option.trigger === normalized);
+  if (supported) return supported.label;
+  if (!normalized) return "Not specified";
+  return normalized
+    .replaceAll("_", " ")
+    .replace(/\b[a-z]/g, (character) => character.toUpperCase());
+}
+
+export function paymentDueConditionLabel(dueCondition: string): string {
+  const normalized = dueCondition.trim().toLowerCase();
+  const supported = SUPPORTED_PAYMENT_TIMING.find(
+    (option) => option.dueCondition === normalized,
+  );
+  return supported ? supported.dueConditionLabel : normalized || "Not specified";
+}
+
 export interface AgreementLineItem {
   description: string;
   sku: string | null;
@@ -34,6 +76,13 @@ export interface AgreementVersion {
   version_number: number;
   terms_hash: string;
   status: AgreementStatus;
+  /**
+   * Explicit copy of the single payment obligation's timing, straight from the
+   * hashed version. The API always sends these (null for a version with zero or
+   * several payment terms); optional here so cached/older payloads still type-check.
+   */
+  payment_trigger?: string | null;
+  payment_due_condition?: string | null;
   terms: {
     schema_version: number;
     buyer_id: string;
@@ -151,6 +200,16 @@ export interface ProposalSuggestion {
   delivery_destination: string;
   delivery_date: string | null;
   status: "DRAFT";
+}
+
+/**
+ * Body of `POST /deals/{deal_id}/agreements/from-reviewed-terms`.
+ *
+ * The proposer confirms the payment timing explicitly; the server rejects a
+ * trigger outside `SUPPORTED_PAYMENT_TIMING` and derives the due condition.
+ */
+export interface ReviewedProposalTerms extends Omit<ProposalSuggestion, "status"> {
+  payment_trigger: string;
 }
 
 export interface FactCorrectionResult {

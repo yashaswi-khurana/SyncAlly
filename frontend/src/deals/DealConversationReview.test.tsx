@@ -323,6 +323,7 @@ describe("DealConversationReview", () => {
       currency: "USD",
       delivery_destination: "Toronto",
       delivery_date: "2026-12-01",
+      payment_trigger: "seller_invoice",
     });
     expect(onAgreementCreated).toHaveBeenCalledOnce();
     expect(await screen.findByRole("status")).toHaveTextContent("Agreement version 1");

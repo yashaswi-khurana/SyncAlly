@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -40,11 +40,15 @@ from syncally.domain.shared.identifiers import (
 )
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
+    AuditEvent,
     Base,
     Deal,
     Organization,
     OrganizationMember,
     User,
+)
+from syncally.infrastructure.models import (
+    Constraint as ConstraintModel,
 )
 from syncally.infrastructure.repositories import SqlAlchemyCommunicationRepository
 
@@ -596,6 +600,318 @@ class ConversationRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertNotIn(sentinel, "\n".join(captured))
+
+    def test_owner_can_toggle_fact_visibility(self) -> None:
+        constraint = self._constraint(self.buyer.id, "quantity", Visibility.PRIVATE)
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        # Toggle to SHAREABLE
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["visibility"], "SHAREABLE")
+        self.assertEqual(body["version"], 1)
+
+        # Check DB state
+        self.session.expire_all()
+        row = self.session.scalar(
+            select(ConstraintModel).where(ConstraintModel.id == constraint.id)
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row.visibility, "SHAREABLE")
+        self.assertEqual(row.version, 1)
+
+        # Check AuditEvent in DB
+        audit_row = self.session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.aggregate_type == "deal_fact",
+                AuditEvent.aggregate_id == constraint.id,
+                AuditEvent.event_type == "FACT_VISIBILITY_UPDATED",
+            )
+        )
+        self.assertIsNotNone(audit_row)
+        self.assertEqual(audit_row.actor_type, "USER")
+        self.assertEqual(audit_row.actor_id, str(self.buyer_user.id))
+        self.assertEqual(audit_row.payload["previous_visibility"], "PRIVATE")
+        self.assertEqual(audit_row.payload["new_visibility"], "SHAREABLE")
+        self.assertEqual(audit_row.payload["deal_id"], str(self.deal.id))
+
+        # Toggle back to PRIVATE
+        response2 = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "PRIVATE"},
+        )
+        self.assertEqual(response2.status_code, 200, response2.text)
+        self.assertEqual(response2.json()["visibility"], "PRIVATE")
+        self.assertEqual(response2.json()["version"], 2)
+
+        self.session.expire_all()
+        row2 = self.session.scalar(
+            select(ConstraintModel).where(ConstraintModel.id == constraint.id)
+        )
+        self.assertEqual(row2.visibility, "PRIVATE")
+
+    def test_non_owner_cannot_alter_fact_visibility(self) -> None:
+        constraint = self._constraint(self.buyer.id, "quantity", Visibility.PRIVATE)
+        self.session.commit()
+        self._authenticate(self._seller_actor())
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.session.expire_all()
+        row = self.session.scalar(
+            select(ConstraintModel).where(ConstraintModel.id == constraint.id)
+        )
+        self.assertEqual(row.visibility, "PRIVATE")
+
+    def test_outsider_cannot_alter_fact_visibility(self) -> None:
+        constraint = self._constraint(self.buyer.id, "quantity", Visibility.PRIVATE)
+        self.session.commit()
+        self._authenticate(self._outsider_actor())
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_alter_fact_visibility_returns_404_when_missing(self) -> None:
+        self._authenticate(self._buyer_actor())
+        random_id = uuid4()
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{random_id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_alter_fact_visibility_rejects_invalid_visibility(self) -> None:
+        constraint = self._constraint(self.buyer.id, "quantity", Visibility.PRIVATE)
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "INVALID_VALUE"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_alter_fact_visibility_requires_authentication(self) -> None:
+        constraint = self._constraint(self.buyer.id, "quantity", Visibility.PRIVATE)
+        self.session.commit()
+        app.dependency_overrides[get_db] = lambda: self.session
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_alter_fact_visibility_rejects_shareable_when_source_message_is_private(self) -> None:
+        private_message = self._message(
+            self.buyer_conversation,
+            "secret internal buyer note",
+            Visibility.PRIVATE,
+            author_user_id=self.buyer_user.id,
+        )
+        constraint = self._constraint(
+            self.buyer.id,
+            "margin_target",
+            Visibility.PRIVATE,
+            source_message=private_message,
+        )
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(
+            response.json()["detail"],
+            "A shareable fact cannot cite a private message",
+        )
+
+        # Check DB state was unchanged
+        self.session.expire_all()
+        row = self.session.scalar(
+            select(ConstraintModel).where(ConstraintModel.id == constraint.id)
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row.visibility, "PRIVATE")
+        self.assertEqual(row.version, 0)
+
+        # Ensure counterparty cannot see the fact via visible-facts endpoint
+        self._authenticate(self._seller_actor())
+        list_response = self._request("GET", f"/deals/{self.deal.id}/facts")
+        self.assertEqual(list_response.status_code, 200)
+        returned_fact_ids = [item["id"] for item in list_response.json()]
+        self.assertNotIn(str(constraint.id), returned_fact_ids)
+
+    def test_alter_fact_visibility_allows_shareable_when_source_message_is_shareable(self) -> None:
+        shareable_message = self._message(
+            self.buyer_conversation,
+            "shared requirement",
+            Visibility.SHAREABLE,
+            author_user_id=self.buyer_user.id,
+        )
+        constraint = self._constraint(
+            self.buyer.id,
+            "delivery_date",
+            Visibility.PRIVATE,
+            source_message=shareable_message,
+        )
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["visibility"], "SHAREABLE")
+
+        # Check DB state
+        self.session.expire_all()
+        row = self.session.scalar(
+            select(ConstraintModel).where(ConstraintModel.id == constraint.id)
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row.visibility, "SHAREABLE")
+
+        # Ensure counterparty CAN see the fact via visible-facts endpoint
+        self._authenticate(self._seller_actor())
+        list_response = self._request("GET", f"/deals/{self.deal.id}/facts")
+        self.assertEqual(list_response.status_code, 200)
+        returned_fact_ids = [item["id"] for item in list_response.json()]
+        self.assertIn(str(constraint.id), returned_fact_ids)
+
+    def test_alter_fact_visibility_noop_when_visibility_is_unchanged(self) -> None:
+        private_message = self._message(
+            self.buyer_conversation,
+            "private note",
+            Visibility.PRIVATE,
+            author_user_id=self.buyer_user.id,
+        )
+        constraint = self._constraint(
+            self.buyer.id,
+            "payment_terms",
+            Visibility.PRIVATE,
+            source_message=private_message,
+        )
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "PRIVATE"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["visibility"], "PRIVATE")
+        self.assertEqual(response.json()["version"], 0)
+
+    def test_revoked_owner_member_cannot_alter_fact_visibility(self) -> None:
+        # Give buyer user active membership in seller as well, so deal participant check passes
+        seller_membership = OrganizationMember(
+            id=uuid4(),
+            organization_id=self.seller.id,
+            user_id=self.buyer_user.id,
+            role="MEMBER",
+            status="ACTIVE",
+        )
+        self.session.add(seller_membership)
+
+        constraint = self._constraint(self.buyer.id, "quantity", Visibility.PRIVATE)
+        self.session.commit()
+
+        # Actor snapshot contains buyer.id in actor.organization_ids
+        self._authenticate(self._buyer_actor())
+
+        # Revoke the buyer user's membership in the owner organization (buyer)
+        membership = self.session.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == self.buyer.id,
+                OrganizationMember.user_id == self.buyer_user.id,
+            )
+        )
+        self.assertIsNotNone(membership)
+        membership.status = "REVOKED"
+        self.session.commit()
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Only an authorized member of the owner organization can modify fact visibility",
+        )
+
+        # Ensure no change committed in DB
+        self.session.expire_all()
+        row = self.session.scalar(
+            select(ConstraintModel).where(ConstraintModel.id == constraint.id)
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row.visibility, "PRIVATE")
+        self.assertEqual(row.version, 0)
+
+    def test_deleted_owner_member_cannot_alter_fact_visibility(self) -> None:
+        seller_membership = OrganizationMember(
+            id=uuid4(),
+            organization_id=self.seller.id,
+            user_id=self.buyer_user.id,
+            role="MEMBER",
+            status="ACTIVE",
+        )
+        self.session.add(seller_membership)
+
+        constraint = self._constraint(self.buyer.id, "quantity", Visibility.PRIVATE)
+        self.session.commit()
+
+        self._authenticate(self._buyer_actor())
+
+        # Delete membership in owner organization completely
+        membership = self.session.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == self.buyer.id,
+                OrganizationMember.user_id == self.buyer_user.id,
+            )
+        )
+        self.assertIsNotNone(membership)
+        self.session.delete(membership)
+        self.session.commit()
+
+        response = self._request(
+            "PATCH",
+            f"/deals/{self.deal.id}/facts/{constraint.id}/visibility",
+            json={"visibility": "SHAREABLE"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Only an authorized member of the owner organization can modify fact visibility",
+        )
+
 
 
 if __name__ == "__main__":

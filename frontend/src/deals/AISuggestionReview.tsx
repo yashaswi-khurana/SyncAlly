@@ -1,7 +1,8 @@
 import { useState } from "react";
 
 import { ApiError, correctDealFact, createAgreementFromReviewedTerms, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
-import type { DealFact, FactReviewAction } from "../api/types";
+import type { DealFact, FactReviewAction, PaymentTrigger, ReviewedProposalTerms } from "../api/types";
+import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import {
   toFactSuggestionDraft,
   toProposalDraft,
@@ -46,9 +47,17 @@ export default function AISuggestionReview({
 }: AISuggestionReviewProps) {
   const [factDrafts, setFactDrafts] = useState<FactSuggestionDraft[]>([]);
   const [proposal, setProposal] = useState<ProposalSuggestionDraft | null>(null);
+  // The AI draft never picks the payment timing for a human; the proposer confirms it here.
+  const [paymentTrigger, setPaymentTrigger] = useState<PaymentTrigger>(
+    SUPPORTED_PAYMENT_TIMING[0].trigger,
+  );
   const [suggestionError, setSuggestionError] = useState("");
   const [agreementNotice, setAgreementNotice] = useState("");
   const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | "agreement" | null>(null);
+
+  const selectedPaymentTiming = SUPPORTED_PAYMENT_TIMING.find(
+    (option) => option.trigger === paymentTrigger,
+  ) ?? SUPPORTED_PAYMENT_TIMING[0];
 
   async function runFactSuggestion() {
     setSuggestionError("");
@@ -77,6 +86,7 @@ export default function AISuggestionReview({
     try {
       const result = await draftDealProposal(dealId, organizationId);
       setProposal(toProposalDraft(result));
+      setPaymentTrigger(SUPPORTED_PAYMENT_TIMING[0].trigger);
     } catch (caught) {
       setSuggestionError(describeError(caught));
     } finally {
@@ -90,7 +100,7 @@ export default function AISuggestionReview({
     setAgreementNotice("");
     setPendingAction("agreement");
     try {
-      const agreement = await createAgreementFromReviewedTerms(dealId, organizationId, {
+      const terms: ReviewedProposalTerms = {
         schema_version: proposal.schemaVersion,
         description: proposal.description,
         quantity: proposal.quantity,
@@ -99,7 +109,9 @@ export default function AISuggestionReview({
         currency: proposal.currency,
         delivery_destination: proposal.deliveryDestination,
         delivery_date: proposal.deliveryDate || null,
-      });
+        payment_trigger: paymentTrigger,
+      };
+      const agreement = await createAgreementFromReviewedTerms(dealId, organizationId, terms);
       setProposal(null);
       setAgreementNotice(`Agreement version ${agreement.version_number} is ready for both parties to review.`);
       onAgreementCreated();
@@ -239,6 +251,25 @@ export default function AISuggestionReview({
             </div>
           ))}
           <p className="proposal-currency">Currency: {proposal.currency}</p>
+          <div className="field">
+            <label htmlFor={`proposal-${dealId}-payment-trigger`}>Payment timing</label>
+            <select
+              id={`proposal-${dealId}-payment-trigger`}
+              value={paymentTrigger}
+              onChange={(event) => {
+                if (isPaymentTrigger(event.target.value)) {
+                  setPaymentTrigger(event.target.value);
+                }
+              }}
+            >
+              {SUPPORTED_PAYMENT_TIMING.map((option) => (
+                <option key={option.trigger} value={option.trigger}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+          <p className="hint">
+            Due condition: {selectedPaymentTiming.dueCondition}
+          </p>
           <p className="hint">Editing this draft does not create or approve an agreement and cannot start a payment.</p>
           <button
             type="button"

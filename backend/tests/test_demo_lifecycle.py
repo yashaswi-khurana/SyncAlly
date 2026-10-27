@@ -245,6 +245,7 @@ class DemoLifecycleTests(unittest.TestCase):
             if key != "status"
         }
         invalid_terms["quantity"] = "-1"
+        invalid_terms["payment_trigger"] = "seller_invoice"
         invalid_terms["organization_id"] = str(self.buyer.id)
         invalid_response = self._request(
             "POST",
@@ -263,6 +264,7 @@ class DemoLifecycleTests(unittest.TestCase):
                     for key, value in proposal_response.json().items()
                     if key != "status"
                 },
+                "payment_trigger": "seller_invoice",
                 "organization_id": str(self.buyer.id),
             },
         )

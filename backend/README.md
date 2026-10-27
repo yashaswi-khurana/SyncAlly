@@ -83,7 +83,15 @@ Committing the same version and hash again is an idempotent success.
 The proposal review screen saves the person's final edits through
 `POST /deals/{deal_id}/agreements/from-reviewed-terms`. The server derives both parties from the
 deal, validates the reviewed terms, then saves the proposal and pending agreement in one
-transaction. Saving terms does not record either party's approval.
+transaction. An explicit `payment_trigger` must name a supported timing; an unsupported value is
+rejected with `422`. For rollout compatibility the field may be omitted, in which case the server
+uses the sole supported demo timing; remove that default once every client sends the field.
+Retrying the same reviewed terms while a matching version is pending returns that version instead
+of creating a duplicate or returning `409`; terms that differ from the pending version still
+return `409`. Saving terms does not record either party's approval.
+When rolling out payment timing in reviewed terms, deploy the API before the frontend: older API
+instances forbid the unknown `payment_trigger` field, so a new frontend that reaches one receives
+`422` until every instance is updated.
 `POST /auth/refresh` accepts a refresh token, rotates it, and returns a new access
 token and refresh token. Refresh tokens are opaque and stored only as hashes.
 Each refresh token can be used once. Replaying any rotated token, including a concurrent

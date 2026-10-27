@@ -368,6 +368,38 @@ class AgreementCommitTests(unittest.TestCase):
         self.assertEqual(milestone.currency, self.terms.payment_terms[0].amount.currency)
         self.assertEqual(milestone.payer_organization_id, self.buyer_org.id)
 
+    def test_payment_terms_are_part_of_the_terms_hash(self) -> None:
+        """Payment timing is a hashed commitment, not presentation-only metadata."""
+        canonical = self.terms.canonical_json()
+        self.assertIn('"trigger":"seller_invoice"', canonical)
+        self.assertIn('"due_condition":"when seller invoices"', canonical)
+
+        def with_timing(trigger: str, due_condition: str) -> TradeTerms:
+            return TradeTerms(
+                buyer_id=self.terms.buyer_id,
+                seller_id=self.terms.seller_id,
+                line_items=self.terms.line_items,
+                shipments=self.terms.shipments,
+                payment_terms=(
+                    PaymentTerm(
+                        self.terms.payment_terms[0].amount, trigger, due_condition
+                    ),
+                ),
+                delivery_location=self.terms.delivery_location,
+            )
+
+        same = with_timing("seller_invoice", "when seller invoices")
+        self.assertEqual(same.terms_hash, self.terms.terms_hash)
+
+        self.assertNotEqual(
+            with_timing("on_delivery", "when seller invoices").terms_hash,
+            self.terms.terms_hash,
+        )
+        self.assertNotEqual(
+            with_timing("seller_invoice", "on delivery").terms_hash,
+            self.terms.terms_hash,
+        )
+
     def test_storage_dict_round_trip_preserves_destination_case(self) -> None:
         terms = TradeTerms(
             buyer_id=OrganizationId(self.buyer_org.id),

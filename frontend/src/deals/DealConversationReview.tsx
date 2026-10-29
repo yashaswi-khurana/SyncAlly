@@ -449,10 +449,16 @@ export default function DealConversationReview({
       && currentConversation
       && !currentConversation.messages.some((message) => message.id === fact.source_message_id)
     ) {
+      const initialMessageIds = new Set(currentConversation.messages.map((message) => message.id));
       void listDealMessages(deal.id, activeOrganizationId).then((messages) => {
-        setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
-          ? { ...current, messages }
-          : current);
+        setConversationState((current) => {
+          if (current?.status !== "ready" || current.organizationId !== activeOrganizationId || current.dealId !== deal.id) return current;
+          // A confirmed send may arrive while this older transcript snapshot is in flight.
+          const fetchedIds = new Set(messages.map((message) => message.id));
+          const addedWhileLoading = current.messages.filter((message) =>
+            !initialMessageIds.has(message.id) && !fetchedIds.has(message.id));
+          return { ...current, messages: [...messages, ...addedWhileLoading] };
+        });
       }).catch(() => {
         // The fact remains saved; message refresh can be retried by reloading the conversation.
       });

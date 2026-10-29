@@ -585,7 +585,7 @@ describe("message composer", () => {
     }, { signal: expect.any(AbortSignal) });
     expect(input).toHaveValue("");
     expect(document.getElementById("deal-message-sent-message")).toHaveTextContent("New terms");
-    expect(observe).toHaveBeenLastCalledWith([expect.objectContaining({ id: "sent-message" })]);
+    await waitFor(() => expect(observe).toHaveBeenLastCalledWith([expect.objectContaining({ id: "sent-message" })]));
   });
 
   it("sends private messages with lock attribution and preserves privacy for the next message", async () => {
@@ -706,4 +706,37 @@ describe("message composer", () => {
     await waitFor(() => expect(mockedListDealMessages).toHaveBeenLastCalledWith("deal-2", BUYER_ID));
     expect(observe).not.toHaveBeenCalled();
   });
+  it.each(["send-first", "refresh-first"])("preserves confirmed sends and fetched source messages (%s)", async (order) => {
+    let refresh!: (messages: DealMessage[]) => void;
+    mockedListDealMessages.mockResolvedValueOnce([]).mockImplementationOnce(() => new Promise((resolve) => { refresh = resolve; }));
+    mockedSuggestDealFacts.mockResolvedValue({
+      status: "VALID", issues: [], missing_fields: [], guidance_message: "Review this fact.",
+      facts: [fact({ id: "source-fact", field: "quantity", source_message_id: "source-message", source_span: "Source terms" })],
+    });
+    let send!: (value: DealMessage) => void;
+    createMessage.mockImplementation(() => new Promise((resolve) => { send = resolve; }));
+    const observe = vi.fn();
+    render(<DealConversationReview deal={DEAL} onMessagesChanged={observe} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+    await waitFor(() => expect(mockedListDealMessages).toHaveBeenCalledTimes(2));
+    fireEvent.change(input, { target: { value: "Confirmed new terms" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    const sent = message({ id: "confirmed", body: "Confirmed new terms" });
+    const source = message({ id: "source-message", body: "Source terms" });
+    if (order === "send-first") {
+      await act(async () => send(sent));
+      expect(screen.getByText("Confirmed new terms")).toBeInTheDocument();
+      await act(async () => refresh([source]));
+    } else {
+      await act(async () => refresh([source]));
+      await act(async () => send(sent));
+    }
+    expect(document.getElementById("deal-message-confirmed")).toHaveTextContent("Confirmed new terms");
+    expect(document.getElementById("deal-message-source-message")).toHaveTextContent("Source terms");
+    expect(observe).toHaveBeenLastCalledWith([source, sent]);
+    expect(input).toHaveValue("");
+    expect(screen.getByText("Message sent.")).toBeInTheDocument();
+  });
+
 });

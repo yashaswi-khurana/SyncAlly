@@ -101,6 +101,14 @@ class CommunicationRepository(ConstraintRepository, Protocol):
     ) -> list[Message]:
         """List messages visible to an organization under the visibility rules."""
 
+    def has_any_message(self, deal_id: UUID, organization_id: UUID) -> bool:
+        """Report whether any message exists in the deal, ignoring visibility.
+
+        ``organization_id`` must be one of the deal's parties and keeps reads
+        explicitly scoped; it does not filter the result. The caller must have
+        already authorized the actor's access to the deal.
+        """
+
     def list_constraints(
         self,
         deal_id: UUID,
@@ -337,6 +345,26 @@ def list_visible_messages(
     deal = _load_deal_for_participant(actor, deal_id, repository)
     resolved = resolve_participant_organization(actor, deal, organization_id)
     return repository.list_messages(deal_id, resolved, limit=limit, offset=offset)
+
+
+def deal_has_any_message(
+    actor: ActorContext,
+    deal_id: UUID,
+    repository: CommunicationRepository,
+) -> bool:
+    """Report whether any party's conversation in the deal contains a message.
+
+    Visibility is irrelevant: onboarding only needs to know whether the deal has
+    started, not what was said. Existence is the only fact that crosses the
+    private-message boundary; content and metadata stay with their owner.
+    """
+    deal = _load_deal_for_participant(actor, deal_id, repository)
+    party_organization_id = next(
+        organization_id
+        for organization_id in (deal.buyer_organization_id, deal.seller_organization_id)
+        if organization_id in actor.organization_ids
+    )
+    return repository.has_any_message(deal_id, party_organization_id)
 
 
 def list_visible_constraints(

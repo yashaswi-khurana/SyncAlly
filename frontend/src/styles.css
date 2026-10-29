@@ -3321,6 +3321,27 @@ body::after {
 
 /* ---------- deal post-creation onboarding banner ---------- */
 
+.deal-onboarding-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  margin-bottom: 20px;
+  border: 1px solid rgba(255, 143, 143, 0.35);
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: #a83d2e;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.deal-onboarding-error button {
+  padding: 6px 14px;
+  font-size: 0.82rem;
+}
+
 .deal-onboarding-banner {
   position: relative;
   overflow: hidden;
@@ -3484,4 +3505,65 @@ body::after {
     display: none;
   }
 }
+
+/* ---------- deal message composer ---------- */
+
+.message-composer {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+}
+
+.message-composer label[for="deal-message-input"] {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.message-composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.88rem;
+  resize: vertical;
+}
+
+.message-composer textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent);
+}
+
+.message-composer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.message-composer__visibility {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.message-composer__visibility .radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
 

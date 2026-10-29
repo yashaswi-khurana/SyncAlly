@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import SignInPage from "./auth/SignInPage";
 import { useSession } from "./auth/useSession";
 import { useHashRoute } from "./app/useHashRoute";
+import { listOrganizations } from "./api/client";
+import type { Organization } from "./api/types";
 import CreateDealPage from "./deals/CreateDealPage";
 import DealDetailPage from "./deals/DealDetailPage";
 import DealsPage from "./deals/DealsPage";
+import OnboardingWizard from "./organizations/OnboardingWizard";
 import OrganizationsSettingsPage from "./organizations/OrganizationsSettingsPage";
 import {
   navigateToCreateDeal,
@@ -19,10 +22,51 @@ export default function App() {
   const { accessToken, signIn, signOut } = useSession();
   const route = useHashRoute();
   const [sessionVersion, setSessionVersion] = useState(0);
+  const [organizations, setOrganizations] = useState<Organization[] | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const orgs = await listOrganizations();
+        if (!cancelled) {
+          setOrganizations(orgs);
+        }
+      } catch {
+        if (!cancelled) {
+          setOrganizations(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, sessionVersion]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => {
+      setToast(null);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  function handleOrganizationCreated(created: Organization) {
+    setOrganizations((prev) => (prev ? [...prev, created] : [created]));
+    navigateToDeals();
+    setToast(`Created ${created.legal_name} (${created.country_code}). Welcome to the Deal Register!`);
+  }
 
   function refreshSessionView() {
     navigateToDeals();
     setSessionVersion((version) => version + 1);
+  }
+
+  function handleSignOut() {
+    setOrganizations(null);
+    signOut();
   }
 
   if (!accessToken) {
@@ -32,6 +76,7 @@ export default function App() {
   const isCreate = route.name === "create";
   const isOrganizations = route.name === "organizations";
   const isWorkspace = route.name === "deals" || route.name === "deal";
+  const hasZeroOrganizations = Boolean(organizations !== null && organizations.length === 0);
 
   return (
     <div className="app-shell">
@@ -73,7 +118,7 @@ export default function App() {
         </nav>
         <div className="site-nav__meta">
           <span className="site-nav__environment">LOCAL DEMO</span>
-          <button type="button" className="button ghost" onClick={signOut}>
+          <button type="button" className="button ghost" onClick={handleSignOut}>
             Sign out
           </button>
         </div>
@@ -104,6 +149,73 @@ export default function App() {
         </div>
       </footer>
       <DevRoleSwitcher onSessionChanged={refreshSessionView} />
+
+      {hasZeroOrganizations && (
+        <OnboardingWizard
+          onComplete={handleOrganizationCreated}
+          onSignOut={handleSignOut}
+        />
+      )}
+
+      {toast && (
+        <aside
+          className="onboarding-toast"
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: "24px",
+            right: "24px",
+            zIndex: 1100,
+            maxWidth: "420px",
+            padding: "12px 18px",
+            borderRadius: "8px",
+            background: "var(--surface)",
+            border: "1px solid var(--accent)",
+            color: "var(--ink)",
+            boxShadow: "0 12px 36px rgba(0, 0, 0, 0.25)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span
+              aria-hidden="true"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "20px",
+                height: "20px",
+                borderRadius: "50%",
+                background: "rgba(56, 211, 159, 0.2)",
+                color: "#38d39f",
+                fontWeight: "bold",
+                fontSize: "12px",
+              }}
+            >
+              ✓
+            </span>
+            <span>{toast}</span>
+          </div>
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => setToast(null)}
+            aria-label="Dismiss notification"
+            style={{
+              padding: "4px 8px",
+              fontSize: "12px",
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            ✕
+          </button>
+        </aside>
+      )}
     </div>
   );
 }

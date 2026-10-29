@@ -16,6 +16,7 @@ vi.mock("./api/client", async (importOriginal) => {
     createDeal: vi.fn(),
     getDeal: vi.fn(),
     getCurrentAgreement: vi.fn(),
+    getDealMessageExistence: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
   };
@@ -27,6 +28,7 @@ import {
   getCommercialDocumentDraft,
   getCurrentAgreement,
   getDeal,
+  getDealMessageExistence,
   listDealFacts,
   listDealMessages,
   listDeals,
@@ -38,6 +40,7 @@ import { clearAccessToken, setAccessToken } from "./api/tokenStore";
 const mockedGetDeal = vi.mocked(getDeal);
 const mockedApiRequest = vi.mocked(apiRequest);
 const mockedGetCurrentAgreement = vi.mocked(getCurrentAgreement);
+const mockedGetDealMessageExistence = vi.mocked(getDealMessageExistence);
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedListDealFacts = vi.mocked(listDealFacts);
@@ -84,6 +87,7 @@ describe("App", () => {
     );
     mockedListDealFacts.mockResolvedValue([]);
     mockedListDealMessages.mockResolvedValue([]);
+    mockedGetDealMessageExistence.mockResolvedValue(false);
     mockedListOrganizations.mockResolvedValue([
       {
         id: "11111111-1111-1111-1111-111111111111",

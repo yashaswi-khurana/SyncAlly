@@ -223,6 +223,33 @@ def list_organization_directory(
     ]
 
 
+@router.get(
+    "/{organization_id}",
+    response_model=OrganizationDirectoryItem,
+    dependencies=[Depends(get_current_actor)],
+)
+def get_organization_route(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict[str, UUID | str]:
+    """Get active organization public details by ID."""
+    org = db.scalar(
+        select(Organization).where(
+            Organization.id == organization_id,
+            Organization.status == "ACTIVE",
+        )
+    )
+    if org is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+        )
+    return {
+        "id": org.id,
+        "legal_name": org.legal_name,
+        "country_code": org.country_code,
+    }
+
+
 @router.post("/{organization_id}/members", status_code=status.HTTP_201_CREATED)
 def add_organization_member(
     organization_id: UUID,

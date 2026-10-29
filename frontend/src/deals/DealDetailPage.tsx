@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 
-import { ApiError, getDeal } from "../api/client";
-import type { Deal } from "../api/types";
+import {
+  ApiError,
+  getCurrentAgreement,
+  getDeal,
+  listDealMessages,
+  listOrganizations,
+} from "../api/client";
+import type { Deal, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 import DealConstellation from "./DealConstellation";
 import DealConversationReview from "./DealConversationReview";
@@ -24,6 +30,9 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
   const [state, setState] = useState<DealState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
   const [agreementReloadToken, setAgreementReloadToken] = useState(0);
+  const [isFresh, setIsFresh] = useState(false);
+  const [activeOrgId, setActiveOrgId] = useState("");
+  const [counterpartyName, setCounterpartyName] = useState("Counterparty");
 
   useEffect(() => {
     let cancelled = false;
@@ -51,9 +60,114 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
     };
   }, [dealId, reloadCount]);
 
+  useEffect(() => {
+    if (state.status !== "ready" || agreementReloadToken > 0) {
+      return;
+    }
+
+    const { deal } = state;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const [agreementResult, organizationsResult] = await Promise.allSettled([
+          getCurrentAgreement(deal.id),
+          listOrganizations(),
+        ]);
+
+        if (cancelled) return;
+
+        const hasAgreement =
+          agreementResult.status === "fulfilled" && agreementResult.value !== null;
+
+        if (hasAgreement) {
+          setIsFresh(false);
+          return;
+        }
+
+        const organizations: Organization[] =
+          organizationsResult.status === "fulfilled" ? organizationsResult.value : [];
+
+        const userOrg = organizations.find(
+          (org) =>
+            org.id === deal.buyer_organization_id || org.id === deal.seller_organization_id,
+        );
+
+        const resolvedActiveOrgId = userOrg?.id || deal.buyer_organization_id;
+        setActiveOrgId(resolvedActiveOrgId);
+        const counterpartyId =
+          userOrg?.id === deal.seller_organization_id
+            ? deal.buyer_organization_id
+            : deal.seller_organization_id;
+
+        const counterpartyOrg = organizations.find((org) => org.id === counterpartyId);
+        const resolvedCounterparty =
+          counterpartyOrg?.legal_name ||
+          organizations.find((org) => org.id !== userOrg?.id)?.legal_name ||
+          "Counterparty";
+
+        setCounterpartyName(resolvedCounterparty);
+
+        const messages = await listDealMessages(deal.id, resolvedActiveOrgId);
+        if (cancelled) return;
+
+        const fresh = messages.length === 0;
+        setIsFresh(fresh);
+      } catch {
+        // Defensive: if checks fail, don't break page rendering
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state, agreementReloadToken, reloadCount]);
+
+  // Periodic check to dismiss the banner automatically when the first message is posted
+  useEffect(() => {
+    if (!isFresh || state.status !== "ready" || agreementReloadToken > 0 || !activeOrgId) {
+      return;
+    }
+
+    const { deal } = state;
+    let cancelled = false;
+
+    const intervalId = setInterval(() => {
+      void (async () => {
+        try {
+          const messages = await listDealMessages(deal.id, activeOrgId);
+          if (!cancelled && messages.length > 0) {
+            setIsFresh(false);
+          }
+        } catch {
+          // Keep background polling silent
+        }
+      })();
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [isFresh, state, agreementReloadToken, activeOrgId]);
+
   function retryDeal() {
     setState({ status: "loading" });
     setReloadCount((count) => count + 1);
+  }
+
+  function handleStartConversation() {
+    const composer =
+      document.querySelector<HTMLTextAreaElement>(
+        "#deal-message-input, textarea[name='message'], .message-composer textarea, textarea",
+      ) ||
+      document.querySelector<HTMLElement>(
+        "#conversation-heading, .communication-card--transcript",
+      );
+    if (composer) {
+      composer.focus();
+      composer.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
   }
 
   if (state.status === "loading") {
@@ -97,9 +211,89 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
   }
 
   const { deal } = state;
+  const showBanner = isFresh && agreementReloadToken === 0;
+
   return (
     <Reveal>
       <div className="workspace deal-workspace">
+        {showBanner ? (
+          <section
+            className="deal-onboarding-banner"
+            aria-label="New deal next steps"
+            role="region"
+          >
+            <div className="deal-onboarding-banner__header">
+              <div className="deal-onboarding-banner__badge">
+                <span className="deal-onboarding-banner__dot" aria-hidden="true" />
+                <span>Next Steps</span>
+              </div>
+              <h2 className="deal-onboarding-banner__title">
+                Deal created with {counterpartyName}!
+              </h2>
+              <p className="deal-onboarding-banner__desc">
+                Follow this 3-step roadmap to propose terms, review AI facts, and approve your
+                agreement.
+              </p>
+            </div>
+
+            <ol className="deal-onboarding-steps" aria-label="Deal progression steps">
+              <li className="deal-onboarding-step deal-onboarding-step--active" aria-current="step">
+                <div className="deal-onboarding-step__indicator">
+                  <span className="deal-onboarding-step__number">1</span>
+                  <span className="deal-onboarding-step__line" aria-hidden="true" />
+                </div>
+                <div className="deal-onboarding-step__content">
+                  <strong className="deal-onboarding-step__label">
+                    Step 1 · Introduce terms
+                  </strong>
+                  <p className="deal-onboarding-step__text">
+                    Introduce trade terms in the conversation below (e.g. quantity, price, delivery port).
+                  </p>
+                </div>
+              </li>
+
+              <li className="deal-onboarding-step">
+                <div className="deal-onboarding-step__indicator">
+                  <span className="deal-onboarding-step__number">2</span>
+                  <span className="deal-onboarding-step__line" aria-hidden="true" />
+                </div>
+                <div className="deal-onboarding-step__content">
+                  <strong className="deal-onboarding-step__label">
+                    Step 2 · Review facts
+                  </strong>
+                  <p className="deal-onboarding-step__text">
+                    Review AI-extracted terms and toggle them to Shareable.
+                  </p>
+                </div>
+              </li>
+
+              <li className="deal-onboarding-step">
+                <div className="deal-onboarding-step__indicator">
+                  <span className="deal-onboarding-step__number">3</span>
+                </div>
+                <div className="deal-onboarding-step__content">
+                  <strong className="deal-onboarding-step__label">
+                    Step 3 · Bilateral agreement
+                  </strong>
+                  <p className="deal-onboarding-step__text">
+                    Approve the bilateral agreement to generate your invoice.
+                  </p>
+                </div>
+              </li>
+            </ol>
+
+            <div className="deal-onboarding-banner__actions">
+              <button
+                type="button"
+                className="button deal-onboarding-banner__button"
+                onClick={handleStartConversation}
+              >
+                Start Conversation <span aria-hidden="true">↓</span>
+              </button>
+            </div>
+          </section>
+        ) : null}
+
         <section className="deal-room" aria-labelledby="deal-detail-heading">
           <div className="deal-room__topline">
             <button type="button" className="deal-room__back" onClick={onBackToDeals}>

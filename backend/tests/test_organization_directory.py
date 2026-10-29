@@ -331,3 +331,32 @@ class OrganizationDirectoryTests(unittest.TestCase):
         data = response.json()
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["id"], str(org_underscore.id))
+
+    def test_get_organization_by_id_returns_active_organization(self) -> None:
+        self._authenticate()
+        org = self._create_org("Counterparty Logistics Ltd", "US")
+
+        response = self._request("GET", f"/organizations/{org.id}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["id"], str(org.id))
+        self.assertEqual(data["legal_name"], "Counterparty Logistics Ltd")
+        self.assertEqual(data["country_code"], "US")
+
+    def test_get_organization_by_id_returns_404_when_missing_or_inactive(self) -> None:
+        self._authenticate()
+        inactive_org = self._create_org("Suspended Corp", "US", status="SUSPENDED")
+
+        response_inactive = self._request("GET", f"/organizations/{inactive_org.id}")
+        self.assertEqual(response_inactive.status_code, 404)
+
+        from uuid import uuid4
+        response_missing = self._request("GET", f"/organizations/{uuid4()}")
+        self.assertEqual(response_missing.status_code, 404)
+
+    def test_get_organization_by_id_requires_authentication(self) -> None:
+        org = self._create_org("Private Org", "US")
+        app.dependency_overrides[get_db] = lambda: self.session
+
+        response = self._request("GET", f"/organizations/{org.id}")
+        self.assertEqual(response.status_code, 401)

@@ -14,7 +14,9 @@ import type {
   FactCorrectionResult,
   FactSuggestionResult,
   FactReviewAction,
+  MessageExistence,
   Organization,
+  OrganizationDirectoryItem,
   OrganizationMember,
   PaymentAuthorization,
   PaymentStatus,
@@ -159,6 +161,10 @@ export function listOrganizations(): Promise<Organization[]> {
   return apiRequest<Organization[]>("/organizations");
 }
 
+export function getOrganization(organizationId: string): Promise<OrganizationDirectoryItem> {
+  return apiRequest<OrganizationDirectoryItem>(`/organizations/${encodeURIComponent(organizationId)}`);
+}
+
 export function createOrganization(input: CreateOrganizationInput): Promise<Organization> {
   return apiRequest<Organization>("/organizations", {
     method: "POST",
@@ -299,6 +305,20 @@ export function listDealMessages(
   return apiRequest<DealMessage[]>(
     `/deals/${encodeURIComponent(dealId)}/messages?${query.toString()}`,
   );
+}
+
+/**
+ * Report whether any message exists anywhere in the deal, including messages
+ * private to the counterparty organization. Only a boolean is exposed.
+ */
+export async function getDealMessageExistence(dealId: string): Promise<boolean> {
+  const payload = await apiRequest<MessageExistence>(
+    `/deals/${encodeURIComponent(dealId)}/messages/existence`,
+  );
+  if (!isRecord(payload) || typeof payload["has_messages"] !== "boolean") {
+    throw new Error("The server returned an unexpected onboarding status.");
+  }
+  return payload["has_messages"];
 }
 
 export function listDealFacts(dealId: string, organizationId: string): Promise<DealFact[]> {

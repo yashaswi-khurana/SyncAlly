@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -36,6 +36,7 @@ import {
   listDeals,
   listOrganizations,
   listPaymentStatuses,
+  login,
 } from "./api/client";
 import { clearAccessToken, setAccessToken } from "./api/tokenStore";
 
@@ -46,6 +47,7 @@ const mockedGetDealMessageExistence = vi.mocked(getDealMessageExistence);
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedCreateOrganization = vi.mocked(createOrganization);
+const mockedLogin = vi.mocked(login);
 const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
 const mockedGetCommercialDocumentDraft = vi.mocked(getCommercialDocumentDraft);
@@ -264,6 +266,142 @@ describe("App", () => {
       await screen.findByRole("heading", { name: "Deals shared with you" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("ignores late organization creation completion from a previous session after sign out", async () => {
+    setAccessToken("token-user-a");
+    mockedListOrganizations.mockResolvedValueOnce([]);
+
+    let resolveCreate!: (org: {
+      id: string;
+      legal_name: string;
+      country_code: string;
+      role: string;
+    }) => void;
+    mockedCreateOrganization.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Set up your trading organization" }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Company Legal Name"), {
+      target: { value: "User A Corp" },
+    });
+    fireEvent.change(screen.getByLabelText("Country Code"), {
+      target: { value: "US" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create & continue/i }));
+
+    const globalSignOut = within(screen.getByRole("banner")).getByRole("button", {
+      name: "Sign out",
+    });
+    fireEvent.click(globalSignOut);
+
+    expect(
+      await screen.findByRole("heading", { name: "Open your trade desk." }),
+    ).toBeInTheDocument();
+
+    mockedLogin.mockResolvedValueOnce({
+      access_token: "token-user-b",
+      refresh_token: "refresh-b",
+      token_type: "Bearer",
+    });
+    mockedListOrganizations.mockResolvedValueOnce([]);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "user-b@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Set up your trading organization" }),
+    ).toBeInTheDocument();
+
+    resolveCreate({
+      id: "org-a-123",
+      legal_name: "User A Corp",
+      country_code: "US",
+      role: "ADMIN",
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      screen.getByRole("heading", { name: "Set up your trading organization" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Created User A Corp/i)).not.toBeInTheDocument();
+  });
+
+  it("clears the previous user's toast on sign out so it does not carry over to the next user", async () => {
+    setAccessToken("token-user-a");
+    mockedListOrganizations.mockResolvedValueOnce([]);
+    mockedCreateOrganization.mockResolvedValueOnce({
+      id: "org-a-1",
+      legal_name: "Alpha Corp",
+      country_code: "US",
+      role: "ADMIN",
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Set up your trading organization" }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Company Legal Name"), {
+      target: { value: "Alpha Corp" },
+    });
+    fireEvent.change(screen.getByLabelText("Country Code"), {
+      target: { value: "US" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create & continue/i }));
+
+    expect(await screen.findByText(/Created Alpha Corp \(US\)/i)).toBeInTheDocument();
+
+    const globalSignOut = within(screen.getByRole("banner")).getByRole("button", {
+      name: "Sign out",
+    });
+    fireEvent.click(globalSignOut);
+
+    expect(screen.queryByText(/Created Alpha Corp \(US\)/i)).not.toBeInTheDocument();
+
+    mockedLogin.mockResolvedValueOnce({
+      access_token: "token-user-b",
+      refresh_token: "refresh-b",
+      token_type: "Bearer",
+    });
+    mockedListOrganizations.mockResolvedValueOnce([
+      {
+        id: "org-b-1",
+        legal_name: "Beta Ltd",
+        country_code: "GB",
+        role: "ADMIN",
+      },
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "user-b@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Deals shared with you" }),
+    ).toBeInTheDocument();
+
+    expect(screen.queryByText(/Created Alpha Corp \(US\)/i)).not.toBeInTheDocument();
   });
 
   it("returns to the deals workspace after resetting from a deal route", async () => {

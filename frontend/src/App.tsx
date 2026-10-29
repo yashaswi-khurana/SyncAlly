@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import SignInPage from "./auth/SignInPage";
 import { useSession } from "./auth/useSession";
@@ -24,6 +24,13 @@ export default function App() {
   const [sessionVersion, setSessionVersion] = useState(0);
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  const currentSessionKey = accessToken ? `${accessToken}:${sessionVersion}` : null;
+  const sessionRef = useRef(currentSessionKey);
+
+  useEffect(() => {
+    sessionRef.current = currentSessionKey;
+  }, [currentSessionKey]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -53,7 +60,10 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  function handleOrganizationCreated(created: Organization) {
+  function handleOrganizationCreated(created: Organization, sessionAtStart: string | null) {
+    if (!sessionRef.current || sessionRef.current !== sessionAtStart) {
+      return;
+    }
     setOrganizations((prev) => (prev ? [...prev, created] : [created]));
     navigateToDeals();
     setToast(`Created ${created.legal_name} (${created.country_code}). Welcome to the Deal Register!`);
@@ -65,7 +75,9 @@ export default function App() {
   }
 
   function handleSignOut() {
+    sessionRef.current = null;
     setOrganizations(null);
+    setToast(null);
     signOut();
   }
 
@@ -152,7 +164,8 @@ export default function App() {
 
       {hasZeroOrganizations && (
         <OnboardingWizard
-          onComplete={handleOrganizationCreated}
+          key={currentSessionKey ?? "none"}
+          onComplete={(created) => handleOrganizationCreated(created, currentSessionKey)}
           onSignOut={handleSignOut}
         />
       )}

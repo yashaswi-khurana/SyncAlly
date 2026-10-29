@@ -240,61 +240,82 @@ export default function DealDetailPage({
 
     const { deal } = state;
     let cancelled = false;
+    let inFlight = false;
 
-    const intervalId = setInterval(() => {
-      void (async () => {
-        try {
-          const [messagesResult, agreementResult] = await Promise.allSettled([
-            listDealMessages(deal.id, selectedOrganizationId),
-            getCurrentAgreement(deal.id),
-          ]);
-          if (cancelled) return;
+    const pollFreshness = async () => {
+      // A slow poll must finish before the next one starts, and hidden tabs
+      // must not generate background traffic.
+      if (cancelled || inFlight || document.hidden) {
+        return;
+      }
 
-          // 1. If an agreement is found, dismiss onboarding immediately
-          if (agreementResult.status === "fulfilled" && agreementResult.value !== null) {
-            setFreshness("not-fresh");
-            setFreshnessError(null);
-            setAgreementReloadToken((token) => token + 1);
-            return;
-          }
+      inFlight = true;
+      try {
+        const [messagesResult, agreementResult] = await Promise.allSettled([
+          listDealMessages(deal.id, selectedOrganizationId),
+          getCurrentAgreement(deal.id),
+        ]);
+        if (cancelled) return;
 
-          // 2. If agreement check failed with non-404 error, treat as unknown
-          if (agreementResult.status === "rejected") {
-            const reason = agreementResult.reason;
-            const isNotFound = reason instanceof ApiError && reason.status === 404;
-            if (!isNotFound) {
-              setFreshness((current) => nextFreshness(current, "unknown"));
-              setFreshnessError(describeError(reason));
-              return;
-            }
-          }
-
-          // 3. If messages check failed, treat as unknown instead of silently retaining fresh
-          if (messagesResult.status === "rejected") {
-            setFreshness((current) => nextFreshness(current, "unknown"));
-            setFreshnessError(describeError(messagesResult.reason));
-            return;
-          }
-
-          // 4. Both checks succeeded and agreement is confirmed absent (404)
-          const messages = messagesResult.value;
-          setFreshness((current) =>
-            nextFreshness(current, messages.length > 0 ? "not-fresh" : "fresh"),
-          );
+        // 1. If an agreement is found, dismiss onboarding immediately
+        if (agreementResult.status === "fulfilled" && agreementResult.value !== null) {
+          setFreshness("not-fresh");
           setFreshnessError(null);
-        } catch (caught) {
-          if (!cancelled) {
-            // Failed check: treat as unknown instead of silently retaining fresh
+          setAgreementReloadToken((token) => token + 1);
+          return;
+        }
+
+        // 2. If agreement check failed with non-404 error, treat as unknown
+        if (agreementResult.status === "rejected") {
+          const reason = agreementResult.reason;
+          const isNotFound = reason instanceof ApiError && reason.status === 404;
+          if (!isNotFound) {
             setFreshness((current) => nextFreshness(current, "unknown"));
-            setFreshnessError(describeError(caught));
+            setFreshnessError(describeError(reason));
+            return;
           }
         }
-      })();
+
+        // 3. If messages check failed, treat as unknown instead of silently retaining fresh
+        if (messagesResult.status === "rejected") {
+          setFreshness((current) => nextFreshness(current, "unknown"));
+          setFreshnessError(describeError(messagesResult.reason));
+          return;
+        }
+
+        // 4. Both checks succeeded and agreement is confirmed absent (404)
+        const messages = messagesResult.value;
+        setFreshness((current) =>
+          nextFreshness(current, messages.length > 0 ? "not-fresh" : "fresh"),
+        );
+        setFreshnessError(null);
+      } catch (caught) {
+        if (!cancelled) {
+          // Failed check: treat as unknown instead of silently retaining fresh
+          setFreshness((current) => nextFreshness(current, "unknown"));
+          setFreshnessError(describeError(caught));
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = setInterval(() => {
+      void pollFreshness();
     }, freshnessIntervalMs);
+
+    // Resume promptly when the tab becomes visible instead of waiting a full interval.
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        void pollFreshness();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       cancelled = true;
       clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [freshness, state, agreementReloadToken, selectedOrganizationId, freshnessChecked, freshnessIntervalMs]);
 

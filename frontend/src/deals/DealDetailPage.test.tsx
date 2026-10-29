@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -49,6 +49,30 @@ const DEAL: Deal = {
   status: "DRAFT",
   version: 0,
 };
+
+function setDocumentHidden(hidden: boolean) {
+  Object.defineProperty(document, "hidden", { configurable: true, value: hidden });
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: hidden ? "hidden" : "visible",
+  });
+}
+
+async function flushMicrotasks() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
+async function waitForOnboardingBanner() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (screen.queryByRole("heading", { name: /deal created with/i })) {
+      return;
+    }
+    await flushMicrotasks();
+  }
+  throw new Error("onboarding banner did not render");
+}
 
 describe("DealDetailPage", () => {
   afterEach(() => {
@@ -737,5 +761,86 @@ describe("DealDetailPage", () => {
     expect(
       screen.queryByText(/unable to verify deal onboarding status/i),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not poll while the page is hidden and resumes when it becomes visible", async () => {
+    vi.useFakeTimers();
+    mockedGetDeal.mockResolvedValue(DEAL);
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
+    mockedListDealMessages.mockResolvedValue([]);
+
+    const { unmount } = render(
+      <DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} freshnessIntervalMs={1000} />,
+    );
+
+    try {
+      await waitForOnboardingBanner();
+      const callsAfterLoad = mockedListDealMessages.mock.calls.length;
+
+      setDocumentHidden(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(mockedListDealMessages).toHaveBeenCalledTimes(callsAfterLoad);
+
+      setDocumentHidden(false);
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(mockedListDealMessages.mock.calls.length).toBeGreaterThan(callsAfterLoad);
+    } finally {
+      unmount();
+      setDocumentHidden(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not stack message requests when a poll is still in flight", async () => {
+    vi.useFakeTimers();
+    mockedGetDeal.mockResolvedValue(DEAL);
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
+    mockedListDealMessages.mockResolvedValue([]);
+
+    const { unmount } = render(
+      <DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} freshnessIntervalMs={1000} />,
+    );
+
+    try {
+      await waitForOnboardingBanner();
+      const callsAfterLoad = mockedListDealMessages.mock.calls.length;
+
+      let resolveSlowPoll:
+        | ((messages: Awaited<ReturnType<typeof listDealMessages>>) => void)
+        | undefined;
+      mockedListDealMessages.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSlowPoll = resolve;
+          }),
+      );
+
+      // First interval tick starts a poll that never settles during the window below.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(mockedListDealMessages).toHaveBeenCalledTimes(callsAfterLoad + 1);
+
+      // Further ticks must be skipped while the slow poll is still in flight.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(mockedListDealMessages).toHaveBeenCalledTimes(callsAfterLoad + 1);
+
+      // Once the slow poll settles, the next tick polls again.
+      await act(async () => {
+        resolveSlowPoll?.([]);
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(mockedListDealMessages).toHaveBeenCalledTimes(callsAfterLoad + 2);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
   });
 });

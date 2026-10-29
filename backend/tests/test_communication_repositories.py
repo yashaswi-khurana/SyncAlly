@@ -260,6 +260,45 @@ class CommunicationRepositoryTests(unittest.TestCase):
             self.repository.get_message(uuid4(), self.deal.id, self.buyer.id)
         )
 
+    def test_has_any_message_is_deal_scoped_and_ignores_visibility(self) -> None:
+        self.assertFalse(self.repository.has_any_message(self.deal.id, self.buyer.id))
+
+        other_deal = Deal(
+            buyer_organization_id=self.buyer.id,
+            seller_organization_id=self.seller.id,
+        )
+        self.session.add(other_deal)
+        self.session.flush()
+        other_conversation = self.repository.add_conversation(
+            DomainConversation(
+                id=ConversationId(uuid4()),
+                deal_id=DealId(other_deal.id),
+                participant_organization_id=OrganizationId(self.seller.id),
+                created_at=datetime.now(UTC),
+            )
+        )
+        self._message(
+            other_conversation,
+            "other deal message",
+            Visibility.SHAREABLE,
+            author_user_id=UserId(self.seller_user.id),
+        )
+        self.session.commit()
+
+        self.assertFalse(self.repository.has_any_message(self.deal.id, self.buyer.id))
+
+        self._message(
+            self.seller_conversation,
+            "private seller note",
+            Visibility.PRIVATE,
+            author_user_id=UserId(self.seller_user.id),
+        )
+        self.session.commit()
+
+        self.assertTrue(self.repository.has_any_message(self.deal.id, self.buyer.id))
+        self.assertTrue(self.repository.has_any_message(self.deal.id, self.seller.id))
+        self.assertTrue(self.repository.has_any_message(other_deal.id, self.seller.id))
+
     def test_private_and_shareable_constraints_round_trip_with_review_state(self) -> None:
         buyer_source = self._message(
             self.buyer_conversation,

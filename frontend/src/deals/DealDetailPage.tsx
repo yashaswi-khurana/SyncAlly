@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   ApiError,
   getCurrentAgreement,
   getDeal,
+  getOrganization,
   listDealMessages,
   listOrganizations,
 } from "../api/client";
@@ -21,17 +22,46 @@ type DealState =
   | { status: "error"; message: string }
   | { status: "ready"; deal: Deal };
 
+type FreshnessStatus = "unknown" | "fresh" | "not-fresh";
+
+function nextFreshness(current: FreshnessStatus, next: FreshnessStatus): FreshnessStatus {
+  // Messages are never deleted, so an older in-flight check must not downgrade
+  // a deal that is already known to have activity.
+  return current === "not-fresh" ? current : next;
+}
+
+function describeError(caught: unknown): string {
+  if (caught instanceof ApiError) {
+    if (caught.status === 401) {
+      return "Your session has expired. Sign in again.";
+    }
+    return caught.message;
+  }
+  if (caught instanceof Error && caught.message) {
+    return caught.message;
+  }
+  return "Something went wrong. Please try again.";
+}
+
 interface DealDetailPageProps {
   dealId: string;
   onBackToDeals: () => void;
+  freshnessIntervalMs?: number;
 }
 
-export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPageProps) {
+export default function DealDetailPage({
+  dealId,
+  onBackToDeals,
+  freshnessIntervalMs = 2500,
+}: DealDetailPageProps) {
   const [state, setState] = useState<DealState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
   const [agreementReloadToken, setAgreementReloadToken] = useState(0);
-  const [isFresh, setIsFresh] = useState(false);
-  const [activeOrgId, setActiveOrgId] = useState("");
+  const [freshness, setFreshness] = useState<FreshnessStatus>("unknown");
+  const [freshnessError, setFreshnessError] = useState<string | null>(null);
+  const [freshnessReloadToken, setFreshnessReloadToken] = useState(0);
+  const [freshnessChecked, setFreshnessChecked] = useState(false);
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [counterpartyName, setCounterpartyName] = useState("Counterparty");
 
   useEffect(() => {
@@ -77,55 +107,134 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
 
         if (cancelled) return;
 
-        const hasAgreement =
-          agreementResult.status === "fulfilled" && agreementResult.value !== null;
-
-        if (hasAgreement) {
-          setIsFresh(false);
+        // 1. Inspect agreement check result
+        if (agreementResult.status === "fulfilled" && agreementResult.value !== null) {
+          setFreshness("not-fresh");
+          setFreshnessError(null);
           return;
         }
 
-        const organizations: Organization[] =
-          organizationsResult.status === "fulfilled" ? organizationsResult.value : [];
+        if (agreementResult.status === "rejected") {
+          const reason = agreementResult.reason;
+          const isNotFound = reason instanceof ApiError && reason.status === 404;
+          if (!isNotFound) {
+            // An agreement lookup failure cannot be assumed as "no agreement".
+            // Treat as unknown and report failure.
+            setFreshness("unknown");
+            setFreshnessError(describeError(reason));
+            return;
+          }
+          // If 404, we have verified that no agreement exists yet.
+        }
 
-        const userOrg = organizations.find(
+        // 2. Resolve organizations
+        if (organizationsResult.status === "rejected") {
+          setFreshness("unknown");
+          setFreshnessError(describeError(organizationsResult.reason));
+          return;
+        }
+
+        const organizations: Organization[] = organizationsResult.value;
+
+        const partyOrganizations = organizations.filter(
           (org) =>
             org.id === deal.buyer_organization_id || org.id === deal.seller_organization_id,
         );
 
-        const resolvedActiveOrgId = userOrg?.id || deal.buyer_organization_id;
-        setActiveOrgId(resolvedActiveOrgId);
+        let effectivePartyId = selectedOrganizationId;
+        if (partyOrganizations.length === 1 && !selectedOrganizationId) {
+          effectivePartyId = partyOrganizations[0].id;
+          setSelectedOrganizationId(partyOrganizations[0].id);
+        }
+
+        if (!effectivePartyId) {
+          // Dual member who has not chosen a party yet: keep banner hidden
+          setFreshness("unknown");
+          setFreshnessError(null);
+          setCounterpartyName("Counterparty");
+          return;
+        }
+
         const counterpartyId =
-          userOrg?.id === deal.seller_organization_id
+          effectivePartyId === deal.seller_organization_id
             ? deal.buyer_organization_id
             : deal.seller_organization_id;
 
-        const counterpartyOrg = organizations.find((org) => org.id === counterpartyId);
-        const resolvedCounterparty =
-          counterpartyOrg?.legal_name ||
-          organizations.find((org) => org.id !== userOrg?.id)?.legal_name ||
-          "Counterparty";
+        let resolvedCounterparty =
+          organizations.find((org) => org.id === counterpartyId)?.legal_name;
 
-        setCounterpartyName(resolvedCounterparty);
+        if (!resolvedCounterparty) {
+          try {
+            const fetchedCounterparty = await getOrganization(counterpartyId);
+            if (!cancelled && fetchedCounterparty?.legal_name) {
+              resolvedCounterparty = fetchedCounterparty.legal_name;
+            }
+          } catch {
+            // Graceful fallback if counterparty organization details cannot be resolved
+          }
+        }
 
-        const messages = await listDealMessages(deal.id, resolvedActiveOrgId);
+        if (cancelled) return;
+        setCounterpartyName(resolvedCounterparty || "Counterparty");
+
+        // 3. Inspect visible messages for the chosen party
+        const messages = await listDealMessages(deal.id, effectivePartyId);
         if (cancelled) return;
 
-        const fresh = messages.length === 0;
-        setIsFresh(fresh);
-      } catch {
-        // Defensive: if checks fail, don't break page rendering
+        setFreshnessError(null);
+        setFreshness((current) =>
+          nextFreshness(current, messages.length > 0 ? "not-fresh" : "fresh"),
+        );
+      } catch (caught) {
+        if (!cancelled) {
+          setFreshness((current) => nextFreshness(current, "unknown"));
+          setFreshnessError(describeError(caught));
+        }
+      } finally {
+        if (!cancelled) {
+          setFreshnessChecked(true);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [state, agreementReloadToken, reloadCount]);
+  }, [state, agreementReloadToken, reloadCount, freshnessReloadToken, selectedOrganizationId]);
 
-  // Periodic check to dismiss the banner automatically when the first message is posted
+  // Retry failed freshness checks periodically so onboarding recovers automatically
+  // once network requests or services are restored.
   useEffect(() => {
-    if (!isFresh || state.status !== "ready" || agreementReloadToken > 0 || !activeOrgId) {
+    if (
+      freshness !== "unknown" ||
+      !freshnessError ||
+      state.status !== "ready" ||
+      agreementReloadToken > 0 ||
+      freshnessIntervalMs <= 0
+    ) {
+      return;
+    }
+
+    const timerId = setTimeout(() => {
+      retryFreshness();
+    }, freshnessIntervalMs);
+
+    return () => {
+      clearTimeout(timerId);
+    };
+  }, [freshness, freshnessError, state.status, agreementReloadToken, freshnessIntervalMs]);
+
+  // Periodic check to dismiss the banner automatically when the first message is posted,
+  // or update freshness when an agreement is created or checks fail.
+  useEffect(() => {
+    if (
+      freshness !== "fresh" ||
+      state.status !== "ready" ||
+      agreementReloadToken > 0 ||
+      !selectedOrganizationId ||
+      !freshnessChecked ||
+      freshnessIntervalMs <= 0
+    ) {
       return;
     }
 
@@ -135,38 +244,95 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
     const intervalId = setInterval(() => {
       void (async () => {
         try {
-          const messages = await listDealMessages(deal.id, activeOrgId);
-          if (!cancelled && messages.length > 0) {
-            setIsFresh(false);
+          const [messagesResult, agreementResult] = await Promise.allSettled([
+            listDealMessages(deal.id, selectedOrganizationId),
+            getCurrentAgreement(deal.id),
+          ]);
+          if (cancelled) return;
+
+          // 1. If an agreement is found, dismiss onboarding immediately
+          if (agreementResult.status === "fulfilled" && agreementResult.value !== null) {
+            setFreshness("not-fresh");
+            setFreshnessError(null);
+            setAgreementReloadToken((token) => token + 1);
+            return;
           }
-        } catch {
-          // Keep background polling silent
+
+          // 2. If agreement check failed with non-404 error, treat as unknown
+          if (agreementResult.status === "rejected") {
+            const reason = agreementResult.reason;
+            const isNotFound = reason instanceof ApiError && reason.status === 404;
+            if (!isNotFound) {
+              setFreshness((current) => nextFreshness(current, "unknown"));
+              setFreshnessError(describeError(reason));
+              return;
+            }
+          }
+
+          // 3. If messages check failed, treat as unknown instead of silently retaining fresh
+          if (messagesResult.status === "rejected") {
+            setFreshness((current) => nextFreshness(current, "unknown"));
+            setFreshnessError(describeError(messagesResult.reason));
+            return;
+          }
+
+          // 4. Both checks succeeded and agreement is confirmed absent (404)
+          const messages = messagesResult.value;
+          setFreshness((current) =>
+            nextFreshness(current, messages.length > 0 ? "not-fresh" : "fresh"),
+          );
+          setFreshnessError(null);
+        } catch (caught) {
+          if (!cancelled) {
+            // Failed check: treat as unknown instead of silently retaining fresh
+            setFreshness((current) => nextFreshness(current, "unknown"));
+            setFreshnessError(describeError(caught));
+          }
         }
       })();
-    }, 2500);
+    }, freshnessIntervalMs);
 
     return () => {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [isFresh, state, agreementReloadToken, activeOrgId]);
+  }, [freshness, state, agreementReloadToken, selectedOrganizationId, freshnessChecked, freshnessIntervalMs]);
 
   function retryDeal() {
     setState({ status: "loading" });
     setReloadCount((count) => count + 1);
+    setFreshnessChecked(false);
+    setFreshness("unknown");
+    setFreshnessError(null);
   }
 
+  function retryFreshness() {
+    setFreshnessChecked(false);
+    setFreshness("unknown");
+    setFreshnessError(null);
+    setFreshnessReloadToken((token) => token + 1);
+  }
+
+  const handleOrganizationChange = useCallback((orgId: string) => {
+    setSelectedOrganizationId(orgId);
+    setFreshness("unknown");
+    setFreshnessError(null);
+  }, []);
+
   function handleStartConversation() {
-    const composer =
-      document.querySelector<HTMLTextAreaElement>(
-        "#deal-message-input, textarea[name='message'], .message-composer textarea, textarea",
-      ) ||
-      document.querySelector<HTMLElement>(
-        "#conversation-heading, .communication-card--transcript",
-      );
+    const composer = document.querySelector<HTMLTextAreaElement>("#deal-message-input");
     if (composer) {
       composer.focus();
-      composer.scrollIntoView({ behavior: "smooth", block: "center" });
+      composer.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      return;
+    }
+
+    const orgSelector =
+      document.querySelector<HTMLSelectElement>(`#conversation-organization-${dealId}`) ||
+      document.querySelector<HTMLSelectElement>("[id^='conversation-organization-']");
+    if (orgSelector) {
+      orgSelector.focus();
+      orgSelector.scrollIntoView?.({ behavior: "smooth", block: "center" });
     }
   }
 
@@ -211,11 +377,24 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
   }
 
   const { deal } = state;
-  const showBanner = isFresh && agreementReloadToken === 0;
+  const showBanner = freshness === "fresh" && agreementReloadToken === 0;
 
   return (
     <Reveal>
       <div className="workspace deal-workspace">
+        {freshnessError && freshness === "unknown" ? (
+          <aside className="deal-onboarding-error" role="status" aria-live="polite">
+            <span>Unable to verify deal onboarding status: {freshnessError}</span>
+            <button
+              type="button"
+              className="button button--secondary button--compact"
+              onClick={retryFreshness}
+            >
+              Retry check
+            </button>
+          </aside>
+        ) : null}
+
         {showBanner ? (
           <section
             className="deal-onboarding-banner"
@@ -370,7 +549,13 @@ export default function DealDetailPage({ dealId, onBackToDeals }: DealDetailPage
         <CommercialDocumentPanel dealId={deal.id} />
         <DealConversationReview
           deal={deal}
+          selectedOrganizationId={selectedOrganizationId}
+          onOrganizationChange={handleOrganizationChange}
           onAgreementCreated={() => setAgreementReloadToken((token) => token + 1)}
+          onMessageCreated={() => {
+            setFreshness("not-fresh");
+            setFreshnessError(null);
+          }}
         />
       </div>
     </Reveal>

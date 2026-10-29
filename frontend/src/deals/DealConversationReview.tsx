@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import {
   ApiError,
+  createDealMessage,
   listDealFacts,
   listDealMessages,
   listOrganizations,
@@ -14,6 +15,7 @@ import type {
   DealMessage,
   FactReviewAction,
   Organization,
+  Visibility,
 } from "../api/types";
 import AISuggestionReview from "./AISuggestionReview";
 
@@ -35,6 +37,9 @@ type ConversationState =
 interface DealConversationReviewProps {
   deal: Deal;
   onAgreementCreated?: () => void;
+  onMessageCreated?: () => void;
+  selectedOrganizationId?: string;
+  onOrganizationChange?: (organizationId: string) => void;
   revalidateIntervalMs?: number;
 }
 
@@ -97,15 +102,27 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
+function generateIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
 export default function DealConversationReview({
   deal,
   onAgreementCreated = () => {},
+  onMessageCreated,
+  selectedOrganizationId: controlledOrgId,
+  onOrganizationChange,
   revalidateIntervalMs = 4000,
 }: DealConversationReviewProps) {
   const [organizationState, setOrganizationState] = useState<OrganizationState>({
     status: "loading",
   });
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
+  const [internalSelectedOrgId, setInternalSelectedOrgId] = useState("");
+  const selectedOrganizationId =
+    controlledOrgId !== undefined ? controlledOrgId : internalSelectedOrgId;
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
   const [pendingFactId, setPendingFactId] = useState<string | null>(null);
@@ -113,6 +130,10 @@ export default function DealConversationReview({
   const [actionError, setActionError] = useState<{ factId: string; message: string } | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
+  const [messageBody, setMessageBody] = useState("");
+  const [messageVisibility, setMessageVisibility] = useState<Visibility>("SHAREABLE");
+  const [submittingMessage, setSubmittingMessage] = useState(false);
+  const [messageError, setMessageError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,7 +148,11 @@ export default function DealConversationReview({
             organization.id === deal.seller_organization_id,
         );
         setOrganizationState({ status: "ready", organizations: partyOrganizations });
-        setSelectedOrganizationId(partyOrganizations.length === 1 ? partyOrganizations[0].id : "");
+        const defaultOrgId = partyOrganizations.length === 1 ? partyOrganizations[0].id : "";
+        setInternalSelectedOrgId(defaultOrgId);
+        if (defaultOrgId) {
+          onOrganizationChange?.(defaultOrgId);
+        }
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
@@ -137,7 +162,7 @@ export default function DealConversationReview({
     return () => {
       cancelled = true;
     };
-  }, [deal.buyer_organization_id, deal.seller_organization_id]);
+  }, [deal.buyer_organization_id, deal.seller_organization_id, onOrganizationChange]);
 
   const partyOrganizations = organizationState.status === "ready" ? organizationState.organizations : [];
   const selectedOrganization = partyOrganizations.find(
@@ -375,6 +400,36 @@ export default function DealConversationReview({
       : current);
   }
 
+  async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmed = messageBody.trim();
+    if (!trimmed || !activeOrganizationId) {
+      return;
+    }
+
+    setSubmittingMessage(true);
+    setMessageError(null);
+    try {
+      const createdMessage = await createDealMessage(deal.id, {
+        body: trimmed,
+        visibility: messageVisibility,
+        organization_id: activeOrganizationId,
+        idempotency_key: generateIdempotencyKey(),
+      });
+      setMessageBody("");
+      setConversationState((current) =>
+        current?.status === "ready" && current.organizationId === activeOrganizationId
+          ? { ...current, messages: [...current.messages, createdMessage] }
+          : current,
+      );
+      onMessageCreated?.();
+    } catch (caught) {
+      setMessageError(describeError(caught));
+    } finally {
+      setSubmittingMessage(false);
+    }
+  }
+
   return (
     <section className="communication-grid" aria-label="Deal conversation and fact review">
       <section className="card communication-card communication-card--transcript" aria-labelledby="conversation-heading">
@@ -401,10 +456,12 @@ export default function DealConversationReview({
                   id={`conversation-organization-${deal.id}`}
                   value={selectedOrganizationId}
                   onChange={(event) => {
+                    const nextOrgId = event.target.value;
                     setActionError(null);
                     setHighlightedMessageId(null);
                     setFactFilter("all");
-                    setSelectedOrganizationId(event.target.value);
+                    setInternalSelectedOrgId(nextOrgId);
+                    onOrganizationChange?.(nextOrgId);
                   }}
                 >
                   <option value="">Choose an organization</option>
@@ -433,34 +490,99 @@ export default function DealConversationReview({
                 </button>
               </div>
             ) : (
-              <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
-                {visibleMessages.length === 0 ? (
-                  <li className="empty-state">No messages yet.</li>
-                ) : (
-                  visibleMessages.map((message) => (
-                    <li
-                      key={message.id}
-                      id={`deal-message-${message.id}`}
-                      className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
+              <>
+                <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
+                  {visibleMessages.length === 0 ? (
+                    <li className="empty-state">No messages yet.</li>
+                  ) : (
+                    visibleMessages.map((message) => (
+                      <li
+                        key={message.id}
+                        id={`deal-message-${message.id}`}
+                        className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
+                      >
+                        <div className="communication-meta">
+                          <span>
+                            {message.source_type === "AGENT"
+                              ? `SyncAlly agent${message.author_agent_id ? ` · ${message.author_agent_id}` : ""}`
+                              : `Deal participant${message.author_user_id ? ` · ${message.author_user_id.slice(0, 8)}` : ""}`}
+                          </span>
+                          <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
+                        </div>
+                        <p className="message-body">{message.body}</p>
+                        <div className="communication-badges">
+                          <span className={`badge badge--${message.visibility.toLowerCase()}`}>
+                            {readable(message.visibility)}
+                          </span>
+                        </div>
+                      </li>
+                    ))
+                  )}
+                </ol>
+
+                <form
+                  className="message-composer"
+                  aria-label="Post a deal message"
+                  onSubmit={(event) => void handleSendMessage(event)}
+                >
+                  <div className="field">
+                    <label htmlFor="deal-message-input">Post a message</label>
+                    <textarea
+                      id="deal-message-input"
+                      name="message"
+                      value={messageBody}
+                      onChange={(event) => setMessageBody(event.target.value)}
+                      placeholder="Introduce trade terms (e.g. 500 units at USD 45, deliver to Toronto)..."
+                      rows={3}
+                      maxLength={8000}
+                      disabled={submittingMessage}
+                      required
+                    />
+                  </div>
+                  <div className="message-composer__controls">
+                    <div
+                      className="message-composer__visibility"
+                      role="radiogroup"
+                      aria-label="Message visibility"
                     >
-                      <div className="communication-meta">
-                        <span>
-                          {message.source_type === "AGENT"
-                            ? `SyncAlly agent${message.author_agent_id ? ` · ${message.author_agent_id}` : ""}`
-                            : `Deal participant${message.author_user_id ? ` · ${message.author_user_id.slice(0, 8)}` : ""}`}
-                        </span>
-                        <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
-                      </div>
-                      <p className="message-body">{message.body}</p>
-                      <div className="communication-badges">
-                        <span className={`badge badge--${message.visibility.toLowerCase()}`}>
-                          {readable(message.visibility)}
-                        </span>
-                      </div>
-                    </li>
-                  ))
-                )}
-              </ol>
+                      <label className="radio-label">
+                        <input
+                          type="radio"
+                          name={`message-visibility-${deal.id}`}
+                          value="SHAREABLE"
+                          checked={messageVisibility === "SHAREABLE"}
+                          onChange={() => setMessageVisibility("SHAREABLE")}
+                          disabled={submittingMessage}
+                        />
+                        <span>Shareable</span>
+                      </label>
+                      <label className="radio-label">
+                        <input
+                          type="radio"
+                          name={`message-visibility-${deal.id}`}
+                          value="PRIVATE"
+                          checked={messageVisibility === "PRIVATE"}
+                          onChange={() => setMessageVisibility("PRIVATE")}
+                          disabled={submittingMessage}
+                        />
+                        <span>Private</span>
+                      </label>
+                    </div>
+                    <button
+                      type="submit"
+                      className="button button--compact"
+                      disabled={submittingMessage || !messageBody.trim()}
+                    >
+                      {submittingMessage ? "Sending…" : "Send message"}
+                    </button>
+                  </div>
+                  {messageError ? (
+                    <p className="form-error" role="alert">
+                      {messageError}
+                    </p>
+                  ) : null}
+                </form>
+              </>
             )}
           </>
         )}

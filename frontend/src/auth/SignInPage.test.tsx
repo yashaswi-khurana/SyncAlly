@@ -1,23 +1,26 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, login } from "../api/client";
+import { ApiError, apiRequest, login } from "../api/client";
 import SignInPage from "./SignInPage";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    apiRequest: vi.fn(),
     login: vi.fn(),
   };
 });
 
+const mockedApiRequest = vi.mocked(apiRequest);
 const mockedLogin = vi.mocked(login);
 
 describe("SignInPage", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    window.location.hash = "";
   });
 
   it("validates required fields before calling the API", async () => {
@@ -103,5 +106,73 @@ describe("SignInPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
 
     expect(await screen.findByText("Invalid email or password.")).toBeInTheDocument();
+  });
+
+  it("renders counterparty onboarding card when invite token is present in hash", async () => {
+    window.location.hash = "#/invite?token=valid-counterparty-token";
+
+    render(<SignInPage onSignIn={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Join via counterparty invite." })).toBeInTheDocument();
+    expect(screen.getByLabelText("Company Legal Name")).toBeInTheDocument();
+    expect(screen.getByLabelText("Country Code (2 letters)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Account & Join Deal" })).toBeInTheDocument();
+  });
+
+  it("submits counterparty onboarding form and triggers onSignIn with tokens", async () => {
+    window.location.hash = "#/invite?token=valid-counterparty-token";
+    const onSignIn = vi.fn();
+
+    mockedApiRequest.mockResolvedValueOnce({
+      status: "ACCEPTED",
+      organization_id: "org-tokyo-123",
+      organization_legal_name: "Tokyo Trade Co",
+      user_id: "user-kenji-123",
+      role: "ADMIN",
+      deal_id: "deal-tokyo-456",
+      access_token: "new-access-token",
+      refresh_token: "new-refresh-token",
+      token_type: "bearer",
+    });
+
+    render(<SignInPage onSignIn={onSignIn} />);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "kenji@tokyo.jp" },
+    });
+    fireEvent.change(screen.getByLabelText("Password (min 8 characters)"), {
+      target: { value: "password123!" },
+    });
+    fireEvent.change(screen.getByLabelText("Company Legal Name"), {
+      target: { value: "Tokyo Trade Co" },
+    });
+    fireEvent.change(screen.getByLabelText("Country Code (2 letters)"), {
+      target: { value: "JP" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Account & Join Deal" }));
+
+    await waitFor(() => {
+      expect(mockedApiRequest).toHaveBeenCalledWith(
+        "/invitations/accept",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            token: "valid-counterparty-token",
+            email: "kenji@tokyo.jp",
+            password: "password123!",
+            organization_legal_name: "Tokyo Trade Co",
+            country_code: "JP",
+          }),
+        }),
+      );
+    });
+
+    expect(onSignIn).toHaveBeenCalledWith({
+      access_token: "new-access-token",
+      refresh_token: "new-refresh-token",
+      token_type: "bearer",
+    });
+    expect(window.location.hash).toBe("#/deals/deal-tokyo-456");
   });
 });

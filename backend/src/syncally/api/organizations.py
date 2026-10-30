@@ -4,18 +4,26 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from syncally.api.auth import get_current_actor
+from syncally.api.auth import (
+    _encode_access_token,
+    bearer_scheme,
+    create_refresh_token,
+    get_current_actor,
+)
 from syncally.application.identity import ActorContext
+from syncally.application.passwords import hash_password, verify_password
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     AuditEvent,
+    Conversation,
     Deal,
     Organization,
     OrganizationMember,
@@ -24,6 +32,18 @@ from syncally.infrastructure.models import (
 
 router = APIRouter(tags=["organizations"])
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
+
+
+def get_optional_actor(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> ActorContext | None:
+    """Resolve actor if valid credentials are supplied, otherwise return None."""
+    try:
+        return get_current_actor(request, credentials, db)
+    except HTTPException:
+        return None
 
 
 class CreateOrganizationRequest(BaseModel):
@@ -66,6 +86,29 @@ class InvitationResponse(BaseModel):
 
 class AcceptInvitationRequest(BaseModel):
     token: str = Field(min_length=1)
+    # Optional credentials for unauthenticated recipient sign-up
+    email: str | None = Field(default=None, max_length=320)
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+    display_name: str | None = Field(default=None, max_length=200)
+    # Recipient counterparty organization details
+    organization_legal_name: str | None = Field(default=None, max_length=200)
+    country_code: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
+
+    @field_validator("country_code", mode="before")
+    @classmethod
+    def normalize_country_code(cls, value: object) -> object:
+        if isinstance(value, str):
+            clean = value.strip().upper()
+            return clean if clean else None
+        return value
+
+    @field_validator("organization_legal_name", mode="before")
+    @classmethod
+    def strip_org_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            clean = value.strip()
+            return clean if clean else None
+        return value
 
 
 class AcceptInvitationResponse(BaseModel):
@@ -75,6 +118,9 @@ class AcceptInvitationResponse(BaseModel):
     user_id: UUID
     role: str
     deal_id: UUID | None = None
+    access_token: str | None = None
+    refresh_token: str | None = None
+    token_type: str = "bearer"
 
 
 class OrganizationDirectoryItem(BaseModel):
@@ -459,10 +505,10 @@ def create_organization_invitation(
 )
 def accept_invitation(
     payload: AcceptInvitationRequest,
-    actor: ActorContext = Depends(get_current_actor),
+    actor: ActorContext | None = Depends(get_optional_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    """Accept an invitation token to join an organization and access linked deals."""
+    """Accept an invitation token to sign up, join an organization, or link a counterparty into a deal."""
     claims = _decode_invitation_token(payload.token)
     try:
         jti = UUID(str(claims["jti"]))
@@ -489,39 +535,137 @@ def accept_invitation(
             detail="Invitation token has already been used",
         )
 
-    org = db.scalar(
+    inviting_org = db.scalar(
         select(Organization).where(Organization.id == org_id, Organization.status == "ACTIVE")
     )
-    if org is None:
+    if inviting_org is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Inviting organization not found",
         )
 
-    existing = db.scalar(
-        select(OrganizationMember).where(
-            OrganizationMember.organization_id == org_id,
-            OrganizationMember.user_id == actor.user_id,
+    # 1. Resolve or create user
+    user: User | None = None
+    if actor is not None:
+        user = db.scalar(
+            select(User).where(User.id == actor.user_id, User.status == "ACTIVE")
         )
-    )
-    if existing is not None:
-        if existing.status == "ACTIVE":
+        if user is None:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="User already has an active membership in this organization",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Active user session not found",
             )
-        existing.role = role
-        existing.status = "ACTIVE"
     else:
+        if not payload.email or not payload.password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email and password are required to accept an invitation when not signed in",
+            )
+        clean_email = payload.email.strip().lower()
+        user = db.scalar(select(User).where(User.email == clean_email))
+        if user is not None:
+            if not verify_password(payload.password, user.password_hash):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid credentials for existing account",
+                )
+            if user.status != "ACTIVE":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User account is suspended",
+                )
+        else:
+            display_name = (payload.display_name or "").strip() or clean_email.split("@")[0]
+            user = User(
+                email=clean_email,
+                display_name=display_name,
+                password_hash=hash_password(payload.password),
+                status="ACTIVE",
+            )
+            db.add(user)
+            db.flush()
+
+    # 2. Handle organization membership & counterparty organization creation
+    if payload.organization_legal_name:
+        # Counterparty onboarding: create recipient's organization
+        recipient_org = Organization(
+            legal_name=payload.organization_legal_name,
+            country_code=payload.country_code or "US",
+            status="ACTIVE",
+        )
+        db.add(recipient_org)
+        db.flush()
         db.add(
             OrganizationMember(
-                organization_id=org_id,
-                user_id=actor.user_id,
-                role=role,
+                organization_id=recipient_org.id,
+                user_id=user.id,
+                role="ADMIN",
                 status="ACTIVE",
             )
         )
+        effective_org = recipient_org
+        effective_role = "ADMIN"
+    else:
+        # Team membership invitation to the inviting org
+        existing = db.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == org_id,
+                OrganizationMember.user_id == user.id,
+            )
+        )
+        if existing is not None:
+            if existing.status == "ACTIVE":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="User already has an active membership in this organization",
+                )
+            existing.role = role
+            existing.status = "ACTIVE"
+        else:
+            db.add(
+                OrganizationMember(
+                    organization_id=org_id,
+                    user_id=user.id,
+                    role=role,
+                    status="ACTIVE",
+                )
+            )
+        effective_org = inviting_org
+        effective_role = role
 
+    # 3. Handle immediate deal linking
+    if deal_id_str:
+        deal_uuid = UUID(deal_id_str)
+        deal = db.scalar(select(Deal).where(Deal.id == deal_uuid).with_for_update())
+        if deal is not None:
+            if payload.organization_legal_name:
+                if deal.buyer_organization_id == org_id:
+                    deal.seller_organization_id = effective_org.id
+                elif deal.seller_organization_id == org_id:
+                    deal.buyer_organization_id = effective_org.id
+                deal.version = deal.version + 1
+
+                # Ensure participant conversation exists for effective_org
+                existing_conv = db.scalar(
+                    select(Conversation).where(
+                        Conversation.deal_id == deal.id,
+                        Conversation.participant_organization_id == effective_org.id,
+                    )
+                )
+                if existing_conv is None:
+                    db.add(
+                        Conversation(
+                            deal_id=deal.id,
+                            participant_organization_id=effective_org.id,
+                        )
+                    )
+
+    # 4. Issue auth tokens for seamless sign-in
+    now = datetime.now(UTC)
+    access_token = _encode_access_token(user.id, now)
+    refresh_token = create_refresh_token(db, user.id, now)
+
+    # 5. Record single-use AuditEvent
     db.add(
         AuditEvent(
             id=jti,
@@ -529,13 +673,14 @@ def accept_invitation(
             aggregate_id=jti,
             event_type="invitation.accepted",
             actor_type="USER",
-            actor_id=str(actor.user_id),
-            occurred_at=datetime.now(UTC),
+            actor_id=str(user.id),
+            occurred_at=now,
             payload={
-                "organization_id": str(org_id),
-                "user_id": str(actor.user_id),
+                "organization_id": str(effective_org.id),
+                "inviting_organization_id": str(org_id),
+                "user_id": str(user.id),
                 "deal_id": deal_id_str,
-                "role": role,
+                "role": effective_role,
             },
         )
     )
@@ -550,11 +695,14 @@ def accept_invitation(
 
     return {
         "status": "ACCEPTED",
-        "organization_id": str(org.id),
-        "organization_legal_name": org.legal_name,
-        "user_id": str(actor.user_id),
-        "role": role,
+        "organization_id": str(effective_org.id),
+        "organization_legal_name": effective_org.legal_name,
+        "user_id": str(user.id),
+        "role": effective_role,
         "deal_id": deal_id_str,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
     }
 
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   ApiError,
+  apiRequest,
   getCurrentAgreement,
   getDeal,
   getOrganization,
@@ -63,6 +64,20 @@ export default function DealDetailPage({
   const [freshnessChecked, setFreshnessChecked] = useState(false);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [counterpartyName, setCounterpartyName] = useState("Counterparty");
+
+  // Shareable Counterparty Invitation Modal State
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [adminOrganizations, setAdminOrganizations] = useState<Organization[]>([]);
+  const [selectedInviteOrgId, setSelectedInviteOrgId] = useState("");
+  const [generatingInvite, setGeneratingInvite] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [generatedInvite, setGeneratedInvite] = useState<{
+    token: string;
+    invite_url: string;
+    organization_id: string;
+    deal_id: string | null;
+  } | null>(null);
+  const [copiedInvite, setCopiedInvite] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -357,6 +372,80 @@ export default function DealDetailPage({
     }
   }
 
+  async function handleOpenInviteModal() {
+    if (state.status !== "ready") return;
+    setShowInviteModal(true);
+    setInviteError(null);
+    setGeneratedInvite(null);
+    setCopiedInvite(false);
+    try {
+      const orgs = await listOrganizations();
+      const admins = orgs.filter((org) => org.role === "ADMIN");
+      setAdminOrganizations(admins);
+      const currentDeal = state.deal;
+      const dealAdmin = admins.find(
+        (org) =>
+          org.id === currentDeal.buyer_organization_id ||
+          org.id === currentDeal.seller_organization_id,
+      );
+      if (dealAdmin) {
+        setSelectedInviteOrgId(dealAdmin.id);
+      } else if (admins.length > 0) {
+        setSelectedInviteOrgId(admins[0].id);
+      }
+    } catch (caught) {
+      setInviteError(describeError(caught));
+    }
+  }
+
+  async function handleGenerateInvite(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (state.status !== "ready") return;
+    const targetOrgId =
+      selectedInviteOrgId || (adminOrganizations[0] ? adminOrganizations[0].id : "");
+    if (!targetOrgId) {
+      setInviteError("Please select an organization where you are an admin.");
+      return;
+    }
+
+    setGeneratingInvite(true);
+    setInviteError(null);
+    try {
+      const res = await apiRequest<{
+        token: string;
+        invite_url: string;
+        organization_id: string;
+        organization_legal_name: string;
+        deal_id: string | null;
+        role: string;
+        expires_at: string;
+      }>(`/organizations/${encodeURIComponent(targetOrgId)}/invitations`, {
+        method: "POST",
+        body: JSON.stringify({
+          deal_id: state.deal.id,
+        }),
+      });
+      setGeneratedInvite(res);
+    } catch (caught) {
+      setInviteError(describeError(caught));
+    } finally {
+      setGeneratingInvite(false);
+    }
+  }
+
+  async function handleCopyInviteLink() {
+    if (!generatedInvite) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(generatedInvite.invite_url);
+      }
+      setCopiedInvite(true);
+      setTimeout(() => setCopiedInvite(false), 2500);
+    } catch {
+      setCopiedInvite(false);
+    }
+  }
+
   if (state.status === "loading") {
     return (
       <section className="card" aria-live="polite">
@@ -490,6 +579,13 @@ export default function DealDetailPage({
               >
                 Start Conversation <span aria-hidden="true">↓</span>
               </button>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={handleOpenInviteModal}
+              >
+                Invite Counterparty
+              </button>
             </div>
           </section>
         ) : null}
@@ -523,6 +619,13 @@ export default function DealDetailPage({
                 <span>Deal version {deal.version}</span>
               </div>
               <div className="deal-room__actions">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleOpenInviteModal}
+                >
+                  Invite Counterparty
+                </button>
                 <button type="button" className="button deal-room__refresh" onClick={retryDeal}>
                   Refresh room <span aria-hidden="true">↗</span>
                 </button>
@@ -578,6 +681,114 @@ export default function DealDetailPage({
             setFreshnessError(null);
           }}
         />
+
+        {showInviteModal ? (
+          <div
+            className="manual-fact-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="deal-invite-modal-title"
+          >
+            <div className="manual-fact-modal">
+              <div className="panel-head">
+                <div>
+                  <span className="eyebrow">Onboarding Link</span>
+                  <h3 id="deal-invite-modal-title" className="display" style={{ fontSize: "1.25rem" }}>
+                    Invite Counterparty
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  className="button ghost"
+                  onClick={() => setShowInviteModal(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p className="muted" style={{ marginBottom: 16 }}>
+                Generate a signed, single-use onboarding link for your counterparty. When opened,
+                they will be guided to sign up, register their entity, and link directly into this deal.
+              </p>
+
+              <form onSubmit={handleGenerateInvite} className="form" style={{ gap: 14 }}>
+                <div className="field">
+                  <label htmlFor="deal-invite-org-select">Inviting Organization</label>
+                  <select
+                    id="deal-invite-org-select"
+                    value={selectedInviteOrgId}
+                    onChange={(e) => setSelectedInviteOrgId(e.target.value)}
+                    disabled={generatingInvite || adminOrganizations.length === 0}
+                  >
+                    {adminOrganizations.length === 0 ? (
+                      <option value="">No admin organizations available</option>
+                    ) : (
+                      adminOrganizations.map((org) => (
+                        <option key={org.id} value={org.id}>
+                          {org.legal_name} ({org.country_code})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                {inviteError ? (
+                  <p className="form-error" role="alert">
+                    {inviteError}
+                  </p>
+                ) : null}
+
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="submit"
+                    className="button"
+                    disabled={generatingInvite || adminOrganizations.length === 0}
+                  >
+                    {generatingInvite ? "Generating link…" : "Generate Shareable Link"}
+                  </button>
+                </div>
+              </form>
+
+              {generatedInvite ? (
+                <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--line)" }}>
+                  <span className="eyebrow">Shareable Invitation Link</span>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <input
+                      type="text"
+                      readOnly
+                      value={generatedInvite.invite_url}
+                      className="mono"
+                      style={{ flex: 1, fontSize: "0.85rem" }}
+                    />
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={handleCopyInviteLink}
+                    >
+                      {copiedInvite ? "Copied!" : "Copy Link"}
+                    </button>
+                  </div>
+                  <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        padding: "2px 8px",
+                        borderRadius: "4px",
+                        background: "rgba(56, 211, 159, 0.15)",
+                        color: "#38d39f",
+                        fontSize: "0.75rem",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Expires in 7 days · Single use · Pre-linked to this deal
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
     </Reveal>
   );

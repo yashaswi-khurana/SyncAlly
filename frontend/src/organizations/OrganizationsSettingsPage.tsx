@@ -52,6 +52,8 @@ export default function OrganizationsSettingsPage() {
 
   // Accept Invitation Flow State
   const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [acceptOrgName, setAcceptOrgName] = useState("");
+  const [acceptCountryCode, setAcceptCountryCode] = useState("US");
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState<string | null>(null);
   const [acceptedResult, setAcceptedResult] = useState<AcceptInvitationResponse | null>(null);
@@ -145,9 +147,19 @@ export default function OrganizationsSettingsPage() {
     setAccepting(true);
     setAcceptError(null);
     try {
+      const payload: {
+        token: string;
+        organization_legal_name?: string;
+        country_code?: string;
+      } = { token: inviteToken };
+      if (acceptOrgName.trim()) {
+        payload.organization_legal_name = acceptOrgName.trim();
+        payload.country_code = acceptCountryCode.trim().toUpperCase() || "US";
+      }
+
       const res = await apiRequest<AcceptInvitationResponse>("/invitations/accept", {
         method: "POST",
-        body: JSON.stringify({ token: inviteToken }),
+        body: JSON.stringify(payload),
       });
       setAcceptedResult(res);
     } catch (caught) {
@@ -343,6 +355,32 @@ export default function OrganizationsSettingsPage() {
                   You have received an invitation to collaborate with a counterparty on SyncAlly.
                   Accepting will grant your account access to trade documents and bilateral deals.
                 </p>
+
+                <div className="field" style={{ marginBottom: 12 }}>
+                  <label htmlFor="accept-org-name">Your Company Legal Name (Optional)</label>
+                  <input
+                    id="accept-org-name"
+                    type="text"
+                    placeholder="Leave blank to join inviting organization"
+                    value={acceptOrgName}
+                    onChange={(e) => setAcceptOrgName(e.target.value)}
+                  />
+                  <p className="hint">If provided, creates your counterparty company and links into the deal.</p>
+                </div>
+
+                {acceptOrgName.trim() ? (
+                  <div className="field" style={{ marginBottom: 12 }}>
+                    <label htmlFor="accept-country-code">Country Code (2 letters)</label>
+                    <input
+                      id="accept-country-code"
+                      type="text"
+                      maxLength={2}
+                      placeholder="US"
+                      value={acceptCountryCode}
+                      onChange={(e) => setAcceptCountryCode(e.target.value.toUpperCase())}
+                    />
+                  </div>
+                ) : null}
 
                 {acceptError && (
                   <p className="form-error" role="alert" style={{ marginBottom: 16 }}>

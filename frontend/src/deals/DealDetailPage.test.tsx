@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  apiRequest,
   createDealMessage,
   getCommercialDocumentDraft,
   getCurrentAgreement,
@@ -20,6 +21,7 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    apiRequest: vi.fn(),
     createDealMessage: vi.fn(),
     getCommercialDocumentDraft: vi.fn(),
     getDeal: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock("../api/client", async (importOriginal) => {
   };
 });
 
+const mockedApiRequest = vi.mocked(apiRequest);
 const mockedGetDeal = vi.mocked(getDeal);
 const mockedGetOrganization = vi.mocked(getOrganization);
 const mockedCreateDealMessage = vi.mocked(createDealMessage);
@@ -842,5 +845,82 @@ describe("DealDetailPage", () => {
       unmount();
       vi.useRealTimers();
     }
+  });
+
+  it("renders the Invite Counterparty button and opens the invitation modal", async () => {
+    mockedGetDeal.mockResolvedValue(DEAL);
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
+    mockedListDealMessages.mockResolvedValue([]);
+    mockedListOrganizations.mockResolvedValue([
+      {
+        id: DEAL.buyer_organization_id,
+        legal_name: "Buyer Co",
+        country_code: "US",
+        role: "ADMIN",
+      },
+    ]);
+
+    render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} />);
+
+    const inviteButtons = await screen.findAllByRole("button", { name: "Invite Counterparty" });
+    expect(inviteButtons.length).toBeGreaterThan(0);
+
+    fireEvent.click(inviteButtons[0]);
+
+    expect(await screen.findByRole("heading", { name: "Invite Counterparty" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Shareable Link" })).toBeInTheDocument();
+  });
+
+  it("generates a counterparty invitation link and copies to clipboard", async () => {
+    mockedGetDeal.mockResolvedValue(DEAL);
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
+    mockedListDealMessages.mockResolvedValue([]);
+    mockedListOrganizations.mockResolvedValue([
+      {
+        id: DEAL.buyer_organization_id,
+        legal_name: "Buyer Co",
+        country_code: "US",
+        role: "ADMIN",
+      },
+    ]);
+
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+      writable: true,
+    });
+
+    mockedApiRequest.mockResolvedValueOnce({
+      token: "test-deal-token-123",
+      invite_url: "https://app.syncally.trade/#/invite?token=test-deal-token-123",
+      organization_id: DEAL.buyer_organization_id,
+      organization_legal_name: "Buyer Co",
+      deal_id: "deal-1",
+      role: "MEMBER",
+      expires_at: "2026-11-06T12:00:00Z",
+    });
+
+    render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} />);
+
+    const inviteButtons = await screen.findAllByRole("button", { name: "Invite Counterparty" });
+    fireEvent.click(inviteButtons[0]);
+
+    const generateBtn = await screen.findByRole("button", { name: "Generate Shareable Link" });
+    fireEvent.click(generateBtn);
+
+    expect(mockedApiRequest).toHaveBeenCalledWith(
+      `/organizations/${DEAL.buyer_organization_id}/invitations`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ deal_id: "deal-1" }),
+      }),
+    );
+
+    const copyBtn = await screen.findByRole("button", { name: "Copy Link" });
+    fireEvent.click(copyBtn);
+
+    expect(writeTextMock).toHaveBeenCalledWith("https://app.syncally.trade/#/invite?token=test-deal-token-123");
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
   });
 });

@@ -327,3 +327,99 @@ class OrganizationInvitationTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("already has an active membership", ctx.exception.detail)
+
+    def test_unauthenticated_counterparty_signup_and_deal_linking(self) -> None:
+        admin = self._user("admin@buyer.com")
+        buyer_org = self._organization(admin)
+        placeholder_seller = Organization(legal_name="Pending Seller", country_code="US")
+        self.db.add(placeholder_seller)
+        self.db.commit()
+
+        deal = self._deal(buyer_org, placeholder_seller)
+        actor_admin = ActorContext(user_id=admin.id, organization_ids=frozenset({buyer_org.id}))
+
+        invitation = create_organization_invitation(
+            organization_id=buyer_org.id,
+            payload=CreateInvitationRequest(deal_id=deal.id),
+            actor=actor_admin,
+            db=self.db,
+        )
+
+        # Unauthenticated counterparty accepts and creates their organization
+        payload = AcceptInvitationRequest(
+            token=invitation["token"],
+            email="kenji@tokyo-trade.jp",
+            password="SecurePassword123!",
+            display_name="Kenji Sato",
+            organization_legal_name="Tokyo Exporters Ltd",
+            country_code="JP",
+        )
+
+        result = accept_invitation(
+            payload=payload,
+            actor=None,
+            db=self.db,
+        )
+
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(result["organization_legal_name"], "Tokyo Exporters Ltd")
+        self.assertEqual(result["deal_id"], str(deal.id))
+        self.assertEqual(result["role"], "ADMIN")
+        self.assertIsNotNone(result["access_token"])
+        self.assertIsNotNone(result["refresh_token"])
+
+        # Check recipient user was created
+        created_user = self.db.scalar(select(User).where(User.email == "kenji@tokyo-trade.jp"))
+        self.assertIsNotNone(created_user)
+        self.assertEqual(created_user.display_name, "Kenji Sato")
+
+        # Check recipient organization was created
+        created_org = self.db.scalar(
+            select(Organization).where(Organization.legal_name == "Tokyo Exporters Ltd")
+        )
+        self.assertIsNotNone(created_org)
+        self.assertEqual(created_org.country_code, "JP")
+
+        # Check user is ADMIN of the created organization
+        membership = self.db.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == created_org.id,
+                OrganizationMember.user_id == created_user.id,
+            )
+        )
+        self.assertIsNotNone(membership)
+        self.assertEqual(membership.role, "ADMIN")
+
+        # Verify deal counterparty (seller) is now linked to Tokyo Exporters Ltd!
+        self.db.refresh(deal)
+        self.assertEqual(deal.seller_organization_id, created_org.id)
+
+        # Second attempt with the same token must fail with 409
+        with self.assertRaises(HTTPException) as ctx:
+            accept_invitation(
+                payload=payload,
+                actor=None,
+                db=self.db,
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_unauthenticated_acceptance_requires_credentials(self) -> None:
+        admin = self._user("admin@example.com")
+        org = self._organization(admin)
+        actor_admin = ActorContext(user_id=admin.id, organization_ids=frozenset({org.id}))
+
+        invitation = create_organization_invitation(
+            organization_id=org.id,
+            payload=CreateInvitationRequest(),
+            actor=actor_admin,
+            db=self.db,
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            accept_invitation(
+                payload=AcceptInvitationRequest(token=invitation["token"]),
+                actor=None,
+                db=self.db,
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Email and password are required", ctx.exception.detail)

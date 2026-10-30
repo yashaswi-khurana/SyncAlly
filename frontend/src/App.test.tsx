@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -190,6 +190,27 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Organization IDs" }),
     ).toBeInTheDocument();
+  });
+
+  it("lets an authenticated user accept a pending invitation before onboarding", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/invite?token=pending-team-token";
+    mockedListOrganizations.mockResolvedValue([]);
+
+    render(<App />);
+
+    // Let the organization lookup settle so a zero-org user would otherwise
+    // trigger the first-run onboarding wizard.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Accept Invitation" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Set up your trading organization" }),
+    ).not.toBeInTheDocument();
   });
 
   it("guides a new user with 0 organizations through the setup wizard to create an organization and routes to deal register with toast", async () => {

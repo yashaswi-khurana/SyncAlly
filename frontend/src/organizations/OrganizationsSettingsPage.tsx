@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApiError, apiRequest, listOrganizations } from "../api/client";
@@ -57,6 +57,8 @@ export default function OrganizationsSettingsPage() {
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState<string | null>(null);
   const [acceptedResult, setAcceptedResult] = useState<AcceptInvitationResponse | null>(null);
+  // Tracks which token the accept outcome above belongs to, so a new invite starts clean.
+  const lastInviteTokenRef = useRef<string | null>(null);
 
   // Extract invite token from hash on mount and hashchange
   useEffect(() => {
@@ -64,15 +66,15 @@ export default function OrganizationsSettingsPage() {
       const hash = window.location.hash;
       const rawPath = hash.startsWith("#") ? hash.slice(1) : hash;
       const [, queryString] = rawPath.split("?");
-      if (queryString) {
-        const params = new URLSearchParams(queryString);
-        const token = params.get("token");
-        if (token) {
-          setInviteToken(token);
-          return;
-        }
+      const token = (queryString ? new URLSearchParams(queryString).get("token") : null) ?? null;
+      if (token !== lastInviteTokenRef.current) {
+        // A different invitation is being opened: discard the previous invitation's outcome
+        // so its result or error cannot leak into the new accept flow.
+        lastInviteTokenRef.current = token;
+        setAcceptedResult(null);
+        setAcceptError(null);
       }
-      setInviteToken(null);
+      setInviteToken(token);
     }
 
     checkHashForInvite();

@@ -498,6 +498,47 @@ def create_organization_invitation(
     }
 
 
+def _deal_awaiting_counterparty(db: Session, deal_id: UUID, inviting_org_id: UUID) -> Deal:
+    """Load the deal an invitation may link a counterparty into, or reject the acceptance.
+
+    Linking replaces the placeholder party with the organization the invitee creates, so it is
+    only safe while the inviting organization still participates, the deal has not moved past
+    DRAFT, and the other party is an unclaimed shell. Rejecting up front keeps the deal
+    untouched and avoids creating a conversation for a non-participant.
+    """
+    deal = db.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+    if deal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    if inviting_org_id == deal.buyer_organization_id:
+        counterparty_org_id = deal.seller_organization_id
+    elif inviting_org_id == deal.seller_organization_id:
+        counterparty_org_id = deal.buyer_organization_id
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Inviting organization is no longer a participant in this deal",
+        )
+    if deal.status != "DRAFT":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Deal is no longer open for counterparty onboarding",
+        )
+    claimed_counterparty = db.scalar(
+        select(OrganizationMember.id)
+        .where(
+            OrganizationMember.organization_id == counterparty_org_id,
+            OrganizationMember.status == "ACTIVE",
+        )
+        .limit(1)
+    )
+    if claimed_counterparty is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Deal counterparty is already claimed by an active organization",
+        )
+    return deal
+
+
 @router.post(
     "/invitations/accept",
     status_code=status.HTTP_200_OK,
@@ -513,6 +554,8 @@ def accept_invitation(
     try:
         jti = UUID(str(claims["jti"]))
         org_id = UUID(str(claims["org_id"]))
+        inviter_user_id = UUID(str(claims["inviter_user_id"]))
+        deal_uuid = UUID(str(claims["deal_id"])) if claims.get("deal_id") else None
     except (ValueError, KeyError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -543,6 +586,29 @@ def accept_invitation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Inviting organization not found",
         )
+
+    inviter_admin = db.scalar(
+        select(OrganizationMember.id)
+        .join(User, User.id == OrganizationMember.user_id)
+        .where(
+            OrganizationMember.organization_id == org_id,
+            OrganizationMember.user_id == inviter_user_id,
+            OrganizationMember.role == "ADMIN",
+            OrganizationMember.status == "ACTIVE",
+            User.status == "ACTIVE",
+        )
+    )
+    if inviter_admin is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inviter is no longer an active organization admin",
+        )
+
+    # Validate the deal claim before writing any user or organization state, so a stale or
+    # invalid invitation cannot leave partial changes behind.
+    linking_deal: Deal | None = None
+    if deal_uuid is not None and payload.organization_legal_name:
+        linking_deal = _deal_awaiting_counterparty(db, deal_uuid, org_id)
 
     # 1. Resolve or create user
     user: User | None = None
@@ -634,38 +700,31 @@ def accept_invitation(
         effective_role = role
 
     # 3. Handle immediate deal linking
-    if deal_id_str:
-        deal_uuid = UUID(deal_id_str)
-        deal = db.scalar(select(Deal).where(Deal.id == deal_uuid).with_for_update())
-        if deal is not None:
-            if payload.organization_legal_name:
-                if deal.buyer_organization_id == org_id:
-                    deal.seller_organization_id = effective_org.id
-                elif deal.seller_organization_id == org_id:
-                    deal.buyer_organization_id = effective_org.id
-                deal.version = deal.version + 1
+    if linking_deal is not None:
+        if linking_deal.buyer_organization_id == org_id:
+            linking_deal.seller_organization_id = effective_org.id
+        else:
+            linking_deal.buyer_organization_id = effective_org.id
+        linking_deal.version = linking_deal.version + 1
 
-                # Ensure participant conversation exists for effective_org
-                existing_conv = db.scalar(
-                    select(Conversation).where(
-                        Conversation.deal_id == deal.id,
-                        Conversation.participant_organization_id == effective_org.id,
-                    )
+        # Ensure participant conversation exists for effective_org
+        existing_conv = db.scalar(
+            select(Conversation).where(
+                Conversation.deal_id == linking_deal.id,
+                Conversation.participant_organization_id == effective_org.id,
+            )
+        )
+        if existing_conv is None:
+            db.add(
+                Conversation(
+                    deal_id=linking_deal.id,
+                    participant_organization_id=effective_org.id,
                 )
-                if existing_conv is None:
-                    db.add(
-                        Conversation(
-                            deal_id=deal.id,
-                            participant_organization_id=effective_org.id,
-                        )
-                    )
+            )
 
-    # 4. Issue auth tokens for seamless sign-in
+    # 4. Record single-use AuditEvent and flush it before issuing tokens, so a
+    # duplicate token is rejected before any acceptance side effects commit.
     now = datetime.now(UTC)
-    access_token = _encode_access_token(user.id, now)
-    refresh_token = create_refresh_token(db, user.id, now)
-
-    # 5. Record single-use AuditEvent
     db.add(
         AuditEvent(
             id=jti,
@@ -678,6 +737,7 @@ def accept_invitation(
             payload={
                 "organization_id": str(effective_org.id),
                 "inviting_organization_id": str(org_id),
+                "inviter_user_id": str(inviter_user_id),
                 "user_id": str(user.id),
                 "deal_id": deal_id_str,
                 "role": effective_role,
@@ -685,6 +745,11 @@ def accept_invitation(
         )
     )
     try:
+        db.flush()
+
+        # 5. Issue auth tokens for seamless sign-in in the same transaction.
+        access_token = _encode_access_token(user.id, now)
+        refresh_token = create_refresh_token(db, user.id, now, commit=False)
         db.commit()
     except IntegrityError as exc:
         db.rollback()

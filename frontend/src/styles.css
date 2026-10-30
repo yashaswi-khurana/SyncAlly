@@ -3022,6 +3022,69 @@ body::after {
   gap: 12px;
 }
 
+.invoice-recipient-dialog {
+  width: min(100%, 560px);
+}
+
+.invoice-recipient-dialog__details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.invoice-recipient-dialog__details > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.invoice-recipient-dialog__details dt {
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.invoice-recipient-dialog__details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.invoice-recipient-dialog__amount {
+  font-family: var(--display);
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.invoice-recipient-dialog__notice {
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.invoice-recipient-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+@media (max-width: 560px) {
+  .invoice-recipient-dialog__details {
+    grid-template-columns: 1fr;
+  }
+
+  .invoice-recipient-dialog__actions > * {
+    flex: 1 1 100%;
+  }
+}
+
 @media (max-width: 720px) {
   .agreement-review__summary {
     grid-template-columns: 1fr;

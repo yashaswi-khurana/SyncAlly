@@ -151,4 +151,49 @@ describe("OrganizationsSettingsPage", () => {
       await screen.findByText("Invitation token has expired"),
     ).toBeInTheDocument();
   });
+
+  it("allows entering counterparty company details and submits to accept endpoint", async () => {
+    window.location.hash = "#/invite?token=invited-token-counterparty";
+
+    mockedApiRequest.mockResolvedValueOnce({
+      status: "ACCEPTED",
+      organization_id: "org-new-counterparty",
+      organization_legal_name: "Tokyo Maritime Ltd",
+      user_id: "user-tokyo-789",
+      role: "ADMIN",
+      deal_id: "deal-123",
+    });
+
+    render(<OrganizationsSettingsPage />);
+
+    expect(screen.getByRole("heading", { name: "Accept Invitation" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Your Company Legal Name (Optional)"), {
+      target: { value: "Tokyo Maritime Ltd" },
+    });
+    fireEvent.change(screen.getByLabelText("Country Code (2 letters)"), {
+      target: { value: "JP" },
+    });
+
+    const acceptBtn = screen.getByRole("button", { name: "Accept & Join" });
+    fireEvent.click(acceptBtn);
+
+    await waitFor(() => {
+      expect(mockedApiRequest).toHaveBeenCalledWith(
+        "/invitations/accept",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            token: "invited-token-counterparty",
+            organization_legal_name: "Tokyo Maritime Ltd",
+            country_code: "JP",
+          }),
+        }),
+      );
+    });
+
+    expect(
+      await screen.findByText(/Successfully joined Tokyo Maritime Ltd!/i),
+    ).toBeInTheDocument();
+  });
 });

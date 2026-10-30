@@ -178,6 +178,7 @@ describe("PaymentStatusPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
 
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith("deal-1", expect.any(String));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Refresh status" }));
     expect(await screen.findByRole("status")).toHaveTextContent(
       "The payment request is queued for the backend worker.",
     );
@@ -231,7 +232,7 @@ describe("PaymentStatusPanel", () => {
     expect(dialog).toBeInTheDocument();
     expect(dialog).toHaveAttribute("aria-modal", "true");
 
-    expect(screen.getByText("Acme Industrial Corp")).toBeInTheDocument();
+    expect(await screen.findByText("Acme Industrial Corp")).toBeInTheDocument();
     expect(screen.getByText("US")).toBeInTheDocument();
     expect(screen.getByText("Resolved by the backend at issuance")).toBeInTheDocument();
     expect(screen.getByText("USD 22,500.00")).toBeInTheDocument();
@@ -244,6 +245,41 @@ describe("PaymentStatusPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
 
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith("deal-1", expect.any(String));
+  });
+
+  it("sets panel ready state without waiting for slow or pending buyer organization lookup", async () => {
+    mockedListPaymentStatuses.mockResolvedValue([]);
+    mockedGetCurrentAgreement.mockResolvedValue({
+      status: "COMMITTED",
+      terms: {
+        buyer_id: "buyer-org-1",
+        seller_id: "seller-org-1",
+        payment_terms: [
+          {
+            amount: { amount: "5000", currency: "USD" },
+            trigger: "DELIVERY",
+            due_condition: "NET_30",
+          },
+        ],
+      },
+    } as unknown as AgreementVersion);
+    mockedListOrganizations.mockResolvedValue([
+      { id: "seller-org-1", legal_name: "Seller Co", country_code: "CA", role: "ADMIN" },
+    ]);
+    // Buyer lookup that stays pending indefinitely:
+    mockedGetOrganization.mockReturnValue(new Promise(() => {}));
+
+    render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
+
+    // The panel should become ready immediately without waiting for directory lookup
+    expect(await screen.findByRole("button", { name: "Request Payment" })).toBeInTheDocument();
+    expect(screen.queryByText(/loading payment status/i)).not.toBeInTheDocument();
+
+    // Opening confirmation dialog shows graceful fallbacks
+    fireEvent.click(screen.getByRole("button", { name: "Request Payment" }));
+    expect(await screen.findByRole("dialog", { name: "Confirm Invoice Recipient" })).toBeInTheDocument();
+    expect(screen.getAllByText("Not available")).toHaveLength(2); // legalName and countryCode
+    expect(screen.getByText("USD 5,000.00")).toBeInTheDocument();
   });
 
   it("displays recipient billing email from existing payment status when present", async () => {
@@ -291,13 +327,15 @@ describe("PaymentStatusPanel", () => {
 
     render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Request Payment" }));
+    const requestButton = await screen.findByRole("button", { name: "Request Payment" });
+    fireEvent.click(requestButton);
 
     expect(await screen.findByRole("dialog", { name: "Confirm Invoice Recipient" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(screen.queryByRole("dialog", { name: "Confirm Invoice Recipient" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(requestButton);
     expect(mockedAuthorizeDealPayment).not.toHaveBeenCalled();
   });
 
@@ -310,13 +348,15 @@ describe("PaymentStatusPanel", () => {
 
     render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Request Payment" }));
+    const requestButton = await screen.findByRole("button", { name: "Request Payment" });
+    fireEvent.click(requestButton);
 
     expect(await screen.findByRole("dialog", { name: "Confirm Invoice Recipient" })).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: "Escape" });
 
     expect(screen.queryByRole("dialog", { name: "Confirm Invoice Recipient" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(requestButton);
     expect(mockedAuthorizeDealPayment).not.toHaveBeenCalled();
   });
 
@@ -329,13 +369,15 @@ describe("PaymentStatusPanel", () => {
 
     render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Request Payment" }));
+    const requestButton = await screen.findByRole("button", { name: "Request Payment" });
+    fireEvent.click(requestButton);
 
     expect(await screen.findByRole("dialog", { name: "Confirm Invoice Recipient" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close recipient confirmation" }));
 
     expect(screen.queryByRole("dialog", { name: "Confirm Invoice Recipient" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(requestButton);
     expect(mockedAuthorizeDealPayment).not.toHaveBeenCalled();
   });
 

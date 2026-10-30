@@ -127,11 +127,35 @@ export default function PaymentStatusPanel({
   const [authorizing, setAuthorizing] = useState(false);
   const [authorizationError, setAuthorizationError] = useState("");
   const [authorizationNotice, setAuthorizationNotice] = useState("");
-  const [recipientPreview, setRecipientPreview] = useState<RecipientPreview | null>(null);
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const idempotencyKey = useRef<string | null>(null);
   const requestButtonRef = useRef<HTMLButtonElement>(null);
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
   const confirmationDialogRef = useRef<HTMLDivElement>(null);
+
+  const recipientPreview: RecipientPreview | null =
+    state.status === "ready"
+      ? {
+          legalName: textOrFallback(
+            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_legal_name ??
+              (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_name ??
+              state.buyerOrganization?.legal_name,
+            "Not available",
+          ),
+          countryCode: textOrFallback(
+            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_country_code ??
+              state.buyerOrganization?.country_code,
+            "Not available",
+          ),
+          billingEmail: textOrFallback(
+            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_email ??
+              (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.billing_email ??
+              (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.email,
+            "Resolved by the backend at issuance",
+          ),
+          amount: state.milestone,
+        }
+      : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -144,25 +168,32 @@ export default function PaymentStatusPanel({
       listOrganizations(),
     ]).then(
       ([payments, agreement, organizations]) => {
+        if (cancelled) return;
+
+        setState({
+          status: "ready",
+          payments,
+          agreementCommitted: agreement?.status === "COMMITTED",
+          sellerMember: organizations.some((organization) => organization.id === sellerOrganizationId),
+          buyerOrganization: null,
+          milestone: firstMilestoneAmount(payments, agreement),
+        });
+
         // The buyer's registered country is not part of the payment payload.
         // Resolve it from the public organization directory via the agreement's
-        // buyer party or explicit prop, but never let a directory failure hide
-        // the saved payment state.
+        // buyer party or explicit prop, but never let a directory failure or
+        // latency block the ready payment state.
         const buyerOrgId = buyerOrganizationId ?? agreement?.terms?.buyer_id;
-        const buyerOrganizationPromise = buyerOrgId
-          ? getOrganization(buyerOrgId).catch(() => null)
-          : Promise.resolve(null);
-        void buyerOrganizationPromise.then((buyerOrganization) => {
-          if (cancelled) return;
-          setState({
-            status: "ready",
-            payments,
-            agreementCommitted: agreement?.status === "COMMITTED",
-            sellerMember: organizations.some((organization) => organization.id === sellerOrganizationId),
-            buyerOrganization,
-            milestone: firstMilestoneAmount(payments, agreement),
+        if (!buyerOrgId) return;
+
+        void getOrganization(buyerOrgId)
+          .catch(() => null)
+          .then((buyerOrganization) => {
+            if (cancelled || !buyerOrganization) return;
+            setState((prev) =>
+              prev.status === "ready" ? { ...prev, buyerOrganization } : prev,
+            );
           });
-        });
       },
       (caught: unknown) => {
         if (cancelled) return;
@@ -213,7 +244,11 @@ export default function PaymentStatusPanel({
     document.addEventListener("keydown", handleDialogKeyDown);
     return () => {
       document.removeEventListener("keydown", handleDialogKeyDown);
-      if (focusReturnTarget?.isConnected) focusReturnTarget.focus();
+      if (focusReturnTarget?.isConnected && !focusReturnTarget.disabled) {
+        focusReturnTarget.focus();
+      } else if (refreshButtonRef.current?.isConnected && !refreshButtonRef.current.disabled) {
+        refreshButtonRef.current.focus();
+      }
     };
   }, [confirmationOpen]);
 
@@ -226,25 +261,6 @@ export default function PaymentStatusPanel({
 
   function openRecipientConfirmation() {
     if (state.status !== "ready") return;
-
-    const latestPayment = state.payments[0] as RecipientPaymentStatus | undefined;
-    setRecipientPreview({
-      legalName: textOrFallback(
-        latestPayment?.recipient_legal_name ?? latestPayment?.recipient_name ?? state.buyerOrganization?.legal_name,
-        "Not available",
-      ),
-      countryCode: textOrFallback(
-        latestPayment?.recipient_country_code ?? state.buyerOrganization?.country_code,
-        "Not available",
-      ),
-      billingEmail: textOrFallback(
-        latestPayment?.recipient_email ??
-          (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.billing_email ??
-          (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.email,
-        "Resolved by the backend at issuance",
-      ),
-      amount: state.milestone,
-    });
     setConfirmationOpen(true);
   }
 
@@ -285,7 +301,12 @@ export default function PaymentStatusPanel({
           <span className="eyebrow">Backend confirmed</span>
           <h2 id="payment-status-heading">Payment status</h2>
         </div>
-        <button type="button" className="button secondary button--compact" onClick={retry}>
+        <button
+          ref={refreshButtonRef}
+          type="button"
+          className="button secondary button--compact"
+          onClick={retry}
+        >
           Refresh status
         </button>
       </div>

@@ -532,6 +532,52 @@ class OrganizationInvitationTests(unittest.TestCase):
             0,
         )
 
+    def test_deal_invitation_requires_counterparty_organization(self) -> None:
+        admin = self._user("admin@buyer.com")
+        buyer_org = self._organization(admin)
+        placeholder = self._placeholder_organization()
+        deal = self._deal(buyer_org, placeholder)
+        token = self._invitation_for_deal(admin, buyer_org, deal)
+        version_before = deal.version
+
+        payload = AcceptInvitationRequest(
+            token=token,
+            email="kenji@tokyo-trade.jp",
+            password="SecurePassword123!",
+            display_name="Kenji Sato",
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            accept_invitation(payload=payload, actor=None, db=self.db)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("organization legal name", ctx.exception.detail)
+
+        # The recipient must not be created or silently joined to the inviting org.
+        self.assertIsNone(
+            self.db.scalar(select(User).where(User.email == "kenji@tokyo-trade.jp"))
+        )
+        self.assertEqual(
+            self.db.scalar(
+                select(func.count(OrganizationMember.id)).where(
+                    OrganizationMember.organization_id == buyer_org.id,
+                )
+            ),
+            1,
+        )
+
+        # The deal must be untouched and the invitation not consumed.
+        self.db.refresh(deal)
+        self.assertEqual(deal.seller_organization_id, placeholder.id)
+        self.assertEqual(deal.version, version_before)
+        self.assertEqual(self.db.scalar(select(func.count(Conversation.id))), 0)
+        self.assertIsNone(
+            self.db.scalar(
+                select(AuditEvent.id).where(
+                    AuditEvent.aggregate_type == "organization_invitation",
+                    AuditEvent.event_type == "invitation.accepted",
+                )
+            )
+        )
+
     def test_accept_invitation_when_already_active_member(self) -> None:
         admin = self._user("admin@example.com")
         org = self._organization(admin)

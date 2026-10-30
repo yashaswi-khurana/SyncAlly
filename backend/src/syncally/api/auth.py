@@ -82,8 +82,18 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None) -> str:
-    """Create and persist a refresh token for a completed sign-in flow."""
+def create_refresh_token(
+    db: Session,
+    user_id: UUID,
+    now: datetime | None = None,
+    *,
+    commit: bool = True,
+) -> str:
+    """Create and persist a refresh token for a completed sign-in flow.
+
+    Callers that need the token in the same transaction as other writes can pass
+    ``commit=False`` and commit themselves.
+    """
     if not settings.jwt_secret:
         raise _unauthorized("Authentication is not configured")
     if resolve_actor(db, user_id) is None:
@@ -98,7 +108,10 @@ def create_refresh_token(db: Session, user_id: UUID, now: datetime | None = None
             expires_at=issued_at + timedelta(days=settings.refresh_token_ttl_days),
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return raw_token
 
 

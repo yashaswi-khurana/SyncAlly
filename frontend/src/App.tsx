@@ -88,6 +88,8 @@ export default function App() {
   const isCreate = route.name === "create";
   const isOrganizations = route.name === "organizations";
   const isWorkspace = route.name === "deals" || route.name === "deal";
+  const hasPendingInvitation =
+    route.name === "organizations" && Boolean(route.inviteToken);
   const hasZeroOrganizations = Boolean(organizations !== null && organizations.length === 0);
 
   return (
@@ -162,7 +164,7 @@ export default function App() {
       </footer>
       <DevRoleSwitcher onSessionChanged={refreshSessionView} />
 
-      {hasZeroOrganizations && (
+      {hasZeroOrganizations && !hasPendingInvitation && (
         <OnboardingWizard
           key={currentSessionKey ?? "none"}
           onComplete={(created) => handleOrganizationCreated(created, currentSessionKey)}

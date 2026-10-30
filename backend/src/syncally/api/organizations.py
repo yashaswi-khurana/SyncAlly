@@ -1,7 +1,9 @@
 """Organization creation and initial membership setup endpoints."""
 
-from uuid import UUID
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import ColumnElement, func, select
@@ -12,9 +14,16 @@ from syncally.api.auth import get_current_actor
 from syncally.application.identity import ActorContext
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
-from syncally.infrastructure.models import Organization, OrganizationMember, User
+from syncally.infrastructure.models import (
+    AuditEvent,
+    Deal,
+    Organization,
+    OrganizationMember,
+    User,
+)
 
-router = APIRouter(prefix="/organizations", tags=["organizations"])
+router = APIRouter(tags=["organizations"])
+org_router = APIRouter(prefix="/organizations", tags=["organizations"])
 
 
 class CreateOrganizationRequest(BaseModel):
@@ -38,6 +47,34 @@ class CreateOrganizationRequest(BaseModel):
 
 class AddOrganizationMemberRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
+
+
+class CreateInvitationRequest(BaseModel):
+    deal_id: UUID | None = None
+    role: str = Field(default="MEMBER", pattern=r"^(ADMIN|MEMBER)$")
+
+
+class InvitationResponse(BaseModel):
+    token: str
+    invite_url: str
+    organization_id: UUID
+    organization_legal_name: str
+    deal_id: UUID | None = None
+    role: str
+    expires_at: str
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str = Field(min_length=1)
+
+
+class AcceptInvitationResponse(BaseModel):
+    status: str = "ACCEPTED"
+    organization_id: UUID
+    organization_legal_name: str
+    user_id: UUID
+    role: str
+    deal_id: UUID | None = None
 
 
 class OrganizationDirectoryItem(BaseModel):
@@ -72,7 +109,7 @@ def _active_admin_membership(
     return organization, membership
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@org_router.post("", status_code=status.HTTP_201_CREATED)
 def create_organization(
     payload: CreateOrganizationRequest,
     actor: ActorContext = Depends(get_current_actor),
@@ -120,7 +157,7 @@ def create_organization(
     }
 
 
-@router.get("")
+@org_router.get("")
 def list_my_organizations(
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
@@ -182,7 +219,7 @@ def _case_insensitive_prefix(
     return func.syncally_casefold(column).like(f"{escaped_prefix.casefold()}%", escape="\\")
 
 
-@router.get(
+@org_router.get(
     "/directory",
     response_model=list[OrganizationDirectoryItem],
     dependencies=[Depends(get_current_actor)],
@@ -223,7 +260,7 @@ def list_organization_directory(
     ]
 
 
-@router.get(
+@org_router.get(
     "/{organization_id}",
     response_model=OrganizationDirectoryItem,
     dependencies=[Depends(get_current_actor)],
@@ -250,7 +287,7 @@ def get_organization_route(
     }
 
 
-@router.post("/{organization_id}/members", status_code=status.HTTP_201_CREATED)
+@org_router.post("/{organization_id}/members", status_code=status.HTTP_201_CREATED)
 def add_organization_member(
     organization_id: UUID,
     payload: AddOrganizationMemberRequest,
@@ -300,6 +337,228 @@ def add_organization_member(
         raise
 
     return {"user_id": str(user.id), "email": user.email, "role": membership.role}
+
+
+def _create_invitation_token(
+    organization: Organization,
+    inviter_user_id: UUID,
+    deal_id: UUID | None = None,
+    role: str = "MEMBER",
+) -> tuple[str, datetime, UUID]:
+    if not settings.jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication is not configured",
+        )
+    jti = uuid4()
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(days=7)
+    claims: dict[str, object] = {
+        "jti": str(jti),
+        "sub": str(organization.id),
+        "org_id": str(organization.id),
+        "org_name": organization.legal_name,
+        "deal_id": str(deal_id) if deal_id else None,
+        "role": role,
+        "inviter_user_id": str(inviter_user_id),
+        "iat": int(now.timestamp()),
+        "exp": int(expires_at.timestamp()),
+        "typ": "organization_invitation",
+    }
+    token = jwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return token, expires_at, jti
+
+
+def _decode_invitation_token(token: str) -> dict[str, object]:
+    if not settings.jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication is not configured",
+        )
+    try:
+        claims = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"require": ["sub", "exp", "typ", "jti"]},
+        )
+        if claims.get("typ") != "organization_invitation":
+            raise jwt.InvalidTokenError("Token type is not valid for invitation")
+        return claims
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invitation token has expired",
+        ) from exc
+    except (jwt.InvalidTokenError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid invitation token",
+        ) from exc
+
+
+@org_router.post(
+    "/{organization_id}/invitations",
+    status_code=status.HTTP_201_CREATED,
+    response_model=InvitationResponse,
+)
+def create_organization_invitation(
+    organization_id: UUID,
+    payload: CreateInvitationRequest = CreateInvitationRequest(),
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Generate a signed single-use invitation token valid for 7 days."""
+    organization, _ = _active_admin_membership(db, organization_id, actor.user_id)
+    if payload.deal_id is not None:
+        deal = db.scalar(select(Deal).where(Deal.id == payload.deal_id))
+        if deal is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+        if organization_id not in (deal.buyer_organization_id, deal.seller_organization_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Organization is not a participant in this deal",
+            )
+
+    token, expires_at, jti = _create_invitation_token(
+        organization, actor.user_id, payload.deal_id, payload.role
+    )
+    db.add(
+        AuditEvent(
+            id=uuid4(),
+            aggregate_type="organization_invitation",
+            aggregate_id=jti,
+            event_type="invitation.created",
+            actor_type="USER",
+            actor_id=str(actor.user_id),
+            occurred_at=datetime.now(UTC),
+            payload={
+                "organization_id": str(organization_id),
+                "deal_id": str(payload.deal_id) if payload.deal_id else None,
+                "role": payload.role,
+                "expires_at": expires_at.isoformat(),
+            },
+        )
+    )
+    db.commit()
+    return {
+        "token": token,
+        "invite_url": f"https://app.syncally.trade/#/invite?token={token}",
+        "organization_id": str(organization_id),
+        "organization_legal_name": organization.legal_name,
+        "deal_id": str(payload.deal_id) if payload.deal_id else None,
+        "role": payload.role,
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@router.post(
+    "/invitations/accept",
+    status_code=status.HTTP_200_OK,
+    response_model=AcceptInvitationResponse,
+)
+def accept_invitation(
+    payload: AcceptInvitationRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Accept an invitation token to join an organization and access linked deals."""
+    claims = _decode_invitation_token(payload.token)
+    try:
+        jti = UUID(str(claims["jti"]))
+        org_id = UUID(str(claims["org_id"]))
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid invitation token claims",
+        ) from exc
+    role = str(claims.get("role", "MEMBER"))
+    deal_id_str = claims.get("deal_id")
+
+    # Atomic single-use check
+    already_used = db.scalar(
+        select(AuditEvent.id).where(
+            AuditEvent.aggregate_type == "organization_invitation",
+            AuditEvent.aggregate_id == jti,
+            AuditEvent.event_type == "invitation.accepted",
+        )
+    )
+    if already_used is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Invitation token has already been used",
+        )
+
+    org = db.scalar(
+        select(Organization).where(Organization.id == org_id, Organization.status == "ACTIVE")
+    )
+    if org is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Inviting organization not found",
+        )
+
+    existing = db.scalar(
+        select(OrganizationMember).where(
+            OrganizationMember.organization_id == org_id,
+            OrganizationMember.user_id == actor.user_id,
+        )
+    )
+    if existing is not None:
+        if existing.status == "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User already has an active membership in this organization",
+            )
+        existing.role = role
+        existing.status = "ACTIVE"
+    else:
+        db.add(
+            OrganizationMember(
+                organization_id=org_id,
+                user_id=actor.user_id,
+                role=role,
+                status="ACTIVE",
+            )
+        )
+
+    db.add(
+        AuditEvent(
+            id=jti,
+            aggregate_type="organization_invitation",
+            aggregate_id=jti,
+            event_type="invitation.accepted",
+            actor_type="USER",
+            actor_id=str(actor.user_id),
+            occurred_at=datetime.now(UTC),
+            payload={
+                "organization_id": str(org_id),
+                "user_id": str(actor.user_id),
+                "deal_id": deal_id_str,
+                "role": role,
+            },
+        )
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Invitation token has already been used",
+        ) from exc
+
+    return {
+        "status": "ACCEPTED",
+        "organization_id": str(org.id),
+        "organization_legal_name": org.legal_name,
+        "user_id": str(actor.user_id),
+        "role": role,
+        "deal_id": deal_id_str,
+    }
+
+
+router.include_router(org_router)
 
 
 def _is_duplicate_membership_error(error: IntegrityError) -> bool:

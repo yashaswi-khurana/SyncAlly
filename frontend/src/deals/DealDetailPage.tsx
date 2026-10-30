@@ -380,19 +380,15 @@ export default function DealDetailPage({
     setCopiedInvite(false);
     try {
       const orgs = await listOrganizations();
-      const admins = orgs.filter((org) => org.role === "ADMIN");
-      setAdminOrganizations(admins);
       const currentDeal = state.deal;
-      const dealAdmin = admins.find(
+      const admins = orgs.filter(
         (org) =>
-          org.id === currentDeal.buyer_organization_id ||
-          org.id === currentDeal.seller_organization_id,
+          org.role === "ADMIN" &&
+          (org.id === currentDeal.buyer_organization_id ||
+            org.id === currentDeal.seller_organization_id),
       );
-      if (dealAdmin) {
-        setSelectedInviteOrgId(dealAdmin.id);
-      } else if (admins.length > 0) {
-        setSelectedInviteOrgId(admins[0].id);
-      }
+      setAdminOrganizations(admins);
+      setSelectedInviteOrgId(admins[0]?.id ?? "");
     } catch (caught) {
       setInviteError(describeError(caught));
     }
@@ -436,9 +432,10 @@ export default function DealDetailPage({
   async function handleCopyInviteLink() {
     if (!generatedInvite) return;
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(generatedInvite.invite_url);
+      if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        throw new Error("Clipboard API is unavailable");
       }
+      await navigator.clipboard.writeText(generatedInvite.invite_url);
       setCopiedInvite(true);
       setTimeout(() => setCopiedInvite(false), 2500);
     } catch {

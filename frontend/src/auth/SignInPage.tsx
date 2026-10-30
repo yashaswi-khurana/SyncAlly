@@ -19,7 +19,6 @@ interface SignInPageProps {
 interface FieldErrors {
   email?: string;
   password?: string;
-  orgName?: string;
 }
 
 function getInviteTokenFromHash(): string | null {
@@ -117,9 +116,6 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
     } else if (invitePassword.length < 8) {
       nextErrors.password = "Password must be at least 8 characters.";
     }
-    if (inviteOrgName.trim() === "") {
-      nextErrors.orgName = "Company legal name is required.";
-    }
 
     setFieldErrors(nextErrors);
     setFormError(null);
@@ -129,6 +125,26 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
 
     setSubmitting(true);
     try {
+      const payload: {
+        token: string;
+        email: string;
+        password: string;
+        display_name?: string;
+        organization_legal_name?: string;
+        country_code?: string;
+      } = {
+        token: inviteToken,
+        email: inviteEmail.trim(),
+        password: invitePassword,
+        display_name: inviteDisplayName.trim() || undefined,
+      };
+      // A legal name creates a counterparty organization; team invitees join
+      // the inviting organization using the invitation's role instead.
+      if (inviteOrgName.trim()) {
+        payload.organization_legal_name = inviteOrgName.trim();
+        payload.country_code = inviteCountryCode.trim().toUpperCase() || "US";
+      }
+
       const res = await apiRequest<{
         status: string;
         organization_id: string;
@@ -141,14 +157,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
         token_type?: string;
       }>("/invitations/accept", {
         method: "POST",
-        body: JSON.stringify({
-          token: inviteToken,
-          email: inviteEmail.trim(),
-          password: invitePassword,
-          display_name: inviteDisplayName.trim() || undefined,
-          organization_legal_name: inviteOrgName.trim(),
-          country_code: inviteCountryCode.trim().toUpperCase() || "US",
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (res.access_token && res.refresh_token) {
@@ -301,21 +310,15 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
               />
             </div>
             <div className="field">
-              <label htmlFor="invite-org-name">Company Legal Name</label>
+              <label htmlFor="invite-org-name">Company Legal Name (Optional)</label>
               <input
                 id="invite-org-name"
                 name="orgName"
                 type="text"
                 placeholder="e.g. Tokyo Exporters Ltd"
                 value={inviteOrgName}
-                aria-invalid={fieldErrors.orgName ? true : undefined}
                 onChange={(e) => setInviteOrgName(e.target.value)}
               />
-              {fieldErrors.orgName ? (
-                <p className="field-error" role="alert">
-                  {fieldErrors.orgName}
-                </p>
-              ) : null}
             </div>
             <div className="field">
               <label htmlFor="invite-country-code">Country Code (2 letters)</label>

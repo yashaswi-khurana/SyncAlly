@@ -114,7 +114,7 @@ describe("SignInPage", () => {
     render(<SignInPage onSignIn={vi.fn()} />);
 
     expect(await screen.findByRole("heading", { name: "Join via counterparty invite." })).toBeInTheDocument();
-    expect(screen.getByLabelText("Company Legal Name")).toBeInTheDocument();
+    expect(screen.getByLabelText("Company Legal Name (Optional)")).toBeInTheDocument();
     expect(screen.getByLabelText("Country Code (2 letters)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Account & Join Deal" })).toBeInTheDocument();
   });
@@ -143,7 +143,7 @@ describe("SignInPage", () => {
     fireEvent.change(screen.getByLabelText("Password (min 8 characters)"), {
       target: { value: "password123!" },
     });
-    fireEvent.change(screen.getByLabelText("Company Legal Name"), {
+    fireEvent.change(screen.getByLabelText("Company Legal Name (Optional)"), {
       target: { value: "Tokyo Trade Co" },
     });
     fireEvent.change(screen.getByLabelText("Country Code (2 letters)"), {
@@ -174,5 +174,43 @@ describe("SignInPage", () => {
       token_type: "bearer",
     });
     expect(window.location.hash).toBe("#/deals/deal-tokyo-456");
+  });
+
+  it("lets a team invitee join without providing an organization legal name", async () => {
+    window.location.hash = "#/invite?token=valid-team-token";
+
+    mockedApiRequest.mockResolvedValueOnce({
+      status: "ACCEPTED",
+      organization_id: "org-inviting-123",
+      organization_legal_name: "Inviting Co",
+      user_id: "user-team-123",
+      role: "MEMBER",
+      deal_id: null,
+    });
+
+    render(<SignInPage onSignIn={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "teammate@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password (min 8 characters)"), {
+      target: { value: "password123!" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Account & Join Deal" }));
+
+    await waitFor(() => {
+      expect(mockedApiRequest).toHaveBeenCalledWith(
+        "/invitations/accept",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            token: "valid-team-token",
+            email: "teammate@example.com",
+            password: "password123!",
+          }),
+        }),
+      );
+    });
   });
 });

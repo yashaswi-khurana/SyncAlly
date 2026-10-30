@@ -135,6 +135,57 @@ describe("OrganizationsSettingsPage", () => {
     expect(screen.getByRole("button", { name: "Go to Linked Deal" })).toBeInTheDocument();
   });
 
+  it("resets the accept outcome when a different invite token is opened", async () => {
+    window.location.hash = "#/invite?token=first-token";
+
+    mockedApiRequest.mockResolvedValueOnce({
+      status: "ACCEPTED",
+      organization_id: "11111111-1111-1111-1111-111111111111",
+      organization_legal_name: "Demo Seller Co",
+      user_id: "99999999-9999-9999-9999-999999999999",
+      role: "MEMBER",
+      deal_id: null,
+    });
+
+    render(<OrganizationsSettingsPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept & Join" }));
+    expect(await screen.findByText(/Successfully joined Demo Seller Co!/i)).toBeInTheDocument();
+
+    window.location.hash = "#/invite?token=second-token";
+    fireEvent(window, new Event("hashchange"));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Successfully joined/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Accept & Join" })).toBeInTheDocument();
+  });
+
+  it("keeps the accept outcome when the hash changes but the token is unchanged", async () => {
+    window.location.hash = "#/invite?token=stable-token";
+
+    mockedApiRequest.mockResolvedValueOnce({
+      status: "ACCEPTED",
+      organization_id: "11111111-1111-1111-1111-111111111111",
+      organization_legal_name: "Demo Seller Co",
+      user_id: "99999999-9999-9999-9999-999999999999",
+      role: "MEMBER",
+      deal_id: null,
+    });
+
+    render(<OrganizationsSettingsPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Accept & Join" }));
+    expect(await screen.findByText(/Successfully joined Demo Seller Co!/i)).toBeInTheDocument();
+
+    window.location.hash = "#/invite?token=stable-token&dealId=deal-999";
+    fireEvent(window, new Event("hashchange"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Successfully joined Demo Seller Co!/i)).toBeInTheDocument();
+    });
+  });
+
   it("displays an error message when accepting an invalid or expired invitation", async () => {
     window.location.hash = "#/invite?token=expired-token";
 

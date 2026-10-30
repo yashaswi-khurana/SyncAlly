@@ -4,10 +4,11 @@ import {
   ApiError,
   authorizeDealPayment,
   getCurrentAgreement,
+  getOrganization,
   listOrganizations,
   listPaymentStatuses,
 } from "../api/client";
-import type { PaymentStatus } from "../api/types";
+import type { OrganizationDirectoryItem, PaymentStatus } from "../api/types";
 
 type PaymentState =
   | { status: "loading" }
@@ -17,7 +18,60 @@ type PaymentState =
       payments: PaymentStatus[];
       agreementCommitted: boolean;
       sellerMember: boolean;
+      buyerOrganization: OrganizationDirectoryItem | null;
+      milestone: { amount: string; currency: string } | null;
     };
+
+/**
+ * PAY-01 added recipient details to the payment response, but the shared
+ * `PaymentStatus` type has not caught up yet. Keep the extra fields local so
+ * this screen can read them without widening the transport contract.
+ */
+interface RecipientPaymentStatus extends PaymentStatus {
+  recipient_email?: string | null;
+  recipient_name?: string | null;
+  recipient_country_code?: string | null;
+  recipient_legal_name?: string | null;
+}
+
+interface RecipientPreview {
+  legalName: string;
+  countryCode: string;
+  billingEmail: string;
+  amount: { amount: string; currency: string } | null;
+}
+
+function firstMilestoneAmount(
+  payments: PaymentStatus[],
+  agreement: { terms: { payment_terms: Array<{ amount: { amount: string; currency: string } }> } } | null,
+): { amount: string; currency: string } | null {
+  const payment = payments[0];
+  if (payment) {
+    return { amount: payment.amount, currency: payment.currency };
+  }
+  return agreement?.terms?.payment_terms?.[0]?.amount ?? null;
+}
+
+function formatInvoiceAmount(amount: string, currency: string): string {
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount) || !/^[A-Z]{3}$/.test(currency)) {
+    return `${currency} ${amount}`;
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    currencyDisplay: "code",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+    .format(numericAmount)
+    .replace(/\u00a0/g, " ");
+}
+
+function textOrFallback(value: string | null | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
+}
 
 function describeStatus(status: string): { label: string; detail: string } {
   switch (status) {
@@ -59,19 +113,49 @@ interface PaymentStatusPanelProps {
   dealId: string;
   sellerOrganizationId: string;
   reloadToken?: number;
+  buyerOrganizationId?: string;
 }
 
 export default function PaymentStatusPanel({
   dealId,
   sellerOrganizationId,
   reloadToken = 0,
+  buyerOrganizationId,
 }: PaymentStatusPanelProps) {
   const [state, setState] = useState<PaymentState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
   const [authorizing, setAuthorizing] = useState(false);
   const [authorizationError, setAuthorizationError] = useState("");
   const [authorizationNotice, setAuthorizationNotice] = useState("");
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
   const idempotencyKey = useRef<string | null>(null);
+  const requestButtonRef = useRef<HTMLButtonElement>(null);
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmationDialogRef = useRef<HTMLDivElement>(null);
+
+  const recipientPreview: RecipientPreview | null =
+    state.status === "ready"
+      ? {
+          legalName: textOrFallback(
+            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_legal_name ??
+              (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_name ??
+              state.buyerOrganization?.legal_name,
+            "Not available",
+          ),
+          countryCode: textOrFallback(
+            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_country_code ??
+              state.buyerOrganization?.country_code,
+            "Not available",
+          ),
+          billingEmail: textOrFallback(
+            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_email ??
+              (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.billing_email ??
+              (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.email,
+            "Resolved by the backend at issuance",
+          ),
+          amount: state.milestone,
+        }
+      : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -84,14 +168,32 @@ export default function PaymentStatusPanel({
       listOrganizations(),
     ]).then(
       ([payments, agreement, organizations]) => {
-        if (!cancelled) {
-          setState({
-            status: "ready",
-            payments,
-            agreementCommitted: agreement?.status === "COMMITTED",
-            sellerMember: organizations.some((organization) => organization.id === sellerOrganizationId),
+        if (cancelled) return;
+
+        setState({
+          status: "ready",
+          payments,
+          agreementCommitted: agreement?.status === "COMMITTED",
+          sellerMember: organizations.some((organization) => organization.id === sellerOrganizationId),
+          buyerOrganization: null,
+          milestone: firstMilestoneAmount(payments, agreement),
+        });
+
+        // The buyer's registered country is not part of the payment payload.
+        // Resolve it from the public organization directory via the agreement's
+        // buyer party or explicit prop, but never let a directory failure or
+        // latency block the ready payment state.
+        const buyerOrgId = buyerOrganizationId ?? agreement?.terms?.buyer_id;
+        if (!buyerOrgId) return;
+
+        void getOrganization(buyerOrgId)
+          .catch(() => null)
+          .then((buyerOrganization) => {
+            if (cancelled || !buyerOrganization) return;
+            setState((prev) =>
+              prev.status === "ready" ? { ...prev, buyerOrganization } : prev,
+            );
           });
-        }
       },
       (caught: unknown) => {
         if (cancelled) return;
@@ -107,13 +209,68 @@ export default function PaymentStatusPanel({
     return () => {
       cancelled = true;
     };
-  }, [dealId, reloadCount, reloadToken, sellerOrganizationId]);
+  }, [buyerOrganizationId, dealId, reloadCount, reloadToken, sellerOrganizationId]);
+
+  useEffect(() => {
+    if (!confirmationOpen) return;
+
+    const focusReturnTarget = requestButtonRef.current;
+    confirmationDialogRef.current?.focus();
+
+    function handleDialogKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setConfirmationOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = confirmationDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable?.length) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === confirmationDialogRef.current)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleDialogKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleDialogKeyDown);
+      if (focusReturnTarget?.isConnected && !focusReturnTarget.disabled) {
+        focusReturnTarget.focus();
+      } else if (refreshButtonRef.current?.isConnected && !refreshButtonRef.current.disabled) {
+        refreshButtonRef.current.focus();
+      }
+    };
+  }, [confirmationOpen]);
 
   function retry() {
     setAuthorizationError("");
     setAuthorizationNotice("");
     setState({ status: "loading" });
     setReloadCount((count) => count + 1);
+  }
+
+  function openRecipientConfirmation() {
+    if (state.status !== "ready") return;
+    setConfirmationOpen(true);
+  }
+
+  function cancelRecipientConfirmation() {
+    setConfirmationOpen(false);
+  }
+
+  function confirmRecipientAndSend() {
+    setConfirmationOpen(false);
+    void authorizePayment();
   }
 
   async function authorizePayment() {
@@ -144,7 +301,12 @@ export default function PaymentStatusPanel({
           <span className="eyebrow">Backend confirmed</span>
           <h2 id="payment-status-heading">Payment status</h2>
         </div>
-        <button type="button" className="button secondary button--compact" onClick={retry}>
+        <button
+          ref={refreshButtonRef}
+          type="button"
+          className="button secondary button--compact"
+          onClick={retry}
+        >
           Refresh status
         </button>
       </div>
@@ -163,8 +325,15 @@ export default function PaymentStatusPanel({
           {state.agreementCommitted && state.sellerMember ? (
             <div className="payment-status__message">
               <p>The agreement is committed. The seller can authorize its payment milestone.</p>
-              <button type="button" className="button" disabled={authorizing} onClick={() => void authorizePayment()}>
-                {authorizing ? "Queuing payment request…" : "Create PayPal invoice request"}
+              <button
+                ref={requestButtonRef}
+                type="button"
+                className="button"
+                disabled={authorizing}
+                aria-haspopup="dialog"
+                onClick={openRecipientConfirmation}
+              >
+                {authorizing ? "Queuing payment request…" : "Request Payment"}
               </button>
             </div>
           ) : (
@@ -212,6 +381,83 @@ export default function PaymentStatusPanel({
         This view uses saved backend status. PayPal return pages and browser redirects are not
         payment evidence.
       </p>
+
+      {confirmationOpen && recipientPreview ? (
+        <div
+          className="manual-fact-modal-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              cancelRecipientConfirmation();
+            }
+          }}
+        >
+          <div
+            ref={confirmationDialogRef}
+            className="manual-fact-modal invoice-recipient-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invoice-recipient-title"
+            aria-describedby="invoice-recipient-notice"
+            tabIndex={-1}
+          >
+            <div className="panel-head">
+              <div>
+                <span className="eyebrow">Payment authorization</span>
+                <h3 id="invoice-recipient-title">Confirm Invoice Recipient</h3>
+              </div>
+              <button
+                type="button"
+                className="button ghost"
+                onClick={cancelRecipientConfirmation}
+                aria-label="Close recipient confirmation"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="muted">
+              Read back the recipient details before authorizing PayPal to issue this invoice.
+            </p>
+
+            <dl className="invoice-recipient-dialog__details">
+              <div>
+                <dt>Buyer legal name</dt>
+                <dd>{recipientPreview.legalName}</dd>
+              </div>
+              <div>
+                <dt>Registered country code</dt>
+                <dd>{recipientPreview.countryCode}</dd>
+              </div>
+              <div>
+                <dt>Recipient billing email</dt>
+                <dd>{recipientPreview.billingEmail}</dd>
+              </div>
+              <div>
+                <dt>Milestone amount</dt>
+                <dd className="invoice-recipient-dialog__amount">
+                  {recipientPreview.amount
+                    ? formatInvoiceAmount(recipientPreview.amount.amount, recipientPreview.amount.currency)
+                    : "Amount unavailable"}
+                </dd>
+              </div>
+            </dl>
+
+            <p id="invoice-recipient-notice" className="invoice-recipient-dialog__notice">
+              This will create a formal PayPal invoice dispatched to the recipient above.
+            </p>
+
+            <div className="invoice-recipient-dialog__actions">
+              <button type="button" className="button secondary" onClick={cancelRecipientConfirmation}>
+                Cancel
+              </button>
+              <button type="button" className="button" onClick={confirmRecipientAndSend}>
+                Confirm &amp; Send Invoice
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

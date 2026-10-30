@@ -605,9 +605,16 @@ def accept_invitation(
         )
 
     # Validate the deal claim before writing any user or organization state, so a stale or
-    # invalid invitation cannot leave partial changes behind.
+    # invalid invitation cannot leave partial changes behind. A deal invitation onboards a
+    # counterparty, so the recipient must create their own organization instead of silently
+    # joining the inviting organization as a team member.
     linking_deal: Deal | None = None
-    if deal_uuid is not None and payload.organization_legal_name:
+    if deal_uuid is not None:
+        if not payload.organization_legal_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An organization legal name is required to accept a deal invitation",
+            )
         linking_deal = _deal_awaiting_counterparty(db, deal_uuid, org_id)
 
     # 1. Resolve or create user

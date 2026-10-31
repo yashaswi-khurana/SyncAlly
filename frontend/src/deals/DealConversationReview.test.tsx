@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  createDealFact,
   createDealMessage,
   listDealFacts,
   listDealMessages,
@@ -21,6 +22,7 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    createDealFact: vi.fn(),
     createDealMessage: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
@@ -44,6 +46,7 @@ const DEAL: Deal = {
   version: 0,
 };
 
+const mockedCreateDealFact = vi.mocked(createDealFact);
 const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
 const mockedListOrganizations = vi.mocked(listOrganizations);
@@ -850,14 +853,181 @@ describe("synchronized fact review and proposal drafts", () => {
     const proposal = await openReview();
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("24");
     mockedListDealFacts.mockResolvedValue([quantity]);
-    fireEvent.focus(window);
-    await waitFor(() => expect(mockedListDealFacts).toHaveBeenCalledTimes(2));
+    await act(async () => { fireEvent.focus(window); });
+    expect(mockedListDealFacts).toHaveBeenCalledTimes(2);
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("24");
     mockedListDealFacts.mockResolvedValue([]);
-    fireEvent.focus(window);
+    await act(async () => { fireEvent.focus(window); });
     await waitFor(() => expect(screen.queryByRole("article", { name: "Fact suggestion: quantity" })).not.toBeInTheDocument());
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("");
     expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+  });
+
+  it("does not resurrect revoked facts when a late review response resolves", async () => {
+    let resolveReview!: (val: DealFact) => void;
+    let resolvePoll!: (val: DealFact[]) => void;
+    mockedReviewDealFact.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+    mockedListDealFacts.mockResolvedValueOnce([quantity]);
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const factItem = await screen.findByRole("article", { name: "quantity: 12" });
+
+    // Poll is started and pending
+    mockedListDealFacts.mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+    fireEvent.focus(window);
+    await waitFor(() => expect(mockedListDealFacts).toHaveBeenCalledTimes(2));
+
+    // User reviews the fact while poll is in flight
+    fireEvent.click(within(factItem).getByRole("button", { name: "Confirm" }));
+    expect(mockedReviewDealFact).toHaveBeenCalledTimes(1);
+
+    // Poll resolves without the fact (revoked by counterparty)
+    await act(async () => {
+      resolvePoll([]);
+    });
+    await waitFor(() => expect(screen.queryByRole("article", { name: "quantity: 12" })).not.toBeInTheDocument());
+
+    // Late review response resolves
+    await act(async () => {
+      resolveReview({ ...quantity, status: "CONFIRMED", version: 2 });
+    });
+
+    // Fact must NOT reappear
+    expect(screen.queryByRole("article", { name: "quantity: 12" })).not.toBeInTheDocument();
+  });
+
+  it("preserves newly saved facts when a stale polling response arrives", async () => {
+    let resolvePoll!: (val: DealFact[]) => void;
+    mockedListDealFacts.mockResolvedValueOnce([quantity]);
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    await screen.findByRole("article", { name: "quantity: 12" });
+
+    mockedListDealFacts.mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+    fireEvent.focus(window);
+    await waitFor(() => expect(mockedListDealFacts).toHaveBeenCalledTimes(2));
+
+    mockedCreateDealFact.mockResolvedValue(fact({ id: "new-fact", field: "delivery_destination", typed_value: "Tokyo", status: "EXTRACTED" }));
+    fireEvent.click(screen.getByRole("button", { name: "+ Add Term Manually" }));
+    fireEvent.change(screen.getByLabelText("Term type"), { target: { value: "delivery_destination" } });
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "Tokyo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add term" }));
+    await screen.findByRole("article", { name: "delivery_destination: Tokyo" });
+
+    await act(async () => {
+      resolvePoll([quantity]);
+    });
+
+    expect(screen.getByRole("article", { name: "delivery_destination: Tokyo" })).toBeInTheDocument();
+  });
+
+  it("blocks agreement creation and clears proposal field when currency metadata contradicts proposal currency", async () => {
+    mockedListDealFacts.mockResolvedValue([
+      fact({ id: "eur-price", field: "unit_price", typed_value: "100", currency_or_unit: "EUR", status: "CONFIRMED" }),
+    ]);
+    mockedDraftDealProposal.mockResolvedValue({
+      schema_version: 1,
+      description: "Apples",
+      quantity: "10",
+      unit: "kg",
+      unit_price: "2.50",
+      currency: "USD",
+      delivery_destination: "Port",
+      delivery_date: "2026-11-01",
+      status: "DRAFT",
+    });
+    const proposal = await openReview();
+    expect(within(proposal).getByLabelText("Unit price")).toHaveValue("");
+    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+  });
+
+  it("blocks agreement creation when confirmed unit fact contradicts confirmed quantity unit", async () => {
+    mockedListDealFacts.mockResolvedValue([
+      fact({ id: "qty-fact", field: "quantity", typed_value: "10", currency_or_unit: "kg", status: "CONFIRMED" }),
+      fact({ id: "unit-fact", field: "unit", typed_value: "boxes", status: "CONFIRMED" }),
+    ]);
+    const proposal = await openReview();
+    expect(within(proposal).getByLabelText("Unit")).toHaveValue("");
+    expect(within(proposal).getByLabelText("Quantity")).toHaveValue("");
+    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+  });
+
+  it("preserves fact suggestion draft edits when a background suggestion response arrives", async () => {
+    await openReview();
+    const suggestion = screen.getByRole("article", { name: "Fact suggestion: quantity" });
+
+    let resolveSuggestions!: (val: Awaited<ReturnType<typeof suggestDealFacts>>) => void;
+    mockedSuggestDealFacts.mockImplementation(() => new Promise((resolve) => { resolveSuggestions = resolve; }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+    expect(mockedSuggestDealFacts).toHaveBeenCalledTimes(2);
+
+    fireEvent.change(within(suggestion).getByLabelText("Suggested value"), { target: { value: "42" } });
+    expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("42");
+
+    await act(async () => {
+      resolveSuggestions({
+        status: "VALID",
+        issues: [],
+        missing_fields: [],
+        guidance_message: "",
+        facts: [fact({ id: quantity.id, field: "quantity", typed_value: "99", status: "EXTRACTED" })],
+      });
+    });
+
+    expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("42");
+  });
+
+  it("fetches all pages of deal facts when there are more than 100 facts", async () => {
+    const actualClient = await vi.importActual<typeof import("../api/client")>("../api/client");
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy;
+    try {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({
+        id: `fact-${i}`,
+        deal_id: DEAL.id,
+        owner_organization_id: BUYER_ID,
+        field: "item_description",
+        typed_value: `Widget ${i}`,
+        currency_or_unit: null,
+        kind: "DISCOVERED",
+        status: "EXTRACTED",
+        visibility: "SHAREABLE",
+        source_message_id: null,
+        source_span: null,
+        confirmed_by: null,
+        confirmed_at: null,
+        version: 1,
+        created_at: "2026-10-31T00:00:00Z",
+      }));
+      const page2 = Array.from({ length: 5 }, (_, i) => ({
+        id: `fact-10${i}`,
+        deal_id: DEAL.id,
+        owner_organization_id: BUYER_ID,
+        field: "item_description",
+        typed_value: `Widget 10${i}`,
+        currency_or_unit: null,
+        kind: "DISCOVERED",
+        status: "CONFIRMED",
+        visibility: "SHAREABLE",
+        source_message_id: null,
+        source_span: null,
+        confirmed_by: null,
+        confirmed_at: null,
+        version: 1,
+        created_at: "2026-10-31T00:00:00Z",
+      }));
+
+      fetchSpy
+        .mockResolvedValueOnce(new Response(JSON.stringify(page1), { status: 200, headers: { "Content-Type": "application/json" } }))
+        .mockResolvedValueOnce(new Response(JSON.stringify(page2), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+      const allFacts = await actualClient.listDealFacts(DEAL.id, BUYER_ID);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(allFacts).toHaveLength(105);
+      expect(allFacts[104].id).toBe("fact-104");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("blocks conflicting confirmed values and excludes another organization's private values", async () => {

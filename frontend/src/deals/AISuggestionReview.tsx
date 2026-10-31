@@ -172,12 +172,49 @@ export default function AISuggestionReview({
     if (new Set(matching.map((fact) => fact.typed_value)).size > 1) conflictingFields.add(field);
     else confirmedValues[field] = matching[0].typed_value;
   }
+  const unitPrices = confirmed.filter((fact) => requiredTradeField(fact.field) === "unit_price");
+  if (unitPrices.length > 0) {
+    const currencies = new Set(
+      unitPrices.map((fact) => fact.currency_or_unit?.trim().toUpperCase()).filter((c): c is string => Boolean(c)),
+    );
+    if (currencies.size > 1) {
+      conflictingFields.add("unitPrice");
+    }
+    if (proposalState?.draft.currency) {
+      const expected = proposalState.draft.currency.trim().toUpperCase();
+      for (const c of currencies) {
+        if (c !== expected) {
+          conflictingFields.add("unitPrice");
+        }
+      }
+    }
+  }
+  const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
+  const quantityUnits = new Set(
+    quantities.map((fact) => fact.currency_or_unit?.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
+  );
+  if (quantityUnits.size > 1) {
+    conflictingFields.add("quantity");
+    conflictingFields.add("unit");
+  }
+  const explicitUnits = confirmed.filter((fact) => requiredTradeField(fact.field) === "unit");
+  const explicitUnitValues = new Set(
+    explicitUnits.map((fact) => fact.typed_value.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
+  );
+  if (explicitUnitValues.size > 1) {
+    conflictingFields.add("unit");
+  }
+  if (explicitUnitValues.size === 1 && quantityUnits.size === 1) {
+    const [expUnit] = explicitUnitValues;
+    const [qtyUnit] = quantityUnits;
+    if (expUnit !== qtyUnit) {
+      conflictingFields.add("unit");
+      conflictingFields.add("quantity");
+    }
+  }
   if (!confirmedSignatures.unit && confirmedSignatures.quantity) {
-    const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
-    const units = new Set(quantities.map((fact) => fact.currency_or_unit).filter(Boolean));
-    if (units.size > 1) conflictingFields.add("unit");
-    else if (units.size === 1) {
-      confirmedValues.unit = [...units][0]!;
+    if (quantityUnits.size === 1) {
+      confirmedValues.unit = quantities.find((fact) => Boolean(fact.currency_or_unit))?.currency_or_unit ?? "";
       confirmedSignatures.unit = confirmedSignatures.quantity;
     }
   }
@@ -264,6 +301,7 @@ export default function AISuggestionReview({
 
   async function createReviewedAgreement() {
     if (!proposal || proposalInvalidated || conflictingFields.size > 0) return;
+    const requestFactsSignature = factsSignature;
     setSuggestionError("");
     setAgreementNotice("");
     setPendingAction("agreement");
@@ -281,6 +319,10 @@ export default function AISuggestionReview({
       };
       const agreement = await createAgreementFromReviewedTerms(dealId, organizationId, terms);
       if (!activeRef.current) return;
+      if (factsSignature !== requestFactsSignature || proposalInvalidated || conflictingFields.size > 0) {
+        setSuggestionError("Proposal terms changed while the agreement was being submitted. Please review the updated terms.");
+        return;
+      }
       setProposalState(null);
       setAgreementNotice(`Agreement version ${agreement.version_number} is ready for both parties to review.`);
       onAgreementCreated();
@@ -293,6 +335,7 @@ export default function AISuggestionReview({
   }
 
   function updateFact(id: string, update: Partial<Pick<FactSuggestionDraft, "field" | "value" | "currencyOrUnit">>) {
+    factStateRevisionRef.current += 1;
     const displayed = synchronizedDrafts.find((draft) => draft.fact.id === id);
     setFactDrafts((current) => current.map((draft) => draft.fact.id === id
       ? { ...(displayed ?? draft), ...update, error: "" } : draft));

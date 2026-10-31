@@ -80,8 +80,9 @@ function areFactsEqual(a: DealFact[], b: DealFact[]): boolean {
   return true;
 }
 
-// A slow response must not undo a newer persisted version.
-function mergeFact(current: DealFact[], incoming: DealFact): DealFact[] {
+// A slow response must not undo a newer persisted version or resurrect a revoked fact.
+function mergeFact(current: DealFact[], incoming: DealFact, removedIds?: ReadonlySet<string>): DealFact[] {
+  if (removedIds?.has(incoming.id)) return current;
   const existing = current.find((fact) => fact.id === incoming.id);
   if (existing && existing.version > incoming.version) return current;
   return existing ? current.map((fact) => fact.id === incoming.id ? incoming : fact) : [...current, incoming];
@@ -259,15 +260,25 @@ export default function DealConversationReview({
   );
   const activeOrganizationId = selectedOrganization?.id ?? "";
   const contextGenerationRef = useRef(0);
+  const removedFactIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     contextGenerationRef.current += 1;
-    return () => { contextGenerationRef.current += 1; };
+    const removedFactIds = removedFactIdsRef.current;
+    removedFactIds.clear();
+    return () => {
+      contextGenerationRef.current += 1;
+      removedFactIds.clear();
+    };
   }, [deal.id, activeOrganizationId]);
 
   const currentConversation =
     conversationState?.status === "ready" && conversationState.organizationId === activeOrganizationId && conversationState.dealId === deal.id
       ? conversationState
       : null;
+  const conversationFactsRef = useRef<DealFact[]>([]);
+  useEffect(() => {
+    conversationFactsRef.current = currentConversation?.facts ?? [];
+  }, [currentConversation?.facts]);
   const visibleFacts =
     currentConversation
       ? currentConversation.facts.filter(
@@ -352,6 +363,15 @@ export default function DealConversationReview({
     onMessageCreated?.();
   }
 
+  const pendingFactIdRef = useRef<string | null>(null);
+  const pendingVisibilityFactIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    pendingFactIdRef.current = pendingFactId;
+  }, [pendingFactId]);
+  useEffect(() => {
+    pendingVisibilityFactIdRef.current = pendingVisibilityFactId;
+  }, [pendingVisibilityFactId]);
+
   useEffect(() => {
     if (!activeOrganizationId || !conversationReady) {
       return;
@@ -361,7 +381,7 @@ export default function DealConversationReview({
     let inFlight = false;
 
     const revalidate = async () => {
-      if (cancelled || inFlight || pendingFactId !== null || pendingVisibilityFactId !== null) {
+      if (cancelled || inFlight || pendingFactIdRef.current !== null || pendingVisibilityFactIdRef.current !== null) {
         return;
       }
       if (typeof document !== "undefined" && document.hidden) {
@@ -369,6 +389,7 @@ export default function DealConversationReview({
       }
 
       inFlight = true;
+      const baselineFactIds = new Set(conversationFactsRef.current.map((fact) => fact.id));
       try {
         const freshFacts = await listDealFacts(deal.id, activeOrganizationId);
         if (!cancelled) {
@@ -376,14 +397,30 @@ export default function DealConversationReview({
             if (current?.status !== "ready" || current.organizationId !== activeOrganizationId || current.dealId !== deal.id) {
               return current;
             }
-            if (areFactsEqual(current.facts, freshFacts)) {
-              return current;
+            const freshIds = new Set(freshFacts.map((fact) => fact.id));
+            for (const fact of current.facts) {
+              if (baselineFactIds.has(fact.id) && !freshIds.has(fact.id)) {
+                removedFactIdsRef.current.add(fact.id);
+              }
             }
+            for (const fact of freshFacts) {
+              removedFactIdsRef.current.delete(fact.id);
+            }
+
+            // Facts added locally after the poll was dispatched were not part of the baseline snapshot; preserve them.
+            const preservedUnseen = current.facts.filter(
+              (fact) => !baselineFactIds.has(fact.id) && !freshIds.has(fact.id),
+            );
+
             // An authorized snapshot also removes facts whose visibility was revoked.
-            const facts = freshFacts.map((fact) => {
+            const reconciledFresh = freshFacts.map((fact) => {
               const existing = current.facts.find((item) => item.id === fact.id);
               return existing && existing.version > fact.version ? existing : fact;
             });
+            const facts = [...reconciledFresh, ...preservedUnseen];
+            if (areFactsEqual(current.facts, facts)) {
+              return current;
+            }
             return { ...current, facts };
           });
         }
@@ -432,8 +469,6 @@ export default function DealConversationReview({
     activeOrganizationId,
     conversationReady,
     deal.id,
-    pendingFactId,
-    pendingVisibilityFactId,
     revalidateIntervalMs,
   ]);
 
@@ -454,7 +489,7 @@ export default function DealConversationReview({
         current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
           ? {
               ...current,
-              facts: mergeFact(current.facts, updatedFact),
+              facts: mergeFact(current.facts, updatedFact, removedFactIdsRef.current),
             }
           : current,
       );
@@ -478,7 +513,7 @@ export default function DealConversationReview({
         current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
           ? {
               ...current,
-              facts: mergeFact(current.facts, updatedFact),
+              facts: mergeFact(current.facts, updatedFact, removedFactIdsRef.current),
             }
           : current,
       );
@@ -490,9 +525,10 @@ export default function DealConversationReview({
   }
 
   function addSuggestedFact(fact: DealFact) {
+    removedFactIdsRef.current.delete(fact.id);
     const generation = contextGenerationRef.current;
     setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
-      ? { ...current, facts: mergeFact(current.facts, fact) }
+      ? { ...current, facts: mergeFact(current.facts, fact, removedFactIdsRef.current) }
       : current);
     if (
       fact.source_message_id
@@ -517,16 +553,19 @@ export default function DealConversationReview({
   }
 
   function updateSuggestedFact(fact: DealFact) {
+    removedFactIdsRef.current.delete(fact.id);
     setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
-      ? { ...current, facts: mergeFact(current.facts, fact) }
+      ? { ...current, facts: mergeFact(current.facts, fact, removedFactIdsRef.current) }
       : current);
   }
 
   function replaceSuggestedFact(replaced: DealFact, corrected: DealFact) {
+    removedFactIdsRef.current.delete(replaced.id);
+    removedFactIdsRef.current.delete(corrected.id);
     setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
       ? {
           ...current,
-          facts: mergeFact(mergeFact(current.facts, replaced), corrected),
+          facts: mergeFact(mergeFact(current.facts, replaced, removedFactIdsRef.current), corrected, removedFactIdsRef.current),
         }
       : current);
   }

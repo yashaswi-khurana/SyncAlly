@@ -321,9 +321,41 @@ export async function getDealMessageExistence(dealId: string): Promise<boolean> 
   return payload["has_messages"];
 }
 
-export function listDealFacts(dealId: string, organizationId: string): Promise<DealFact[]> {
-  const query = new URLSearchParams({ organization_id: organizationId });
-  return apiRequest<DealFact[]>(`/deals/${encodeURIComponent(dealId)}/facts?${query.toString()}`);
+export async function listDealFacts(
+  dealId: string,
+  organizationId: string,
+  options?: { limit?: number; offset?: number; signal?: AbortSignal },
+): Promise<DealFact[]> {
+  if (options?.limit !== undefined || options?.offset !== undefined) {
+    const query = new URLSearchParams({ organization_id: organizationId });
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    return apiRequest<DealFact[]>(`/deals/${encodeURIComponent(dealId)}/facts?${query.toString()}`, {
+      signal: options.signal,
+    });
+  }
+
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 100;
+  const allFacts: DealFact[] = [];
+  let offset = 0;
+  for (let pageIdx = 0; pageIdx < MAX_PAGES; pageIdx += 1) {
+    const query = new URLSearchParams({
+      organization_id: organizationId,
+      limit: String(PAGE_SIZE),
+      offset: String(offset),
+    });
+    const page = await apiRequest<DealFact[]>(
+      `/deals/${encodeURIComponent(dealId)}/facts?${query.toString()}`,
+      { signal: options?.signal },
+    );
+    allFacts.push(...page);
+    if (page.length < PAGE_SIZE) {
+      break;
+    }
+    offset += page.length;
+  }
+  return allFacts;
 }
 
 export function createDealFact(dealId: string, input: CreateDealFactInput): Promise<DealFact> {

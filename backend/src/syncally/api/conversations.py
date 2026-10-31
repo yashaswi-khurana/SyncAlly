@@ -41,6 +41,7 @@ from syncally.application.conversations import (
     add_message,
     correct_constraint,
     create_manual_constraint,
+    deal_has_any_message,
     list_visible_constraints,
     list_visible_messages,
     review_constraint,
@@ -126,6 +127,12 @@ class MessageResponse(BaseModel):
     source_type: str
     source_reference: str | None
     created_at: datetime
+
+
+class MessageExistenceResponse(BaseModel):
+    """Deal-wide message presence; deliberately no content or metadata."""
+
+    has_messages: bool
 
 
 class ConstraintResponse(BaseModel):
@@ -569,6 +576,30 @@ def add_message_route(
         _raise_review_error(exc)
     db.commit()
     return _to_message_response(message)
+
+
+@router.get("/messages/existence", response_model=MessageExistenceResponse)
+def message_existence_route(
+    deal_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+) -> MessageExistenceResponse:
+    """Report whether any message exists in the deal, including private ones.
+
+    Visibility is deliberately ignored so onboarding reflects activity the
+    selected organization cannot read. Only the boolean crosses the privacy
+    boundary; never add content, author, counts, or timestamps here.
+    """
+    try:
+        has_messages = deal_has_any_message(actor, deal_id, repository)
+    except (
+        CommunicationNotFound,
+        OrganizationAccessDenied,
+        AmbiguousOrganization,
+        CommunicationScopeError,
+    ) as exc:
+        _raise_review_error(exc)
+    return MessageExistenceResponse(has_messages=has_messages)
 
 
 @router.get("/messages", response_model=list[MessageResponse])

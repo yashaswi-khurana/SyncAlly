@@ -57,7 +57,10 @@ domain commands, not direct status assignment.
 
 Conversation data must be labeled by owner and visibility. Never build a
 shared LLM prompt from all deal messages without an explicit
-access-filtering step.
+access-filtering step. One deliberate exception: a deal participant may
+learn whether any message exists anywhere in the deal, without content,
+author, count, or timestamp, so onboarding can reflect activity that the
+selected organization cannot read.
 
 ### Constraint and evidence
 

@@ -11,6 +11,12 @@ export interface Organization {
   role: string;
 }
 
+export interface OrganizationDirectoryItem {
+  id: string;
+  legal_name: string;
+  country_code: string;
+}
+
 export interface Deal {
   id: string;
   buyer_organization_id: string;
@@ -169,6 +175,10 @@ export interface DealMessage {
   source_type: "USER" | "AGENT";
   source_reference: string | null;
   created_at: string;
+}
+
+export interface MessageExistence {
+  has_messages: boolean;
 }
 
 export interface DealFact {

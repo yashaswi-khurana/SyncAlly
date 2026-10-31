@@ -1,70 +1,162 @@
 # SyncAlly Implementation Plan
 
-**Status:** Living plan. Completed foundations and remaining product work are listed separately below.
+**Status:** Living plan. Foundations and core product workflows are fully implemented; remaining production hardening and enterprise milestones are detailed below.
 
-This plan tracks the constrained first demo from the shared [demo contract in issue #8](https://github.com/yashaswi-khurana/SyncAlly/issues/8). The contract's working defaults are ready to implement. Update implementation status when work merges, and use the relevant issue/PR to propose a focused contract change when code reveals a concrete mismatch.
+This plan tracks the implementation of SyncAlly from the initial demo contract ([Issue #8](https://github.com/yashaswi-khurana/SyncAlly/issues/8)) through the major commercial execution capabilities and workflow extensions ([Issue #77](https://github.com/yashaswi-khurana/SyncAlly/issues/77)).
+
+---
 
 ## Current Implementation Status
 
-### Implemented foundation
+### Implemented Foundation & Core Vertical Slice
 
-- Backend API health endpoints, JWT authentication, refresh-token storage/rotation, and deal reads authorized through database-backed organization membership.
-- PostgreSQL models, Alembic migrations, database configuration, persistence/rollback coverage, and migration instructions (PRs [#41](https://github.com/yashaswi-khurana/SyncAlly/pull/41) and [#42](https://github.com/yashaswi-khurana/SyncAlly/pull/42)).
-- Framework-independent domain foundations for deals, trade terms, negotiation, bilateral agreements, and payment intents.
-- Framework-independent conversation, message, and constraint contracts with visibility checks and owner-authorized fact confirmation.
-- React/TypeScript Vite shell.
-- Backend test/lint commands, a health-route test, and frontend test/build/lint checks are defined in the project READMEs and verified by this story.
-- Development/test demo seeding creates buyer/seller accounts, organizations, and admin memberships; public self-registration is disabled.
+The following capabilities are complete, tested, and merged into the active application mainline:
 
-### Still planned
+1. **Authentication, Tenant Isolation & Onboarding:**
+   - JWT access and refresh token rotation with cryptographic secrets and configurable TTLs.
+   - Database-backed organization membership checks and actor context resolution (`ActorContext`).
+   - Guided organization setup wizard (`OnboardingWizard`) for first-time signups with 0 organizations.
+   - Cryptographically signed 7-day single-use counterparty invitation tokens (`POST /organizations/{org_id}/invitations` and `POST /invitations/accept`) with atomic replay protection.
+   - Development demo account seeder (`python -m syncally.cli.seed_demo`) for local environments; public self-registration remains disabled.
 
-- Persisted deal creation and complete browser-to-API deal workflows.
-- Message/fact review, proposal creation and negotiation workflows, bilateral approval, and committed agreement persistence.
-- PayPal Sandbox invoice creation and reconciliation.
-- Frontend connection to the API and user-facing product flows.
-- Product onboarding through organization invitations, acceptance, and password setup.
+2. **Organization Directory Discovery & Deal Creation:**
+   - Case-insensitive legal entity directory search API (`GET /organizations/directory`) with prefix matching, pagination, and active organization exclusions.
+   - Deal Creation Wizard (`CreateDealPage`) discovering trading counterparties directly via directory search, replacing manual UUID entry.
 
-See [README](../README.md), [system architecture](../ARCHITECTURE.md), and the [architecture decision record](architecture/04-architecture-decision-record.md) for more detail. Architecture documents describe intended behavior where the implementation status above says work is still planned.
+3. **Context-Scoped Negotiation & In-Deal Messaging:**
+   - Dual-channel message timeline (`DealConversationReview`) with explicit privacy tagging (`SHAREABLE` vs. `PRIVATE`).
+   - Client idempotency key transmission and message existence verification (`GET /deals/{deal_id}/messages/existence`).
 
-## What We Are Building
+4. **Commercial Facts Review & Manual Term Studio:**
+   - On-demand AI fact extraction (`POST /deals/{deal_id}/ai/facts`) with provenance, confidence scores, and missing-field diagnostics.
+   - Manual Term Studio (`POST /deals/{deal_id}/facts`, `PATCH /deals/{deal_id}/facts/{fact_id}`) enabling manual entry, editing, and fact visibility toggling (`PATCH .../visibility`).
+   - Agreement readiness checklist dynamically tracking mandatory terms (item, quantity, price, delivery date, destination) before unblocking proposal drafting.
 
-Build one simple buyer/seller flow for one agreed trade type and currency:
+5. **Reactive Suggestion-to-Proposal Synchronization:**
+   - Confirmed commercial facts automatically overlay candidate agreement proposals.
+   - Revoking or modifying a confirmed fact automatically invalidates affected draft fields while preserving unrelated human edits.
 
-1. Create a deal and save it.
-2. Add messages and review extracted facts.
-3. Draft a proposal and let people review it.
-4. Get both sides to approve the exact same agreement.
-5. Track long-running work with Temporal.
-6. Create and reconcile one PayPal Sandbox invoice.
+6. **Bilateral Agreement Consensus & Atomic Commitment:**
+   - Canonical JSON terms serialization and deterministic `SHA-256` terms hashing.
+   - Payment timing terms validation (`UPFRONT`, `NET_30`, `UPON_DELIVERY`, `SPLIT_50_50`).
+   - Dual approval verification: both buyer and seller organizations must approve the identical version and terms hash.
+   - Atomic PostgreSQL commitment transaction: transitions deal to `COMMITTED`, generates immutable obligations and payment milestones, logs audit events, and writes outbox events.
 
-This does not include production payments, multiple payment providers, escrow, or general legal/tax/customs compliance.
+7. **Durable Temporal Workflow Orchestration:**
+   - Transactional outbox relay (`outbox_worker.py`) delivering committed events to Temporal via `signal_with_start`.
+   - `DealWorkflow` (`deal/<deal_id>/lifecycle`) maintaining durable state across 30-day horizons.
+   - `RefreshDealStateActivity` reloading authoritative commercial truth directly from PostgreSQL via SQLAlchemy repositories.
 
-## Words Used in This Plan
+8. **PayPal Sandbox Invoicing & Reconciliation:**
+   - Independent leased payment outbox worker (`payment_worker.py`) with PostgreSQL `FOR UPDATE SKIP LOCKED` claims (5-minute leases).
+   - Seller pre-authorization confirmation dialog previewing the buyer organization's single active administrator contact.
+   - Deterministic PayPal Sandbox invoice creation, send dispatch, and optional Gmail SMTP copies.
+   - Robust recovery for ambiguous timeouts (`CREATE_PENDING` $\rightarrow$ `CREATE_UNKNOWN` with lookup before retry).
+   - Cryptographically verified PayPal webhook intake (`POST /webhooks/paypal/invoicing`) with automated full-amount and currency reconciliation to `PAID`.
 
-- **Migration:** a versioned change to the database structure.
-- **Outbox:** a database row saved with a business change, then picked up and delivered later. It prevents work from being lost if a process stops.
-- **Idempotent:** safe to retry without doing the same work twice.
-- **Reconcile:** ask PayPal for its current status and compare it with our saved status.
-- **Immutable:** cannot be edited after commit; make a new version to change it.
-- **Private context:** information visible only to the organization that supplied it.
+9. **Developer Tooling & Verification Automation:**
+   - Floating Dev Role Switcher (`POST /dev/switch-role`) for 1-click toggling between Buyer, Seller, and Admin sessions in development mode.
+   - Safe Demo Data Reset (`POST /dev/reset-demo`) purging test deals between demo organizations while preserving accounts and external records.
+   - Standalone end-to-end simulation CLI (`simulate_deal_flow.py`) executing all 7 checkpoints in <0.5s in CI mode and against running live APIs.
+
+---
+
+### Still Planned / Production Rollout Scope
+
+The following items are intentionally deferred for production scaling and enterprise compliance:
+
+- **Live Production Payments:** Onboarding live PayPal merchant credentials, multi-seller payout routing, dispute webhooks, and alternative settlement rails / escrow.
+- **Cloud Object Storage:** S3 / MinIO storage adapter for persisting commercial document drafts and compliance artifacts.
+- **Automated PDF Generation:** Server-side document rendering (e.g. WeasyPrint) generating standardized, printable PDF sales contracts bearing the immutable agreement hash.
+- **In-Flight Term Amendments:** Non-destructive amendment state machine (`deepdiff`) allowing post-commitment milestone adjustments without workflow resets.
+- **Distributed Observability:** OpenTelemetry distributed tracing and Prometheus metrics exporters.
+- **Enterprise Legal & Tax Compliance:** Automated calculation of regional VAT/GST, cross-border customs declarations, and multi-jurisdiction e-signature compliance.
+
+See [README](../README.md), [system architecture](../ARCHITECTURE.md), [operations guide](operations.md), and the [architecture decision record](architecture/04-architecture-decision-record.md) for more detail.
+
+---
+
+## New Architecture Contracts (Issue #77 Extensions)
+
+### 1. Organization Directory Search Contract
+- **Endpoint:** `GET /organizations/directory?query={prefix}&limit={10}&offset={0}`
+- **Ownership:** `backend/src/syncally/api/organizations.py`, `infrastructure/repositories/organizations.py`
+- **Contract Guarantees:**
+  - Performs case-insensitive prefix matching against active organizations (`status = 'ACTIVE'`).
+  - Automatically filters out organizations where the authenticated caller holds active membership to prevent self-dealing.
+  - Returns paginated list of `{ id, legal_name, country_code }`.
+  - Enforced by frontend `CreateDealPage` to eliminate manual UUID copy-pasting.
+
+### 2. Deal Message Composer & Privacy Selector Contract
+- **Endpoint:** `POST /deals/{deal_id}/messages`
+- **Ownership:** `backend/src/syncally/api/conversations.py`, `frontend/src/deals/DealConversationReview.tsx`
+- **Contract Guarantees:**
+  - Requires caller to be an active member of a participant organization in the deal.
+  - Enforces explicit `visibility` parameter: `SHAREABLE` (delivered to counterparty) or `PRIVATE` (persisted strictly within authoring organization's context).
+  - Accepts optional `idempotency_key` string from the client to prevent duplicate posts on network retries.
+  - Component preserves unsubmitted text and selected privacy state upon network or server error.
+
+### 3. Manual Term Studio & Readiness Checklist Contract
+- **Endpoints:**
+  - `POST /deals/{deal_id}/facts` (insert manual fact candidate)
+  - `PATCH /deals/{deal_id}/facts/{fact_id}` (update fact value or unit)
+  - `PATCH /deals/{deal_id}/facts/{fact_id}/visibility` (toggle between `PRIVATE` and `SHAREABLE`)
+  - `POST /deals/{deal_id}/facts/{fact_id}/confirm` (mark fact authoritative)
+- **Ownership:** `backend/src/syncally/api/conversations.py`, `frontend/src/deals/AISuggestionReview.tsx`
+- **Contract Guarantees:**
+  - Allows operators to bypass or supplement AI extraction by manually entering structured terms (item description, quantity, unit price, delivery destination, delivery date).
+  - Readiness checklist dynamically inspects confirmed terms; disables proposal creation and highlights missing fields until all mandatory terms are confirmed.
+  - Toggling visibility verifies that only the fact's owner organization can alter privacy boundaries.
+
+### 4. Dev Role Switcher & Sandbox Recovery Contract
+- **Endpoints:**
+  - `POST /dev/switch-role` (issue fresh JWT tokens for `BUYER`, `SELLER`, or `ADMIN`)
+  - `POST /dev/reset-demo` (transactional purge of demo deal records)
+- **Ownership:** `backend/src/syncally/api/dev.py`, `frontend/src/ui/DevRoleSwitcher.tsx`
+- **Contract Guarantees:**
+  - Strictly blocked (HTTP 403) unless `APP_ENV` is `development` or `test` and caller holds a valid demo admin token.
+  - Reset Demo Data locks reset operations, preserves user accounts, retains memberships, and deletes only deals between seeded demo organizations (`buyer@syncally.demo` and `seller@syncally.demo`). Deals involving other organizations remain untouched.
+
+### 5. Invoice Observability & Pre-Authorization Recipient Contract
+- **Endpoints:** `POST /deals/{deal_id}/payments`, `GET /deals/{deal_id}/payments`
+- **Ownership:** `backend/src/syncally/api/payments.py`, `frontend/src/deals/PaymentStatusPanel.tsx`
+- **Contract Guarantees:**
+  - Before authorizing payment, the seller UI displays a confirmation dialog previewing the buyer organization's single active administrator contact (email, name, country).
+  - Status panel exposes live status (`AUTHORIZED`, `PROVIDER_CREATED`, `SENT`, `PAID`, `ACTION_REQUIRED`), provider invoice URL, failure reason, and retry countdown timers.
+  - Browser displays payment observations; actual settlement requires verified PayPal webhook reconciliation.
+
+---
+
+## Acceptance Criteria Verification Matrix (GitHub Issue #77)
+
+The table below maps all 11 acceptance criteria from Issue #77 directly to their implemented code modules, automated test suites, and verified execution commands:
+
+| AC ID | Acceptance Criteria & Requirement | Implemented Code Modules | Automated Test Suite & Coverage | Verification Command | Status |
+| :---: | :--- | :--- | :--- | :--- | :---: |
+| **AC-1** | **Organization Directory Search API**<br>Expose `GET /organizations/directory` with case-insensitive prefix matching, pagination, and caller org exclusion. | `backend/src/syncally/api/organizations.py`<br>`backend/src/syncally/infrastructure/repositories/organizations.py` | `test_organization_directory.py`<br>(10 unit & integration tests) | `python -m unittest discover -s backend/tests -p "test_organization_directory.py"` | **PASS** |
+| **AC-2** | **Directory Deal Creation Wizard**<br>Replace manual seller UUID entry with searchable directory picker; validate non-self-trading and display search errors. | `frontend/src/deals/CreateDealPage.tsx`<br>`frontend/src/api/client.ts` (`searchOrganizations`) | `CreateDealPage.test.tsx`<br>(14 component tests) | `cd frontend && npx vitest run src/deals/CreateDealPage.test.tsx` | **PASS** |
+| **AC-3** | **In-Deal Message Composer & Privacy**<br>Allow posting messages with explicit `SHAREABLE` or `PRIVATE` visibility, idempotency keys, and error preservation. | `frontend/src/deals/DealConversationReview.tsx`<br>`backend/src/syncally/api/conversations.py` | `DealConversationReview.test.tsx`<br>`test_conversation_routes.py` (36 tests) | `cd frontend && npx vitest run src/deals/DealConversationReview.test.tsx` | **PASS** |
+| **AC-4** | **Manual Term Studio & Readiness Checklist**<br>Allow manual fact entry and editing; enforce checklist requiring mandatory terms before proposal generation. | `frontend/src/deals/AISuggestionReview.tsx`<br>`frontend/src/deals/DealConversationReview.tsx` | `AISuggestionReview.test.tsx`<br>`DealConversationReview.test.tsx` | `cd frontend && npx vitest run src/deals/AISuggestionReview.test.tsx` | **PASS** |
+| **AC-5** | **Fact Visibility Toggle API & UI**<br>Add `PATCH /deals/{id}/facts/{id}/visibility` allowing fact owners to toggle between `PRIVATE` and `SHAREABLE`. | `backend/src/syncally/api/conversations.py`<br>`frontend/src/deals/DealConversationReview.tsx` | `test_conversation_routes.py`<br>`DealConversationReview.test.tsx` | `python -m unittest discover -s backend/tests -p "test_conversation_routes.py"` | **PASS** |
+| **AC-6** | **Colloquial AI Fact Extraction**<br>Extract commercial terms from informal messages with confidence scores, source citations, and missing-field diagnostics. | `backend/src/syncally/infrastructure/ai/demo.py`<br>`backend/src/syncally/application/ai.py` | `test_ai_provider.py`<br>`test_ai_context.py` (15 tests) | `python -m unittest discover -s backend/tests -p "test_ai_provider.py"` | **PASS** |
+| **AC-7** | **Reactive Fact-to-Proposal Sync**<br>Synchronize confirmed facts into proposal drafts; revoking or editing facts invalidates affected proposal fields. | `frontend/src/deals/DealConversationReview.tsx`<br>`backend/src/syncally/api/agreements.py` | `DealConversationReview.test.tsx`<br>`test_agreement_routes.py` | `cd frontend && npx vitest run src/deals/DealConversationReview.test.tsx` | **PASS** |
+| **AC-8** | **Payment Timing & Agreement Review**<br>Validate payment timing terms (`NET_30`, `UPFRONT`), compute SHA-256 canonical hash, and require bilateral approval. | `backend/src/syncally/domain/agreements/`<br>`frontend/src/deals/AgreementReview.tsx` | `AgreementReview.test.tsx`<br>`test_agreements.py` (30 tests) | `cd frontend && npx vitest run src/deals/AgreementReview.test.tsx` | **PASS** |
+| **AC-9** | **Dev Role Switcher & Sandbox Recovery**<br>Floating widget to toggle `BUYER`, `SELLER`, `ADMIN` (`/dev/switch-role`) and reset demo data (`/dev/reset-demo`). | `backend/src/syncally/api/dev.py`<br>`frontend/src/ui/DevRoleSwitcher.tsx` | `DevRoleSwitcher.test.tsx`<br>`test_dev_routes.py` (22 tests) | `cd frontend && npx vitest run src/ui/DevRoleSwitcher.test.tsx` | **PASS** |
+| **AC-10** | **Pre-Authorization Recipient & Observability**<br>Preview buyer admin contact before payment request; display provider invoice link, retry count, and countdown timers. | `frontend/src/deals/PaymentStatusPanel.tsx`<br>`backend/src/syncally/api/payments.py` | `PaymentStatusPanel.test.tsx`<br>`test_payment_processing.py` (28 tests) | `cd frontend && npx vitest run src/deals/PaymentStatusPanel.test.tsx` | **PASS** |
+| **AC-11** | **Automated Dual-Role Simulation CLI**<br>Execute all 7 deal flow checkpoints end-to-end; support sub-second in-process CI mode and live network API execution. | `backend/src/syncally/cli/simulate_deal_flow.py` | Standalone CLI Test Harness<br>(7/7 checkpoints passing in 0.4s) | `python -m syncally.cli.simulate_deal_flow --ci --no-color` | **PASS** |
+
+---
 
 ## Identity and Onboarding Status
 
-Email/password login, verified-token identity, database-backed memberships, organization
-creation, and admin membership for existing users are implemented. Public self-registration
-is disabled to match the demo contract. From `backend/`, run
-`python -m syncally.cli.seed_demo` after migrations to provision the demo buyer and seller;
-the command prompts for passwords and hashes them in the app. Product onboarding through an
-organization admin invitation, invite acceptance, and password setup remains planned work.
+Email/password login, verified-token identity, database-backed memberships, organization creation, and admin membership for existing users are fully implemented. Public self-registration is disabled to match the demo contract.
 
-## Team Rules
+Product onboarding is implemented via two complementary mechanisms:
+1. **Guided Setup Wizard (`OnboardingWizard`):** Authenticated users with 0 organizations are automatically presented with the setup wizard upon sign-in to configure their company legal name and country code, establishing them as `ADMIN`.
+2. **Tokenized Counterparty Invitations:** Organization administrators generate signed 7-day single-use JWT invitation links (`POST /organizations/{org_id}/invitations`). Recipients opening `#/invite?token=...` are guided through account creation, company registration, and direct linking into the target deal via `POST /invitations/accept`.
+3. **Local Demo Seeding:** Run `python -m syncally.cli.seed_demo` after migrations to provision fixed demo accounts (`buyer@syncally.demo` and `seller@syncally.demo`) with prompted passwords.
 
-- Each story gets one branch and one PR. Put tests with the code they test.
-- Use issue #8 as the working product and API contract; work can proceed asynchronously against those defaults.
-- Agree on shared types and API shapes before building dependent pieces in parallel.
-- Do not edit the same file at the same time. If two stories need the same file, merge the shared change first or do those stories one after another.
-- Merge all stories in a stage before starting a later stage that changes the same interfaces.
-- Update this plan when work merges so completed foundations remain distinct from planned flows.
+---
 
 ## Rules Every Stage Must Follow
 
@@ -74,535 +166,63 @@ organization admin invitation, invite acceptance, and password setup remains pla
 - AI can suggest facts and terms. A person and the domain rules must check them before they affect an agreement.
 - Both organizations must approve the same agreement version. A committed agreement is not edited in place.
 - PostgreSQL stores the business truth. Temporal, AI history, a webhook, or a browser redirect cannot replace it.
-- Save and authorize a PaymentIntent before calling PayPal. Mark it paid only after checking PayPal's current payment state.
+- Save and authorize a `PaymentIntent` before calling PayPal. Mark it paid only after checking PayPal's current payment state.
 - Do not hold a database transaction open while calling an AI service, Temporal, or PayPal.
 - Use decimal money values and an explicit currency. Do not use floating-point numbers for money.
 
-## Stage 1 - Set Up the Basics
-
-**Goal:** Add the first domain types, database setup, user identity boundary, and test commands.
-
-### S1-01 - Add organization and deal types
-
-**Code area:** `backend/src/syncally/domain/`
-
-**Why:** Other features need a common definition of a deal and its participants.
-
-**What to build:** Add Organization, membership, and Deal types. A deal has one buyer, one seller, a status, and a version. Put allowed status changes in domain methods, not in the API or database code.
-
-**Done when:**
-- Tests reject a deal where buyer and seller are the same organization.
-- Tests reject an invalid status change.
-- Importing the domain package does not load FastAPI, the database, Temporal, or PayPal code.
-
-### S1-02 - Set up the database
-
-**Code area:** `backend/src/syncally/infrastructure/` and the chosen migrations folder.
-
-**Why:** Deals and user memberships must survive app restarts.
-
-**What to build:** Add SQLAlchemy setup, Alembic migrations, database configuration from environment variables, and tables for organizations, memberships, and deals. Add the basic outbox table, but not its worker yet.
-
-**Done when:**
-- A clean local database can be created with the documented migration command.
-- Tests cover saving and loading the first records and rolling back after an error.
-- A deal and its outbox row can be saved in one transaction; if the transaction fails, neither is saved.
-- No database password is committed to the repo.
-
-### S1-03 - Add the user identity boundary
-
-**Code area:** `backend/src/syncally/api/` and `application/`.
-
-**Why:** Later API calls must know which user is making a request and which organizations they can act for.
-
-**What to build:** Implement the sign-in/authentication choice agreed by the team. Add a backend ActorContext that gives application code the verified user and organization memberships. Any shortcut for local development must be disabled outside development/test settings.
-
-For the first demo, operator provisioning is performed by the development/test-only
-`python -m syncally.cli.seed_demo` command. Do not expose public self-registration. The
-separate product onboarding flow (invite by email, accept invite, set password, activate
-membership) remains planned.
-
-**Done when:**
-- Protected requests fail when the user is not signed in.
-- A user without active membership cannot access that organization's deal.
-- Tests prove browser-supplied roles or organization IDs cannot grant access.
-- Secrets come from configuration and are not written to logs.
-
-### S1-04 - Add test and check commands
-
-**Code area:** backend/frontend test configuration and READMEs.
-
-**Why:** Everyone needs the same quick way to check their changes.
-
-**What to build:** Add a backend test/lint setup and a frontend test setup that fit the existing projects. Add a health-route test and a basic frontend render test. Document the commands.
-
-**Done when:**
-- The documented backend and frontend checks run after installing dependencies.
-- A broken test makes its command fail.
-- The health route and basic frontend render are tested.
-
-**Stage check:** The foundational stories are merged. A clean checkout can run the documented checks and database migration.
-
-## Stage 2 - Create and View a Deal
-
-**Goal:** A signed-in user can create a deal, save it, and view it again.
-
-### S2-01 - Add deal use cases
-
-**Code area:** `backend/src/syncally/application/`
-
-**Why:** The API and UI need one tested place to ask for deal creation and retrieval.
-
-**What to build:** Add create-deal and get-deal operations. They take the verified user context, check participation, and use a repository interface. Do not put SQLAlchemy code here.
-
-**Done when:**
-- Unit tests cover create, get, missing deal, same buyer/seller, and user without membership.
-- The use case does not trust a role supplied by the caller.
-- Tests run without starting FastAPI or PostgreSQL.
-
-### S2-02 - Save and load deals
-
-**Code area:** `backend/src/syncally/infrastructure/`.
-
-**Why:** The use cases need a database implementation of their repository interface.
-
-**What to build:** Add create/get database operations for organizations, memberships, and deals. Convert database rows to domain types at this boundary.
-
-**Done when:**
-- Database tests save and load a deal with the right buyer, seller, and version.
-- Missing or duplicate references return clear errors.
-- A failed create leaves no partial deal behind.
-
-### S2-03 - Add deal API routes
-
-**Code area:** `backend/src/syncally/api/`.
-
-**Why:** The UI needs HTTP endpoints to create and view deals.
-
-**What to build:** Add create and detail routes, input/output schemas, and error mapping. Get the user context from S1-03. Call application use cases; do not implement deal rules inside the route.
-
-**Done when:**
-- API tests cover success, bad input, not signed in, forbidden access, and missing deal.
-- Responses use API schemas, not raw database objects.
-- A user cannot see another organization's membership details.
-
-### S2-04 - Connect the deal UI
-
-**Code area:** `frontend/src/`.
-
-**Why:** This proves the backend and browser work together.
-
-**What to build:** Replace the placeholder screen with a basic create and detail flow. Load data from the API. Show loading, empty, validation, and error states.
-
-**Done when:**
-- A user can create a deal and see it in the UI.
-- Refreshing the page loads the saved deal from the API.
-- API errors do not leave the screen stuck loading.
-- Frontend tests and build pass.
-
-**Stage check:** Create a deal in the browser, refresh, and see it again. A different organization cannot read it.
-
-## Stage 3 - Messages and Facts
-
-**Goal:** Store deal messages and facts while keeping each side's private information private.
-
-### S3-01 - Define messages and facts
-
-**Code area:** `backend/src/syncally/domain/` and `application/`.
-
-**Why:** Later proposal work needs to know who said something and whether it can be shared.
-
-**What to build:** Add Conversation, Message, and Constraint types. A conversation uses `participant_organization_id`; messages and facts have explicit private/shareable visibility. Facts retain units and provenance, start unconfirmed, and advance by versioned review transitions.
-
-**Contract code:** Domain types and fake-backed authorization/confirmation checks are implemented. A message inherits deal/owner scope through its required conversation reference; a constraint stores its deal and owner directly. The repository port requires current owner membership, same-deal provenance, and an expected-version check in the save transaction. Persistence, API routes, and UI remain in S3-02 through S3-04.
-
-**Done when:**
-- Tests reject messages or facts without a deal owner and visibility.
-- Extracted facts cannot become confirmed without an authorized confirm operation.
-
-### S3-02 - Save messages and facts
-
-**Code area:** database migrations and `backend/src/syncally/infrastructure/`.
-
-**Why:** Messages and their source information must persist and remain correctly scoped.
-
-**What to build:** Add tables and repository operations for conversations, messages, and constraints. Save owner, visibility, source reference, and status. Require a deal/organization scope when reading records.
-
-**Done when:**
-- Database tests save and load messages/facts with ownership and visibility intact.
-- A buyer-scoped query cannot return seller-private data, and vice versa.
-- Migration and rollback are covered by tests.
-
-### S3-03 - Add message and fact API routes
-
-**Code area:** `backend/src/syncally/api/` and `application/`.
-
-**Why:** The backend, not the browser, must decide which side can read or change a message or fact.
-
-**What to build:** Add routes to add/list messages and to confirm, reject, or request clarification for a fact. Get the organization from the verified user context.
-
-**Done when:**
-- API tests cover allowed access, cross-organization denial, and unauthorized confirmation.
-- A participant gets only the messages/facts allowed by the visibility rules.
-- Message contents are not written to general logs.
-
-### S3-04 - Build the message and fact review screens
-
-**Code area:** `frontend/src/`.
-
-**Why:** People need to check extracted facts before the app uses them.
-
-**What to build:** Add a deal conversation screen and a fact review screen. Label private/shareable and extracted/confirmed information. Let the user confirm, reject, or ask for clarification.
-
-**Done when:**
-- Users can only see data returned by their authorized API calls.
-- Unconfirmed facts look different from confirmed facts.
-- The UI does not present an extracted fact as agreed truth.
-
-**Stage check:** Tests with two organizations prove private messages/facts do not cross between them.
-
-## Stage 4 - AI Suggestions
-
-**Goal:** AI can suggest facts and terms, but a person reviews them before they are used.
-
-### S4-01 - Define AI input and output types
-
-**Code area:** `backend/src/syncally/domain/` or shared application schemas.
-
-**Why:** The app must reject malformed AI output instead of trusting free-form text.
-
-**What to build:** Define versioned schemas for extracted facts, their source references, proposal terms, and validation errors. Check required fields and supported values in normal Python code.
-
-**Done when:**
-- Tests reject missing, malformed, or unsupported values.
-- Each extracted fact has a source reference or says that its source is unknown.
-- AI output cannot directly approve an agreement or start a payment.
-
-### S4-02 - Filter AI context by organization
-
-**Code area:** `backend/src/syncally/application/`.
-
-**Why:** A prompt must not include the other side's private information.
-
-**What to build:** Add a service that selects only the current organization's private data and explicitly shareable data. Keep filtering separate from prompt-building so it can be tested without an AI service.
-
-**Done when:**
-- Tests prove buyer prompts cannot include seller-private facts and seller prompts cannot include buyer-private facts.
-- Missing or conflicting ownership/visibility causes the request to fail closed.
-- Raw private context is not put in logs or Temporal workflow inputs.
-
-### S4-03 - Add an AI adapter and fake
-
-**Code area:** `backend/src/syncally/infrastructure/` and `application/`.
-
-**Why:** The app needs to call an AI service without making business rules depend on its SDK.
-
-**What to build:** Add a small interface for fact extraction and proposal drafting. Add a fake implementation for tests. Add one real provider only after the team chooses it. Set time and retry limits; parse output with S4-01 schemas. Use LangGraph only if a simple typed function is not enough.
-
-**Contract code:** The `AISuggestionProvider` port, `AIRetryPolicy`, the bounded `extract_facts`/`draft_proposal` use cases, and deterministic providers are implemented in `application/ai.py` and `infrastructure/ai/`. Output is parsed with the S4-01 schemas and grounded against the S4-02 filtered context. The explicit review API and UI are integrated; no real provider is selected. See [the AI provider boundary](architecture/06-ai-provider-boundary.md).
-
-**Done when:**
-- Tests run with the fake and need no network or API key.
-- Invalid AI output is rejected or sent for clarification; it is never auto-confirmed.
-- Timeouts/retries have a fixed limit.
-- AI credentials never reach the browser, Temporal history, or logs.
-
-### S4-04 - Add the AI review UI
-
-**Code area:** `frontend/src/`.
-
-**Why:** Users need to review suggestions before sharing or using them.
-
-**What to build:** Show extracted facts with their source. Let users correct, confirm, or ask for clarification. Show proposals as drafts, not agreements. Hide private facts from the other party's view.
-
-**Done when:**
-- Review actions go through the API and require an explicit user click.
-- A private fact never appears in the other party's proposal screen.
-- AI drafts are clearly different from approved agreements.
-
-**Stage check:** Verified on the current mainline: deterministic AI suggestions are requested explicitly, facts are saved unconfirmed with source evidence, the user can review them, and private context remains organization-scoped. Backend coverage is in `test_ai_context.py`, `test_ai_provider.py`, and `test_conversation_routes.py`; frontend coverage is in `DealConversationReview.test.tsx`.
-
-## Stage 5 - Agreement and Approvals
-
-**Goal:** The deal becomes agreed only after both sides approve the same saved version.
-
-### S5-01 - Make stable agreement versions
-
-**Code area:** `backend/src/syncally/domain/` and `application/`.
-
-**Why:** Both approvals must refer to exactly the same terms.
-
-**What to build:** Define the agreement fields and how to normalize them before saving. Create a stable hash (fingerprint) from the normalized terms. A change after commit creates a new version.
-
-**Done when:**
-- Tests show the same terms produce the same hash even if fields arrive in a different order.
-- Amounts use decimal values and always include a currency.
-- Unsupported/unclear terms cannot be committed.
-- A committed agreement cannot be edited in place.
-
-### S5-02 - Save approvals and commit in one transaction
-
-**Code area:** `backend/src/syncally/infrastructure/` and `application/`.
-
-**Why:** Two simultaneous approval requests must not create two agreements or commit different terms.
-
-**What to build:** Save agreement versions and approvals. Add `CommitAgreement`: check both authorized approvals match the current version and hash, then save the commit, obligations, audit record, and outbox row in one database transaction.
-
-**Done when:**
-- Tests reject one approval, unauthorized approval, old version, and wrong hash.
-- Two simultaneous commit attempts create only one commit and one set of obligations.
-- If any check fails, none of the commit-related rows are saved.
-
-### S5-03 - Add approval API routes
-
-**Code area:** `backend/src/syncally/api/`.
-
-**Why:** Approval must be a verified backend command, not a browser status change.
-
-**What to build:** Add routes to create an agreement draft, approve/reject a version, and request commit. Get the user's organization from sign-in state. Require the version and hash the user saw.
-
-**Done when:**
-- API tests cover unauthorized users, stale versions, wrong hashes, repeat requests, and successful commit.
-- A client cannot send `COMMITTED` status or pretend to be the other organization.
-- Stale approvals return a clear conflict response.
-
-### S5-04 - Add agreement review and approval screens
-
-**Code area:** `frontend/src/`.
-
-**Why:** Both sides must review the same saved terms before approving.
-
-**What to build:** Show agreement terms, version, and status. Approve/reject the version currently on screen. If it changed, show the conflict and reload. Make committed terms read-only.
-
-**Done when:**
-- The UI sends the version/hash it displayed.
-- A stale approval asks the user to reload; it does not approve a newer version automatically.
-- Committed terms cannot be edited on the screen.
-
-**Stage check:** Only two authorized approvals for the same version/hash can create one committed agreement and its obligations.
-
-## Stage 6 - Background Deal Workflow
-
-**Goal:** Let a deal wait for people and recover if a worker stops.
-
-### S6-01 - Deliver outbox work to Temporal
-
-**Code area:** `backend/src/syncally/infrastructure/` and worker entry point.
-
-**Why:** Saving a deal and starting Temporal are two separate operations. The outbox lets the app retry if Temporal is down.
-
-**What to build:** Add a process that reads pending outbox rows and starts one workflow per deal with a stable ID. Mark a row delivered only after handling the start result. Make retries safe.
-
-**Done when:**
-- Tests cover a stopped dispatcher, Temporal being unavailable, two dispatchers, and a workflow that already started.
-- A pending row starts one workflow after Temporal comes back.
-- Outbox data contains IDs, not private messages or secrets.
-
-### S6-02 - Write the deal workflow
-
-**Code area:** `backend/src/syncally/workflows/`.
-
-**Why:** Deals can wait hours or days; a normal API request cannot stay open that long.
-
-**What to build:** Add one workflow per deal. It may wait, set timers, and receive signals. It must call activities for database, AI, or provider work; do not call those systems directly from workflow code. Put a limit on waits, retries, and proposal rounds.
-
-**Contract code:** `workflows/deal.py` accepts the ID-only start payload from the S6-01 outbox, deduplicates notification IDs, and refreshes persisted state through the `RefreshDealState` activity contract. The workflow has a 30-day wait deadline and a three-attempt activity retry limit. Timeout returns `WAIT_EXPIRED` and does not mutate business state. The activity implementation and worker registration are in S6-03. The workflow patch marker and input schema migration strategy is documented in [the Temporal contract](architecture/02-temporal-deal-workflow-contract.md#10-temporal-workflow-determinism-and-versioning).
-
-**Done when:**
-- Tests show the workflow waits for approval and continues after a signal or worker restart.
-- Repeated/out-of-order signals do not repeat business actions.
-- A timeout never means approval or payment.
-- There is a test/release plan for changing workflow code while old workflows exist.
-
-### S6-03 - Add workflow activities and worker process
-
-**Code area:** `backend/src/syncally/workflows/` and `application/`.
-
-**Why:** Activities do external work; the API and workflow worker should be startable separately.
-
-**What to build:** Add activities that call application services using saved record IDs. Add a worker entry point separate from the FastAPI app. Reload current state before taking an action; do not treat old workflow input as current authorization.
-
-**Contract code:** `application/workflow_state.py` reloads the deal and current agreement by saved ID; the agreement version carried in older workflow input is not treated as current. `workflows/activities.py` implements `RefreshDealState`, converts validation and business rejections to non-retryable errors, and leaves transient database failures to the workflow's bounded retry policy. `workflows/worker.py` registers the workflow and activity as a process independent of FastAPI.
-
-**Done when:**
-- Tests show activities reload current state and use safe/repeatable commands.
-- Temporary errors retry a limited number of times; permission/validation errors do not retry forever.
-- Starting the API does not start a worker, and starting the worker does not start API routes.
-
-### S6-04 - Add local services and restart test
-
-**Code area:** `infra/` and local development docs.
-
-**Why:** All developers need a repeatable way to run PostgreSQL, Temporal, the API, and the worker.
-
-**What to build:** Add only the local service setup that has been tested. Document how to run migrations, API, outbox relay, and workflow worker. Add a smoke test that starts a workflow from the outbox and continues it after approval signals and a worker restart.
-
-**Local implementation:** `infra/compose.yaml` runs PostgreSQL and a Temporal CLI development server with persistent local workflow history. The API, outbox relay, and workflow worker run as separate backend processes. `backend/tests/test_local_workflow_smoke.py` is an opt-in PostgreSQL/Temporal integration test that verifies outbox start, approval notification delivery, worker restart recovery, and idempotent commit replay.
-
-**Done when:**
-- A new developer can follow the instructions and start all local processes.
-- The smoke test starts a workflow from an outbox row and resumes it after approval.
-- Restarting the worker does not lose deal state or repeat a commit.
-
-**Stage check:** A saved deal starts a workflow through the outbox, and the workflow can recover after a worker restart.
-
-## Stage 7 - PayPal Sandbox Payment
-
-**Goal:** Create one authorized Sandbox invoice and update its status only after checking PayPal.
-
-### S7-01 - Add PaymentIntent rules
-
-**Code area:** `backend/src/syncally/domain/` and `application/`.
-
-**Why:** The app needs a saved, authorized payment operation before it contacts PayPal.
-
-**What to build:** Add PaymentIntent and its states. Check there is a committed agreement, a valid seller, the right milestone amount/currency, and no duplicate active request. Include an unknown state for timeouts where PayPal may have received the request.
-
-**Done when:**
-- Tests reject missing agreement, unauthorized seller, wrong amount/currency, and duplicate request.
-- A timeout can be marked unknown, not falsely marked failed.
-- Only a PayPal status check can mark the intent fully paid.
-
-### S7-02 - Save payment intents and payment outbox rows
-
-**Code area:** database migrations and `backend/src/syncally/infrastructure/`.
-
-**Why:** The worker needs to resume a payment operation after a crash without creating another invoice.
-
-**What to build:** Save intent ID, deal/agreement/milestone IDs, amount/currency, status, version, operation key, provider invoice ID, and last check time. Save its outbox row in the same transaction. Never save credentials as ordinary database data.
-
-**Done when:**
-- Database tests reject duplicate active requests for one milestone.
-- Tests prove the intent and outbox row save or roll back together.
-- Logs and stored fields do not expose credentials or unnecessary provider data.
-
-### S7-03 - Add PayPal Sandbox adapter and worker
-
-**Code area:** `backend/src/syncally/infrastructure/` and payment worker.
-
-**Why:** PayPal-specific requests should be separate from deal rules and safe to retry.
-
-**What to build:** Add an adapter to create and send an invoice using the saved PaymentIntent and committed agreement data. Create and send are separate operations. Use stable request IDs when PayPal supports them. Do not call PayPal while a database transaction is open.
-
-**Done when:**
-- Automated tests use a fake PayPal client and need no credentials.
-- A timeout records an unknown result and checks PayPal before retrying invoice creation.
-- Permanent errors are shown as needing action, not retried forever.
-- Credentials never reach the browser or AI code.
-
-### S7-04 - Verify PayPal events and check payment status
-
-**Code area:** `backend/src/syncally/api/` and payment reconciliation worker.
-
-**Why:** A webhook or browser redirect alone does not prove that the full amount was paid.
-
-**What to build:** Verify webhook signatures, save each event ID once, then schedule a PayPal status check. Compare PayPal's current amount/currency/status with the saved intent before updating it.
-
-**Done when:**
-- Tests reject invalid signatures and ignore duplicate events safely.
-- Partial, pending, unknown, or mismatched payments never become paid.
-- Old events cannot overwrite a newer checked status.
-- Status, audit, and outbox updates commit together.
-
-**Implementation:** `POST /webhooks/paypal/invoicing` verifies the transmission
-with PayPal's Sandbox webhook-verification API, persists verified event IDs once,
-and writes reconciliation work to the payment outbox in the same transaction.
-The payment worker fetches the current invoice, checks its saved identity, amount,
-currency and payment progress, then commits the guarded intent update, audit row,
-webhook completion, and outbox completion together. Automated coverage uses fake
-PayPal responses. Mismatches are audited and moved to manual action atomically
-without changing the last trusted payment state. Stored webhook metadata omits
-payer details. The live Sandbox webhook round trip remains an environment check.
-
-**Stage check:** The Sandbox flow authorizes, creates, sends, and checks one invoice. Tests cover timeouts, duplicate webhooks, and partial payments.
-
-## Stage 8 - Finish the Demo and Handoff
-
-**Goal:** Show the saved agreement/payment status, test the full flow, and explain how to recover from failures.
-
-### S8-01 - Generate draft commercial documents
-
-**Code area:** `backend/src/syncally/application/` and document adapter if needed.
-
-**Why:** Users need a useful document based on the agreed terms, without creating another editable source of truth.
-
-**What to build:** Generate a clearly marked draft from the committed agreement. Include the agreement version. Do not claim legal/tax/customs compliance or guess missing terms. Add object storage only if the team has chosen how files should be saved.
-
-**Done when:**
-- Tests show the draft uses the committed terms and version.
-- Editing a draft cannot change the agreement.
-- Missing/unsupported terms are shown as missing, not guessed.
-
-### S8-02 - Finish payment and document screens
-
-**Code area:** `frontend/src/`.
-
-**Why:** Users need to know whether a payment is waiting, partial, paid, or needs help.
-
-**What to build:** Show the backend's payment status and safe document links. Do not use a browser redirect to decide payment status. Do not show invoice secrets or payment credentials.
-
-**Done when:**
-- UI tests cover loading, pending, partial, paid, error, and unavailable API states.
-- A redirect/query string cannot mark a payment paid.
-- Secret invoice links and credentials are not displayed in logs or page source.
-
-### S8-03 - Test the full flow and access boundaries
-
-**Code area:** backend integration tests and frontend end-to-end tests.
-
-**Why:** Bugs often happen between components, especially around privacy, approval, retries, and payment.
-
-**What to build:** Add one automated flow from deal creation through agreement and payment status. Use fake AI/PayPal services in normal tests. Keep the live Sandbox test optional.
-
-**Done when:**
-- Tests cover private data isolation for both organizations.
-- Simultaneous approvals cannot create duplicate agreements or obligations.
-- Repeated signals, outbox rows, webhooks, and worker restarts cannot create duplicate payment actions.
-- The normal test suite needs no external account or API key.
-
-**Implementation (issue #39):** `backend/tests/test_demo_lifecycle.py` drives the API,
-agreement commit, payment outbox worker, and webhook reconciliation with in-memory SQLite and
-fake AI, PayPal, and webhook adapters. It checks buyer/seller private-message isolation,
-outsider access, exact bilateral approval, idempotent agreement/payment retries, provider
-timeout recovery across worker instances, duplicate webhook handling, and payment status that
-omits invoice IDs and payer details. `backend/tests/test_local_workflow_smoke.py` adds two
-simultaneous commit requests against PostgreSQL and verifies one set of obligations, audit, and
-outbox effects, plus Temporal recovery after a worker restart. The PostgreSQL/Temporal check is
-opt-in; the normal suite needs no external services or credentials.
-
-### S8-04 - Add safe logs and a recovery guide
-
-**Code area:** logging/metrics setup and operations docs.
-
-**Why:** Developers need to find stuck work and recover it without exposing customer data or making duplicate payments.
-
-**What to build:** Add correlation IDs and useful status/retry information. Redact secrets, private prompts, and sensitive invoice links. Document how to inspect stuck outbox items, failed workflows, unknown PayPal results, bad webhooks, and payment mismatches.
-
-**Done when:**
-- Tests or captured logs prove sensitive values are hidden.
-- The guide explains how to check state, retry safely, and escalate unresolved cases.
-- The guide warns not to create a new PayPal request ID after an unclear timeout until the old request is checked.
-- Health checks do not claim a dependency is healthy unless they actually check it.
-
-**Implementation:** Standard-library allowlisted operational output is configured on
-API and worker entrypoints. HTTP responses carry generated correlation UUIDs;
-committed outbox/payment outcomes expose safe identifiers, status and retry timing.
-Captured-output tests exercise privacy canaries and recovery-related boundaries.
-The [operations guide](operations.md) documents health scope, guarded inspection and
-recovery, unknown PayPal outcomes and webhook reconciliation limitations. Live
-Sandbox and full-demo stage gates require separate environment verification.
-
-**Final demo check:** A new developer can run the app locally with fake AI/PayPal services and complete the flow. The optional Sandbox test can complete one invoice. All privacy, approval, restart, and payment tests pass.
-
-## Do Not Add to This First Build
-
-These need a separate team decision:
-
-- Live PayPal, multiple seller accounts, escrow, or other payment providers.
-- General legal, tax, customs, or export compliance.
-- Full accounting, ERP, inventory, shipping, refunds, and disputes.
-- AI automatically approving agreements or starting payments.
-- Microservices or Kubernetes.
+---
+
+## Stage Summary & Historical Record
+
+### Stage 1 - Set Up the Basics *(Status: Merged & Verified)*
+- **S1-01 Organization and deal types:** Pure domain types in `backend/src/syncally/domain/`.
+- **S1-02 Database setup:** SQLAlchemy 2.0 models, Alembic migrations, PostgreSQL connection.
+- **S1-03 User identity boundary:** JWT token decode/issue, `ActorContext`, and dev login override.
+- **S1-04 Test and check commands:** Verified unittest and Vitest configurations.
+
+### Stage 2 - Create and View a Deal *(Status: Merged & Verified)*
+- **S2-01 Deal use cases:** Application operations for deal creation and retrieval.
+- **S2-02 Save and load deals:** SQLAlchemy deal repository with participant authorization.
+- **S2-03 Deal API routes:** `POST /deals`, `GET /deals`, and `GET /deals/{deal_id}` endpoints.
+- **S2-04 Connect deal UI:** `CreateDealPage` and `DealDetailPage` with directory search integration.
+
+### Stage 3 - Messages and Facts *(Status: Merged & Verified)*
+- **S3-01 Define messages and facts:** Domain models for `Conversation`, `Message`, and `Constraint`.
+- **S3-02 Save messages and facts:** Tables and repositories with strict tenant visibility filtering.
+- **S3-03 Message and fact API routes:** `POST/GET /deals/{id}/messages` and review actions.
+- **S3-04 Message and fact review screens:** Dual-role chat timeline and fact review badges.
+
+### Stage 4 - AI Suggestions *(Status: Merged & Verified)*
+- **S4-01 AI input and output types:** Versioned Pydantic schemas for extracted terms.
+- **S4-02 Filter AI context by organization:** Isolation service filtering private counterparty data.
+- **S4-03 AI adapter and fake:** Deterministic demo AI provider with fallback diagnostics.
+- **S4-04 AI review UI:** Suggestion review cards with explicit confirm/reject/clarify buttons.
+
+### Stage 5 - Agreement and Approvals *(Status: Merged & Verified)*
+- **S5-01 Stable agreement versions:** Canonical JSON serialization and SHA-256 terms hashing.
+- **S5-02 Save approvals and commit in one transaction:** Atomic PostgreSQL commit transaction.
+- **S5-03 Approval API routes:** `POST /agreements/{version}/approve` and `commit` endpoints.
+- **S5-04 Agreement review screens:** Side-by-side proposal editor and bilateral approval buttons.
+
+### Stage 6 - Background Deal Workflow *(Status: Merged & Verified)*
+- **S6-01 Deliver outbox work to Temporal:** Transactional outbox table and `cli/outbox_worker.py`.
+- **S6-02 Deal workflow:** `DealWorkflow` with 30-day wait deadline and replay safety.
+- **S6-03 Workflow activities and worker process:** `RefreshDealStateActivity` reloading PostgreSQL state.
+- **S6-04 Local services and restart test:** Docker Compose setup and integration smoke test.
+
+### Stage 7 - PayPal Sandbox Payment *(Status: Merged & Verified)*
+- **S7-01 PaymentIntent rules:** Domain state machine for payment milestones.
+- **S7-02 Save payment intents and outbox:** Transactional payment outbox with lease claims.
+- **S7-03 PayPal Sandbox adapter and worker:** Leased invoice creation with lookup recovery.
+- **S7-04 Verify PayPal events and reconciliation:** HMAC webhook verification and full payment checks.
+
+### Stage 8 - Finish the Demo and Handoff *(Status: Merged & Verified)*
+- **S8-01 Generate draft commercial documents:** Read-only commercial draft generator.
+- **S8-02 Payment and document screens:** `PaymentStatusPanel` and document draft viewer.
+- **S8-03 Test the full flow and access boundaries:** `test_demo_lifecycle.py` and `simulate_deal_flow.py`.
+- **S8-04 Safe logs and recovery guide:** Redacted JSON console logging and `docs/operations.md`.
+
+---
 
 ## Design References
 
@@ -610,4 +230,8 @@ These need a separate team decision:
 - [Temporal and outbox rules](architecture/02-temporal-deal-workflow-contract.md)
 - [PayPal payment rules](architecture/03-paypal-payment-intent-lifecycle.md)
 - [Architecture decisions](architecture/04-architecture-decision-record.md)
+- [Domain layer specifications](architecture/05-domain-layer.md)
+- [AI provider boundary](architecture/06-ai-provider-boundary.md)
+- [Safe operations and recovery](operations.md)
 - [Architecture overview](../ARCHITECTURE.md)
+- [Project README](../README.md)

@@ -407,4 +407,141 @@ describe("PaymentStatusPanel", () => {
     expect(screen.queryByText(/secret-invoice|private-invoice-token/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
+
+  it("displays prominent '💳 View & Pay PayPal Invoice' link opening in new tab for buyer", async () => {
+    mockedListOrganizations.mockResolvedValue([
+      { id: "buyer-org-1", legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
+    ]);
+    mockedListPaymentStatuses.mockResolvedValue([
+      {
+        ...PAYMENT,
+        status: "SENT",
+        invoice_url: "https://www.sandbox.paypal.com/invoice/p/#INV2-SIM-TEST1234",
+      } as PaymentStatus,
+    ]);
+
+    render(
+      <PaymentStatusPanel
+        dealId="deal-1"
+        sellerOrganizationId="seller-org-1"
+        buyerOrganizationId="buyer-org-1"
+      />,
+    );
+
+    const payLink = await screen.findByRole("link", { name: "💳 View & Pay PayPal Invoice" });
+    expect(payLink).toBeInTheDocument();
+    expect(payLink).toHaveAttribute(
+      "href",
+      "https://www.sandbox.paypal.com/invoice/p/#INV2-SIM-TEST1234",
+    );
+    expect(payLink).toHaveAttribute("target", "_blank");
+    expect(payLink).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("displays invoice number and payment instructions when invoice_url is present", async () => {
+    mockedListOrganizations.mockResolvedValue([
+      { id: "buyer-org-1", legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
+    ]);
+    mockedListPaymentStatuses.mockResolvedValue([
+      {
+        ...PAYMENT,
+        status: "SENT",
+        invoice_url: "https://www.sandbox.paypal.com/invoice/p/#INV2-SIM-TEST1234",
+      } as PaymentStatus,
+    ]);
+
+    render(
+      <PaymentStatusPanel
+        dealId="deal-1"
+        sellerOrganizationId="seller-org-1"
+        buyerOrganizationId="buyer-org-1"
+      />,
+    );
+
+    expect(await screen.findByText("INV2-SIM-TEST1234")).toBeInTheDocument();
+    expect(screen.getByText("Payment Instructions")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Review your order details and milestone amount on PayPal/i),
+    ).toBeInTheDocument();
+  });
+
+  it("clearly distinguishes RETRYING state with live countdown, retry count, last attempt, and cause", async () => {
+    mockedListPaymentStatuses.mockResolvedValue([
+      {
+        ...PAYMENT,
+        status: "RETRYING",
+        retry_count: 2,
+        last_checked_at: "10:42 AM",
+        failure_reason: "PayPal sandbox rate limit",
+        next_retry_at: "45",
+      } as PaymentStatus,
+    ]);
+
+    render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
+
+    expect(await screen.findByText("Automatic Retry Scheduled")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Payment request retry #2 in ~45 seconds. Last attempt: 10:42 AM. Cause: PayPal sandbox rate limit.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Retrying")).toHaveLength(1);
+  });
+
+  it("clearly distinguishes FAILED state, showing exact error cause and safe Retry Request button", async () => {
+    mockedListPaymentStatuses.mockResolvedValue([
+      {
+        ...PAYMENT,
+        status: "FAILED",
+        failure_reason: "PayPal sandbox rate limit exceeded",
+      } as PaymentStatus,
+    ]);
+
+    render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
+
+    expect(await screen.findByText("Payment Request Failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("PayPal sandbox rate limit exceeded", { exact: false }),
+    ).toBeInTheDocument();
+
+    const retryButton = screen.getByRole("button", { name: "Retry Request" });
+    expect(retryButton).toBeInTheDocument();
+
+    fireEvent.click(retryButton);
+
+    expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith("deal-1", expect.any(String));
+  });
+
+  it("auto-polls payment status every 10 seconds while payment is in transitional state and cleans up on unmount", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockedListPaymentStatuses.mockResolvedValue([
+      {
+        ...PAYMENT,
+        status: "CREATE_PENDING",
+      },
+    ]);
+
+    const { unmount } = render(
+      <PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />,
+    );
+
+    // Wait for initial load to complete
+    expect(await screen.findByText("Preparing payment request")).toBeInTheDocument();
+    expect(mockedListPaymentStatuses).toHaveBeenCalledTimes(1);
+
+    // Fast-forward 10 seconds
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mockedListPaymentStatuses).toHaveBeenCalledTimes(2);
+
+    // Fast-forward another 10 seconds
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mockedListPaymentStatuses).toHaveBeenCalledTimes(3);
+
+    // Unmount and verify polling stops
+    unmount();
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(mockedListPaymentStatuses).toHaveBeenCalledTimes(3);
+
+    vi.useRealTimers();
+  });
 });

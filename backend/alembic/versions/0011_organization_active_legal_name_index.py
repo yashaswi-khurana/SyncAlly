@@ -17,6 +17,9 @@ _WHERE = "status = 'ACTIVE'"
 def upgrade() -> None:
     context = op.get_context()
     if context.dialect.name == "postgresql":
+        # This published revision exceeds Alembic's default VARCHAR(32). Widen
+        # before concurrent DDL commits, so Alembic can stamp this unchanged ID.
+        op.alter_column("alembic_version", "version_num", type_=sa.Text())
         with context.autocommit_block():
             op.drop_index(
                 _INDEX_NAME,
@@ -43,6 +46,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Retain TEXT: Alembic replaces the current long revision only after this
+    # function returns, and a wider bookkeeping column is backward compatible.
     context = op.get_context()
     if context.dialect.name == "postgresql":
         with context.autocommit_block():

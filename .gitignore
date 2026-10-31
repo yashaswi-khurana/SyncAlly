@@ -37,7 +37,6 @@ uploads/
 .DS_Store
 Thumbs.db
 
-.agents
 docs/strategy
 docs/tasks
 skills

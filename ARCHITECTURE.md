@@ -1,103 +1,154 @@
-# SyncAlly Architecture
+# SyncAlly architecture
 
-**Status:** Proposed system architecture; commercial domain foundation implemented
-**Source:** Adapted from the architecture documents supplied for the project on 2026-10-13.
+This overview describes the implemented local/demo vertical slice. The [architecture records](docs/architecture/README.md) retain deeper contracts and design history; proposals in those records should be checked against current source. See [README](README.md#local-quickstart) for startup and [operations](docs/operations.md) for recovery.
 
-This document summarizes the intended system shape. Detailed contracts and the original decision record are in [`docs/architecture/`](docs/architecture/README.md). Nothing here implies that the design has been implemented or deployed.
+## System and ownership
 
-The current code covers the deal and negotiation foundations, canonical trade terms, bilateral agreement approval, payment-intent state, the HTTP API and persistence adapters, the transactional outbox, and a durable Temporal deal workflow with a separately startable worker and activities. Provider adapters and local service wiring remain unimplemented. See [the domain layer implementation boundary](docs/architecture/05-domain-layer.md).
-
-## System shape
-
-The first implementation is planned as a modular monolith. The web client calls a FastAPI application; domain and application services own business rules; PostgreSQL stores authoritative state. Temporal workers coordinate waits, timers, and retries for long-running deals. Bounded AI work may run inside activities, while a payment worker integrates with PayPal through an adapter.
+SyncAlly is a Python modular monolith with a React/TypeScript web client and PostgreSQL as its commercial ledger. Four backend processes share application/domain services: HTTP API, Temporal workflow worker, Temporal outbox relay, and payment worker. The frontend is a fifth process in local development.
 
 ```mermaid
 flowchart LR
-    Buyer[Buyer] --> Web[React and TypeScript web app]
-    Seller[Seller] --> Web
-    Web --> API[FastAPI application]
-    API --> App[Application services]
-    App --> Domain[Framework-independent domain]
-    App --> DB[(PostgreSQL source of truth)]
-    App --> Outbox[Transactional outbox]
-    Outbox --> Temporal[Temporal workflows and workers]
-    Temporal --> Activities[Activities]
-    Activities --> AI[Bounded AI extraction and proposal]
-    Activities --> Payment[Payment worker and PayPal adapter]
-    Payment --> PayPal[PayPal Invoicing API]
-    Activities --> Storage[S3-compatible document storage]
-    API --> Telemetry[OpenTelemetry]
-    Temporal --> Telemetry
+    People[Buyer and seller] --> Web[React app]
+    Web --> API[FastAPI]
+    API --> App[Application and domain services]
+    App --> DB[(PostgreSQL)]
+    API --> AI[Explicit bounded AI request]
+    AI --> App
+    DB --> Relay[Temporal outbox relay]
+    Relay --> Temporal[Temporal service]
+    Temporal --> Worker[Workflow worker and activities]
+    Worker --> App
+    DB --> Payment[Payment outbox worker]
+    Payment --> PayPal[PayPal Sandbox]
+    PayPal --> Hook[Verified webhook API]
+    Hook --> DB
+    Payment --> DB
+    Payment --> Gmail[Optional Gmail invoice copy]
 ```
 
-## Ownership boundaries
+| Boundary | Owns |
+| --- | --- |
+| `api/` | Authentication, request validation, authorized HTTP commands/reads and response shaping |
+| `domain/` | Canonical trade terms, state transitions, immutable commitment, money and payment rules; no FastAPI/Temporal/provider dependencies |
+| `application/` | Use cases and ports; domain validation and orchestration |
+| `infrastructure/` | SQLAlchemy records/repositories, transactions, outbox delivery, demo AI, Sandbox adapter, webhook verification and optional Gmail |
+| `workflows/` | Durable lifecycle orchestration and activities that reload authoritative state |
+| `cli/` | Worker entrypoints, demo seeding and lifecycle simulation |
+| Frontend | Organization-scoped review buffers, synchronized saved facts and proposal previews, human approval/payment actions |
 
-| Component | Owns | Does not own |
-| --- | --- | --- |
-| Domain and application services | Authorization checks, deal and agreement transitions, canonical terms, approvals, obligations, payment intents, audit records | HTTP, Temporal internals, LLM reasoning, PayPal-specific behavior |
-| FastAPI | HTTP request/response handling and authenticated API boundary | Commercial policy or trusted client-supplied roles |
-| PostgreSQL | Durable commercial records, constraints, transactions, outbox | Workflow execution history or provider-side payment truth |
-| Temporal | Durable process progression, waits, timers, retries, recovery | Approval authority, commercial ledger, direct business-state writes |
-| AI activities | Typed candidate extraction and proposal generation using authorized context | Approvals, commitments, payment authorization, unrestricted provider calls |
-| PayPal adapter and reconciliation worker | Provider requests, normalized responses, webhook verification, provider-state reconciliation | Deciding whether a commercial obligation was authorized |
+AI extraction/drafting is explicitly requested through the API. Authorized context is selected before the provider call, which runs outside the database transaction; returned suggestions are validated before persistence. It is not a Temporal-triggered AI loop. The demo provider is not an installed LangGraph workflow.
 
-The domain layer should not import FastAPI, Temporal, LangGraph, or PayPal-specific code. Adapters translate external inputs and outputs into domain-owned contracts.
+## HTTP route map
 
-## Deal and payment flow
+These routes are registered by [api/main.py](backend/src/syncally/api/main.py). `/docs` and `/openapi.json` provide generated schemas, including payloads and query parameters. Braces below denote path parameters; all deal operations apply actor/deal authorization. Scoped message/fact/AI requests also require an organization context the actor may use.
+
+| Area | Method and path |
+| --- | --- |
+| Session | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/dev-login` |
+| Development | `POST /dev/switch-role`, `POST /dev/reset-demo` |
+| Organizations | `GET /organizations`, `POST /organizations`, `GET /organizations/directory`, `GET /organizations/{organization_id}` |
+| Membership and invitations | `POST /organizations/{organization_id}/members`, `POST /organizations/{organization_id}/invitations`, `POST /invitations/accept` |
+| Deals | `GET /deals`, `POST /deals`, `GET /deals/{deal_id}` |
+| Messages | `GET /deals/{deal_id}/messages`, `POST /deals/{deal_id}/messages`, `GET /deals/{deal_id}/messages/existence` |
+| AI requests | `POST /deals/{deal_id}/ai/facts`, `POST /deals/{deal_id}/ai/proposal` |
+| Fact entry/correction | `GET /deals/{deal_id}/facts`, `POST /deals/{deal_id}/facts`, `PATCH /deals/{deal_id}/facts/{fact_id}` |
+| Fact review | `POST /deals/{deal_id}/facts/{fact_id}/confirm`, `POST /deals/{deal_id}/facts/{fact_id}/reject`, `POST /deals/{deal_id}/facts/{fact_id}/clarify`, `PATCH /deals/{deal_id}/facts/{fact_id}/visibility` |
+| Agreement candidates | `GET /deals/{deal_id}/agreements/current`, `POST /deals/{deal_id}/agreements`, `POST /deals/{deal_id}/agreements/from-reviewed-terms` |
+| Bilateral decisions | `POST /deals/{deal_id}/agreements/{version_number}/approve`, `POST /deals/{deal_id}/agreements/{version_number}/reject`, `POST /deals/{deal_id}/agreements/{version_number}/commit` |
+| Payment | `POST /deals/{deal_id}/payments`, `GET /deals/{deal_id}/payments` |
+| Document draft | `GET /deals/{deal_id}/documents/commercial-draft` |
+| Provider intake | `POST /webhooks/paypal/invoicing` |
+| Health | `GET /health`, `GET /health/database` |
+
+Session routes issue/rotate JWT credentials; active user and database membership determine authority, not a role sent by the browser. Development shortcuts are environment-gated. Invitations are signed, expire, and are single-use; acceptance can create an account, add a team member or onboard a separate counterparty organization for a deal. There is no independent `/auth/register` route. The message-existence endpoint exposes only presence, not another organization's private message content.
+
+## Review and bilateral consensus
 
 ```mermaid
 sequenceDiagram
     actor B as Buyer
     actor S as Seller
-    participant API as FastAPI and domain services
+    participant API as API and application services
+    participant AI as Demo AI provider
     participant DB as PostgreSQL
-    participant T as Temporal
-    participant AI as Bounded AI activity
-    participant P as Payment worker and PayPal
+    participant R as Temporal relay
+    participant T as Temporal and workflow worker
 
-    B->>API: Add message or confirm requirements
-    API->>DB: Persist authorized command and audit event
-    DB-->>T: Outbox event
-    T->>AI: Request extraction or proposal
-    AI-->>T: Candidate IDs and typed output
-    T->>API: Validate proposal through domain service
-    API->>DB: Save validated proposal or agreement candidate
-    B->>API: Approve exact agreement version and hash
-    S->>API: Approve same agreement version and hash
-    API->>DB: Atomically commit agreement and create obligations
-    S->>API: Authorize a payment milestone
-    API->>DB: Persist PaymentIntent and outbox operation
-    DB-->>T: Payment operation available
-    T->>P: Create or send provider invoice
-    P-->>T: Provider response or ambiguous outcome
-    T->>P: Reconcile current provider state
-    P-->>API: Verified and reconciled payment facts
-    API->>DB: Record payment state and audit event
+    B->>API: Post organization-scoped message
+    API->>DB: Persist authorized message
+    B->>API: Request fact suggestions or proposal
+    API->>DB: Select authorized context
+    API->>AI: Bounded request outside DB transaction
+    AI-->>API: Typed candidate output
+    API->>DB: Validate and save fact candidates
+    API-->>B: Private review draft
+    B->>API: Review facts and submit edited terms
+    API->>DB: Save agreement version and terms hash
+    B->>API: Approve exact version and hash
+    S->>API: Approve same version and hash
+    B->>API: Commit approved current version
+    API->>DB: Atomically commit, create obligations and milestones, audit and outbox
+    R->>DB: Claim committed notification
+    R->>T: Signal with start using stable workflow ID
+    T->>DB: Activity reloads authoritative state
 ```
 
-Provider calls happen outside database transactions. When an outcome is ambiguous, persist an unknown/pending state and reconcile before retrying. Webhooks are verified and deduplicated, then used to trigger reconciliation; a webhook or browser redirect alone does not prove payment.
+Commitment is an explicit command after bilateral approval. The UI can issue that command once approvals satisfy the policy; approval itself is not a provider side effect. A stale version/hash or missing authorized approval cannot commit. Editing terms produces a new version requiring matching approvals. Either authorized party may request commit; the database transaction remains the final guard.
 
-## Commercial invariants
+The parent conversation component owns saved fact state. Suggestion cards reconcile against saved versions while retaining applicable unsaved edits. Newly confirmed fields overlay an existing proposal without discarding unrelated human edits. A lost authorized fact or conflicting confirmed values invalidates affected draft fields and blocks sending until review/refresh. In-flight responses retain fact provenance and cannot silently restore revoked confirmed terms.
 
-- Buyer and seller are distinct organizations, and every read or write is authorized against deal participation.
-- Extracted constraints remain unconfirmed until reviewed under an explicit policy; private context never leaks into shared proposals or traces.
-- Proposals are non-binding. A committed agreement is an immutable, canonical version.
-- Agreement commitment is one database transaction that checks authorized approvals from both organizations for the same current version and terms hash.
-- Payment amounts use fixed-precision decimal values and explicit currencies.
-- A payment intent is durably authorized before any provider-side effect. A payment becomes `PAID` only after reconciliation confirms the full modeled amount.
-- External side effects use stable operation IDs, bounded retries, and reconciliation. The design targets safe at-least-once processing rather than claiming cross-system exactly-once execution.
-- Deal, payment, and fulfillment lifecycles remain separate state machines.
+## Payment intent and Sandbox invoice flow
 
-## Workflow rules
+```mermaid
+sequenceDiagram
+    actor S as Seller
+    actor B as Buyer
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant P as Payment worker
+    participant PayPal as PayPal Sandbox
 
-Use one lifecycle workflow per persisted deal, with a stable workflow ID. Workflow code orchestrates; activities and application services perform external calls and validated state changes. Workflow arguments and history should contain stable record IDs and minimal non-sensitive context, not private negotiation details or credentials. Signals notify the workflow but do not grant authority; referenced domain records must be loaded and validated.
+    S->>API: Authorize payment for committed agreement
+    API->>DB: Save intent and authorization outbox with idempotency key
+    P->>DB: Claim leased payment event and load invoice terms/contact
+    P->>PayPal: Create invoice using stable identity
+    PayPal-->>P: Invoice ID or unknown outcome
+    P->>DB: Persist provider identity/state
+    P->>PayPal: Send existing invoice
+    P->>DB: Save invoice URL and status
+    B->>PayPal: Open invoice and make Sandbox payment
+    PayPal->>API: Signed invoicing event
+    API->>PayPal: Verify event signature
+    API->>DB: Deduplicate event and queue reconciliation
+    P->>PayPal: Fetch current invoice state
+    P->>DB: Validate identity, amount/currency and record reconciled status
+```
 
-Every wait needs a deadline and escalation policy. A timeout never implies acceptance or payment. Retries are bounded, and permanent authorization or validation failures are not blindly retried.
+The payment worker independently consumes payment authorization and webhook-reconciliation events; Temporal does not call it. Provider calls occur outside database transactions. Worker leases, stable request identities and bounded retry policies support safe at-least-once delivery. An ambiguous create/send outcome is reconciled before another effect; it does not authorize a new invoice.
 
-## Initial deployment direction
+The recipient is resolved from the buyer organization's single active administrator. The browser's recipient confirmation is a human check, not a trusted override. `PAID` requires reconciliation of the full modeled amount/currency; a webhook body, URL, redirect, partial payment or delivered outbox event is insufficient evidence. Optional Gmail delivery is a separate copy of the existing Sandbox invoice.
 
-The proposed local development environment uses Docker Compose. For production, the design favors managed PostgreSQL and Temporal where practical, with the API and Temporal workers running as separate processes from the same repository. The FastAPI process and the Temporal worker are now separate entry points; the combined local service setup and restart smoke test remain future work.
+## Configuration and process contracts
 
-## Scope and open gates
+[Settings](backend/src/syncally/config.py) load `backend/.env` relative to the package, with process environment overrides. The [example](backend/.env.example) matches [local Compose](infra/compose.yaml).
 
-The initial vertical slice is intentionally constrained: one buyer, one seller, one supported trade/currency scenario, bilateral approval, draft commercial documents, and PayPal Sandbox. Before production, SyncAlly needs tenant-isolation and security review, operational recovery and monitoring, supported-market/legal review, and confirmation of PayPal merchant eligibility and permissions. See the [architecture decision record](docs/architecture/04-architecture-decision-record.md) for rollout gates and alternatives.
+| Configuration | Purpose |
+| --- | --- |
+| `APP_ENV`, `DEBUG`, `DATABASE_URL` | Environment mode, debug behavior and authoritative database connection |
+| `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_ISSUER`, `JWT_AUDIENCE`, `ACCESS_TOKEN_TTL_MINUTES`, `REFRESH_TOKEN_TTL_DAYS` | JWT credentials/validation and rotation lifetimes |
+| `MAX_ORGANIZATIONS_PER_USER`, `DEV_AUTH_USER_ID` | Organization limit and development/test-only authentication override |
+| `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `TEMPORAL_TLS` | Relay/worker connection and shared queue |
+| `OUTBOX_POLL_INTERVAL_SECONDS`, `OUTBOX_BATCH_SIZE` | Outbox polling cadence and batch size |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID` | Sandbox processing and webhook signature verification |
+| `GMAIL_SMTP_USERNAME`, `GMAIL_APP_PASSWORD`, `GMAIL_FROM_EMAIL` | Optional invoice email copy |
+| `VITE_API_PROXY_TARGET`, `VITE_API_BASE_URL`, `VITE_ENABLE_DEV_SWITCHER` | Frontend API routing and development UI visibility |
+
+Outside development/test, configuration requires an explicit database URL, a cryptographically generated JWT secret containing at least 32 random bytes (43 URL-safe characters minimum), and Temporal TLS. `APP_ENV` defaults to production when omitted. Never expose backend credentials using a `VITE_` variable; those values are browser-visible.
+
+## Scope and deployment
+
+The local Compose file implements persistent PostgreSQL and a Temporal development server; its embedded Temporal history store is separate from the business database. API and workers run as independent host processes. The [restart smoke test](infra/README.md#restart-smoke-test) exercises durable workflow recovery using an isolated schema.
+
+Commercial document generation currently returns a read-only draft from committed terms. S3 object storage, LangGraph orchestration and OpenTelemetry remain deferred design directions. Structured, redacted application logs and correlation IDs are implemented; see [operations](docs/operations.md).
+
+Production requires tenant/security review, deployment monitoring and recovery verification, market/legal review, and provider merchant eligibility/permissions. The isolated simulation is useful lifecycle evidence, not complete-stack startup or a live PayPal delivery gate. See [the ADR](docs/architecture/04-architecture-decision-record.md) for broader rollout decisions.

@@ -1,7 +1,7 @@
 """Submitted proposal snapshots and negotiation round control."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from syncally.domain.agreements.trade_terms import TradeTerms
@@ -40,11 +40,21 @@ class Proposal:
     expires_at: datetime | None = None
     status: ProposalStatus = ProposalStatus.SUBMITTED
 
+    def __setattr__(self, name: str, value: object) -> None:
+        if hasattr(self, name):
+            raise InvalidTransition("Submitted proposal snapshots are immutable")
+        object.__setattr__(self, name, value)
+
     def __post_init__(self) -> None:
         if self.author_organization_id not in (self.terms.buyer_id, self.terms.seller_id):
             raise InvariantViolation("Proposal author must be a party to its trade terms")
-        if self.expires_at is not None and self.expires_at <= self.created_at:
-            raise InvariantViolation("Proposal expiry must be later than its creation time")
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise InvariantViolation("Proposal creation time must be timezone-aware")
+        if self.expires_at is not None:
+            if self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None:
+                raise InvariantViolation("Proposal expiry must be timezone-aware")
+            if not self.created_at < self.expires_at <= self.created_at + timedelta(days=30):
+                raise InvariantViolation("Proposal expiry must be within 30 days of creation")
 
     @property
     def terms_hash(self) -> str:
@@ -60,10 +70,23 @@ class Proposal:
     def supersede(self) -> None:
         self._transition(ProposalStatus.SUPERSEDED)
 
+    def expire(self, *, now: datetime) -> None:
+        if self.expires_at is None or now < self.expires_at:
+            raise InvalidTransition("Proposal deadline has not elapsed")
+        self._transition(ProposalStatus.EXPIRED)
+
+    def authorize_action(self, action: str, organization_id: OrganizationId) -> None:
+        if organization_id not in (self.terms.buyer_id, self.terms.seller_id):
+            raise InvariantViolation("Actor must be a deal party")
+        if action in ("counter", "accept", "reject") and organization_id == self.author_organization_id:
+            raise InvalidTransition("Only the other party may respond to a proposal")
+        if action == "supersede" and organization_id != self.author_organization_id:
+            raise InvalidTransition("Only the author may supersede a proposal")
+
     def _transition(self, target: ProposalStatus) -> None:
         if self.status is not ProposalStatus.SUBMITTED:
             raise InvalidTransition(f"Cannot move proposal from {self.status} to {target}")
-        self.status = target
+        object.__setattr__(self, "status", target)
 
     def _ensure_not_expired(self, now: datetime) -> None:
         if self.expires_at is not None and self.expires_at <= now:
@@ -80,8 +103,8 @@ class NegotiationSession:
     escalated: bool = False
 
     def __post_init__(self) -> None:
-        if self.max_rounds < 1:
-            raise InvariantViolation("Negotiation max_rounds must be positive")
+        if self.max_rounds < 1 or not 0 <= self.round_count <= self.max_rounds:
+            raise InvariantViolation("Negotiation round counts must be within a positive limit")
 
     def submit(
         self,
@@ -109,7 +132,8 @@ class NegotiationSession:
         if self.round_count >= self.max_rounds:
             self.escalated = True
             return NegotiationSubmissionOutcome.ESCALATION_REQUIRED
-        if current_proposal is not None:
+        if current_proposal is not None and current_proposal.status is ProposalStatus.SUBMITTED:
+            current_proposal._ensure_not_expired(now)
             current_proposal.supersede()
         self.round_count += 1
         self.current_proposal_id = proposal.id

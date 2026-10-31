@@ -2,11 +2,12 @@
 
 import json
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -23,17 +24,20 @@ from syncally.application.payments import (
     IdempotencyKeyReused,
     PaymentIntentCommandMismatch,
     PaymentMilestoneNotFound,
+    PaymentModeChanged,
     UnauthorizedPaymentAuthorization,
 )
 from syncally.domain.agreements.agreement import ApprovalDecision
-from syncally.domain.payments.intent import PaymentIntentStatus
+from syncally.domain.payments.intent import PaymentExecutionMode, PaymentIntentStatus
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.models import (
     AgreementVersion,
+    AuditEvent,
     Base,
     Deal,
+    DemoFixture,
     NegotiationSession,
     Organization,
     OrganizationMember,
@@ -42,6 +46,7 @@ from syncally.infrastructure.models import (
     PaymentMilestone,
     Proposal,
     User,
+    WebhookEvent,
 )
 from syncally.infrastructure.repositories.agreements import (
     SqlAlchemyAgreementRepository,
@@ -185,6 +190,233 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
         )
 
     # -- Acceptance criteria --------------------------------------------
+
+    def _offline_intent(self):
+        for user_id, email in ((self.buyer_user_id, "buyer@syncally.demo"), (self.seller_user_id, "seller@syncally.demo")):
+            self.session.get(User, user_id).email = email
+        for member in self.session.scalars(select(OrganizationMember)):
+            member.role = "ADMIN"
+        self.session.add(DemoFixture(fixture_key="offline-test", fixture_version=1, deal_id=self.deal.id,
+            buyer_organization_id=self.buyer_org_id, seller_organization_id=self.seller_org_id))
+        self.session.commit()
+        command = replace(self._command(), execution_mode=PaymentExecutionMode.OFFLINE_DEMO)
+        authorize_payment_intent_in_transaction(self.session, command)
+        from syncally.infrastructure.payment_outbox import dispatch_one_payment_event
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        repository = SqlAlchemyPaymentProcessingRepository(factory)
+        with patch("syncally.config.PayPalSettings", side_effect=AssertionError("No offline PayPal")), patch("syncally.config.GmailSettings", side_effect=AssertionError("No offline SMTP")):
+            self.assertTrue(dispatch_one_payment_event(factory, repository))
+        self.session.expire_all()
+        return self.session.get(PaymentIntent, command.id), factory, repository
+
+    def test_offline_outbox_to_simulation_is_atomic_idempotent_and_source_tagged(self) -> None:
+        from syncally.infrastructure.payment_outbox import dispatch_one_payment_event
+        from syncally.infrastructure.repositories.offline_payments import (
+            queue_simulated_reconciliation,
+        )
+        from syncally.infrastructure.repositories.paypal_webhooks import record_paypal_webhook_event
+
+        intent, factory, repository = self._offline_intent()
+        self.assertEqual(intent.status, "SENT")
+        self.assertIsNone(intent.reconciled_amount)
+        self.assertEqual(intent.reconciliation_source, "NONE")
+        self.assertEqual(intent.provider_invoice_id, f"OFFLINE-{intent.id}")
+        record_paypal_webhook_event(self.session, {"id": "cross-mode", "event_type": "INVOICING.INVOICE.PAID", "resource": {"id": intent.provider_invoice_id}})
+        webhook = self.session.scalar(select(WebhookEvent).where(WebhookEvent.provider == "PAYPAL"))
+        self.assertIsNone(webhook.payment_intent_id)
+        version = intent.version
+        arguments = dict(user_id=self.seller_user_id, idempotency_key="paid-once", expected_version=version, outcome="PAID", paid_amount="10.000")
+        event = queue_simulated_reconciliation(self.session, intent.id, **arguments)
+        replay = queue_simulated_reconciliation(self.session, intent.id, **{**arguments, "paid_amount": "10"})
+        self.assertEqual(event.id, replay.id)
+        with patch("syncally.config.PayPalSettings", side_effect=AssertionError("offline network")), patch("syncally.config.GmailSettings", side_effect=AssertionError("offline mail")):
+            self.assertTrue(dispatch_one_payment_event(factory, repository))
+        self.session.expire_all()
+        saved = self.session.get(PaymentIntent, intent.id)
+        self.assertEqual((saved.status, saved.reconciliation_source), ("PAID", "OFFLINE_DEMO"))
+        audit = self.session.scalar(select(AuditEvent).where(AuditEvent.aggregate_id == intent.id, AuditEvent.event_type == "PAYMENT_STATE_RECONCILED"))
+        self.assertEqual((audit.actor_type, audit.actor_id), ("SIMULATION", "OFFLINE_DEMO"))
+        self.assertEqual(self.session.get(OutboxEvent, event.id).status, "DELIVERED")
+        self.assertEqual(queue_simulated_reconciliation(self.session, intent.id, **arguments).id, event.id)
+        self.assertFalse(dispatch_one_payment_event(factory, repository))
+
+    def test_simulation_invalid_amounts_stale_versions_and_scope_do_not_queue(self) -> None:
+        from syncally.application.payment_processing import PaymentNeedsAction
+        from syncally.infrastructure.repositories.offline_payments import (
+            queue_simulated_reconciliation,
+        )
+
+        intent, _, _ = self._offline_intent()
+        for outcome, amount in (("PAID", "9"), ("PAID", "11"), ("PARTIALLY_PAID", "0"), ("PENDING", "1"), ("PAID", "NaN"), ("PAID", "-1")):
+            with self.subTest(outcome=outcome, amount=amount), self.assertRaises(PaymentNeedsAction):
+                queue_simulated_reconciliation(self.session, intent.id, user_id=self.seller_user_id, idempotency_key="invalid", expected_version=intent.version, outcome=outcome, paid_amount=amount)
+        with self.assertRaises(PaymentNeedsAction):
+            queue_simulated_reconciliation(self.session, intent.id, user_id=self.seller_user_id, idempotency_key="stale", expected_version=0, outcome="PAID", paid_amount="10")
+        self.session.delete(self.session.get(DemoFixture, "offline-test"))
+        self.session.commit()
+        with self.assertRaises(PaymentNeedsAction):
+            queue_simulated_reconciliation(self.session, intent.id, user_id=self.seller_user_id, idempotency_key="no-marker", expected_version=intent.version, outcome="PAID", paid_amount="10")
+        self.assertIsNone(self.session.scalar(select(WebhookEvent.id)))
+
+    def test_simulation_unbounded_decimals_are_rejected_before_canonicalization(self) -> None:
+        from syncally.application.payment_processing import PaymentNeedsAction
+        from syncally.infrastructure.repositories.offline_payments import (
+            queue_simulated_reconciliation,
+        )
+
+        intent, _, _ = self._offline_intent()
+        models = (WebhookEvent, OutboxEvent, AuditEvent)
+        original = [self.session.scalar(select(func.count()).select_from(model)) for model in models]
+        invalid = (
+            "1E+1000000", "-1E+1000000", "0E+1000000", "1E-1000000",
+            "-1E-1000000", "0E-1000000", "NaN", "sNaN", "Infinity", "-Infinity",
+            "100000000000000", "0.0000001", "0" * 65,
+        )
+        for outcome in ("PENDING", "PARTIALLY_PAID", "PAID"):
+            for amount in invalid:
+                with self.subTest(outcome=outcome, amount=amount), patch(
+                    "syncally.infrastructure.repositories.offline_payments.canonical_decimal"
+                ) as canonical:
+                    with self.assertRaises(PaymentNeedsAction) as raised:
+                        queue_simulated_reconciliation(
+                            self.session, intent.id, user_id=self.seller_user_id,
+                            idempotency_key="oversize", expected_version=intent.version,
+                            outcome=outcome, paid_amount=amount,
+                        )
+                    self.assertEqual(raised.exception.code, "PAYMENT_RECONCILIATION_REJECTED")
+                    canonical.assert_not_called()
+                    self.assertEqual(
+                        [self.session.scalar(select(func.count()).select_from(model)) for model in models],
+                        original,
+                    )
+
+    def test_simulation_bounded_exact_decimals_keep_canonical_money(self) -> None:
+        from syncally.infrastructure.repositories.offline_payments import (
+            queue_simulated_reconciliation,
+        )
+
+        intent, _, _ = self._offline_intent()
+        for outcome, amount, expected in (
+            ("PENDING", "0E+13", "0"),
+            ("PARTIALLY_PAID", "1E-6", "0.000001"),
+            ("PARTIALLY_PAID", "1.230000", "1.23"),
+            ("PAID", "1E+1", "10"),
+        ):
+            with self.subTest(amount=amount):
+                event = queue_simulated_reconciliation(
+                    self.session, intent.id, user_id=self.seller_user_id,
+                    idempotency_key=amount, expected_version=intent.version,
+                    outcome=outcome, paid_amount=amount,
+                )
+                observation = self.session.get(WebhookEvent, UUID(event.payload["webhook_event_id"]))
+                self.assertEqual(observation.raw_payload["paid_amount"], expected)
+
+    def test_worker_rechecks_simulation_authority_version_and_event_mode(self) -> None:
+        from syncally.infrastructure.payment_outbox import dispatch_one_payment_event
+        from syncally.infrastructure.repositories.offline_payments import (
+            queue_simulated_reconciliation,
+        )
+
+        intent, factory, repository = self._offline_intent()
+        event = queue_simulated_reconciliation(self.session, intent.id, user_id=self.seller_user_id, idempotency_key="revoked", expected_version=intent.version, outcome="PAID", paid_amount="10")
+        self.session.get(User, self.seller_user_id).status = "INACTIVE"
+        self.session.commit()
+        self.assertTrue(dispatch_one_payment_event(factory, repository))
+        self.session.expire_all()
+        self.assertEqual(self.session.get(PaymentIntent, intent.id).status, "SENT")
+        self.assertEqual(self.session.get(OutboxEvent, event.id).status, "FAILED")
+        observation_id = UUID(event.payload["webhook_event_id"])
+        self.assertTrue(self.session.get(WebhookEvent, observation_id).processed)
+        audit = self.session.scalar(select(AuditEvent).where(
+            AuditEvent.aggregate_id == intent.id,
+            AuditEvent.event_type == "PAYMENT_RECONCILIATION_NEEDS_ACTION",
+        ))
+        self.assertEqual(audit.payload["error_code"], "PAYMENT_SIMULATION_FORBIDDEN")
+        self.assertEqual(self.session.get(PaymentIntent, intent.id).reconciliation_source, "NONE")
+        self.session.get(User, self.seller_user_id).status = "ACTIVE"
+        self.session.commit()
+        stale = queue_simulated_reconciliation(self.session, intent.id, user_id=self.seller_user_id, idempotency_key="stale-worker", expected_version=intent.version, outcome="PAID", paid_amount="10")
+        self.session.get(PaymentIntent, intent.id).version += 1
+        self.session.commit()
+        self.assertTrue(dispatch_one_payment_event(factory, repository))
+        self.session.expire_all()
+        self.assertEqual(self.session.get(OutboxEvent, stale.id).status, "FAILED")
+        forged = OutboxEvent(aggregate_type="payment_intent", aggregate_id=intent.id, event_type="PAYPAL_WEBHOOK_RECONCILIATION_REQUESTED",
+            payload={"payment_intent_id": str(intent.id), "webhook_event_id": str(uuid4())}, status="PENDING")
+        self.session.add(forged)
+        self.session.commit()
+        with patch("syncally.config.PayPalSettings", side_effect=AssertionError("Cross-mode must not construct PayPal")):
+            self.assertTrue(dispatch_one_payment_event(factory, repository))
+        self.session.expire_all()
+        self.assertEqual(self.session.get(OutboxEvent, forged.id).status, "FAILED")
+        self.assertIsNone(self.session.get(PaymentIntent, intent.id).reconciled_amount)
+
+    def test_mode_is_atomic_and_replay_ignores_new_configuration_and_guard(self) -> None:
+        first = replace(self._command(), execution_mode=PaymentExecutionMode.OFFLINE_DEMO)
+        outcome = authorize_payment_intent_in_transaction(self.session, first)
+        self.assertEqual((outcome.provider, outcome.execution_mode), ("OFFLINE_DEMO", "OFFLINE_DEMO"))
+        row = self.session.get(PaymentIntent, first.id)
+        self.assertEqual((row.execution_mode, row.reconciliation_source), ("OFFLINE_DEMO", "NONE"))
+        retry = replace(first, id=uuid4(), execution_mode=PaymentExecutionMode.PAYPAL_SANDBOX,
+                        expected_mode=PaymentExecutionMode.OFFLINE_DEMO)
+        replay = authorize_payment_intent_in_transaction(self.session, retry)
+        self.assertTrue(replay.already_existed)
+        self.assertEqual(replay.execution_mode, "OFFLINE_DEMO")
+        self.assertEqual(len(self._outbox_rows()), 1)
+
+    def test_api_preview_guard_replay_and_explicit_simulation_contract(self) -> None:
+        import asyncio
+
+        import httpx
+
+        from syncally.api.auth import get_current_actor
+        from syncally.api.dev import _require_demo_admin
+        from syncally.api.main import app
+        from syncally.application.identity import ActorContext
+        from syncally.config import settings
+        from syncally.infrastructure.database import get_db
+
+        intent, _, _ = self._offline_intent()
+        actor = ActorContext(self.seller_user_id, frozenset({self.seller_org_id}))
+        app.dependency_overrides[get_current_actor] = lambda: actor
+        app.dependency_overrides[_require_demo_admin] = lambda: actor
+        app.dependency_overrides[get_db] = lambda: self.session
+
+        async def exercise():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                path = f"/deals/{self.deal.id}/payments"
+                with patch.object(settings, "payment_mode", "PAYPAL_SANDBOX"):
+                    preview = await client.get(path + "/preview")
+                    self.assertEqual(preview.json(), {"provider": "PAYPAL", "execution_mode": "PAYPAL_SANDBOX"})
+                    replay = await client.post(path, json={"idempotency_key": intent.idempotency_key, "expected_mode": "OFFLINE_DEMO"})
+                    self.assertEqual(replay.status_code, 202, replay.text)
+                    self.assertEqual(replay.json()["execution_mode"], "OFFLINE_DEMO")
+                    changed = await client.post(path, json={"idempotency_key": "new-mode", "expected_mode": "OFFLINE_DEMO"})
+                    self.assertEqual(changed.status_code, 409)
+                    override = await client.post(path, json={"idempotency_key": "client-override", "provider": "OFFLINE_DEMO"})
+                    self.assertEqual(override.status_code, 422)
+                simulation = await client.post(f"/dev/payments/{intent.id}/simulate-reconciliation", json={
+                    "idempotency_key": "api-sim", "expected_version": intent.version, "outcome": "PAID", "paid_amount": "10"})
+                self.assertEqual(simulation.status_code, 202, simulation.text)
+                self.assertEqual(simulation.json()["status"], "QUEUED")
+                statuses = await client.get(path)
+                self.assertEqual(statuses.json()[0]["status"], "SENT")
+                self.assertIsNone(statuses.json()[0]["invoice_url"])
+                self.assertEqual(statuses.json()[0]["reconciliation_source"], "NONE")
+        try:
+            asyncio.run(exercise())
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_expected_mode_is_only_a_new_intent_guard(self) -> None:
+        command = replace(self._command(), expected_mode=PaymentExecutionMode.OFFLINE_DEMO)
+        with self.assertRaises(PaymentModeChanged):
+            authorize_payment_intent_in_transaction(self.session, command)
+        self.assertEqual(list(self.session.scalars(select(PaymentIntent))), [])
+        self.assertEqual(self._outbox_rows(), [])
 
     def test_authorize_persists_intent_and_outbox_row_atomically(self) -> None:
         command = self._command(idempotency_key="intent-1")

@@ -18,6 +18,18 @@ from syncally.domain.shared.identifiers import (
 from syncally.domain.shared.money import Money
 
 
+class PaymentExecutionMode(StrEnum):
+    PAYPAL_SANDBOX = "PAYPAL_SANDBOX"
+    OFFLINE_DEMO = "OFFLINE_DEMO"
+    LEGACY_UNRESOLVED = "LEGACY_UNRESOLVED"
+
+    @property
+    def provider(self) -> str:
+        if self is PaymentExecutionMode.LEGACY_UNRESOLVED:
+            raise InvariantViolation("Unresolved payment provenance cannot authorize payments")
+        return "PAYPAL" if self is PaymentExecutionMode.PAYPAL_SANDBOX else "OFFLINE_DEMO"
+
+
 class PaymentIntentStatus(StrEnum):
     AUTHORIZED = "AUTHORIZED"
     CREATE_PENDING = "CREATE_PENDING"
@@ -29,6 +41,14 @@ class PaymentIntentStatus(StrEnum):
     PAID = "PAID"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {
+            PaymentIntentStatus.PAID,
+            PaymentIntentStatus.FAILED,
+            PaymentIntentStatus.CANCELLED,
+        }
 
 
 class VerifiedProviderPaymentStatus(StrEnum):
@@ -71,10 +91,13 @@ class VerifiedProviderPaymentState:
     status: VerifiedProviderPaymentStatus
     paid_amount: Money
     provider_reference: str | None = None
+    source: str = "PAYPAL_SANDBOX"
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, VerifiedProviderPaymentStatus):
             raise InvariantViolation("Provider payment state must use a normalized status")
+        if self.source not in {"PAYPAL_SANDBOX", "OFFLINE_DEMO"}:
+            raise InvariantViolation("Payment evidence needs an explicit source")
         if not isinstance(self.paid_amount, Money):
             raise InvariantViolation("Provider payment state must use a Money amount")
         if self.provider_reference is not None and not isinstance(self.provider_reference, str):

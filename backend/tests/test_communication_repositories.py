@@ -1,19 +1,29 @@
 """Database-backed coverage for communication persistence and tenant isolation."""
 
+import os
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
+from unittest.mock import patch
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.application.conversations import (
+    AddMessageCommand,
+    CommunicationNotFound,
     ConcurrentConstraintUpdate,
     ConstraintNotFound,
     ConstraintReviewAction,
+    MessageIdempotencyConflict,
+    add_message,
     confirm_constraint,
+    import_thread,
+    preview_thread_import,
     review_constraint,
 )
 from syncally.application.identity import ActorContext
@@ -63,6 +73,150 @@ from syncally.infrastructure.repositories import (
     CommunicationScopeError,
     SqlAlchemyCommunicationRepository,
 )
+
+
+@unittest.skipUnless(os.environ.get("TEST_POSTGRES_URL"), "Set TEST_POSTGRES_URL for message idempotency PostgreSQL concurrency tests")
+class MessageIdempotencyPostgresTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.engine = create_engine(os.environ["TEST_POSTGRES_URL"], hide_parameters=True)
+        self.schema = f"message_idempotency_{uuid4().hex}"
+        with self.engine.begin() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{self.schema}"'))
+        self.scoped_engine = self.engine.execution_options(schema_translate_map={None: self.schema})
+        self.addCleanup(self._cleanup)
+        Base.metadata.create_all(self.scoped_engine)
+        with Session(self.scoped_engine) as session:
+            user = User(email="race@example.com", display_name="Race actor")
+            buyer = Organization(legal_name="Buyer", country_code="US")
+            seller = Organization(legal_name="Seller", country_code="CA")
+            session.add_all([user, buyer, seller])
+            session.flush()
+            session.add(OrganizationMember(user_id=user.id, organization_id=buyer.id, status="ACTIVE"))
+            deal = Deal(buyer_organization_id=buyer.id, seller_organization_id=seller.id)
+            session.add(deal)
+            session.flush()
+            self.actor = ActorContext(user.id, frozenset({buyer.id}))
+            self.deal_id = deal.id
+            self.organization_id = buyer.id
+            session.commit()
+
+    def _cleanup(self) -> None:
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(text(f'DROP SCHEMA "{self.schema}" CASCADE'))
+        finally:
+            self.engine.dispose()
+
+    def _race(self, *, lazy: bool, changed: bool = False, rollback: bool = False) -> None:
+        if not lazy:
+            with Session(self.scoped_engine) as session:
+                SqlAlchemyCommunicationRepository(session).get_or_create_conversation(self.deal_id, self.organization_id)
+                session.commit()
+        gate = threading.Barrier(2, timeout=15)
+        winner_ready = threading.Event()
+        loser_insert = threading.Event()
+        thread_state = threading.local()
+
+        def wait_for(signal):
+            if not signal.wait(15):
+                raise AssertionError("Concurrency rendezvous timed out")
+
+        def observe_insert(_connection, _cursor, statement, _parameters, _context, _many):
+            table = "conversations" if lazy else "messages"
+            if getattr(thread_state, "role", None) == "loser" and statement.startswith("INSERT INTO") and table in statement:
+                loser_insert.set()
+
+        event.listen(self.engine, "before_cursor_execute", observe_insert)
+        owner = self
+
+        class RacingRepository(SqlAlchemyCommunicationRepository):
+            first_lookup = True
+
+            def rendezvous(self):
+                self.first_lookup = False
+                gate.wait()
+                if thread_state.role == "loser":
+                    wait_for(winner_ready)
+
+            def _find_conversation(self, deal_id, organization_id):
+                row = super()._find_conversation(deal_id, organization_id)
+                if lazy and self.first_lookup:
+                    owner.assertIsNone(row)
+                    self.rendezvous()
+                return row
+
+            def _find_keyed_message(self, message):
+                row = super()._find_keyed_message(message)
+                if not lazy and self.first_lookup:
+                    owner.assertIsNone(row)
+                    self.rendezvous()
+                return row
+
+        def send(role):
+            thread_state.role = role
+            with Session(self.scoped_engine) as session:
+                session.execute(text("SET LOCAL lock_timeout = '10s'"))
+                session.execute(text("SET LOCAL statement_timeout = '20s'"))
+                try:
+                    result = add_message(
+                        self.actor, self.deal_id,
+                        AddMessageCommand(body="Changed" if changed and role == "loser" else "Terms",
+                                          visibility=Visibility.PRIVATE, idempotency_key="concurrent-key"),
+                        RacingRepository(session),
+                    )
+                    if role == "winner":
+                        winner_ready.set()
+                        wait_for(loser_insert)
+                    if rollback and role == "winner":
+                        session.rollback()
+                    else:
+                        session.commit()
+                    return result
+                except MessageIdempotencyConflict:
+                    session.rollback()
+                    return "conflict"
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                winner = pool.submit(send, "winner")
+                loser = pool.submit(send, "loser")
+                winner_result = winner.result(timeout=30)
+                loser_result = loser.result(timeout=30)
+        finally:
+            event.remove(self.engine, "before_cursor_execute", observe_insert)
+        with Session(self.scoped_engine) as session:
+            messages = session.scalars(select(MessageRow)).all()
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(len(session.scalars(select(OutboxEvent)).all()), 1)
+            self.assertEqual(len(session.scalars(select(ConversationRow)).all()), 1)
+            if rollback:
+                self.assertNotEqual(winner_result.id, loser_result.id)
+                self.assertEqual(messages[0].id, loser_result.id)
+                self.assertEqual(messages[0].body, "Changed" if changed else "Terms")
+            elif changed:
+                self.assertEqual(loser_result, "conflict")
+                self.assertEqual(messages[0].id, winner_result.id)
+            else:
+                self.assertEqual(winner_result, loser_result)
+                self.assertEqual(messages[0].id, winner_result.id)
+
+    def test_existing_conversation_identical_requests_converge(self) -> None:
+        self._race(lazy=False)
+
+    def test_lazy_conversation_identical_requests_converge(self) -> None:
+        self._race(lazy=True)
+
+    def test_existing_conversation_changed_request_conflicts(self) -> None:
+        self._race(lazy=False, changed=True)
+
+    def test_lazy_conversation_changed_request_conflicts(self) -> None:
+        self._race(lazy=True, changed=True)
+
+    def test_existing_conversation_rollback_winner_leaves_key_reusable(self) -> None:
+        self._race(lazy=False, changed=True, rollback=True)
+
+    def test_lazy_conversation_rollback_winner_leaves_key_reusable(self) -> None:
+        self._race(lazy=True, changed=True, rollback=True)
 
 
 class CommunicationRepositoryTests(unittest.TestCase):
@@ -190,6 +344,175 @@ class CommunicationRepositoryTests(unittest.TestCase):
         if status is ConstraintStatus.CONFIRMED:
             constraint.confirm(confirmed_by=confirmer, confirmed_at=datetime.now(UTC))
         return self.repository.add_constraint(constraint)
+
+    def test_thread_import_durable_scoped_replay_and_atomic_rollback(self) -> None:
+        actor = ActorContext(self.user.id, frozenset({self.buyer.id}))
+        deal_id = self.deal.id
+        text = " \nFrom: Another user\r\n\r\n> Caf\u00e9 \U0001f600\r\nPrice: EUR 9 \n "
+        preview = preview_thread_import(actor, deal_id, text, self.repository)
+        self.assertEqual(self.session.scalars(select(MessageRow)).all(), [])
+        first = import_thread(actor, deal_id, text, preview.digest, self.repository, confirmed=True)
+        self.assertEqual(first.body, text.strip())
+        self.assertEqual(first.author_user_id, actor.user_id)
+        self.assertEqual(first.source_reference, preview.digest)
+        self.assertEqual(first.idempotency_key, preview.digest)
+        self.session.commit()
+        with Session(self.engine) as fresh:
+            repository = SqlAlchemyCommunicationRepository(fresh)
+            replay = import_thread(actor, deal_id, text.strip(), preview.digest, repository, confirmed=True)
+            self.assertEqual(first, replay)
+            with self.assertRaises(MessageIdempotencyConflict):
+                import_thread(actor, deal_id, text, preview.digest, repository, confirmed=True,
+                              visibility=Visibility.SHAREABLE, shareable_confirmed=True)
+            fresh.rollback()
+        self.assertEqual(len(self.session.scalars(select(MessageRow)).all()), 1)
+        self.assertEqual(len(self.session.scalars(select(OutboxEvent)).all()), 1)
+        other_deal = Deal(buyer_organization_id=self.buyer.id, seller_organization_id=self.seller.id)
+        self.session.add(other_deal)
+        self.session.flush()
+        separate = import_thread(actor, other_deal.id, text, preview.digest, self.repository, confirmed=True)
+        self.assertNotEqual(separate.id, first.id)
+        self.session.commit()
+        seller = ActorContext(self.seller_user.id, frozenset({self.seller.id}))
+        separate_actor = import_thread(seller, deal_id, text, preview.digest, self.repository, confirmed=True)
+        self.assertNotEqual(separate_actor.id, first.id)
+        self.session.rollback()
+        self.assertIsNone(self.session.get(MessageRow, separate_actor.id))
+        retry = import_thread(seller, deal_id, text, preview.digest, self.repository, confirmed=True)
+        self.session.commit()
+        self.assertNotEqual(retry.id, separate_actor.id)
+        self.assertEqual(len(self.session.scalars(select(OutboxEvent)).all()), 3)
+
+    def test_thread_preview_selected_membership_checks_current_database_status(self) -> None:
+        actor = ActorContext(self.user.id, frozenset({self.buyer.id}))
+        for model in (self.user, self.buyer, self.session.scalar(select(OrganizationMember).where(
+            OrganizationMember.user_id == self.user.id, OrganizationMember.organization_id == self.buyer.id,
+        ))):
+            model.status = "INACTIVE"
+            self.session.commit()
+            with self.assertRaises((CommunicationScopeError, CommunicationNotFound)) as raised:
+                preview_thread_import(actor, self.deal.id, "Private", self.repository)
+            self.assertEqual(str(raised.exception), "Deal not found")
+            model.status = "ACTIVE"
+            self.session.commit()
+        self.assertEqual(self.session.scalars(select(MessageRow)).all(), [])
+        self.assertEqual(self.session.scalars(select(OutboxEvent)).all(), [])
+
+    def test_idempotency_scope_actor_organization_and_deal(self) -> None:
+        original = self._message(self.buyer_conversation, "Terms", Visibility.PRIVATE)
+        keyed = replace(original, id=MessageId(uuid4()), idempotency_key="scope-key")
+        first = self.repository.add_message(keyed)
+        self.assertEqual(self.repository.add_message(replace(keyed, id=MessageId(uuid4()))), first)
+        self.session.add_all([
+            OrganizationMember(organization_id=self.buyer.id, user_id=self.seller_user.id, status="ACTIVE"),
+            OrganizationMember(organization_id=self.seller.id, user_id=self.user.id, status="ACTIVE"),
+        ])
+        self.session.flush()
+        other_deal = Deal(buyer_organization_id=self.buyer.id, seller_organization_id=self.seller.id)
+        self.session.add(other_deal)
+        self.session.flush()
+        other_conversation = self.repository.get_or_create_conversation(other_deal.id, self.buyer.id)
+        for change in (
+            {"author_user_id": UserId(self.seller_user.id)},
+            {"conversation_id": self.seller_conversation.id},
+            {"conversation_id": other_conversation.id},
+        ):
+            separate = self.repository.add_message(replace(keyed, id=MessageId(uuid4()), body="Other scope", **change))
+            self.assertNotEqual(separate.id, first.id)
+            self.assertEqual(separate.body, "Other scope")
+
+    def test_idempotency_notification_rollback_leaves_key_reusable(self) -> None:
+        original = self._message(self.buyer_conversation, "Baseline", Visibility.PRIVATE)
+        self.session.commit()
+        keyed = replace(original, id=MessageId(uuid4()), body="Retry me", idempotency_key="rollback")
+        from syncally.infrastructure.repositories import communications
+        queue = communications.queue_deal_workflow_notification
+
+        def fail_after_queue(*args, **kwargs):
+            queue(*args, **kwargs)
+            raise RuntimeError("Notification failed")
+
+        with patch.object(communications, "queue_deal_workflow_notification", side_effect=fail_after_queue):
+            with self.assertRaisesRegex(RuntimeError, "Notification failed"):
+                self.repository.add_message(keyed)
+        self.session.commit()
+        self.assertIsNone(self.session.get(MessageRow, keyed.id))
+        self.assertEqual(len(self.session.scalars(select(OutboxEvent)).all()), 1)
+        saved = self.repository.add_message(keyed)
+        self.session.rollback()
+        self.assertIsNone(self.session.get(MessageRow, saved.id))
+        self.assertEqual(self.repository.add_message(keyed).id, keyed.id)
+        self.session.commit()
+        self.assertEqual(len(self.session.scalars(select(OutboxEvent)).all()), 2)
+
+    def test_idempotency_unique_race_recovery_and_unrelated_integrity_errors(self) -> None:
+        original = self._message(self.buyer_conversation, "Terms", Visibility.PRIVATE)
+        keyed = replace(original, id=MessageId(uuid4()), idempotency_key="race")
+        stored = self.repository.add_message(keyed)
+        self.session.commit()
+        row = self.session.get(MessageRow, stored.id)
+        with patch.object(self.repository, "_find_keyed_message", side_effect=[None, row]):
+            self.assertEqual(self.repository.add_message(replace(keyed, id=MessageId(uuid4()))), stored)
+        with patch.object(self.repository, "_find_keyed_message", side_effect=[None, row]):
+            with self.assertRaises(MessageIdempotencyConflict):
+                self.repository.add_message(replace(keyed, id=MessageId(uuid4()), body="Changed"))
+        with self.assertRaises(IntegrityError):
+            self.repository.add_message(replace(keyed, id=original.id, idempotency_key="different-key"))
+
+    def test_idempotency_race_recovery_revalidates_access_before_lookup(self) -> None:
+        original = self._message(self.buyer_conversation, "Terms", Visibility.PRIVATE)
+        keyed = replace(original, id=MessageId(uuid4()), idempotency_key="revoked-race")
+        stored = self.repository.add_message(keyed)
+        self.session.commit()
+        row = self.session.get(MessageRow, stored.id)
+        member = self.session.scalar(select(OrganizationMember).where(OrganizationMember.user_id == self.user.id))
+        require_access = self.repository._require_message_access
+        checks = 0
+
+        def revoke_on_recovery(message):
+            nonlocal checks
+            checks += 1
+            if checks == 2:
+                member.status = "INACTIVE"
+                self.session.flush()
+            return require_access(message)
+
+        with patch.object(self.repository, "_require_message_access", side_effect=revoke_on_recovery):
+            with patch.object(self.repository, "_find_keyed_message", side_effect=[None, row]) as lookup:
+                with self.assertRaises(CommunicationScopeError):
+                    self.repository.add_message(replace(keyed, id=MessageId(uuid4())))
+                self.assertEqual(lookup.call_count, 1)
+        self.assertEqual(checks, 2)
+
+    def test_lazy_conversation_does_not_swallow_unrelated_integrity_failure(self) -> None:
+        from syncally.infrastructure.repositories import communications
+        with patch.object(self.repository, "_find_conversation", return_value=None):
+            with patch.object(communications, "Conversation", return_value=ConversationRow(
+                id=self.buyer_conversation.id, deal_id=self.deal.id,
+                participant_organization_id=self.buyer.id,
+            )):
+                with self.assertRaises(IntegrityError):
+                    self.repository.get_or_create_conversation(self.deal.id, self.buyer.id)
+
+    def test_idempotency_rechecks_selected_org_user_and_deal_before_replay(self) -> None:
+        original = self._message(self.buyer_conversation, "Terms", Visibility.PRIVATE)
+        keyed = replace(original, id=MessageId(uuid4()), idempotency_key="authorization")
+        self.repository.add_message(keyed)
+        self.session.commit()
+        member = self.session.scalar(select(OrganizationMember).where(OrganizationMember.user_id == self.user.id))
+        for target, attribute, revoked in (
+            (member, "status", "INACTIVE"), (self.user, "status", "INACTIVE"),
+            (self.buyer, "status", "INACTIVE"),
+            (self.deal, "buyer_organization_id", self.outsider.id),
+        ):
+            with self.subTest(attribute=attribute, target=type(target).__name__):
+                previous = getattr(target, attribute)
+                setattr(target, attribute, revoked)
+                self.session.flush()
+                with self.assertRaises(CommunicationScopeError):
+                    self.repository.add_message(replace(keyed, id=MessageId(uuid4())))
+                setattr(target, attribute, previous)
+                self.session.flush()
 
     def test_messages_round_trip_owner_visibility_source_and_utc_timestamp(self) -> None:
         message = self._message(

@@ -1,13 +1,22 @@
+import hashlib
+import json
+from copy import deepcopy
 from datetime import UTC, datetime
+from io import BytesIO
 from unittest import TestCase
+from unittest.mock import patch
 from uuid import uuid4
+from zipfile import ZipFile
 
 from test_domain_fixes import build_terms
 
 from syncally.application.deals import DealNotFound
 from syncally.application.documents import (
     AgreementNotCommitted,
+    InvalidTradePack,
+    TradePackTooLarge,
     generate_commercial_document_draft,
+    generate_trade_pack,
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import (
@@ -143,3 +152,93 @@ class CommercialDocumentDraftTests(TestCase):
                 self.deal_repository,
                 self.agreement_repository,
             )
+
+    def projection(self):
+        return {"id": str(self.agreement.version_id), "deal_id": str(self.deal_id),
+                "version_number": 2, "terms_hash": self.terms.terms_hash, "status": "COMMITTED",
+                "created_at": self.agreement.created_at, "committed_at": self.agreement.created_at,
+                "terms": self.terms.to_storage_dict(),
+                "approvals": [{"organization_id": str(approval.organization_id),
+                    "agreement_version_id": str(self.agreement.version_id), "deal_id": str(self.deal_id),
+                    "version_number": 2, "decision": "APPROVE", "terms_hash": self.terms.terms_hash}
+                    for approval in self.agreement.approvals.values()]}
+
+    def pack(self, projection, format="zip"):
+        return generate_trade_pack(projection, deal_id=self.deal_id, number=2,
+            agreement_version_id=self.agreement.version_id, terms_hash=projection["terms_hash"], format=format)
+
+    def test_pack_all_entries_escaped_private_free_deterministic_and_exact_hash(self):
+        projection = self.projection()
+        display = projection["terms"]
+        display["line_items"] *= 2
+        display["shipments"] *= 2
+        display["payment_terms"] *= 2
+        display["line_items"][0]["description"] = '<img src="x" onerror="alert(1)"> & dangerous'
+        from syncally.domain.agreements.trade_terms import TradeTerms
+        canonical = TradeTerms.from_canonical_json(display).canonical_json().encode()
+        projection["terms_hash"] = hashlib.sha256(canonical).hexdigest()
+        for approval in projection["approvals"]:
+            approval["terms_hash"] = projection["terms_hash"]
+        display["_f6_evidence"] = [{"private": "NEVER EXPORT"}]
+        before = deepcopy(projection)
+        pack = self.pack(projection)
+        self.assertEqual(pack.content, self.pack(projection).content)
+        self.assertEqual(projection, before)
+        with ZipFile(BytesIO(pack.content)) as archive:
+            self.assertEqual(archive.namelist(), ["trade-pack.html", "canonical-terms.json", "manifest.json"])
+            self.assertEqual(archive.read("canonical-terms.json"), canonical)
+            html = archive.read("trade-pack.html").decode()
+            self.assertIn("Item 2", html)
+            self.assertIn("Shipment 2", html)
+            self.assertIn("Payment term 2", html)
+            self.assertIn("&lt;img src=&quot;x&quot; onerror=&quot;alert(1)&quot;&gt;", html)
+            self.assertNotIn("NEVER EXPORT", str(pack.content))
+            self.assertNotIn("_f6_evidence", archive.read("manifest.json").decode())
+            self.assertEqual(json.loads(archive.read("manifest.json"))["counts"]["line_items"], 2)
+            self.assertIn("Toronto", html)
+            self.assertIn("toronto", canonical.decode())
+            self.assertIn("Not recorded in committed terms", html)
+            self.assertNotIn("<script", html)
+
+    def test_pack_fails_closed_for_unknown_schema_hash_and_approval(self):
+        for mutation in (lambda value: value["terms"].update(unknown="x"),
+                         lambda value: value["terms"].update(schema_version=2),
+                         lambda value: value.update(terms_hash="0" * 64),
+                         lambda value: value["approvals"].pop(),
+                         lambda value: value["approvals"][0].update(decision="REJECT")):
+            with self.subTest(mutation=mutation):
+                projection = self.projection()
+                mutation(projection)
+                with self.assertRaises(InvalidTradePack):
+                    self.pack(projection)
+
+    def test_pack_size_limits_and_decimal_expansion(self):
+        projection = self.projection()
+        projection["terms"]["line_items"][0]["quantity"] = "1e999999999"
+        with self.assertRaises(TradePackTooLarge):
+            self.pack(projection)
+        with patch("syncally.application.documents.MAX_DISPLAY_JSON_BYTES", 10):
+            with self.assertRaises(TradePackTooLarge):
+                self.pack(self.projection())
+        with patch("syncally.application.documents.MAX_TRADE_PACK_BYTES", 3000):
+            with self.assertRaises(TradePackTooLarge):
+                self.pack(self.projection(), "html")
+
+    def test_pack_cumulative_expansion_rejected_before_domain_formatting(self):
+        projection = self.projection()
+        projection["terms"]["line_items"] *= 20
+        for item in projection["terms"]["line_items"]:
+            item["quantity"] = "1e200000"
+        with patch("syncally.application.documents.TradeTerms.from_canonical_json") as reconstruct:
+            with self.assertRaises(TradePackTooLarge):
+                self.pack(projection)
+            reconstruct.assert_not_called()
+
+    def test_pack_oversized_display_rejected_before_renderer_or_compression(self):
+        projection = self.projection()
+        projection["terms"]["line_items"][0]["description"] = "x" * (2 * 1024 * 1024)
+        with patch("syncally.application.documents._trade_pack_html") as renderer, patch("syncally.application.documents.ZipFile") as compress:
+            with self.assertRaises(TradePackTooLarge):
+                self.pack(projection)
+            renderer.assert_not_called()
+            compress.assert_not_called()

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import ColumnElement, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import (
@@ -20,15 +20,26 @@ from syncally.api.auth import (
 from syncally.application.identity import ActorContext
 from syncally.application.passwords import hash_password, verify_password
 from syncally.config import settings
+from syncally.domain.deals.deal import Deal as DomainDeal
+from syncally.domain.shared.identifiers import DealId, OrganizationId
+from syncally.infrastructure.counterparty_onboarding import lock_deal
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
 from syncally.infrastructure.models import (
+    AgreementVersion,
     AuditEvent,
     Conversation,
+    CounterpartyOnboarding,
     Deal,
+    Message,
+    NegotiationSession,
     Organization,
     OrganizationMember,
+    Proposal,
     User,
 )
+from syncally.infrastructure.repositories._timestamps import as_utc
+from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 
 router = APIRouter(tags=["organizations"])
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
@@ -72,6 +83,22 @@ class AddOrganizationMemberRequest(BaseModel):
 class CreateInvitationRequest(BaseModel):
     deal_id: UUID | None = None
     role: str = Field(default="MEMBER", pattern=r"^(ADMIN|MEMBER)$")
+    recipient_email: str | None = Field(default=None, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+    @field_validator("recipient_email", mode="before")
+    @classmethod
+    def normalize_recipient(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+
+class CreateCounterpartyInvitationRequest(CreateOrganizationRequest):
+    buyer_organization_id: UUID
+    recipient_email: str = Field(max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+    @field_validator("recipient_email", mode="before")
+    @classmethod
+    def normalize_recipient(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
 
 
 class InvitationResponse(BaseModel):
@@ -82,13 +109,18 @@ class InvitationResponse(BaseModel):
     deal_id: UUID | None = None
     role: str
     expires_at: str
+    kind: str | None = None
+
+
+class CounterpartyInvitationResponse(InvitationResponse):
+    pending_counterparty: bool = True
 
 
 class AcceptInvitationRequest(BaseModel):
     token: str = Field(min_length=1)
     # Optional credentials for unauthenticated recipient sign-up
     email: str | None = Field(default=None, max_length=320)
-    password: str | None = Field(default=None, min_length=8, max_length=128)
+    password: str | None = Field(default=None, min_length=12, max_length=128)
     display_name: str | None = Field(default=None, max_length=200)
     # Recipient counterparty organization details
     organization_legal_name: str | None = Field(default=None, max_length=200)
@@ -137,6 +169,7 @@ def _active_admin_membership(
             Organization.id == organization_id,
             Organization.status == "ACTIVE",
         )
+        .with_for_update().execution_options(populate_existing=True)
     )
     if organization is None:
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -147,6 +180,7 @@ def _active_admin_membership(
             OrganizationMember.user_id == user_id,
             OrganizationMember.status == "ACTIVE",
         )
+        .with_for_update().execution_options(populate_existing=True)
     )
     if membership is None:
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -390,6 +424,9 @@ def _create_invitation_token(
     inviter_user_id: UUID,
     deal_id: UUID | None = None,
     role: str = "MEMBER",
+    *,
+    recipient_email: str | None = None,
+    shell_id: UUID | None = None,
 ) -> tuple[str, datetime, UUID]:
     if not settings.jwt_secret:
         raise HTTPException(
@@ -411,6 +448,11 @@ def _create_invitation_token(
         "exp": int(expires_at.timestamp()),
         "typ": "organization_invitation",
     }
+    if recipient_email is not None:
+        claims.update(version=1, kind="COUNTERPARTY" if shell_id else "TEAM",
+                      recipient_email=recipient_email, role="MEMBER")
+        if shell_id is not None:
+            claims.update(shell_id=str(shell_id), buyer_id=str(organization.id))
     token = jwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
     return token, expires_at, jti
 
@@ -430,6 +472,27 @@ def _decode_invitation_token(token: str) -> dict[str, object]:
         )
         if claims.get("typ") != "organization_invitation":
             raise jwt.InvalidTokenError("Token type is not valid for invitation")
+        typed_keys = {"version", "kind", "recipient_email", "shell_id", "buyer_id"}
+        if typed_keys.intersection(claims):
+            if type(claims.get("version")) is not int or claims["version"] != 1:
+                raise jwt.InvalidTokenError("Unknown invitation version")
+            if claims.get("kind") not in {"TEAM", "COUNTERPARTY"}:
+                raise jwt.InvalidTokenError("Unknown invitation kind")
+            email = claims.get("recipient_email")
+            if not isinstance(email, str) or email != email.strip().lower() or "@" not in email:
+                raise jwt.InvalidTokenError("Missing invitation recipient")
+            if claims.get("role") != "MEMBER" or claims.get("sub") != claims.get("org_id"):
+                raise jwt.InvalidTokenError("Invalid invitation authority")
+            for key in ("jti", "org_id", "inviter_user_id"):
+                UUID(str(claims[key]))
+            if claims["kind"] == "TEAM":
+                if claims.get("deal_id") or "shell_id" in claims or "buyer_id" in claims:
+                    raise jwt.InvalidTokenError("Invalid team invitation binding")
+            else:
+                for key in ("deal_id", "shell_id", "buyer_id"):
+                    UUID(str(claims[key]))
+                if claims["buyer_id"] != claims["org_id"] or claims["shell_id"] == claims["buyer_id"]:
+                    raise jwt.InvalidTokenError("Invalid counterparty binding")
         return claims
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(
@@ -456,10 +519,14 @@ def create_organization_invitation(
 ) -> dict[str, object]:
     """Generate a signed single-use invitation token valid for 7 days."""
     organization, _ = _active_admin_membership(db, organization_id, actor.user_id)
+    if payload.recipient_email is not None and payload.deal_id is not None:
+        raise HTTPException(status_code=422, detail="Use counterparty deal creation for recipient-bound deal invitations")
     if payload.deal_id is not None:
         deal = db.scalar(select(Deal).where(Deal.id == payload.deal_id))
         if deal is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+        if deal.onboarding is not None:
+            raise HTTPException(status_code=409, detail="This deal already has a bound counterparty invitation")
         if organization_id not in (deal.buyer_organization_id, deal.seller_organization_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -467,7 +534,8 @@ def create_organization_invitation(
             )
 
     token, expires_at, jti = _create_invitation_token(
-        organization, actor.user_id, payload.deal_id, payload.role
+        organization, actor.user_id, payload.deal_id, payload.role,
+        recipient_email=payload.recipient_email,
     )
     db.add(
         AuditEvent(
@@ -481,7 +549,7 @@ def create_organization_invitation(
             payload={
                 "organization_id": str(organization_id),
                 "deal_id": str(payload.deal_id) if payload.deal_id else None,
-                "role": payload.role,
+                "role": "MEMBER" if payload.recipient_email else payload.role,
                 "expires_at": expires_at.isoformat(),
             },
         )
@@ -489,13 +557,55 @@ def create_organization_invitation(
     db.commit()
     return {
         "token": token,
-        "invite_url": f"https://app.syncally.trade/#/invite?token={token}",
+        "invite_url": f"{settings.public_frontend_url}/#/invite?token={token}",
         "organization_id": str(organization_id),
         "organization_legal_name": organization.legal_name,
         "deal_id": str(payload.deal_id) if payload.deal_id else None,
-        "role": payload.role,
+        "role": "MEMBER" if payload.recipient_email else payload.role,
         "expires_at": expires_at.isoformat(),
+        "kind": "TEAM" if payload.recipient_email else None,
     }
+
+
+@router.post("/deals/counterparty-invitations", status_code=201, response_model=CounterpartyInvitationResponse)
+def create_counterparty_invitation(
+    payload: CreateCounterpartyInvitationRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    try:
+        buyer, _ = _active_admin_membership(db, payload.buyer_organization_id, actor.user_id)
+        active_user = db.scalar(select(User.id).where(User.id == actor.user_id, User.status == "ACTIVE").with_for_update())
+        if active_user is None:
+            raise HTTPException(status_code=401, detail="Active user session not found")
+        shell = Organization(legal_name=payload.legal_name, country_code=payload.country_code, status="INACTIVE")
+        db.add(shell)
+        db.flush()
+        lock_demo_deal_creation(db, buyer.id, shell.id)
+        now = datetime.now(UTC)
+        deal = DomainDeal(id=DealId(uuid4()), buyer_organization_id=OrganizationId(buyer.id),
+                          seller_organization_id=OrganizationId(shell.id), created_at=now, version=1)
+        SqlAlchemyDealRepository(db).stage(deal)
+        token, expires_at, jti = _create_invitation_token(
+            buyer, actor.user_id, deal.id, recipient_email=payload.recipient_email, shell_id=shell.id
+        )
+        db.flush()
+        db.add(CounterpartyOnboarding(invitation_jti=jti, deal_id=deal.id,
+                                     buyer_organization_id=buyer.id, shell_organization_id=shell.id,
+                                     inviter_user_id=actor.user_id, recipient_email=payload.recipient_email,
+                                     expires_at=expires_at))
+        db.add(AuditEvent(id=uuid4(), aggregate_type="organization_invitation", aggregate_id=jti,
+                          event_type="invitation.created", actor_type="USER", actor_id=str(actor.user_id),
+                          occurred_at=now, payload={"kind": "COUNTERPARTY", "deal_id": str(deal.id),
+                                                    "organization_id": str(buyer.id), "expires_at": expires_at.isoformat()}))
+        db.commit()
+        return {"token": token, "invite_url": f"{settings.public_frontend_url}/#/invite?token={token}",
+                "organization_id": str(buyer.id), "organization_legal_name": buyer.legal_name,
+                "deal_id": str(deal.id), "role": "ADMIN", "kind": "COUNTERPARTY",
+                "expires_at": expires_at.isoformat(), "pending_counterparty": True}
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _deal_awaiting_counterparty(db: Session, deal_id: UUID, inviting_org_id: UUID) -> Deal:
@@ -506,7 +616,7 @@ def _deal_awaiting_counterparty(db: Session, deal_id: UUID, inviting_org_id: UUI
     DRAFT, and the other party is an unclaimed shell. Rejecting up front keeps the deal
     untouched and avoids creating a conversation for a non-participant.
     """
-    deal = db.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+    deal = lock_deal(db, deal_id)
     if deal is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
     if inviting_org_id == deal.buyer_organization_id:
@@ -549,6 +659,19 @@ def accept_invitation(
     actor: ActorContext | None = Depends(get_optional_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
+    try:
+        return _accept_invitation(payload, actor, db)
+    except (IntegrityError, OperationalError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Invitation acceptance conflicts with another request") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _accept_invitation(
+    payload: AcceptInvitationRequest, actor: ActorContext | None, db: Session
+) -> dict[str, object]:
     """Accept an invitation token to sign up, join an organization, or link a counterparty into a deal."""
     claims = _decode_invitation_token(payload.token)
     try:
@@ -563,6 +686,28 @@ def accept_invitation(
         ) from exc
     role = str(claims.get("role", "MEMBER"))
     deal_id_str = claims.get("deal_id")
+    kind = claims.get("kind")
+    onboarding: CounterpartyOnboarding | None = None
+    if kind == "TEAM" and payload.organization_legal_name:
+        raise HTTPException(status_code=400, detail="Team invitations do not create a counterparty organization")
+    if kind == "COUNTERPARTY":
+        lock_deal(db, deal_uuid)
+        onboarding = db.scalar(select(CounterpartyOnboarding).where(CounterpartyOnboarding.invitation_jti == jti)
+                               .with_for_update().execution_options(populate_existing=True))
+        if onboarding is None or (
+            onboarding.deal_id != deal_uuid or str(onboarding.buyer_organization_id) != claims["buyer_id"]
+            or str(onboarding.shell_organization_id) != claims["shell_id"]
+            or onboarding.inviter_user_id != inviter_user_id or onboarding.recipient_email != claims["recipient_email"]
+        ):
+            raise HTTPException(status_code=409, detail="Counterparty invitation binding is no longer valid")
+        if onboarding.consumed_at is not None:
+            raise HTTPException(status_code=409, detail="Invitation token has already been used")
+        if as_utc(onboarding.expires_at) <= datetime.now(UTC):
+            raise HTTPException(status_code=400, detail="Invitation token has expired")
+        shell = db.scalar(select(Organization).where(Organization.id == onboarding.shell_organization_id)
+                          .with_for_update().execution_options(populate_existing=True))
+        if shell is None or shell.status != "INACTIVE":
+            raise HTTPException(status_code=409, detail="Counterparty shell is no longer unclaimed")
 
     # Atomic single-use check
     already_used = db.scalar(
@@ -580,6 +725,7 @@ def accept_invitation(
 
     inviting_org = db.scalar(
         select(Organization).where(Organization.id == org_id, Organization.status == "ACTIVE")
+        .with_for_update().execution_options(populate_existing=True)
     )
     if inviting_org is None:
         raise HTTPException(
@@ -597,6 +743,7 @@ def accept_invitation(
             OrganizationMember.status == "ACTIVE",
             User.status == "ACTIVE",
         )
+        .with_for_update(of=(OrganizationMember, User))
     )
     if inviter_admin is None:
         raise HTTPException(
@@ -616,12 +763,25 @@ def accept_invitation(
                 detail="An organization legal name is required to accept a deal invitation",
             )
         linking_deal = _deal_awaiting_counterparty(db, deal_uuid, org_id)
+        if onboarding is None and linking_deal.onboarding is not None:
+            raise HTTPException(status_code=409, detail="This deal requires its bound counterparty invitation")
+        if onboarding is not None:
+            if linking_deal.buyer_organization_id != onboarding.buyer_organization_id or linking_deal.seller_organization_id != onboarding.shell_organization_id:
+                raise HTTPException(status_code=409, detail="Deal parties have changed")
+            has_messages = db.scalar(select(Message.id).join(Conversation, Conversation.id == Message.conversation_id)
+                                     .where(Conversation.deal_id == deal_uuid).limit(1))
+            commercial_state = any(db.scalar(select(model.id).where(model.deal_id == deal_uuid).limit(1)) is not None
+                                   for model in (Proposal, NegotiationSession, AgreementVersion))
+            if has_messages is not None or commercial_state or linking_deal.current_proposal_id or linking_deal.current_agreement_version_id:
+                raise HTTPException(status_code=409, detail="Deal is no longer open for counterparty onboarding")
+            _decode_invitation_token(payload.token)
 
     # 1. Resolve or create user
     user: User | None = None
     if actor is not None:
         user = db.scalar(
             select(User).where(User.id == actor.user_id, User.status == "ACTIVE")
+            .with_for_update().execution_options(populate_existing=True)
         )
         if user is None:
             raise HTTPException(
@@ -635,7 +795,9 @@ def accept_invitation(
                 detail="Email and password are required to accept an invitation when not signed in",
             )
         clean_email = payload.email.strip().lower()
-        user = db.scalar(select(User).where(User.email == clean_email))
+        if kind and clean_email != claims["recipient_email"]:
+            raise HTTPException(status_code=403, detail="Invitation is addressed to a different account")
+        user = db.scalar(select(User).where(User.email == clean_email).with_for_update().execution_options(populate_existing=True))
         if user is not None:
             if not verify_password(payload.password, user.password_hash):
                 raise HTTPException(
@@ -658,8 +820,15 @@ def accept_invitation(
             db.add(user)
             db.flush()
 
+    if kind and user.email.strip().lower() != claims["recipient_email"]:
+        raise HTTPException(status_code=403, detail="Invitation is addressed to a different account")
+
     # 2. Handle organization membership & counterparty organization creation
     if payload.organization_legal_name:
+        active_count = db.scalar(select(func.count(OrganizationMember.id)).join(Organization, Organization.id == OrganizationMember.organization_id)
+                    .where(OrganizationMember.user_id == user.id, OrganizationMember.status == "ACTIVE", Organization.status == "ACTIVE"))
+        if active_count >= settings.max_organizations_per_user:
+            raise HTTPException(status_code=409, detail="Organization limit reached for this account")
         # Counterparty onboarding: create recipient's organization
         recipient_org = Organization(
             legal_name=payload.organization_legal_name,
@@ -713,6 +882,9 @@ def accept_invitation(
         else:
             linking_deal.buyer_organization_id = effective_org.id
         linking_deal.version = linking_deal.version + 1
+        if onboarding is not None:
+            onboarding.consumed_at = datetime.now(UTC)
+            onboarding.recipient_organization_id = effective_org.id
 
         # Ensure participant conversation exists for effective_org
         existing_conv = db.scalar(

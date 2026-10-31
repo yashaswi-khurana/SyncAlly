@@ -4,11 +4,22 @@ import {
   API_REQUEST_TIMEOUT_MS,
   ApiError,
   createDealMessage,
+  importDealThread,
+  previewDealThreadImport,
   getDealMessageExistence,
   getOrganization,
+  listPaymentStatuses,
+  suggestDealFacts,
+  draftDealProposal,
+  getAgreementHistory,
+  getAgreementVersion,
+  compareAgreementVersions,
+  previewDealPayment,
+  authorizeDealPayment,
+  getTradePack,
 } from "./client";
 import { clearAccessToken, setAccessToken } from "./tokenStore";
-import type { CreateMessageInput, DealMessage } from "./types";
+import type { CreateMessageInput, DealMessage, PaymentStatus } from "./types";
 
 const DEAL_ID = "11111111-1111-1111-1111-111111111111";
 const IDEMPOTENCY_KEY = "message-request-1";
@@ -36,6 +47,90 @@ const CREATED_MESSAGE: DealMessage = {
 
 const fetchMock = vi.fn();
 
+describe("trade pack binary client", () => {
+  beforeEach(() => { vi.stubGlobal("fetch", fetchMock); setAccessToken("access-token"); });
+  afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); clearAccessToken(); vi.useRealTimers(); });
+  const snapshot = { id: "version/1", version_number: 7, terms_hash: "a".repeat(64) };
+
+  it("reads authenticated binary with exact identity and no write body", async () => {
+    fetchMock.mockResolvedValue(new Response(new Uint8Array([80, 75, 0, 255]), { headers: { "Content-Type": "application/zip" } }));
+    const blob = await getTradePack("deal/1", snapshot, "party/1", "zip");
+    expect(Array.from(new Uint8Array(await blob.arrayBuffer()))).toEqual([80, 75, 0, 255]);
+    expect(lastRequest().url).toBe(`/deals/deal%2F1/documents/versions/7/trade-pack?agreement_version_id=version%2F1&terms_hash=${snapshot.terms_hash}&organization_id=party%2F1&format=zip`);
+    expect(new Headers(lastRequest().init.headers).get("Authorization")).toBe("Bearer access-token");
+    expect(lastRequest().init.body).toBeUndefined();
+  });
+  it.each([401, 404, 409, 413, 422])("keeps JSON error detail for binary %s responses", async (status) => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "Export unavailable" }, status));
+    await expect(getTradePack("deal", snapshot, "party", "html")).rejects.toMatchObject({ status, message: "Export unavailable" });
+  });
+  it.each(["caller", "timeout"])("cancels binary requests on %s and releases deadline", async (reason) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+    }));
+    const result = getTradePack("deal", snapshot, "party", "zip", controller.signal).catch((error: unknown) => error);
+    if (reason === "caller") controller.abort();
+    else await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS);
+    expect(lastRequest().init.signal?.aborted).toBe(true);
+    expect(await result).toMatchObject(reason === "caller" ? { name: "AbortError" } : { status: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("payment mode contracts", () => {
+  beforeEach(() => { vi.stubGlobal("fetch", fetchMock); setAccessToken("access-token"); });
+  afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); clearAccessToken(); });
+
+  it("reads typed mode and sends only an expected-mode guard, never a provider override", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ provider: "OFFLINE_DEMO", execution_mode: "OFFLINE_DEMO" }));
+    expect((await previewDealPayment("deal/1")).execution_mode).toBe("OFFLINE_DEMO");
+    expect(lastRequest().url).toBe("/deals/deal%2F1/payments/preview");
+    expect(lastRequest().init.body).toBeUndefined();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: "original", execution_mode: "PAYPAL_SANDBOX", already_existed: true }, 202));
+    const replay = await authorizeDealPayment("deal/1", "stable-key", "OFFLINE_DEMO");
+    expect(replay.execution_mode).toBe("PAYPAL_SANDBOX");
+    expect(sentBody()).toEqual({ idempotency_key: "stable-key", expected_mode: "OFFLINE_DEMO" });
+  });
+});
+
+describe("agreement history GET contracts", () => {
+  beforeEach(() => { vi.stubGlobal("fetch", fetchMock); setAccessToken("access-token"); });
+  afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); clearAccessToken(); });
+
+  it("encodes party/deal and binds exact before/after versions without a write body", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ versions: [] }));
+    const controller = new AbortController();
+    await getAgreementHistory("deal/1", "party/1", controller.signal);
+    expect(lastRequest().url).toBe("/deals/deal%2F1/agreements/history?organization_id=party%2F1");
+    await getAgreementVersion("deal/1", 7, "party/1", controller.signal);
+    expect(lastRequest().url).toBe("/deals/deal%2F1/agreements/versions/7?organization_id=party%2F1");
+    await compareAgreementVersions("deal/1", 3, 7, "party/1", controller.signal);
+    expect(lastRequest().url).toBe("/deals/deal%2F1/agreements/compare?before=3&after=7&organization_id=party%2F1");
+    expect(lastRequest().init.body).toBeUndefined();
+    expect(lastRequest().init.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("AI invocation contract", () => {
+  beforeEach(() => { vi.stubGlobal("fetch", fetchMock); setAccessToken("access-token"); });
+  afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); clearAccessToken(); });
+
+  it.each([suggestDealFacts, draftDealProposal])("preserves additive provenance and sends only the selected organization", async (operation) => {
+    const provenance = { provider: "openai", mode: "openai", model: "operator-test-model", context_scope: "shareable_only", fallback_reason: null };
+    fetchMock.mockResolvedValue(jsonResponse({ provenance }));
+    expect(await operation(DEAL_ID, "buyer")).toEqual({ provenance });
+    expect(sentBody()).toEqual({ organization_id: "buyer" });
+    expect(lastRequest().init.method).toBe("POST");
+  });
+
+  it("does not fabricate provenance for legacy responses", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: "VALID", facts: [] }));
+    expect(await suggestDealFacts(DEAL_ID, "buyer")).not.toHaveProperty("provenance");
+  });
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -56,6 +151,125 @@ function sentBody(): Record<string, unknown> {
   const { init } = lastRequest();
   return JSON.parse(String(init.body)) as Record<string, unknown>;
 }
+
+describe("plaintext thread import client", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    setAccessToken("access-token");
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    clearAccessToken();
+  });
+
+  it("posts raw preview text and exact confirmed text without author or source claims", async () => {
+    const text = " \nFrom: Spoof\r\n> Caf\u00e9 \u{1f600}\r\nPrice: EUR 9 \n ";
+    const preview = { text: text.trim(), digest: "plaintext-thread:v1:" + "a".repeat(64), headers: [], warnings: ["Unverified text"] };
+    fetchMock.mockResolvedValueOnce(jsonResponse(preview));
+    expect(await previewDealThreadImport("deal/with space", { text, organization_id: "buyer" })).toEqual(preview);
+    expect(lastRequest().url).toBe("/deals/deal%2Fwith%20space/messages/import/preview");
+    expect(lastRequest().init.method).toBe("POST");
+    expect(sentBody()).toEqual({ text, organization_id: "buyer" });
+    expect(new Headers(lastRequest().init.headers).get("Authorization")).toBe("Bearer access-token");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...CREATED_MESSAGE, body: preview.text }, 201));
+    const created = await importDealThread(DEAL_ID, { text: preview.text, organization_id: "buyer", digest: preview.digest, confirmed: true });
+    expect(created.body).toBe(preview.text);
+    expect(lastRequest().url).toBe(`/deals/${DEAL_ID}/messages/import`);
+    expect(sentBody()).toEqual({ text: preview.text, organization_id: "buyer", digest: preview.digest, confirmed: true, visibility: "PRIVATE", shareable_confirmed: false });
+  });
+
+  it.each([409, 413, 422])("preserves the %s import error for draft-safe handling", async (status) => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "Preview required" }, status));
+    await expect(importDealThread(DEAL_ID, { text: "Original", organization_id: "buyer", digest: "digest", confirmed: true }))
+      .rejects.toMatchObject({ status, message: "Preview required" });
+  });
+
+  it.each(["preview", "import"])("forwards cancellation for %s and releases its deadline", async (operation) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+    }));
+    const input = { text: "Terms", organization_id: "buyer", digest: "digest", confirmed: true };
+    const pending = (operation === "preview"
+      ? previewDealThreadImport(DEAL_ID, input, { signal: controller.signal })
+      : importDealThread(DEAL_ID, input, { signal: controller.signal }))
+      .catch((error: unknown) => error);
+    controller.abort();
+    expect(lastRequest().init.signal?.aborted).toBe(true);
+    expect(await pending).toHaveProperty("name", "AbortError");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("listPaymentStatuses", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    setAccessToken("access-token");
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    clearAccessToken();
+  });
+
+  it.each<PaymentStatus["status"]>([
+    "AUTHORIZED", "CREATE_PENDING", "CREATE_UNKNOWN", "PROVIDER_CREATED", "SENT",
+    "PENDING", "PARTIALLY_PAID", "PAID", "FAILED", "CANCELLED",
+  ])("returns the typed %s snapshot without rewriting diagnostics", async (status) => {
+    const payment: PaymentStatus = {
+      id: "payment-1", milestone_sequence: 1, amount: "100", currency: "USD", status,
+      requires_polling: !["PAID", "FAILED", "CANCELLED"].includes(status),
+      reconciled_amount: null, last_checked_at: "2026-10-31T10:40:00Z",
+      last_reconciled_at: null, invoice_url: null, recipient_email: "buyer@example.com",
+      recipient_name: "Buyer", retry_count: 2, outbox_status: "PROCESSING",
+      next_retry_at: "2026-10-31T10:42:00Z", retry_scheduled_at: null,
+      lease_expires_at: "2026-10-31T10:42:00Z", failure_reason: null,
+    };
+    fetchMock.mockResolvedValue(jsonResponse([payment]));
+    expect(await listPaymentStatuses("deal/with space")).toEqual([payment]);
+    expect(lastRequest().url).toBe("/deals/deal%2Fwith%20space/payments");
+    expect(lastRequest().init.method ?? "GET").toBe("GET");
+    expect(lastRequest().init.body).toBeUndefined();
+    expect(new Headers(lastRequest().init.headers).get("Authorization")).toBe("Bearer access-token");
+  });
+
+  it("preserves missing legacy diagnostics rather than fabricating a polling signal", async () => {
+    const payment: PaymentStatus = {
+      id: "payment-1", milestone_sequence: 1, amount: "100", currency: "USD",
+      status: "CREATE_UNKNOWN", reconciled_amount: null,
+      last_checked_at: null, last_reconciled_at: null,
+    };
+    fetchMock.mockResolvedValue(jsonResponse([payment]));
+    const [snapshot] = await listPaymentStatuses(DEAL_ID);
+    expect(snapshot).toEqual(payment);
+    expect(snapshot).not.toHaveProperty("requires_polling");
+    expect(snapshot).not.toHaveProperty("retry_scheduled_at");
+  });
+
+  it("forwards caller cancellation and clears the request deadline", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    fetchMock.mockImplementation(
+      (_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      }),
+    );
+    const pending = listPaymentStatuses(DEAL_ID, { signal: controller.signal })
+      .catch((error: unknown) => error);
+    const sentSignal = lastRequest().init.signal;
+    expect(sentSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(sentSignal?.aborted).toBe(true);
+    expect(await pending).toHaveProperty("name", "AbortError");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe("createDealMessage", () => {
   beforeEach(() => {

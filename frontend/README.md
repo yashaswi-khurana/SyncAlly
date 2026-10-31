@@ -34,6 +34,17 @@ separate commit action requests the backend to mark the deal agreed. A `409` res
 old terms visible, disables further decisions, and asks the user to reload and review the current
 version.
 
+AI review now submits a human negotiation proposal instead of immediately creating an
+agreement. The existing detail screen shows saved rounds, hashes, deadlines and action
+history for the selected organization. The non-author may counter, accept as candidate
+or reject; the author may supersede, and either party may explicitly expire an elapsed
+proposal. Candidate approval and commit remain separate in Agreement review.
+Replacing a pending candidate requires explicit confirmation of the displayed version;
+old approvals do not carry forward. Conflicts require reload/review, organization/deal
+changes discard stale responses, and pending counterparty onboarding disables writes.
+Only server-projected evidence is rendered; the browser is not an authorization boundary.
+See [the F5 walkthrough and validation limits](../docs/operations.md#f5-persisted-human-negotiation).
+
 After signing in, the app opens the deals workspace (`#/deals`), which lists every deal where the
 signed-in account's organization is the buyer or the seller and labels which side the account is
 on. A seller reaches shared deals here instead of the create form. The workspace also lists the
@@ -52,12 +63,24 @@ to the backend so the browser stays same-origin. Point the proxy at a non-defaul
 `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:8000`). To call the API from a different
 origin, set `VITE_API_BASE_URL`; that environment needs CORS configured on the backend.
 
-The seller must be a different active organization. Because there is no organization search
-endpoint yet, the create form asks for the seller organization ID directly. Set
-`VITE_DEMO_SELLER_ORGANIZATION_ID` to prefill it for the local demo.
+New deal offers Existing organization (active directory selection) and Invite counterparty.
+The latter collects recipient/company details and returns a copyable URL tied to the new
+pending DRAFT deal; no email is sent. Awaiting counterparty permits human preparation but
+disables sending, thread import and proposal/approval actions until acceptance; refresh/poll
+restores the existing review controls. Settings and deal-context invitations are clearly
+Invite team member, recipient-bound, and contain no manual Deal ID.
+
+The existing signup and signed-in acceptance screens distinguish TEAM (join as MEMBER)
+from COUNTERPARTY (create one's separate organization as ADMIN). Decoded claims are display
+hints only. Wrong-account/expired/used/stale errors come from the backend. Token changes
+reset forms and ignore old responses; acceptance refreshes membership and navigates using
+the returned deal ID. Pending invitations suppress the zero-organization wizard.
+See [the two-person walkthrough](../docs/operations.md#f4-counterparty-onboarding).
 
 Sign in with a provisioned demo account (for example `buyer@syncally.demo`). The access token
-is kept in browser storage and sent as a bearer token; there is no public self-registration.
+is kept in browser storage and sent as a bearer token. There is no unrestricted public
+self-registration; invitation signup is supported. Token possession and signup-address
+matching do not verify mailbox ownership, and no email-verification claim is made.
 
 Use feature-oriented folders under `src/` as product flows are implemented. Keep API access in
 the shared `src/api/client.ts` module and keep server-side authorization and business rules in

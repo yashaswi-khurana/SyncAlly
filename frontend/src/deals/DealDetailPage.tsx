@@ -9,13 +9,13 @@ import {
   listDealMessages,
   listOrganizations,
 } from "../api/client";
-import type { Deal, Organization } from "../api/types";
+import type { Deal, NegotiationView, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 import DealConstellation from "./DealConstellation";
 import DealConversationReview from "./DealConversationReview";
 import AgreementReview from "./AgreementReview";
-import CommercialDocumentPanel from "./CommercialDocumentPanel";
 import PaymentStatusPanel from "./PaymentStatusPanel";
+import NegotiationReview from "./NegotiationReview";
 
 type DealState =
   | { status: "loading" }
@@ -64,11 +64,18 @@ export default function DealDetailPage({
   const [freshnessChecked, setFreshnessChecked] = useState(false);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [counterpartyName, setCounterpartyName] = useState("Counterparty");
+  const [negotiation, setNegotiation] = useState<NegotiationView | null>(null);
+  function commercialChanged() {
+    setNegotiation(null);
+    setAgreementReloadToken((token) => token + 1);
+    setReloadCount((count) => count + 1);
+  }
 
   // Shareable Counterparty Invitation Modal State
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [adminOrganizations, setAdminOrganizations] = useState<Organization[]>([]);
   const [selectedInviteOrgId, setSelectedInviteOrgId] = useState("");
+  const [teamRecipientEmail, setTeamRecipientEmail] = useState("");
   const [generatingInvite, setGeneratingInvite] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [generatedInvite, setGeneratedInvite] = useState<{
@@ -104,6 +111,21 @@ export default function DealDetailPage({
       cancelled = true;
     };
   }, [dealId, reloadCount]);
+
+  const pendingCounterparty = state.status === "ready" && state.deal.pending_counterparty;
+  useEffect(() => {
+    if (!pendingCounterparty || freshnessIntervalMs <= 0) return;
+    let cancelled = false;
+    let inFlight = false;
+    const timer = setInterval(() => {
+      if (document.hidden || inFlight) return;
+      inFlight = true;
+      void getDeal(dealId).then((deal) => {
+        if (!cancelled && !deal.pending_counterparty) setState({ status: "ready", deal });
+      }).catch(() => {}).finally(() => { inFlight = false; });
+    }, freshnessIntervalMs);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [dealId, pendingCounterparty, freshnessIntervalMs]);
 
   useEffect(() => {
     if (state.status !== "ready" || agreementReloadToken > 0) {
@@ -350,6 +372,7 @@ export default function DealDetailPage({
   }
 
   const handleOrganizationChange = useCallback((orgId: string) => {
+    setNegotiation(null);
     setSelectedOrganizationId(orgId);
     setFreshness("unknown");
     setFreshnessError(null);
@@ -378,6 +401,7 @@ export default function DealDetailPage({
     setInviteError(null);
     setGeneratedInvite(null);
     setCopiedInvite(false);
+    setTeamRecipientEmail("");
     try {
       const orgs = await listOrganizations();
       const currentDeal = state.deal;
@@ -397,6 +421,10 @@ export default function DealDetailPage({
   async function handleGenerateInvite(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (state.status !== "ready") return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(teamRecipientEmail.trim())) {
+      setInviteError("Enter the team member's email address.");
+      return;
+    }
     const targetOrgId =
       selectedInviteOrgId || (adminOrganizations[0] ? adminOrganizations[0].id : "");
     if (!targetOrgId) {
@@ -418,7 +446,7 @@ export default function DealDetailPage({
       }>(`/organizations/${encodeURIComponent(targetOrgId)}/invitations`, {
         method: "POST",
         body: JSON.stringify({
-          deal_id: state.deal.id,
+          recipient_email: teamRecipientEmail.trim().toLowerCase(),
         }),
       });
       setGeneratedInvite(res);
@@ -484,11 +512,12 @@ export default function DealDetailPage({
   }
 
   const { deal } = state;
-  const showBanner = freshness === "fresh" && agreementReloadToken === 0;
+  const showBanner = !deal.pending_counterparty && freshness === "fresh" && agreementReloadToken === 0;
 
   return (
     <Reveal>
       <div className="workspace deal-workspace">
+        {deal.pending_counterparty ? <aside className="deal-onboarding-banner" role="status"><h2>Awaiting counterparty</h2></aside> : null}
         {freshnessError && freshness === "unknown" ? (
           <aside className="deal-onboarding-error" role="status" aria-live="polite">
             <span>Unable to verify deal onboarding status: {freshnessError}</span>
@@ -581,7 +610,7 @@ export default function DealDetailPage({
                 className="button button--secondary"
                 onClick={handleOpenInviteModal}
               >
-                Invite Counterparty
+                Invite team member
               </button>
             </div>
           </section>
@@ -616,13 +645,13 @@ export default function DealDetailPage({
                 <span>Deal version {deal.version}</span>
               </div>
               <div className="deal-room__actions">
-                <button
+                {!deal.pending_counterparty ? <button
                   type="button"
                   className="button"
                   onClick={handleOpenInviteModal}
                 >
-                  Invite Counterparty
-                </button>
+                  Invite team member
+                </button> : null}
                 <button type="button" className="button deal-room__refresh" onClick={retryDeal}>
                   Refresh room <span aria-hidden="true">↗</span>
                 </button>
@@ -655,26 +684,33 @@ export default function DealDetailPage({
           </dl>
         </section>
 
-        <AgreementReview
+        {selectedOrganizationId ? <NegotiationReview
+          deal={deal} organizationId={selectedOrganizationId} reloadToken={agreementReloadToken}
+          onLoaded={setNegotiation} onChanged={commercialChanged}
+        /> : null}
+        {!deal.pending_counterparty ? <AgreementReview
+          key={`${deal.id}:${selectedOrganizationId}`}
           dealId={deal.id}
           buyerOrganizationId={deal.buyer_organization_id}
           sellerOrganizationId={deal.seller_organization_id}
           reloadToken={agreementReloadToken}
-          onCommitted={() => setAgreementReloadToken((token) => token + 1)}
-        />
+          selectedOrganizationId={selectedOrganizationId}
+          onOrganizationChange={handleOrganizationChange}
+          onCommitted={commercialChanged}
+        /> : null}
         <PaymentStatusPanel
           dealId={deal.id}
           sellerOrganizationId={deal.seller_organization_id}
           reloadToken={agreementReloadToken}
         />
-        <CommercialDocumentPanel dealId={deal.id} />
         <DealConversationReview
+          negotiation={negotiation?.organization_id === selectedOrganizationId && negotiation.deal_id === deal.id ? negotiation : null}
           deal={deal}
           composerId="deal-message-input"
           buttonLabel="Send message"
           selectedOrganizationId={selectedOrganizationId}
           onOrganizationChange={handleOrganizationChange}
-          onAgreementCreated={() => setAgreementReloadToken((token) => token + 1)}
+          onAgreementCreated={commercialChanged}
           onMessageCreated={() => {
             setFreshness("not-fresh");
             setFreshnessError(null);
@@ -693,7 +729,7 @@ export default function DealDetailPage({
                 <div>
                   <span className="eyebrow">Onboarding Link</span>
                   <h3 id="deal-invite-modal-title" className="display" style={{ fontSize: "1.25rem" }}>
-                    Invite Counterparty
+                    Invite team member
                   </h3>
                 </div>
                 <button
@@ -707,11 +743,11 @@ export default function DealDetailPage({
               </div>
 
               <p className="muted" style={{ marginBottom: 16 }}>
-                Generate a signed, single-use onboarding link for your counterparty. When opened,
-                they will be guided to sign up, register their entity, and link directly into this deal.
+                Team membership invitation
               </p>
 
               <form onSubmit={handleGenerateInvite} className="form" style={{ gap: 14 }}>
+                <div className="field"><label htmlFor="deal-team-email">Team member email</label><input id="deal-team-email" type="email" maxLength={320} value={teamRecipientEmail} disabled={generatingInvite} onChange={(event) => setTeamRecipientEmail(event.target.value)} /></div>
                 <div className="field">
                   <label htmlFor="deal-invite-org-select">Inviting Organization</label>
                   <select
@@ -780,7 +816,7 @@ export default function DealDetailPage({
                         fontWeight: 600,
                       }}
                     >
-                      Expires in 7 days · Single use · Pre-linked to this deal
+                      Expires in 7 days · Single use
                     </span>
                   </div>
                 </div>

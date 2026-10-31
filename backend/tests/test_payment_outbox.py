@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -183,6 +185,44 @@ class PaymentOutboxWorkerTests(unittest.TestCase):
             request_payload_hash=None,
             invoice_request=None,
         )
+
+    def test_mixed_batch_resolves_each_persisted_mode_not_global_configuration(self) -> None:
+        from syncally.config import settings
+        from syncally.infrastructure.offline_payments import (
+            OfflineDemoInvoiceProvider,
+            PaymentProviderResolver,
+        )
+        from syncally.infrastructure.payment_outbox import dispatch_pending_payment_events
+
+        sandbox = self._sent_work()
+        offline = replace(self._sent_work(), provider="OFFLINE_DEMO", execution_mode="OFFLINE_DEMO")
+        offline = replace(offline, provider_invoice_id=f"OFFLINE-{offline.payment_intent_id}")
+        unresolved = replace(self._sent_work(), provider="UNKNOWN", execution_mode="LEGACY_UNRESOLVED")
+        works = {work.payment_intent_id: work for work in (sandbox, offline, unresolved)}
+        events = [self._event(payload={"payment_intent_id": str(work.payment_intent_id)}) for work in works.values()]
+        resolutions = []
+
+        class Repository(FakeRepository):
+            def load(self, payment_intent_id):
+                return works[payment_intent_id]
+
+        class Resolver(PaymentProviderResolver):
+            def resolve(self, work):
+                resolutions.append(work.execution_mode)
+                if work.execution_mode == "PAYPAL_SANDBOX":
+                    return NoCallProvider()
+                if work.execution_mode == "OFFLINE_DEMO":
+                    return OfflineDemoInvoiceProvider(work)
+                return super().resolve(work)
+
+            def notifier(self, work):
+                return None
+
+        with patch.object(settings, "payment_mode", "OFFLINE_DEMO"), patch("syncally.config.PayPalSettings", side_effect=AssertionError("No remote construction")):
+            self.assertEqual(dispatch_pending_payment_events(self.session_factory, Repository(), Resolver(), batch_size=3), 3)
+        self.assertCountEqual(resolutions, ["PAYPAL_SANDBOX", "OFFLINE_DEMO", "LEGACY_UNRESOLVED"])
+        with self.session_factory() as db:
+            self.assertEqual([db.get(OutboxEvent, event).status for event in events], ["DELIVERED", "DELIVERED", "FAILED"])
 
     def test_completed_intent_marks_payment_outbox_delivered(self) -> None:
         event_id = self._event()

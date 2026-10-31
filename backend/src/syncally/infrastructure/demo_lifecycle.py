@@ -61,5 +61,16 @@ def lock_demo_payment_processing(db: Session, payment_intent_id: UUID) -> None:
 
 
 def lock_demo_reset(db: Session) -> None:
-    """Serialize a reset against demo deal creation and payment processing."""
+    """Serialize reset against demo mutations and durable outbox claims."""
+    if db.get_bind().dialect.name == "sqlite":
+        connection = db.connection()
+        if connection.connection.driver_connection.in_transaction:
+            raise RuntimeError("Demo setup/reset must own the SQLite transaction")
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        return
     _acquire_lock(db)
+
+
+def lock_outbox_dispatch(db: Session) -> None:
+    """Coordinate a short claim transaction with reset, never the external call."""
+    lock_demo_reset(db)

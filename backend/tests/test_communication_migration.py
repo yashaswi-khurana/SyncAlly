@@ -20,6 +20,37 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 
+class MessageIdempotencyMigrationTests(unittest.TestCase):
+    def test_upgrade_preserves_legacy_duplicates_and_downgrade_only_removes_additions(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0012_message_idempotency.py"
+        spec = importlib.util.spec_from_file_location("message_idempotency_migration", path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        self.assertEqual(migration.revision, "0012_message_idempotency")
+        self.assertEqual(migration.down_revision, "0011_organization_active_legal_name_index")
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id INTEGER, author_user_id INTEGER, body TEXT)"))
+                connection.execute(text("INSERT INTO messages VALUES (1, 10, 20, 'same'), (2, 10, 20, 'same')"))
+                migration.op = Operations(MigrationContext.configure(connection))
+                migration.upgrade()
+                columns = {column["name"]: column for column in inspect(connection).get_columns("messages")}
+                self.assertTrue(columns["idempotency_key"]["nullable"])
+                self.assertTrue(columns["idempotency_fingerprint"]["nullable"])
+                self.assertEqual(connection.execute(text("SELECT id, body, idempotency_key, idempotency_fingerprint FROM messages ORDER BY id")).fetchall(), [(1, "same", None, None), (2, "same", None, None)])
+                self.assertEqual(inspect(connection).get_unique_constraints("messages")[0]["name"], "uq_messages_conversation_author_idempotency_key")
+                connection.execute(text("INSERT INTO messages VALUES (3, 10, 20, 'new', 'key', 'v1:hash')"))
+                with self.assertRaises(IntegrityError):
+                    connection.execute(text("INSERT INTO messages VALUES (4, 10, 20, 'new', 'key', 'v1:hash')"))
+                connection.execute(text("INSERT INTO messages VALUES (5, 11, 20, 'new', 'key', 'v1:hash'), (6, 10, 21, 'new', 'key', 'v1:hash')"))
+                migration.downgrade()
+                self.assertEqual({column["name"] for column in inspect(connection).get_columns("messages")}, {"id", "conversation_id", "author_user_id", "body"})
+                self.assertEqual(connection.execute(text("SELECT count(*) FROM messages")).scalar_one(), 5)
+        finally:
+            engine.dispose()
+
+
 class CommunicationMigrationTests(unittest.TestCase):
     def test_upgrade_adds_source_reference_and_scope_indexes_downgrade_removes_them(self) -> None:
         migration_path = (

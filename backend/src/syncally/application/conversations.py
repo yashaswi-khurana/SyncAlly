@@ -8,10 +8,13 @@ free of HTTP parsing, request/response schemas, and SQLAlchemy.
 
 from __future__ import annotations
 
+import json
+import re
 from copy import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from hashlib import sha256
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -83,6 +86,11 @@ class ConstraintRepository(Protocol):
 class CommunicationRepository(ConstraintRepository, Protocol):
     """Persistence boundary for deal-scoped messages and constraint reads."""
 
+    def require_participant_membership(
+        self, deal_id: UUID, organization_id: UUID, user_id: UUID
+    ) -> None:
+        """Require current database-backed membership in the selected deal party."""
+
     def get_or_create_conversation(
         self, deal_id: UUID, organization_id: UUID
     ) -> Conversation:
@@ -130,6 +138,22 @@ class ConcurrentConstraintUpdate(DomainError):
 
 class CommunicationNotFound(DomainError):
     """The deal or record is missing or hidden from the authenticated actor."""
+
+
+class MessageIdempotencyConflict(DomainError):
+    """The actor already used this key for a different message payload."""
+
+
+def message_fingerprint(message: Message) -> str:
+    payload = {
+        "version": 1,
+        "body": message.body.strip(),
+        "visibility": message.visibility.value,
+        "source_reference": (message.source_reference or "").strip() or None,
+        "source_type": MessageSourceType.USER.value,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "v1:" + sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class OrganizationAccessDenied(DomainError):
@@ -249,6 +273,95 @@ class AddMessageCommand:
     visibility: Visibility
     source_reference: str | None = None
     organization_id: UUID | None = None
+    idempotency_key: str | None = None
+
+
+@dataclass(frozen=True)
+class ThreadImportPreview:
+    text: str
+    digest: str
+    headers: tuple[tuple[str, str], ...]
+    warnings: tuple[str, ...]
+
+
+class ThreadImportValidationError(DomainError):
+    """The literal thread or its confirmation is invalid."""
+
+
+class ThreadImportStale(DomainError):
+    """The confirmed digest no longer matches the submitted thread."""
+
+
+def _thread_import_preview(text: str) -> ThreadImportPreview:
+    normalized = text.strip()
+    if not normalized or len(normalized) > 8000:
+        raise ThreadImportValidationError("Thread must contain 1 to 8000 code points")
+    try:
+        encoded = normalized.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ThreadImportValidationError("Thread must be valid Unicode text") from error
+    digest = "plaintext-thread:v1:" + sha256(encoded).hexdigest()
+    headers = tuple(
+        (match.group(1), match.group(2))
+        for line in normalized.splitlines()
+        if (match := re.fullmatch(r"(From|To|Date|Sent|Subject):(.*)", line))
+    )
+    warnings = ["Pasted headers are unverified text, not identity or timestamps."]
+    for label in ("From", "To", "Date", "Sent", "Subject"):
+        values = [value for name, value in headers if name == label]
+        if not values or any(not value.strip() for value in values):
+            warnings.append(f"Missing or empty {label} label; no metadata inferred.")
+        if len(values) > 1:
+            warnings.append(f"Ambiguous {label} labels; all literal values retained.")
+    return ThreadImportPreview(normalized, digest, headers, tuple(warnings))
+
+
+def preview_thread_import(
+    actor: ActorContext,
+    deal_id: UUID,
+    text: str,
+    repository: CommunicationRepository,
+    *,
+    organization_id: UUID | None = None,
+) -> ThreadImportPreview:
+    deal = _load_deal_for_participant(actor, deal_id, repository)
+    selected = resolve_participant_organization(actor, deal, organization_id)
+    repository.require_participant_membership(deal_id, selected, actor.user_id)
+    return _thread_import_preview(text)
+
+
+def import_thread(
+    actor: ActorContext,
+    deal_id: UUID,
+    text: str,
+    digest: str,
+    repository: CommunicationRepository,
+    *,
+    confirmed: bool,
+    visibility: Visibility = Visibility.PRIVATE,
+    shareable_confirmed: bool = False,
+    organization_id: UUID | None = None,
+) -> Message:
+    preview = preview_thread_import(
+        actor, deal_id, text, repository, organization_id=organization_id
+    )
+    if confirmed is not True or (
+        visibility is Visibility.SHAREABLE and shareable_confirmed is not True
+    ):
+        raise ThreadImportValidationError("Explicit import and sharing confirmation required")
+    if digest != preview.digest:
+        raise ThreadImportStale("Thread changed; preview it again before importing")
+    return add_message(
+        actor, deal_id,
+        AddMessageCommand(
+            body=preview.text,
+            visibility=visibility,
+            source_reference=preview.digest,
+            organization_id=organization_id,
+            idempotency_key=preview.digest,
+        ),
+        repository,
+    )
 
 
 def add_message(
@@ -268,10 +381,11 @@ def add_message(
         conversation_id=ConversationId(conversation.id),
         author_user_id=UserId(actor.user_id),
         author_agent_id=None,
-        body=command.body,
+        body=command.body.strip(),
         visibility=command.visibility,
         source_type=MessageSourceType.USER,
-        source_reference=command.source_reference,
+        source_reference=(command.source_reference or "").strip() or None,
+        idempotency_key=command.idempotency_key,
         created_at=now or datetime.now(UTC),
     )
     return repository.add_message(message)
@@ -301,6 +415,17 @@ def create_manual_constraint(
     deal = _load_deal_for_participant(actor, deal_id, repository)
     organization_id = resolve_participant_organization(actor, deal, command.organization_id)
     timestamp = now or datetime.now(UTC)
+    if deal.pending_counterparty:
+        repository.lock_deal_for_fact_persistence(deal_id, actor.user_id)
+        repository.require_participant_membership(deal_id, organization_id, actor.user_id)
+        return repository.add_constraint(Constraint(
+            id=ConstraintId(uuid4()), deal_id=DealId(deal_id),
+            owner_organization_id=OrganizationId(organization_id), field=command.field,
+            typed_value=command.typed_value, currency_or_unit=command.currency_or_unit,
+            kind=command.kind, visibility=command.visibility,
+            source_span=f"Manual term entry: {command.field}: {command.typed_value}",
+            created_at=timestamp,
+        ))
     conversation = repository.get_or_create_conversation(deal_id, organization_id)
     source_text = f"Manual term entry — {command.field}: {command.typed_value}"
     source_message = repository.add_message(

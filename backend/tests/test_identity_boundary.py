@@ -463,9 +463,102 @@ class IdentityBoundaryTests(unittest.TestCase):
             database_url="postgresql+psycopg://configured.example/syncally",
             jwt_secret=secret,
             temporal_tls=True,
+            public_frontend_url="https://app.syncally.trade",
         )
 
         self.assertEqual(configured.jwt_secret, secret)
+
+    def test_public_frontend_url_defaults_only_in_local_environments(self) -> None:
+        for app_env in ("development", "test"):
+            with self.subTest(app_env=app_env):
+                configured = Settings(_env_file=None, app_env=app_env)
+                self.assertEqual(configured.public_frontend_url, "http://localhost:5173")
+
+        for app_env in ("production", "staging"):
+            with self.subTest(app_env=app_env):
+                with self.assertRaises(ValidationError) as raised:
+                    Settings(
+                        _env_file=None,
+                        app_env=app_env,
+                        database_url="postgresql+psycopg://configured.example/syncally",
+                        jwt_secret="SBLsd2xA2yUll_ixIwVOvnukFtR4o8MwjZKlIWyG4_8",
+                        temporal_tls=True,
+                        public_frontend_url=None,
+                    )
+                self.assertIn("PUBLIC_FRONTEND_URL", str(raised.exception))
+
+    def test_public_frontend_url_acceptance_matrix(self) -> None:
+        cases = (
+            ("development", "http://localhost:5173/", "http://localhost:5173"),
+            ("test", "http://127.0.0.1:5174", "http://127.0.0.1:5174"),
+            ("test", "http://[::1]:5173/", "http://[::1]:5173"),
+            ("development", "http://192.168.1.10:5173/portal/", "http://192.168.1.10:5173/portal"),
+            ("production", "https://app.syncally.trade/", "https://app.syncally.trade"),
+            ("production", "https://app.syncally.trade:8443/portal/team///", "https://app.syncally.trade:8443/portal/team"),
+            ("staging", "https://app.example.com/portal%20team/", "https://app.example.com/portal%20team"),
+            ("production", "https://8.8.8.8/", "https://8.8.8.8"),
+            ("production", "https://[2606:4700:4700::1111]/", "https://[2606:4700:4700::1111]"),
+        )
+        for app_env, value, expected in cases:
+            with self.subTest(app_env=app_env, value=value):
+                configured = Settings(
+                    _env_file=None,
+                    app_env=app_env,
+                    database_url="postgresql+psycopg://configured.example/syncally",
+                    jwt_secret="SBLsd2xA2yUll_ixIwVOvnukFtR4o8MwjZKlIWyG4_8",
+                    temporal_tls=True,
+                    public_frontend_url=value,
+                )
+                self.assertEqual(configured.public_frontend_url, expected)
+
+    def test_public_frontend_url_rejection_matrix(self) -> None:
+        invalid_urls = (
+            "", " ", "https://", "app.example.com", "//app.example.com",
+            "ftp://app.example.com", "javascript:alert(1)",
+            "https://user@app.example.com", "https://user:password@app.example.com",
+            "https://@app.example.com", "https://app.example.com?", "https://app.example.com?x=1",
+            "https://app.example.com#", "https://app.example.com#/invite",
+            " https://app.example.com", "https://app.example.com ",
+            "https://app.example.com/\npath", "https://app.example.com/\tpath",
+            "https://app.example.com/\rpath", "https://app.example.com/\x00path",
+            "https://app.example.com/\x7fpath", "https://app.example.com/\\path",
+            "https://app.example.com\\@evil.example", "https://app.example.com:",
+            "https://app.example.com:0", "https://app.example.com:-1",
+            "https://app.example.com:65536", "https://app.example.com:port",
+            "https://[::1", "https://[::1]evil.example", "https://app..example.com",
+            "https://app.example.com..",
+            "https://-app.example.com", "https://app_example.com", "https://127.1",
+            "https://2130706433", "https://0x7f000001",
+            "https://app.example.com/base/../other", "https://app.example.com/./base",
+            "https://app.example.com/base/%2e%2e/other", "https://app.example.com/%2E/",
+            "https://app.example.com/base%2fother", "https://app.example.com/base%5Cother",
+            "https://app.example.com/%252e%252e/other", "https://app.example.com/%",
+            "https://app.example.com/%zz", "https://app.example.com/%00",
+            "https://app.example.com/%0a", "https://app.example.com/%7f",
+        )
+        nonlocal_urls = (
+            "http://app.syncally.trade", "https://localhost", "https://localhost.",
+            "https://app.localhost", "https://app.local", "https://intranet",
+            "https://127.0.0.1", "https://10.0.0.1", "https://172.16.0.1",
+            "https://192.168.1.1", "https://169.254.1.1", "https://100.64.0.1",
+            "https://0.0.0.0", "https://[::1]", "https://[::]",
+            "https://[fc00::1]", "https://[fe80::1]", "https://[::ffff:127.0.0.1]",
+            "https://224.0.0.1", "https://[ff02::1]", "https://[fec0::1]",
+        )
+        for app_env in ("development", "test", "production", "staging"):
+            urls = invalid_urls + (nonlocal_urls if app_env in {"production", "staging"} else ())
+            for value in urls:
+                with self.subTest(app_env=app_env, value=value):
+                    with self.assertRaises(ValidationError) as raised:
+                        Settings(
+                            _env_file=None,
+                            app_env=app_env,
+                            database_url="postgresql+psycopg://configured.example/syncally",
+                            jwt_secret="SBLsd2xA2yUll_ixIwVOvnukFtR4o8MwjZKlIWyG4_8",
+                            temporal_tls=True,
+                            public_frontend_url=value,
+                        )
+                    self.assertIn("PUBLIC_FRONTEND_URL", str(raised.exception))
 
     def test_missing_app_environment_fails_closed(self) -> None:
         self.assertEqual(Settings.model_fields["app_env"].default, "production")

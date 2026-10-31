@@ -3,9 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import {
   ApiError,
   createDealMessage,
+  importDealThread,
   listDealFacts,
   listDealMessages,
   listOrganizations,
+  previewDealThreadImport,
   reviewDealFact,
   updateFactVisibility,
 } from "../api/client";
@@ -15,6 +17,8 @@ import type {
   DealMessage,
   FactReviewAction,
   Organization,
+  NegotiationView,
+  ThreadImportPreview,
   Visibility,
 } from "../api/types";
 import AISuggestionReview from "./AISuggestionReview";
@@ -44,6 +48,7 @@ interface DealConversationReviewProps {
   revalidateIntervalMs?: number;
   composerId?: string;
   buttonLabel?: string;
+  negotiation?: NegotiationView | null;
 }
 
 type FactFilter = "all" | "needs-review" | "confirmed" | "private";
@@ -126,12 +131,13 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const request = useRef<AbortController | null>(null);
+  const draftRequest = useRef<{ key: string; signature: string } | null>(null);
   const inputId = composerId ?? `deal-message-composer-${deal.id}`;
   const sendButtonText = buttonLabel ?? "Send Message";
   useEffect(() => () => { request.current?.abort(); }, []);
 
   async function send() {
-    if (request.current) return;
+    if (request.current || deal.pending_counterparty) return;
     const text = body.trim();
     setSent(false);
     if (!text || text.length > 8000) {
@@ -139,15 +145,20 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
       return;
     }
     const controller = new AbortController();
+    const signature = JSON.stringify([deal.id, organization.id, text, visibility]);
+    if (draftRequest.current?.signature !== signature) {
+      draftRequest.current = { key: crypto.randomUUID(), signature };
+    }
     request.current = controller;
     setSubmitting(true);
     setError(null);
     try {
       const message = await createDealMessage(deal.id, {
         body: text, visibility, organization_id: organization.id,
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: draftRequest.current.key,
       }, { signal: controller.signal });
       if (controller.signal.aborted) return;
+      draftRequest.current = null;
       onSent(message);
       setBody("");
       setSent(true);
@@ -172,7 +183,10 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
           value={body} disabled={submitting}
           aria-describedby={`message-help-${deal.id}${error ? ` message-error-${deal.id}` : ""}`}
           aria-invalid={error ? true : undefined}
-          onChange={(event) => { setBody(event.target.value); setSent(false); setError(null); }}
+          onChange={(event) => {
+            if (event.target.value.trim() !== body.trim()) draftRequest.current = null;
+            setBody(event.target.value); setSent(false); setError(null);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
               event.preventDefault(); void send();
@@ -182,16 +196,22 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
       <fieldset className="message-composer__visibility" disabled={submitting}>
         <legend>Message visibility</legend>
         <label><input type="radio" name="message-visibility" value="SHAREABLE"
-          checked={visibility === "SHAREABLE"} onChange={() => setVisibility("SHAREABLE")} />
+          checked={visibility === "SHAREABLE"} onChange={() => {
+            if (visibility !== "SHAREABLE") draftRequest.current = null;
+            setVisibility("SHAREABLE");
+          }} />
           <span><span aria-hidden="true">{"\u{1F310}"} </span>Shareable <small>Visible to both buyer and seller</small></span>
         </label>
         <label><input type="radio" name="message-visibility" value="PRIVATE"
-          checked={visibility === "PRIVATE"} onChange={() => setVisibility("PRIVATE")} />
+          checked={visibility === "PRIVATE"} onChange={() => {
+            if (visibility !== "PRIVATE") draftRequest.current = null;
+            setVisibility("PRIVATE");
+          }} />
           <span><span aria-hidden="true">{"\u{1F512}"} </span>Private <small>Visible only to members of your organization</small></span>
         </label>
       </fieldset>
       <div className="message-composer__actions">
-        <button type="submit" className="button" disabled={submitting}>{submitting ? "Sending..." : sendButtonText}</button>
+        <button type="submit" className="button" disabled={submitting || deal.pending_counterparty}>{submitting ? "Sending..." : sendButtonText}</button>
         <p id={`message-help-${deal.id}`} className="hint">Cmd/Ctrl + Enter to send</p>
       </div>
       {error ? <p id={`message-error-${deal.id}`} className="form-error" role="alert">{error} Your draft is saved here; you can try sending again.</p> : null}
@@ -200,9 +220,150 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
   );
 }
 
+function ThreadImporter({ deal, organization, onImported }: {
+  deal: Deal;
+  organization: Organization;
+  onImported: (message: DealMessage) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [preview, setPreview] = useState<ThreadImportPreview | null>(null);
+  const [visibility, setVisibility] = useState<Visibility>("PRIVATE");
+  const [confirmed, setConfirmed] = useState(false);
+  const [sharingConfirmed, setSharingConfirmed] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [imported, setImported] = useState(false);
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => () => { request.current?.abort(); }, []);
+
+  function cancel() {
+    request.current?.abort();
+    request.current = null;
+    setPending(false);
+    setPreview(null);
+    setConfirmed(false);
+    setSharingConfirmed(false);
+    setVisibility("PRIVATE");
+    setError(null);
+  }
+
+  async function submit() {
+    if (request.current) return;
+    const input = preview ? {
+      text: preview.text, organization_id: organization.id, digest: preview.digest,
+      confirmed, visibility, shareable_confirmed: sharingConfirmed,
+    } : { text: draft, organization_id: organization.id };
+    const codePoints = Array.from(input.text);
+    const pythonWhitespace = "\t\n\v\f\r\u001c\u001d\u001e\u001f \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000";
+    let start = 0;
+    let end = codePoints.length;
+    while (start < end && pythonWhitespace.includes(codePoints[start])) start++;
+    while (end > start && pythonWhitespace.includes(codePoints[end - 1])) end--;
+    if (end - start > 8000 || end === start) {
+      setError("Thread must contain 1 to 8,000 characters.");
+      return;
+    }
+    if (new TextEncoder().encode(JSON.stringify(input)).length > 16 * 1024) {
+      setError("Thread request exceeds 16 KiB. Nothing has been shortened or imported.");
+      return;
+    }
+    const controller = new AbortController();
+    request.current = controller;
+    setPending(true);
+    setError(null);
+    setImported(false);
+    try {
+      if (preview) {
+        if (!confirmed || (visibility === "SHAREABLE" && !sharingConfirmed)) return;
+        const message = await importDealThread(deal.id, {
+          text: preview.text, organization_id: organization.id, digest: preview.digest,
+          confirmed, visibility, shareable_confirmed: sharingConfirmed,
+        }, { signal: controller.signal });
+        if (controller.signal.aborted || request.current !== controller) return;
+        onImported(message);
+        setDraft("");
+        setPreview(null);
+        setConfirmed(false);
+        setSharingConfirmed(false);
+        setVisibility("PRIVATE");
+        setImported(true);
+      } else {
+        const result = await previewDealThreadImport(deal.id, {
+          text: draft, organization_id: organization.id,
+        }, { signal: controller.signal });
+        if (controller.signal.aborted || request.current !== controller) return;
+        setPreview(result);
+        setConfirmed(false);
+      }
+    } catch (caught) {
+      if (!controller.signal.aborted && request.current === controller) {
+        setError(describeError(caught));
+        if (caught instanceof ApiError && caught.status === 409) {
+          setPreview(null);
+          setConfirmed(false);
+          setSharingConfirmed(false);
+        }
+      }
+    } finally {
+      if (!controller.signal.aborted && request.current === controller) {
+        request.current = null;
+        setPending(false);
+      }
+    }
+  }
+
+  return (
+    <form className="message-composer" aria-label="Import plaintext thread" noValidate
+      onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      <h3>Import thread</h3>
+      {!preview ? (
+        <div className="field">
+          <label htmlFor={`thread-import-${deal.id}`}>Paste thread</label>
+          <textarea id={`thread-import-${deal.id}`} rows={5} value={draft} disabled={pending}
+            aria-invalid={error ? true : undefined}
+            onChange={(event) => { setDraft(event.target.value); setError(null); setImported(false); }} />
+        </div>
+      ) : (
+        <>
+          <h4>Exact import text</h4>
+          <pre aria-label="Exact import text" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{preview.text}</pre>
+          <dl aria-label="Unverified pasted headers" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+            {preview.headers.map((header, index) => (
+              <div key={index}><dt>{header.label} (unverified)</dt><dd>{header.value}</dd></div>
+            ))}
+          </dl>
+          <ul>{preview.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+          <fieldset className="message-composer__visibility" disabled={pending}>
+            <legend>Import visibility</legend>
+            <label><input type="radio" name={`import-visibility-${deal.id}`} checked={visibility === "PRIVATE"}
+              onChange={() => { setVisibility("PRIVATE"); setSharingConfirmed(false); }} />Private</label>
+            <label><input type="radio" name={`import-visibility-${deal.id}`} checked={visibility === "SHAREABLE"}
+              onChange={() => { setVisibility("SHAREABLE"); setSharingConfirmed(false); }} />Shareable</label>
+          </fieldset>
+          <label><input type="checkbox" checked={confirmed} disabled={pending}
+            onChange={(event) => setConfirmed(event.target.checked)} />I confirm importing this exact text as {organization.legal_name}</label>
+          {visibility === "SHAREABLE" ? (
+            <label><input type="checkbox" checked={sharingConfirmed} disabled={pending}
+              onChange={(event) => setSharingConfirmed(event.target.checked)} />I confirm sharing this thread with the counterparty</label>
+          ) : null}
+        </>
+      )}
+      <div className="message-composer__actions">
+        <button className="button" type="submit" disabled={pending || (preview !== null && (!confirmed || (visibility === "SHAREABLE" && !sharingConfirmed)))}>
+          {pending ? "Please wait..." : preview ? "Confirm import" : "Preview thread"}
+        </button>
+        <button className="button secondary" type="button" onClick={cancel}>Cancel import</button>
+      </div>
+      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      {imported ? <p role="status">Thread imported.</p> : null}
+    </form>
+  );
+}
+
 export default function DealConversationReview({
   deal,
   onAgreementCreated = () => {},
+  negotiation,
   onMessagesChanged,
   onMessageCreated,
   selectedOrganizationId: controlledOrgId,
@@ -661,9 +822,13 @@ export default function DealConversationReview({
               </ol>
             )}
             {currentConversation && selectedOrganization ? (
-              <MessageComposer key={`${deal.id}:${activeOrganizationId}`}
-                deal={deal} organization={selectedOrganization} onSent={appendMessage}
-                composerId={composerId} buttonLabel={buttonLabel} />
+              <>
+                <MessageComposer key={`${deal.id}:${activeOrganizationId}`}
+                  deal={deal} organization={selectedOrganization} onSent={appendMessage}
+                  composerId={composerId} buttonLabel={buttonLabel} />
+                {!deal.pending_counterparty ? <ThreadImporter key={`import:${deal.id}:${activeOrganizationId}`}
+                  deal={deal} organization={selectedOrganization} onImported={appendMessage} /> : null}
+              </>
             ) : null}
           </>
         )}
@@ -842,6 +1007,8 @@ export default function DealConversationReview({
       </section>
       {currentConversation ? (
         <AISuggestionReview
+          negotiation={negotiation}
+          pendingCounterparty={deal.pending_counterparty}
           key={`${deal.id}:${activeOrganizationId}`}
           dealId={deal.id}
           organizationId={activeOrganizationId}

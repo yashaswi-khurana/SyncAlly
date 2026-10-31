@@ -78,6 +78,7 @@ class Message:
     source_type: MessageSourceType
     created_at: datetime
     source_reference: str | None = field(default=None, repr=False)
+    idempotency_key: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.id is None or self.conversation_id is None:
@@ -94,6 +95,13 @@ class Message:
             raise InvariantViolation("Message requires a source type")
         if (self.source_type is MessageSourceType.USER) != (self.author_user_id is not None):
             raise InvariantViolation("Message source type must match its author")
+        if self.idempotency_key is not None and (
+            not isinstance(self.idempotency_key, str)
+            or not self.idempotency_key.strip()
+            or len(self.idempotency_key) > 128
+            or self.source_type is not MessageSourceType.USER
+        ):
+            raise InvariantViolation("Message idempotency key must be a nonblank user key of at most 128 characters")
 
 
 @dataclass(slots=True)

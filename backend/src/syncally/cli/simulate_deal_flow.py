@@ -7,7 +7,7 @@ Performs end-to-end verification across Buyer and Seller roles:
 4. Triggers AI fact suggestion and confirms all extracted terms.
 5. Generates proposal draft, records bilateral approvals from both parties.
 6. Commits agreement and verifies committed state.
-7. Authorizes payment milestone and prints simulated PayPal invoice URL.
+7. Authorizes payment and prints persisted mode, reference, and unpaid state.
 
 Executable directly via:
     python -m syncally.cli.simulate_deal_flow
@@ -29,14 +29,6 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-warnings.filterwarnings("ignore", category=Warning, module="starlette.*")
-warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
-warnings.filterwarnings("ignore", message=".*StarletteDeprecationWarning.*")
-warnings.filterwarnings("ignore", message=".*httpx.*")
-logging.getLogger("syncally").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 DEFAULT_BASE_URL = os.environ.get("SYNCALLY_API_URL", "http://127.0.0.1:8000")
 DEFAULT_BUYER_EMAIL = "buyer@syncally.demo"
@@ -107,6 +99,9 @@ class DealFlowContext:
     terms_hash: str = ""
     payment_intent_id: str = ""
     invoice_url: str = ""
+    execution_mode: str = ""
+    invoice_reference: str = ""
+    payment_status: str = ""
 
 
 class DealFlowSimulator:
@@ -120,6 +115,7 @@ class DealFlowSimulator:
         buyer_password: str = DEFAULT_BUYER_PASSWORD,
         seller_email: str = DEFAULT_SELLER_EMAIL,
         seller_password: str = DEFAULT_SELLER_PASSWORD,
+        dispatch_payment: Callable[[], None] | None = None,
     ) -> None:
         self.client = client
         self.fmt = fmt
@@ -129,6 +125,7 @@ class DealFlowSimulator:
         self.seller_password = seller_password
         self.ctx = DealFlowContext()
         self.step_records: list[StepRecord] = []
+        self.dispatch_payment = dispatch_payment
 
     def _auth_header(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
@@ -340,7 +337,7 @@ class DealFlowSimulator:
         reviewed_payload = {
             key: value
             for key, value in proposal_data.items()
-            if key != "status"
+            if key not in {"status", "provenance"}
         }
         reviewed_payload["payment_trigger"] = "seller_invoice"
         reviewed_payload["organization_id"] = self.ctx.buyer_org_id
@@ -410,16 +407,21 @@ class DealFlowSimulator:
 
     def step_7_authorize_payment_milestone(self) -> str:
         idempotency_key = f"sim-pay-{uuid4()}"
+        preview = self._request("GET", f"/deals/{self.ctx.deal_id}/payments/preview",
+            headers=self._auth_header(self.ctx.seller_token), expected_status=200, step_name="Preview Payment Mode").json()
         pay_resp = self._request(
             "POST",
             f"/deals/{self.ctx.deal_id}/payments",
             headers=self._auth_header(self.ctx.seller_token),
-            json={"idempotency_key": idempotency_key},
+            json={"idempotency_key": idempotency_key, "expected_mode": preview["execution_mode"]},
             expected_status=202,
             step_name="Authorize Payment Milestone",
         )
         pay_data = pay_resp.json()
         self.ctx.payment_intent_id = str(pay_data["id"])
+        self.ctx.execution_mode = pay_data["execution_mode"]
+        if self.dispatch_payment is not None:
+            self.dispatch_payment()
 
         # Read payment statuses
         status_resp = self._request(
@@ -430,15 +432,13 @@ class DealFlowSimulator:
             step_name="Read Payment Statuses",
         )
         statuses = status_resp.json()
-        simulated_invoice_id = f"INV2-SIM-{self.ctx.payment_intent_id[:8].upper()}"
-        default_invoice_url = f"https://www.sandbox.paypal.com/invoice/p/#{simulated_invoice_id}"
-
-        if statuses and statuses[0].get("invoice_url"):
-            self.ctx.invoice_url = statuses[0]["invoice_url"]
-        else:
-            self.ctx.invoice_url = default_invoice_url
-
-        return f"PaymentIntent: {self.ctx.payment_intent_id} | Invoice URL: {self.ctx.invoice_url}"
+        saved = next((payment for payment in statuses if payment["id"] == self.ctx.payment_intent_id), None)
+        if saved is None:
+            raise SimulationError("Read Payment Statuses", "Authorized intent missing from saved statuses")
+        self.ctx.invoice_url = saved.get("invoice_url") or ""
+        self.ctx.invoice_reference = saved.get("invoice_reference") or ""
+        self.ctx.payment_status = saved["status"]
+        return f"PaymentIntent: {self.ctx.payment_intent_id} | Mode: {self.ctx.execution_mode} | Reference: {self.ctx.invoice_reference or 'not issued'} | State: {self.ctx.payment_status}"
 
     def run(self) -> int:
         print(f"\n{self.fmt.bold('======================================================================')}")
@@ -454,7 +454,7 @@ class DealFlowSimulator:
             (4, "Trigger Fact Suggestion & Confirm Terms", self.step_4_suggest_and_confirm_facts),
             (5, "Generate Proposal & Approve Agreement", self.step_5_draft_and_approve_agreement),
             (6, "Commit Agreement & Verify Status", self.step_6_commit_and_verify_agreement),
-            (7, "Authorize Payment & Print PayPal URL", self.step_7_authorize_payment_milestone),
+            (7, "Authorize Payment & Read Stored Invoice", self.step_7_authorize_payment_milestone),
         ]
 
         try:
@@ -485,7 +485,11 @@ class DealFlowSimulator:
         print(f"  Agreement Version:   {self.fmt.cyan(str(self.ctx.version_number))}")
         print(f"  Terms Hash:          {self.fmt.cyan(self.ctx.terms_hash)}")
         print(f"  Payment Intent ID:   {self.fmt.cyan(self.ctx.payment_intent_id)}")
-        print(f"  PayPal Invoice URL:  {self.fmt.green(self.ctx.invoice_url)}")
+        print(f"  Payment Mode:        {self.ctx.execution_mode}")
+        print(f"  Invoice Reference:   {self.ctx.invoice_reference or 'not issued'}")
+        print(f"  Payment State:       {self.ctx.payment_status} (queued/sent is not paid)")
+        if self.ctx.invoice_url:
+            print(f"  Invoice URL:         {self.ctx.invoice_url}")
 
         timing_color = self.fmt.green if total_duration_s < MAX_TOTAL_RUNTIME_SECONDS else self.fmt.red
         print(f"\nTotal Duration: {timing_color(f'{total_duration_s:.3f}s')} (Target: < {MAX_TOTAL_RUNTIME_SECONDS:.1f}s)")
@@ -500,8 +504,10 @@ class DealFlowSimulator:
 
 def _build_in_process_client(
     buyer_password: str, seller_password: str
-) -> tuple[httpx.Client, Callable[[], None]]:
+) -> tuple[httpx.Client, Callable[[], None], Callable[[], None]]:
     """Construct an in-process ASGI test harness with an isolated SQLite database."""
+    from secrets import token_urlsafe
+
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
     from sqlalchemy.pool import StaticPool
@@ -512,6 +518,10 @@ def _build_in_process_client(
     from syncally.config import settings
     from syncally.infrastructure.database import get_db
     from syncally.infrastructure.models import Base
+    from syncally.infrastructure.payment_outbox import dispatch_pending_payment_events
+    from syncally.infrastructure.repositories.payment_processing import (
+        SqlAlchemyPaymentProcessingRepository,
+    )
 
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -522,21 +532,40 @@ def _build_in_process_client(
     session = Session(engine, expire_on_commit=False)
 
     original_env = settings.app_env
+    original_payment_mode = settings.payment_mode
+    original_ai_provider = settings.ai_provider
+    original_jwt_secret = settings.jwt_secret
     settings.app_env = "test"
+    settings.payment_mode = "OFFLINE_DEMO"
+    settings.ai_provider = "offline"
+    settings.jwt_secret = token_urlsafe(32)
 
     seed_demo_data(session, (buyer_password, seller_password))
 
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides.clear()
     app.dependency_overrides[get_db] = lambda: session
 
     def cleanup() -> None:
         app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
         session.close()
         Base.metadata.drop_all(engine)
         engine.dispose()
         settings.app_env = original_env
+        settings.payment_mode = original_payment_mode
+        settings.ai_provider = original_ai_provider
+        settings.jwt_secret = original_jwt_secret
 
     client = TestClient(app=app, base_url="http://testserver")
-    return client, cleanup
+
+    def session_factory() -> Session:
+        return Session(engine, expire_on_commit=False)
+
+    def dispatch_payment() -> None:
+        dispatch_pending_payment_events(session_factory, SqlAlchemyPaymentProcessingRepository(session_factory), batch_size=25)
+
+    return client, cleanup, dispatch_payment
 
 
 def _is_live_backend_healthy(base_url: str) -> bool:
@@ -557,14 +586,19 @@ def run_simulation(
     seller_password: str = DEFAULT_SELLER_PASSWORD,
     in_process: bool = False,
     enable_color: bool = True,
+    offline: bool = False,
 ) -> int:
     """Execute the full deal flow simulation and return the exit code."""
     fmt = TerminalFormatter(enable_color=enable_color)
     cleanup_fn: Callable[[], None] | None = None
+    dispatch_payment = None
 
-    if in_process:
+    if in_process and not offline:
+        print("Isolated execution requires explicit offline=True or --offline. No automatic fallback is permitted.")
+        return 1
+    if offline:
         print(fmt.cyan("[Mode] Running via in-process ASGI engine (isolated SQLite test harness)..."))
-        client, cleanup_fn = _build_in_process_client(buyer_password, seller_password)
+        client, cleanup_fn, dispatch_payment = _build_in_process_client(buyer_password, seller_password)
     else:
         # Check if live server is reachable
         print(fmt.cyan(f"[Mode] Probing target backend at {base_url}..."))
@@ -573,8 +607,8 @@ def run_simulation(
             client = httpx.Client(base_url=base_url, timeout=REQUEST_TIMEOUT_SECONDS)
         else:
             print(fmt.yellow(f"[Mode] Live backend at {base_url} is unreachable."))
-            print(fmt.cyan("[Mode] Automatically falling back to in-process FastAPI engine for CI/standalone run..."))
-            client, cleanup_fn = _build_in_process_client(buyer_password, seller_password)
+            print("No fallback performed. Use --offline for an explicitly isolated offline run.")
+            return 1
 
     try:
         simulator = DealFlowSimulator(
@@ -584,6 +618,7 @@ def run_simulation(
             buyer_password=buyer_password,
             seller_email=seller_email,
             seller_password=seller_password,
+            dispatch_payment=dispatch_payment,
         )
         return simulator.run()
     finally:
@@ -598,11 +633,14 @@ def ci_deal_flow_hook() -> int:
     Returns:
         0 on success, 1 on failure.
     """
-    return run_simulation(in_process=True, enable_color=False)
+    return run_simulation(in_process=True, offline=True, enable_color=False)
 
 
 def main(argv: list[str] | None = None) -> None:
     """Entry point for terminal execution."""
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    logging.getLogger("syncally").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(
         description="SyncAlly two-sided automated deal flow simulation",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -638,6 +676,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Force execution against in-process FastAPI app with isolated test DB",
     )
     parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Explicit isolated OFFLINE_DEMO execution, with shared payment adapter and no remote services",
+    )
+    parser.add_argument(
         "--ci",
         action="store_true",
         help="Execute in CI mode (in-process, headless, strictly zero-daemon)",
@@ -661,6 +704,7 @@ def main(argv: list[str] | None = None) -> None:
         seller_password=args.seller_password,
         in_process=is_in_process,
         enable_color=enable_color,
+        offline=args.offline or args.ci,
     )
     sys.exit(exit_code)
 

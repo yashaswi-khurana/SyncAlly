@@ -5,6 +5,8 @@ import {
   ApiError,
   createDealFact,
   createDealMessage,
+  importDealThread,
+  previewDealThreadImport,
   listDealFacts,
   listDealMessages,
   listOrganizations,
@@ -12,10 +14,11 @@ import {
   suggestDealFacts,
   draftDealProposal,
   correctDealFact,
-  createAgreementFromReviewedTerms,
+  getNegotiation,
+  negotiateDeal,
   updateFactVisibility,
 } from "../api/client";
-import type { AgreementVersion, Deal, DealFact, DealMessage, Organization } from "../api/types";
+import type { Deal, DealFact, DealMessage, Organization } from "../api/types";
 import DealConversationReview from "./DealConversationReview";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -24,6 +27,8 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     createDealFact: vi.fn(),
     createDealMessage: vi.fn(),
+    importDealThread: vi.fn(),
+    previewDealThreadImport: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
     listOrganizations: vi.fn(),
@@ -31,7 +36,8 @@ vi.mock("../api/client", async (importOriginal) => {
     suggestDealFacts: vi.fn(),
     draftDealProposal: vi.fn(),
     correctDealFact: vi.fn(),
-    createAgreementFromReviewedTerms: vi.fn(),
+    getNegotiation: vi.fn(),
+    negotiateDeal: vi.fn(),
     updateFactVisibility: vi.fn(),
   };
 });
@@ -54,11 +60,17 @@ const mockedReviewDealFact = vi.mocked(reviewDealFact);
 const mockedSuggestDealFacts = vi.mocked(suggestDealFacts);
 const mockedDraftDealProposal = vi.mocked(draftDealProposal);
 const mockedCorrectDealFact = vi.mocked(correctDealFact);
-const mockedCreateAgreementFromReviewedTerms = vi.mocked(createAgreementFromReviewedTerms);
+const mockedNegotiateDeal = vi.mocked(negotiateDeal);
 const mockedUpdateFactVisibility = vi.mocked(updateFactVisibility);
 
 function organization(id: string, legalName: string): Organization {
   return { id, legal_name: legalName, country_code: "US", role: "ADMIN" };
+}
+
+function mockNegotiation() {
+  vi.mocked(getNegotiation).mockImplementation(async (dealId, organizationId) => ({ deal_id: dealId, organization_id: organizationId,
+    deal_revision: 0, latest: null, current_candidate: null, eligible_actions: ["submit"], round_count: 0, max_rounds: 5,
+    escalated: false, history_ambiguous: false, proposals: [], history: [] }));
 }
 
 function fact(overrides: Partial<DealFact> = {}): DealFact {
@@ -99,6 +111,7 @@ function message(overrides: Partial<DealMessage> = {}): DealMessage {
 
 describe("DealConversationReview", () => {
   beforeEach(() => {
+    mockNegotiation();
     mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co")]);
     mockedListDealMessages.mockResolvedValue([message()]);
     mockedListDealFacts.mockResolvedValue([fact()]);
@@ -106,6 +119,172 @@ describe("DealConversationReview", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("previews literal text without AI or writes and requires explicit private confirmation", async () => {
+    const text = "From: Unverified\n\n> Caf\u00e9 \u{1f600}\nPrice: EUR 9";
+    const preview = { text, digest: "plaintext-thread:v1:" + "a".repeat(64), headers: [{ label: "From", value: " Unverified", verified: false as const }], warnings: ["Unverified pasted text"] };
+    vi.mocked(previewDealThreadImport).mockResolvedValue(preview);
+    vi.mocked(importDealThread).mockResolvedValue(message({ id: "imported", body: text }));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const paste = await screen.findByRole("textbox", { name: "Paste thread" });
+    expect(paste).not.toHaveAttribute("maxlength");
+    fireEvent.change(paste, { target: { value: "  " + text + "  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    expect(await screen.findByLabelText("Exact import text")).toHaveTextContent(/Caf/);
+    expect(screen.getByLabelText("Exact import text").textContent).toBe(text);
+    expect(previewDealThreadImport).toHaveBeenCalledWith(DEAL.id, { text: "  " + text + "  ", organization_id: BUYER_ID }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(importDealThread).not.toHaveBeenCalled();
+    expect(mockedSuggestDealFacts).not.toHaveBeenCalled();
+    const form = screen.getByRole("form", { name: "Import plaintext thread" });
+    expect(within(form).getByRole("radio", { name: "Private" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Confirm import" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I confirm importing/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
+    expect(await screen.findByText("Thread imported.")).toBeInTheDocument();
+    expect(importDealThread).toHaveBeenCalledWith(DEAL.id, {
+      text, organization_id: BUYER_ID, digest: preview.digest, confirmed: true,
+      visibility: "PRIVATE", shareable_confirmed: false,
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(within(screen.getByRole("list", { name: "Conversation messages" })).getByText(/Price: EUR 9/).textContent).toBe(text);
+    expect(mockedSuggestDealFacts).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Post a message" })).toHaveValue("");
+  });
+
+  it("requires separate sharing confirmation and preserves drafts after stale/import errors", async () => {
+    const preview = { text: "Terms", digest: "plaintext-thread:v1:" + "b".repeat(64), headers: [], warnings: [] };
+    vi.mocked(previewDealThreadImport).mockResolvedValue(preview);
+    vi.mocked(importDealThread).mockRejectedValueOnce(new ApiError(503, "Try again"))
+      .mockRejectedValueOnce(new ApiError(409, "Thread changed; preview again"));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Paste thread" }), { target: { value: " Terms " } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    const form = screen.getByRole("form", { name: "Import plaintext thread" });
+    fireEvent.click(await within(form).findByRole("radio", { name: "Shareable" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /I confirm importing/ }));
+    expect(screen.getByRole("button", { name: "Confirm import" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /I confirm sharing/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Try again");
+    expect(screen.getByLabelText("Exact import text").textContent).toBe("Terms");
+    fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
+    expect(await screen.findByRole("textbox", { name: "Paste thread" })).toHaveValue(" Terms ");
+    expect(screen.getByRole("alert")).toHaveTextContent("Thread changed");
+    expect(importDealThread).toHaveBeenCalledWith(DEAL.id, expect.objectContaining({ visibility: "SHAREABLE", shareable_confirmed: true }), expect.anything());
+  });
+
+  it("rejects oversized paste without truncation and counts code points rather than UTF-16 units", async () => {
+    vi.mocked(previewDealThreadImport).mockRejectedValue(new ApiError(422, "Review text"));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const paste = await screen.findByRole("textbox", { name: "Paste thread" });
+    const oversized = "  " + "x".repeat(8001) + "  ";
+    fireEvent.change(paste, { target: { value: oversized } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("8,000");
+    expect(paste).toHaveValue(oversized);
+    expect(previewDealThreadImport).not.toHaveBeenCalled();
+    fireEvent.change(paste, { target: { value: "\u{1f600}".repeat(5000) } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("16 KiB");
+    expect(paste).toHaveValue("\u{1f600}".repeat(5000));
+    expect(previewDealThreadImport).not.toHaveBeenCalled();
+    const rawOversized = " ".repeat(9000) + "x".repeat(8000);
+    fireEvent.change(paste, { target: { value: rawOversized } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("16 KiB");
+    expect(paste).toHaveValue(rawOversized);
+    expect(previewDealThreadImport).not.toHaveBeenCalled();
+    const bomOversized = "\ufeff" + "x".repeat(8000);
+    fireEvent.change(paste, { target: { value: bomOversized } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("8,000");
+    expect(paste).toHaveValue(bomOversized);
+    expect(previewDealThreadImport).not.toHaveBeenCalled();
+    const withinLimits = "\u{1f600}".repeat(2000) + "x".repeat(6000);
+    fireEvent.change(paste, { target: { value: withinLimits } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    await waitFor(() => expect(previewDealThreadImport).toHaveBeenCalledWith(DEAL.id, { text: withinLimits, organization_id: BUYER_ID }, expect.anything()));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Review text");
+    expect(paste).toHaveValue(withinLimits);
+  });
+
+  it.each(["  ", "\u0085", "\u001c\u001d\u001e\u001f", "\u00a0\u2003\u3000"])("accepts 8,000 normalized code points with outer whitespace %j without mutating the draft", async (whitespace) => {
+    const text = "x".repeat(7995) + "\n \u0085xx";
+    const raw = whitespace + text + whitespace;
+    const preview = { text, digest: "plaintext-thread:v1:" + "d".repeat(64), headers: [], warnings: [] };
+    vi.mocked(previewDealThreadImport).mockResolvedValue(preview);
+    vi.mocked(importDealThread).mockResolvedValue(message({ id: "boundary-import", body: text }));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Paste thread" }), { target: { value: raw } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    expect((await screen.findByLabelText("Exact import text")).textContent).toBe(text);
+    expect(previewDealThreadImport).toHaveBeenCalledWith(DEAL.id, { text: raw, organization_id: BUYER_ID }, expect.anything());
+    fireEvent.click(screen.getByRole("checkbox", { name: /I confirm importing/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
+    expect(await screen.findByText("Thread imported.")).toBeInTheDocument();
+    expect(importDealThread).toHaveBeenCalledWith(DEAL.id, {
+      text, digest: preview.digest, organization_id: BUYER_ID, confirmed: true,
+      visibility: "PRIVATE", shareable_confirmed: false,
+    }, expect.anything());
+  });
+
+  it("aborts cancellation and ignores late previews across deal and organization switches", async () => {
+    const resolvers: Array<(value: { text: string; digest: string; headers: []; warnings: [] }) => void> = [];
+    vi.mocked(previewDealThreadImport).mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve); }));
+    mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co"), organization(SELLER_ID, "Seller Co")]);
+    const { rerender } = render(<DealConversationReview deal={DEAL} selectedOrganizationId={BUYER_ID} revalidateIntervalMs={0} />);
+    const begin = async (text: string) => {
+      fireEvent.change(await screen.findByRole("textbox", { name: "Paste thread" }), { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+    };
+    const latePreview = { text: "Old private thread", digest: "old", headers: [] as [], warnings: [] as [] };
+    await begin("Old private thread");
+    const firstSignal = vi.mocked(previewDealThreadImport).mock.calls[0][2]?.signal;
+    fireEvent.click(screen.getByRole("button", { name: "Cancel import" }));
+    expect(firstSignal?.aborted).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Paste thread" })).toHaveValue("Old private thread");
+    await begin("Retry thread");
+    await act(async () => { resolvers[0](latePreview); });
+    expect(screen.queryByLabelText("Exact import text")).not.toBeInTheDocument();
+    rerender(<DealConversationReview deal={{ ...DEAL, id: "deal-2" }} selectedOrganizationId={BUYER_ID} revalidateIntervalMs={0} />);
+    expect(vi.mocked(previewDealThreadImport).mock.calls[1][2]?.signal?.aborted).toBe(true);
+    await act(async () => { resolvers[1](latePreview); });
+    expect(await screen.findByRole("textbox", { name: "Paste thread" })).toHaveValue("");
+    await begin("Buyer only");
+    rerender(<DealConversationReview deal={{ ...DEAL, id: "deal-2" }} selectedOrganizationId={SELLER_ID} revalidateIntervalMs={0} />);
+    expect(vi.mocked(previewDealThreadImport).mock.calls[2][2]?.signal?.aborted).toBe(true);
+    await act(async () => { resolvers[2](latePreview); });
+    expect(await screen.findByRole("textbox", { name: "Paste thread" })).toHaveValue("");
+    expect(screen.queryByLabelText("Exact import text")).not.toBeInTheDocument();
+    expect(importDealThread).not.toHaveBeenCalled();
+  });
+
+  it("ignores late persisted import responses after cancel and context switch", async () => {
+    const preview = { text: "Private old thread", digest: "plaintext-thread:v1:" + "c".repeat(64), headers: [], warnings: [] };
+    vi.mocked(previewDealThreadImport).mockResolvedValue(preview);
+    const resolvers: Array<(value: DealMessage) => void> = [];
+    vi.mocked(importDealThread).mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve); }));
+    const onMessageCreated = vi.fn();
+    const { rerender } = render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} onMessageCreated={onMessageCreated} />);
+    const beginImport = async () => {
+      fireEvent.change(await screen.findByRole("textbox", { name: "Paste thread" }), { target: { value: preview.text } });
+      fireEvent.click(screen.getByRole("button", { name: "Preview thread" }));
+      fireEvent.click(await screen.findByRole("checkbox", { name: /I confirm importing/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
+    };
+    await beginImport();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel import" }));
+    expect(vi.mocked(importDealThread).mock.calls[0][2]?.signal?.aborted).toBe(true);
+    await act(async () => { resolvers[0](message({ id: "old-import", body: preview.text })); });
+    expect(onMessageCreated).not.toHaveBeenCalled();
+    expect(screen.queryByText("Thread imported.")).not.toBeInTheDocument();
+    await beginImport();
+    rerender(<DealConversationReview deal={{ ...DEAL, id: "other-deal" }} revalidateIntervalMs={0} onMessageCreated={onMessageCreated} />);
+    expect(vi.mocked(importDealThread).mock.calls[1][2]?.signal?.aborted).toBe(true);
+    await act(async () => { resolvers[1](message({ id: "old-import", body: preview.text })); });
+    expect(await screen.findByRole("textbox", { name: "Paste thread" })).toHaveValue("");
+    expect(onMessageCreated).not.toHaveBeenCalled();
+    expect(screen.queryByText(preview.text)).not.toBeInTheDocument();
   });
 
   it("shows message visibility and fact review state, then submits all review actions", async () => {
@@ -281,9 +460,7 @@ describe("DealConversationReview", () => {
       delivery_date: "2026-12-01",
       status: "DRAFT",
     });
-    mockedCreateAgreementFromReviewedTerms.mockResolvedValue({
-      version_number: 1,
-    } as AgreementVersion);
+    mockedNegotiateDeal.mockResolvedValue({ outcome: "APPLIED", deal_revision: 1, proposal_id: "proposal", candidate_id: null });
 
     render(<DealConversationReview deal={DEAL} onAgreementCreated={onAgreementCreated} />);
 
@@ -328,9 +505,9 @@ describe("DealConversationReview", () => {
     expect(within(proposal).getByText("Due condition: when seller invoices")).toBeInTheDocument();
     expect(within(proposal).getByText(/does not create or approve an agreement/i)).toBeInTheDocument();
     expect(mockedDraftDealProposal).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
-    fireEvent.click(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" }));
-    await vi.waitFor(() => expect(mockedCreateAgreementFromReviewedTerms).toHaveBeenCalled());
-    expect(mockedCreateAgreementFromReviewedTerms).toHaveBeenCalledWith(DEAL.id, BUYER_ID, {
+    fireEvent.click(within(proposal).getByRole("button", { name: "Submit reviewed proposal" }));
+    await vi.waitFor(() => expect(mockedNegotiateDeal).toHaveBeenCalled());
+    expect(mockedNegotiateDeal.mock.calls[0][2].terms).toEqual({
       schema_version: 1,
       description: "Organic cotton shirts",
       quantity: "12",
@@ -342,7 +519,7 @@ describe("DealConversationReview", () => {
       payment_trigger: "seller_invoice",
     });
     expect(onAgreementCreated).toHaveBeenCalledOnce();
-    expect(await screen.findByText("Agreement version 1 is ready for both parties to review."))
+    expect(await screen.findByText("Proposal submitted."))
       .toBeInTheDocument();
   });
 
@@ -565,6 +742,7 @@ describe("message composer", () => {
   const createMessage = vi.mocked(createDealMessage);
   beforeEach(() => {
     vi.resetAllMocks();
+    mockNegotiation();
     mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co")]);
     mockedListDealMessages.mockResolvedValue([]);
     mockedListDealFacts.mockResolvedValue([]);
@@ -646,6 +824,67 @@ describe("message composer", () => {
     fireEvent.click(send);
     await screen.findByText("Message sent.");
     expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage.mock.calls[1][1].idempotency_key).toBe(createMessage.mock.calls[0][1].idempotency_key);
+  });
+
+  it("reuses a lost-response key for whitespace-only edits and rotates after successful send", async () => {
+    createMessage.mockRejectedValueOnce(new TypeError("Lost response"));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    const send = screen.getByRole("button", { name: "Send Message" });
+    fireEvent.change(input, { target: { value: "New terms" } });
+    fireEvent.click(send);
+    await screen.findByRole("alert");
+    const firstKey = createMessage.mock.calls[0][1].idempotency_key;
+    fireEvent.change(input, { target: { value: "  New terms  " } });
+    fireEvent.click(send);
+    await screen.findByText("Message sent.");
+    expect(createMessage.mock.calls[1][1].idempotency_key).toBe(firstKey);
+    fireEvent.change(input, { target: { value: "New terms" } });
+    fireEvent.click(send);
+    await screen.findByText("Message sent.");
+    expect(createMessage.mock.calls[2][1].idempotency_key).not.toBe(firstKey);
+  });
+
+  it.each(["body", "visibility"])("rotates a failed draft key after effective %s changes, even when reverted", async (field) => {
+    createMessage.mockRejectedValue(new TypeError("Lost response"));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    const send = screen.getByRole("button", { name: "Send Message" });
+    fireEvent.change(input, { target: { value: "New terms" } });
+    fireEvent.click(send);
+    await screen.findByRole("alert");
+    if (field === "body") {
+      fireEvent.change(input, { target: { value: "Changed terms" } });
+      fireEvent.change(input, { target: { value: "New terms" } });
+    } else {
+      fireEvent.click(screen.getByRole("radio", { name: /^Private/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /^Shareable/ }));
+    }
+    fireEvent.click(send);
+    await waitFor(() => expect(createMessage).toHaveBeenCalledTimes(2));
+    expect(createMessage.mock.calls[1][1].idempotency_key).not.toBe(createMessage.mock.calls[0][1].idempotency_key);
+    await screen.findByRole("alert");
+  });
+
+  it.each(["organization", "deal"])("rotates failed draft keys on %s scope changes", async (scope) => {
+    mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co"), organization(SELLER_ID, "Seller Co")]);
+    createMessage.mockRejectedValue(new TypeError("Lost response"));
+    const { rerender } = render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    fireEvent.change(await screen.findByLabelText("Viewing as"), { target: { value: BUYER_ID } });
+    fireEvent.change(await screen.findByLabelText("Message"), { target: { value: "New terms" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    await screen.findByRole("alert");
+    if (scope === "organization") {
+      fireEvent.change(screen.getByLabelText("Viewing as"), { target: { value: SELLER_ID } });
+    } else {
+      rerender(<DealConversationReview deal={{ ...DEAL, id: "deal-2" }} revalidateIntervalMs={0} />);
+    }
+    fireEvent.change(await screen.findByLabelText("Message"), { target: { value: "New terms" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    await waitFor(() => expect(createMessage).toHaveBeenCalledTimes(2));
+    expect(createMessage.mock.calls[1][1].idempotency_key).not.toBe(createMessage.mock.calls[0][1].idempotency_key);
+    await screen.findByRole("alert");
   });
 
   it("requires a party selection and hides confirmed private messages from the other context", async () => {
@@ -753,13 +992,14 @@ describe("synchronized fact review and proposal drafts", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mockNegotiation();
     mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co")]);
     mockedListDealMessages.mockResolvedValue([]);
     mockedListDealFacts.mockResolvedValue([quantity]);
     mockedSuggestDealFacts.mockResolvedValue({ status: "VALID", issues: [], facts: [quantity],
       missing_fields: ["quantity"], guidance_message: "Review quantity." });
     mockedDraftDealProposal.mockResolvedValue(draft);
-    mockedCreateAgreementFromReviewedTerms.mockResolvedValue({ version_number: 1 } as AgreementVersion);
+    mockedNegotiateDeal.mockResolvedValue({ outcome: "APPLIED", deal_revision: 1, proposal_id: "proposal", candidate_id: null });
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -786,9 +1026,9 @@ describe("synchronized fact review and proposal drafts", () => {
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("24");
     expect(within(proposal).getByLabelText("Unit price")).toHaveValue("8.75");
     expect(within(proposal).getByLabelText("Delivery destination")).toHaveValue("Mumbai");
-    fireEvent.click(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" }));
-    await waitFor(() => expect(mockedCreateAgreementFromReviewedTerms).toHaveBeenCalledWith(DEAL.id, BUYER_ID,
-      expect.objectContaining({ quantity: "24", unit_price: "8.75", delivery_destination: "Mumbai", currency: "USD", payment_trigger: "seller_invoice" })));
+    fireEvent.click(within(proposal).getByRole("button", { name: "Submit reviewed proposal" }));
+    await waitFor(() => expect(mockedNegotiateDeal).toHaveBeenCalledWith(DEAL.id, "submit",
+      expect.objectContaining({ organization_id: BUYER_ID, terms: expect.objectContaining({ quantity: "24", unit_price: "8.75", delivery_destination: "Mumbai", currency: "USD", payment_trigger: "seller_invoice" }) })));
     expect(mockedSuggestDealFacts).toHaveBeenCalledTimes(1);
   });
 
@@ -844,8 +1084,8 @@ describe("synchronized fact review and proposal drafts", () => {
     const proposal = await screen.findByLabelText("Proposed terms draft");
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("");
     expect(within(proposal).getByRole("alert")).toHaveTextContent("request a fresh draft");
-    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
-    expect(mockedCreateAgreementFromReviewedTerms).not.toHaveBeenCalled();
+    expect(within(proposal).getByRole("button", { name: "Submit reviewed proposal" })).toBeDisabled();
+    expect(mockedNegotiateDeal).not.toHaveBeenCalled();
   });
 
   it("discards older polling versions and removes revoked facts and their derived draft values", async () => {
@@ -860,7 +1100,7 @@ describe("synchronized fact review and proposal drafts", () => {
     await act(async () => { fireEvent.focus(window); });
     await waitFor(() => expect(screen.queryByRole("article", { name: "Fact suggestion: quantity" })).not.toBeInTheDocument());
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("");
-    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+    expect(within(proposal).getByRole("button", { name: "Submit reviewed proposal" })).toBeDisabled();
   });
 
   it("does not resurrect revoked facts when a late review response resolves", async () => {
@@ -936,7 +1176,7 @@ describe("synchronized fact review and proposal drafts", () => {
     });
     const proposal = await openReview();
     expect(within(proposal).getByLabelText("Unit price")).toHaveValue("");
-    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+    expect(within(proposal).getByRole("button", { name: "Submit reviewed proposal" })).toBeDisabled();
   });
 
   it("blocks agreement creation when confirmed unit fact contradicts confirmed quantity unit", async () => {
@@ -947,7 +1187,7 @@ describe("synchronized fact review and proposal drafts", () => {
     const proposal = await openReview();
     expect(within(proposal).getByLabelText("Unit")).toHaveValue("");
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("");
-    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+    expect(within(proposal).getByRole("button", { name: "Submit reviewed proposal" })).toBeDisabled();
   });
 
   it("preserves fact suggestion draft edits when a background suggestion response arrives", async () => {
@@ -1039,7 +1279,7 @@ describe("synchronized fact review and proposal drafts", () => {
     const proposal = await openReview();
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("");
     expect(within(proposal).getByLabelText("Unit price")).toHaveValue("2.50");
-    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+    expect(within(proposal).getByRole("button", { name: "Submit reviewed proposal" })).toBeDisabled();
   });
 
   it("ignores a suggestion completion from a previous visit to the same organization", async () => {

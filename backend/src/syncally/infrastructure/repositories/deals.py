@@ -33,6 +33,7 @@ def _to_domain(row: Deal) -> DomainDeal:
             else None
         ),
         version=row.version,
+        pending_counterparty=row.onboarding is not None and row.onboarding.consumed_at is None,
     )
 
 
@@ -73,6 +74,12 @@ class SqlAlchemyDealRepository:
         )
 
     def add(self, deal: DomainDeal) -> DomainDeal:
+        row = self.stage(deal)
+        self._db.commit()
+        self._db.refresh(row)
+        return _to_domain(row)
+
+    def stage(self, deal: DomainDeal) -> Deal:
         row = Deal(
             id=deal.id,
             buyer_organization_id=deal.buyer_organization_id,
@@ -89,9 +96,7 @@ class SqlAlchemyDealRepository:
             record_id=deal.id,
             kind=NotificationKind.DEAL_CREATED,
         )
-        self._db.commit()
-        self._db.refresh(row)
-        return _to_domain(row)
+        return row
 
     def get(self, deal_id: UUID) -> DomainDeal | None:
         """Load a deal by saved identifier for trusted workflow work."""

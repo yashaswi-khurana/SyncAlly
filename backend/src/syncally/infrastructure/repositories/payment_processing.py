@@ -25,6 +25,10 @@ from syncally.application.payment_processing import (
     PaymentWorkItem,
     payment_invoice_number,
 )
+from syncally.application.payments import (
+    OFFLINE_RECONCILIATION_EVENT_TYPE,
+    PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+)
 from syncally.domain.agreements.agreement import AgreementStatus
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.organizations.organization import OrganizationMemberRole
@@ -108,6 +112,9 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 request_error_detail=request_error_detail,
                 failure_code=row.failure_code,
                 failure_detail=row.failure_detail,
+                provider=row.provider,
+                execution_mode=row.execution_mode,
+                version=row.version,
             )
 
     def begin_create(self, payment_intent_id: UUID, request_payload_hash: str) -> None:
@@ -217,6 +224,7 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 OutboxEvent.id == outbox_event_id,
                 OutboxEvent.status == "PROCESSING",
                 OutboxEvent.next_attempt_at == lease_until,
+                OutboxEvent.next_attempt_at > now,
             )
             intent_statement = select(PaymentIntent).where(
                 PaymentIntent.id == payment_intent_id
@@ -245,6 +253,31 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                     "PAYMENT_RECONCILIATION_RECORD_MISSING",
                     "The payment or webhook record is missing; inspect the reconciliation event.",
                 )
+
+            simulation = payment_state.source == "OFFLINE_DEMO"
+            expected_provider = "OFFLINE_DEMO" if simulation else "PAYPAL"
+            expected_mode = "OFFLINE_DEMO" if simulation else "PAYPAL_SANDBOX"
+            expected_event = OFFLINE_RECONCILIATION_EVENT_TYPE if simulation else PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE
+            if ((row.provider, row.execution_mode) != (expected_provider, expected_mode)
+                    or webhook.provider != expected_provider or webhook.processed
+                    or outbox.aggregate_type != "payment_intent" or outbox.aggregate_id != row.id
+                    or outbox.event_type != expected_event
+                    or outbox.payload != {"payment_intent_id": str(row.id), "webhook_event_id": str(webhook.id)}
+                    or payment_state.provider_reference != row.provider_invoice_id):
+                raise PaymentNeedsAction("PAYMENT_PROVENANCE_UNRESOLVED", "Reconciliation evidence does not match the intent and event identity.")
+            if simulation:
+                from syncally.infrastructure.repositories.offline_payments import (
+                    require_simulation_scope,
+                    simulation_state,
+                )
+
+                try:
+                    require_simulation_scope(db, row, UUID(webhook.raw_payload["actor_user_id"]))
+                    if (webhook.event_type != expected_event or row.version != webhook.raw_payload["expected_version"]
+                            or simulation_state(row, webhook.raw_payload) != payment_state):
+                        raise PaymentNeedsAction("PAYMENT_STATE_CHANGED", "Simulation evidence or payment version changed.")
+                except (KeyError, ValueError, TypeError) as error:
+                    raise PaymentNeedsAction("PAYMENT_RECONCILIATION_REJECTED", "Simulation evidence is invalid.") from error
 
             previous_status = row.status
             try:
@@ -295,6 +328,7 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                         intent.reconciled_amount.amount if intent.reconciled_amount else None
                     ),
                     last_checked_at=now,
+                    reconciliation_source=payment_state.source if payment_state.status is not VerifiedProviderPaymentStatus.UNKNOWN else row.reconciliation_source,
                     last_reconciled_at=(
                         now
                         if payment_state.status is not VerifiedProviderPaymentStatus.UNKNOWN
@@ -318,8 +352,8 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                         if status_changed or amount_changed
                         else "PAYMENT_RECONCILIATION_CHECKED"
                     ),
-                    actor_type="PROVIDER",
-                    actor_id="PAYPAL",
+                    actor_type="SIMULATION" if simulation else "PROVIDER",
+                    actor_id="OFFLINE_DEMO" if simulation else "PAYPAL",
                     occurred_at=now,
                     correlation_id=webhook.provider_event_id,
                     payload={
@@ -328,6 +362,7 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                         "provider_status": payment_state.status.value,
                         "paid_amount": str(payment_state.paid_amount.amount),
                         "currency": payment_state.paid_amount.currency,
+                        "reconciliation_source": payment_state.source,
                     },
                 )
             )
@@ -365,6 +400,7 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 OutboxEvent.id == outbox_event_id,
                 OutboxEvent.status == "PROCESSING",
                 OutboxEvent.next_attempt_at == lease_until,
+                OutboxEvent.next_attempt_at > now,
             )
             intent_statement = select(PaymentIntent).where(
                 PaymentIntent.id == payment_intent_id
@@ -406,7 +442,7 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                     },
                 )
             )
-            if webhook is not None:
+            if webhook is not None and outbox.aggregate_id == payment_intent_id and outbox.payload == {"payment_intent_id": str(payment_intent_id), "webhook_event_id": str(webhook.id)}:
                 webhook.processed = True
             outbox.status = "FAILED"
             outbox.next_attempt_at = None

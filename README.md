@@ -33,6 +33,7 @@ flowchart LR
 5. **Atomic Commitment:** Once bilateral consensus is satisfied, either authorized organization triggers commitment. A single PostgreSQL transaction transitions the deal to `COMMITTED`, generates immutable commercial obligations and payment milestones, writes audit log entries, and enqueues outbox events.
 6. **PayPal Invoicing & Reconciliation:** The seller reviews buyer administrator contact details and chooses **Request Payment**. An independent payment worker claims the outbox event, creates and sends a real PayPal Sandbox invoice, and notifies the buyer. When the buyer settles the invoice, verified PayPal webhooks trigger automated payment reconciliation to mark the milestone `PAID`.
 
+> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. F4 adds recipient-bound team/counterparty invitations, invitation signup, private pending deals, and atomic acceptance; unrestricted public self-registration remains disabled. Deal creation, the create/detail browser flow, bilateral agreement approval, and the durable Temporal deal workflow with its separate worker process are implemented. Local PostgreSQL and Temporal development services and an opt-in worker restart smoke test are provided in `infra/`; external payment integration remains planned.
 ---
 
 ## Architecture Overview
@@ -144,6 +145,11 @@ The seeder creates two pre-configured administrator accounts:
 - **Buyer:** `buyer@syncally.demo` representing **Demo Buyer Co**
 - **Seller:** `seller@syncally.demo` representing **Demo Seller Co**
 
+The command asks for each password without displaying it. Use `buyer@syncally.demo` or
+`seller@syncally.demo` to sign in. It is disabled outside development/test; public
+self-registration is disabled. Recipient-bound invitation signup/acceptance is supported;
+matching a signup email is not verified mailbox ownership. See the
+[F4 walkthrough and migration safeguards](docs/operations.md#f4-counterparty-onboarding).
 > [!NOTE]
 > `seed_demo` is idempotent and safe to re-run. If an account already has a password set, it preserves the existing password.
 

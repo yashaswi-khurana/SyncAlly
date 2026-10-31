@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import subprocess
+import sys
 import unittest
+from contextlib import redirect_stdout
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -112,6 +116,52 @@ class FakePayPalInvoiceProvider:
 
 
 class DemoLifecycleTests(unittest.TestCase):
+    def test_explicit_ci_flag_selects_offline_harness(self) -> None:
+        from syncally.cli.simulate_deal_flow import main
+
+        with (
+            patch("syncally.cli.simulate_deal_flow.run_simulation", return_value=0) as run,
+            patch("syncally.cli.simulate_deal_flow.logging.getLogger"),
+            self.assertRaises(SystemExit) as exit_result,
+        ):
+            main(["--ci", "--no-color"])
+        self.assertEqual(exit_result.exception.code, 0)
+        self.assertTrue(run.call_args.kwargs["in_process"])
+        self.assertTrue(run.call_args.kwargs["offline"])
+
+    def test_cli_import_preserves_process_logging_levels(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-c", (
+                "import logging; "
+                "logging.getLogger('syncally').setLevel(logging.INFO); "
+                "logging.getLogger('httpx').setLevel(logging.INFO); "
+                "import syncally.cli.simulate_deal_flow; "
+                "assert logging.getLogger('syncally').level == logging.INFO; "
+                "assert logging.getLogger('httpx').level == logging.INFO"
+            )],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_explicit_offline_cli_uses_shared_invoice_without_network_or_fallback(self) -> None:
+        from syncally.cli.simulate_deal_flow import run_simulation
+
+        output = io.StringIO()
+        with redirect_stdout(output), patch("syncally.cli.simulate_deal_flow._is_live_backend_healthy", side_effect=AssertionError("No network probe")), patch("syncally.config.PayPalSettings", side_effect=AssertionError("No PayPal")), patch("syncally.config.GmailSettings", side_effect=AssertionError("No SMTP")):
+            self.assertEqual(run_simulation(offline=True, in_process=True, enable_color=False), 0)
+        self.assertIn("Payment Mode:        OFFLINE_DEMO", output.getvalue())
+        self.assertIn("Invoice Reference:   OFFLINE-", output.getvalue())
+        self.assertIn("Payment State:       SENT (queued/sent is not paid)", output.getvalue())
+        self.assertNotIn("paypal.com", output.getvalue())
+        self.assertNotIn("INV2-SIM", output.getvalue())
+
+    def test_unreachable_backend_never_silently_replaces_database(self) -> None:
+        from syncally.cli.simulate_deal_flow import run_simulation
+
+        with redirect_stdout(io.StringIO()), patch("syncally.cli.simulate_deal_flow._is_live_backend_healthy", return_value=False), patch("syncally.cli.simulate_deal_flow._build_in_process_client", side_effect=AssertionError("No fallback")):
+            self.assertEqual(run_simulation(), 1)
+            self.assertEqual(run_simulation(in_process=True), 1)
+
     def setUp(self) -> None:
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",
@@ -242,7 +292,7 @@ class DemoLifecycleTests(unittest.TestCase):
         invalid_terms = {
             key: value
             for key, value in proposal_response.json().items()
-            if key != "status"
+            if key not in {"status", "provenance"}
         }
         invalid_terms["quantity"] = "-1"
         invalid_terms["payment_trigger"] = "seller_invoice"
@@ -262,7 +312,7 @@ class DemoLifecycleTests(unittest.TestCase):
                 **{
                     key: value
                     for key, value in proposal_response.json().items()
-                    if key != "status"
+                    if key not in {"status", "provenance"}
                 },
                 "payment_trigger": "seller_invoice",
                 "organization_id": str(self.buyer.id),

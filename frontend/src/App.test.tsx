@@ -13,10 +13,18 @@ vi.mock("./api/client", async (importOriginal) => {
     createOrganization: vi.fn(),
     listPaymentStatuses: vi.fn(),
     getCommercialDocumentDraft: vi.fn(),
+    getTradePack: vi.fn(),
     listDeals: vi.fn(),
     createDeal: vi.fn(),
     getDeal: vi.fn(),
+    getNegotiation: vi.fn(async (dealId: string, organizationId: string) => ({ deal_id: dealId, organization_id: organizationId,
+      deal_revision: 0, latest: null, current_candidate: null, eligible_actions: [], round_count: 0, max_rounds: 5,
+      escalated: false, history_ambiguous: false, proposals: [], history: [] })),
+    getOrganization: vi.fn(),
     getCurrentAgreement: vi.fn(),
+    getAgreementHistory: vi.fn().mockResolvedValue({ versions: [] }),
+    getAgreementVersion: vi.fn().mockRejectedValue(new actual.ApiError(404, "No version")),
+    compareAgreementVersions: vi.fn().mockRejectedValue(new actual.ApiError(404, "No comparison")),
     getDealMessageExistence: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
@@ -29,6 +37,8 @@ import {
   createOrganization,
   getCommercialDocumentDraft,
   getCurrentAgreement,
+  getAgreementVersion,
+  getTradePack,
   getDeal,
   getDealMessageExistence,
   listDealFacts,
@@ -38,7 +48,8 @@ import {
   listPaymentStatuses,
   login,
 } from "./api/client";
-import { clearAccessToken, setAccessToken } from "./api/tokenStore";
+import { clearAccessToken, getAccessToken, setAccessToken } from "./api/tokenStore";
+import type { AgreementVersion } from "./api/types";
 
 const mockedGetDeal = vi.mocked(getDeal);
 const mockedApiRequest = vi.mocked(apiRequest);
@@ -86,6 +97,7 @@ describe("App", () => {
     window.location.hash = "";
     vi.stubGlobal("confirm", vi.fn(() => true));
     mockedListDeals.mockResolvedValue([]);
+    vi.mocked(getAgreementVersion).mockReset().mockRejectedValue(new ApiError(404, "No version"));
     mockedListPaymentStatuses.mockResolvedValue([]);
     mockedGetCommercialDocumentDraft.mockRejectedValue(
       new ApiError(409, "Agreement not committed"),
@@ -127,6 +139,28 @@ describe("App", () => {
 
     expect(await screen.findByText("DRAFT")).toBeInTheDocument();
     expect(mockedGetDeal).toHaveBeenCalledWith("deal-42");
+  });
+
+  it("aborts a committed download when signing out of the deal room", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/deals/deal-42";
+    mockedGetDeal.mockResolvedValue({ id: "deal-42", buyer_organization_id: "11111111-1111-1111-1111-111111111111",
+      seller_organization_id: "22222222-2222-2222-2222-222222222222", status: "AGREED", version: 1 });
+    const agreement = { id: "version-42", deal_id: "deal-42", version_number: 1, status: "COMMITTED",
+      terms_hash: "a".repeat(64), created_at: "2026-10-31T10:00:00Z", approvals: [],
+      terms: { line_items: [], shipments: [], payment_terms: [] } } as unknown as AgreementVersion;
+    mockedGetCurrentAgreement.mockResolvedValue(agreement);
+    vi.mocked(getAgreementVersion).mockResolvedValue(agreement);
+    let resolve!: (blob: Blob) => void;
+    vi.mocked(getTradePack).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Download trade pack" }));
+    const signal = vi.mocked(getTradePack).mock.calls[0][4]!;
+    fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
+    expect(signal.aborted).toBe(true);
+    await act(async () => { resolve(new Blob(["late document"])); });
+    expect(screen.queryByRole("button", { name: "Download trade pack" })).not.toBeInTheDocument();
+    expect(getAccessToken()).toBeNull();
   });
 
   it("lands a signed-in user on the deals workspace by default", async () => {
@@ -211,6 +245,119 @@ describe("App", () => {
     expect(
       screen.queryByRole("heading", { name: "Set up your trading organization" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("refreshes accepted membership and navigates to the server-returned deal", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/invite?token=pending-team-token";
+    mockedGetDeal.mockResolvedValue({
+      id: "accepted-deal", buyer_organization_id: "buyer", seller_organization_id: "seller",
+      status: "DRAFT", version: 1,
+    });
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
+    mockedApiRequest.mockResolvedValueOnce({
+      organization_id: "seller", role: "ADMIN", deal_id: "accepted-deal",
+      access_token: "accepted-token", refresh_token: "accepted-refresh", token_type: "bearer",
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
+    expect(await screen.findByText("DRAFT")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/deals/accepted-deal");
+    expect(mockedListOrganizations.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(screen.queryByRole("heading", { name: "Set up your trading organization" })).not.toBeInTheDocument();
+  });
+
+  it("ignores an acceptance membership refresh that finishes after sign out", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/invite?token=pending-team-token";
+    let resolveRefresh!: (organizations: []) => void;
+    mockedApiRequest.mockImplementationOnce(async () => {
+      mockedListOrganizations.mockImplementation(() => new Promise((resolve) => {
+        resolveRefresh = resolve;
+      }));
+      return { organization_id: "seller", role: "ADMIN", deal_id: "stale-deal" };
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
+    await act(async () => {});
+    fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "Sign out" }));
+    await act(async () => resolveRefresh([]));
+    expect(screen.getByRole("heading", { name: "Join via counterparty invite." })).toBeInTheDocument();
+    expect(mockedGetDeal).not.toHaveBeenCalledWith("stale-deal");
+    expect(window.location.hash).not.toBe("#/deals/stale-deal");
+  });
+
+  it.each([false, true])("ignores invitation A's refresh after opening B (reopen A: %s)", async (reopenA) => {
+    setAccessToken("access-token");
+    window.location.hash = "#/invite?token=invitation-a";
+    let resolveRefresh!: (organizations: []) => void;
+    mockedApiRequest.mockImplementationOnce(async () => {
+      mockedListOrganizations.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRefresh = resolve;
+      }));
+      return {
+        organization_id: "seller", role: "ADMIN", deal_id: "deal-a",
+        access_token: "accepted-token", refresh_token: "accepted-refresh",
+      };
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
+    await act(async () => {});
+    expect(resolveRefresh).toBeDefined();
+    await act(async () => {
+      window.location.hash = "#/invite?token=invitation-b";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    if (reopenA) {
+      await act(async () => {
+        window.location.hash = "#/invite?token=invitation-a";
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      });
+    }
+    const currentHash = window.location.hash;
+    await act(async () => resolveRefresh([]));
+    expect(window.location.hash).toBe(currentHash);
+    expect(mockedGetDeal).not.toHaveBeenCalledWith("deal-a");
+    expect(screen.getByRole("button", { name: "Accept & Join" })).toBeEnabled();
+    expect(screen.queryByRole("heading", { name: "Set up your trading organization" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    await screen.findByRole("heading", { name: "Deals shared with you" });
+    expect(screen.queryByRole("heading", { name: "Set up your trading organization" })).not.toBeInTheDocument();
+  });
+
+  it.each(["sign out", "session change"])("ignores late acceptance after %s before applying returned tokens", async (change) => {
+    setAccessToken("access-token");
+    window.location.hash = "#/invite?token=invitation-a";
+    let resolveAcceptance!: (result: {
+      organization_id: string; role: string; deal_id: string;
+      access_token: string; refresh_token: string;
+    }) => void;
+    mockedApiRequest.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAcceptance = resolve;
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
+    if (change === "sign out") {
+      fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "Sign out" }));
+    } else {
+      mockedApiRequest.mockResolvedValueOnce({ message: "Reset" });
+      fireEvent.click(screen.getByRole("button", { name: "Reset Demo Data" }));
+      await screen.findByRole("heading", { name: "Deals shared with you" });
+      await act(async () => {
+        window.location.hash = "#/invite?token=invitation-a";
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      });
+    }
+    const currentHash = window.location.hash;
+    const refreshCalls = mockedListOrganizations.mock.calls.length;
+    await act(async () => resolveAcceptance({
+      organization_id: "seller", role: "ADMIN", deal_id: "stale-deal",
+      access_token: "stale-token", refresh_token: "stale-refresh",
+    }));
+    expect(window.location.hash).toBe(currentHash);
+    expect(mockedListOrganizations).toHaveBeenCalledTimes(refreshCalls);
+    expect(mockedGetDeal).not.toHaveBeenCalledWith("stale-deal");
+    expect(getAccessToken()).toBe(change === "sign out" ? null : "access-token");
   });
 
   it("guides a new user with 0 organizations through the setup wizard to create an organization and routes to deal register with toast", async () => {

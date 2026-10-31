@@ -4,7 +4,8 @@ import SignInPage from "./auth/SignInPage";
 import { useSession } from "./auth/useSession";
 import { useHashRoute } from "./app/useHashRoute";
 import { listOrganizations } from "./api/client";
-import type { Organization } from "./api/types";
+import { getAccessToken } from "./api/tokenStore";
+import type { InvitationAcceptance, Organization, TokenResponse } from "./api/types";
 import CreateDealPage from "./deals/CreateDealPage";
 import DealDetailPage from "./deals/DealDetailPage";
 import DealsPage from "./deals/DealsPage";
@@ -70,6 +71,7 @@ export default function App() {
   }
 
   function refreshSessionView() {
+    sessionRef.current = null;
     navigateToDeals();
     setSessionVersion((version) => version + 1);
   }
@@ -81,8 +83,36 @@ export default function App() {
     signOut();
   }
 
+  function handleSignIn(tokens: TokenResponse) {
+    sessionRef.current = `${tokens.access_token}:${sessionVersion}`;
+    setOrganizations(null);
+    signIn(tokens);
+  }
+
+  async function handleInvitationAccepted(
+    result: InvitationAcceptance,
+    isCurrentInvitation: () => boolean,
+  ) {
+    if (!currentSessionKey || sessionRef.current !== currentSessionKey ||
+        getAccessToken() !== accessToken || !isCurrentInvitation()) return;
+    setOrganizations(null);
+    let acceptedToken = accessToken;
+    if (result.access_token && result.refresh_token) {
+      acceptedToken = result.access_token;
+      handleSignIn({ access_token: result.access_token, refresh_token: result.refresh_token,
+        token_type: result.token_type ?? "bearer" });
+    }
+    const acceptedSession = sessionRef.current;
+    const refreshed = await listOrganizations();
+    if (sessionRef.current !== acceptedSession || getAccessToken() !== acceptedToken ||
+      !isCurrentInvitation()) return;
+    setOrganizations(refreshed);
+    if (result.deal_id) navigateToDeal(result.deal_id);
+    else navigateToDeals();
+  }
+
   if (!accessToken) {
-    return <SignInPage onSignIn={signIn} />;
+    return <SignInPage onSignIn={handleSignIn} />;
   }
 
   const isCreate = route.name === "create";
@@ -148,7 +178,7 @@ export default function App() {
         ) : route.name === "create" ? (
           <CreateDealPage onCreated={navigateToDeal} />
         ) : route.name === "organizations" ? (
-          <OrganizationsSettingsPage />
+          <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : (
           <DealsPage onOpenDeal={navigateToDeal} onCreateDeal={navigateToCreateDeal} />
         )}

@@ -1,139 +1,148 @@
 # SyncAlly
 
-SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
+SyncAlly helps buyers and sellers turn trade conversations into reviewed terms, a bilateral agreement, draft commercial records, and a PayPal Sandbox invoice. The current app includes organization setup and invitations, counterparty search, private/shareable messages, fact review, proposed terms, agreement approval, payment authorization and status, and development demo tools.
 
-> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. Public self-registration and product invitation/acceptance are not implemented; product invitations remain planned. Deal creation, the create/detail browser flow, bilateral agreement approval, and the durable Temporal deal workflow with its separate worker process are implemented. Local PostgreSQL and Temporal development services and an opt-in worker restart smoke test are provided in `infra/`; external payment integration remains planned.
+The supported slice uses one buyer, one seller, USD terms and seller-invoice payment timing. AI suggestions are non-binding: people review terms, both organizations approve the same agreement version, and the seller separately requests payment. Production rollout remains subject to the [architecture gates](ARCHITECTURE.md#scope-and-deployment).
 
-## Architecture
+## Trade lifecycle
 
-The proposed first release is a constrained vertical slice built as a Python modular monolith with a React and TypeScript frontend. FastAPI exposes the application API, PostgreSQL stores authoritative business state, and Temporal coordinates long-running deal workflows. AI may help extract requirements and draft proposals, while domain services remain responsible for validation, authorization, and commercial decisions.
+1. Sign in with a seeded demo account, or accept an invitation to create an account. Users without an organization complete the setup wizard; organization settings support team invitations.
+2. Create a deal by searching the organization directory by legal name. The deal page also supports counterparty invitations. No manual copying of organization IDs is needed for the normal create flow.
+3. Post messages as your organization, choosing private or shareable visibility. First-deal guidance explains the conversation flow.
+4. Request fact suggestions, review or correct them, or add terms manually. Saved confirmations synchronize fact badges and affected proposal fields. Private context stays scoped to its organization; draft generation does not share or approve it.
+5. Request a proposal, edit its terms, then send the reviewed version for bilateral approval. Buyer and seller approve the same version and terms hash; commitment creates payment milestones and obligations atomically.
+6. The seller reviews the invoice recipient and chooses **Request Payment**. A configured payment worker creates and sends the Sandbox invoice. The buyer can open its invoice link and see reconciled payment status. A committed agreement also supplies a read-only commercial document draft.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the system overview, [docs/architecture/](docs/architecture/README.md) for the detailed domain, workflow, payment, and decision records, and [docs/implementation-plan.md](docs/implementation-plan.md) for the living plan separating implemented foundations from planned product flows.
+## Architecture and repository
 
-The current domain code and its exact implementation boundary are described in [the domain layer architecture](docs/architecture/05-domain-layer.md).
-
-## Core rules
-
-- AI output is a proposal and must pass domain validation.
-- Only authenticated, authorized commands can approve agreements or request payments.
-- A proposal is not a commitment; both parties must approve the same immutable agreement version.
-- PostgreSQL is the source of truth for commercial state. Workflow history and AI checkpoints are not the business ledger.
-- Payment requests and provider events require durable intent, idempotency, verification, and reconciliation.
-- Private buyer and seller context must be isolated before it is used in prompts or shared proposals.
-
-## Planned stack
-
-| Area | Proposed technology |
+| Component | Current implementation |
 | --- | --- |
-| Web app | React + TypeScript |
-| API | Python + FastAPI |
-| Domain models and schemas | Framework-independent Python + Pydantic |
-| Durable deal workflows | Temporal |
-| AI orchestration | LangGraph, introduced only where useful |
-| Database and migrations | PostgreSQL + SQLAlchemy + Alembic |
-| Payment requests | PayPal Invoicing API, starting with Sandbox |
-| Document storage | S3-compatible object storage |
-| Observability | OpenTelemetry with redacted application and agent traces |
+| Web | React 19, TypeScript, Vite |
+| API and business rules | FastAPI; framework-independent domain and application services |
+| Commercial ledger | PostgreSQL, SQLAlchemy, Alembic migrations |
+| Durable workflow | Temporal lifecycle worker plus a separate database outbox relay |
+| Suggestions | Explicit API requests to the bounded demo AI provider |
+| Payments | Separate payment outbox worker, PayPal Sandbox adapter, verified webhooks and reconciliation |
 
-The API and React client now have starter shells. The other components in this table remain planned and are not yet integrated. The architecture records explain the alternatives and conditions for revisiting these choices.
+`backend/src/syncally/` contains `api/`, `application/`, `domain/`, `infrastructure/`, `workflows/`, and `cli/`. `frontend/src/` contains the app; `infra/` supplies local PostgreSQL and Temporal. See [ARCHITECTURE.md](ARCHITECTURE.md) for current routes and data flow, [the architecture records](docs/architecture/README.md) for design decisions, and [operations](docs/operations.md) for recovery. LangGraph, S3 storage and OpenTelemetry are design directions rather than integrations in this slice.
 
-## MVP boundary
+## Local quickstart
 
-The reference design proposes one buyer, one seller, one supported currency and trade scenario, bilateral approval, generated draft commercial records, and a PayPal Sandbox payment flow. It does not claim universal legal, tax, customs, export, accounting, or payment-provider compliance. Production use needs separate product, security, operational, and provider-readiness reviews.
+Use PowerShell from the repository root. Install Python **3.12+**, Docker with Compose v2, and Node **22.13+ on 22.x or 24+**, with npm. Docker must be running. Plan for dependency/image downloads on a fresh machine; a five-minute startup target assumes prerequisites and downloads are already available, and is not a measured cold-install guarantee.
 
-## Repository map
-
-```text
-.
-├── backend/
-│   ├── pyproject.toml
-│   └── src/syncally/
-│       ├── api/                 # HTTP boundary and route registration
-│       ├── application/         # Use cases and command orchestration
-│       ├── domain/              # Framework-independent business rules
-│       ├── infrastructure/      # Persistence and provider adapters
-│       └── workflows/           # Durable workflow definitions and activities
-├── frontend/
-│   ├── package.json
-│   └── src/                     # React application
-├── infra/                       # Local PostgreSQL and Temporal development services
-├── docs/architecture/           # Domain, workflow, payment, and ADR documents
-├── ARCHITECTURE.md
-├── LICENSE
-└── README.md
-```
-
-## Development
-
-Start PostgreSQL and the persistent Temporal development service from the repository
-root by following [the local infrastructure guide](infra/README.md). Then use the
-backend and frontend commands below in separate terminals.
-
-### Backend
-
-Requires Python 3.12 or newer.
+### 1. Install, configure and start dependencies
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-cd backend
-python -m pip install -e ".[dev]"
-python -m unittest discover -s tests -v
-python -m ruff check src tests
-cd ..
-python -m uvicorn syncally.api.main:app --reload --app-dir backend\src
+python -m pip install -e "./backend[dev]"
+if (!(Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
+docker compose -f infra/compose.yaml up -d
+docker compose -f infra/compose.yaml ps
+docker compose -f infra/compose.yaml exec -T postgres pg_isready -U syncally -d syncally
 ```
 
-To create or update the local PostgreSQL schema, copy
-`backend/.env.example` to `backend/.env`, set `DATABASE_URL`, then run the migration
-command from the backend directory:
+Wait for PostgreSQL to report healthy/accepting connections and for Temporal UI at <http://localhost:8233> to respond. PostgreSQL listens on `localhost:5432`, Temporal on `localhost:7233`; Compose persists both services in named volumes. Existing data/configuration is retained. See [infra/README.md](infra/README.md) for service troubleshooting and the workflow restart smoke test.
+
+The example `backend/.env` opts into `APP_ENV=development`, supplies a local JWT key and a `DATABASE_URL` matching Compose. Review it before connecting to another database. Settings load this file relative to the backend package, regardless of terminal directory; environment variables override it. Do not use the example credentials outside local development.
+
+### 2. Migrate and provision the demo accounts
+
+In the same activated terminal:
 
 ```powershell
-cd backend
+Set-Location backend
 alembic upgrade head
-```
-
-In development/test, create the local demo buyer and seller accounts after migrating:
-
-```powershell
 python -m syncally.cli.seed_demo
 ```
 
-The command asks for each password without displaying it. Use `buyer@syncally.demo` or
-`seller@syncally.demo` to sign in. It is disabled outside development/test; public
-self-registration and organization invitations are not available yet.
+Set and confirm passwords of 12 to 128 characters when prompted. The command creates `buyer@syncally.demo` / **Demo Buyer Co** and `seller@syncally.demo` / **Demo Seller Co**, with administrator memberships. It is repeatable and retains an existing password; it is not a password reset. Seeding is restricted to development/test. Invitation acceptance supports new account creation; there is no standalone public registration endpoint.
 
-The API exposes `GET /health` for process health and `GET /health/database` to verify
-that it can acquire and use a database connection. It does not yet check workflow-worker
-or provider availability.
+### 3. Run the API and workers
 
-### Frontend
+Open a separate terminal for each process below. In **every backend terminal**, start from the repository root, activate `.\.venv\Scripts\Activate.ps1`, then `Set-Location backend`. Each process uses the same configuration.
 
-Requires Node.js 22.13 or newer on the 22.x line, or Node.js 24 or newer, and npm.
+| Terminal | Command | Purpose |
+| --- | --- | --- |
+| API | `python -m uvicorn syncally.api.main:app --reload` | HTTP API at <http://localhost:8000> |
+| Workflow worker | `python -m syncally.workflows.worker` | Executes durable deal lifecycle activities |
+| Temporal relay | `python -m syncally.cli.outbox_worker` | Delivers committed database events to Temporal |
+| Payment worker | `python -m syncally.cli.payment_worker` | Creates/sends/reconciles Sandbox invoices; requires the credentials below |
+
+For conversation/agreement development, run the first three processes. The payment worker exits without PayPal credentials; queued payment requests cannot create invoices until it is configured and running. The API's interactive route reference is <http://localhost:8000/docs>.
+
+### 4. Run the frontend
+
+In a new terminal from the repository root:
 
 ```powershell
-cd frontend
+Set-Location frontend
 npm ci
-npm test
-npm run lint:check
-npm run build
 npm run dev
 ```
 
-The frontend provides a sign-in form and a deal create/detail flow connected to the API. It
-proxies API paths to the backend during local development; see [frontend/README.md](frontend/README.md)
-for the contract, configuration, and commands.
+Open the URL Vite prints, usually <http://localhost:5173>, and sign in using a demo email and the password you set. During development Vite proxies `/auth`, `/dev`, `/organizations` and `/deals` to `http://127.0.0.1:8000`. Optional `VITE_API_PROXY_TARGET` changes that target; `VITE_API_BASE_URL` changes the client's API base. The invitation acceptance path is `/invitations/accept`, outside the default Vite proxy prefixes: invitation testing needs that path routed to the API by your local proxy or a suitable API base and same-origin deployment. See [frontend/README.md](frontend/README.md) for additional client details.
 
-### Implementation boundaries
+From any terminal, check API readiness:
 
-- Keep business rules in `backend/src/syncally/domain`; this package must not depend on FastAPI, Temporal, LangGraph, or provider SDKs.
-- Keep use cases in `application` and external system integrations in `infrastructure`.
-- Keep the API and workflow worker as separate process entry points over shared application and domain code.
-- Add infrastructure definitions only alongside verified local setup instructions.
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod http://localhost:8000/health/database
+```
 
-See [the operations and recovery guide](docs/operations.md) for safe logs, health
-checks, stuck work and ambiguous PayPal outcomes.
+These check process/database access only; verify the workers separately in their terminals and Temporal UI.
+
+## Real PayPal Sandbox invoices
+
+Configure `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` in `backend/.env` using a **Sandbox** REST app, then start/restart the payment worker. The adapter is fixed to `https://api-m.sandbox.paypal.com`. For verified invoice events, configure the app's invoicing webhook at a reachable `POST /webhooks/paypal/invoicing` endpoint and set its `PAYPAL_WEBHOOK_ID`; localhost requires an externally reachable forwarding setup.
+
+The invoice contact comes from the buyer organization's **single active administrator** and their email, with the organization legal name/country. Seeded `.demo` addresses are local identities, not real mailboxes; use appropriate controlled Sandbox identities/contact data when verifying actual delivery. The recipient modal previews available data; it does not edit the backend's invoice contact. An optional Gmail copy uses `GMAIL_SMTP_USERNAME`, `GMAIL_APP_PASSWORD` and optional `GMAIL_FROM_EMAIL` (a verified alias). Supply both username and App Password if enabling Gmail.
+
+A queued intent or displayed link does not prove invoice dispatch or payment. Verify provider create/send and reconciled status separately. [Operations](docs/operations.md) explains unknown outcomes, webhook verification and safe recovery; never create a second intent to recover an ambiguous provider response.
+
+## Development role switcher and simulation
+
+After demo sign-in, the development switcher changes between the seeded Buyer and Seller sessions without signing in again. It appears in Vite development builds, or with `VITE_ENABLE_DEV_SWITCHER=true`. The server independently restricts these endpoints to `APP_ENV=development` or `test` and an authenticated seeded demo administrator. The neutral **Admin** label is not a separate account; the API's ADMIN target resolves to the buyer.
+
+**Reset Demo Data** asks for confirmation and deletes deals whose two parties are the seeded demo organizations, with their related activity. It preserves deals involving other organizations and restores the demo identities/memberships. It does not reset Temporal history or cancel provider invoices; do not use it to recover a payment.
+
+For an isolated lifecycle smoke run, from an activated `backend/` terminal with the example `.env` in place:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+python -m syncally.cli.simulate_deal_flow --help
+python -m syncally.cli.simulate_deal_flow --ci --no-color
+```
+
+`PYTHONUTF8=1` keeps the CLI's Unicode output readable in Windows terminals. `--ci` and `--in-process` use an in-memory SQLite/FastAPI harness with seeded test identities. They do not start PostgreSQL, Temporal, the browser or PayPal. A passing run returns 0; failure returns 1 and reports the failing step and elapsed time. The CLI prints a **simulated** Sandbox invoice URL when no actual `invoice_url` is available; this is not invoice delivery/payment evidence.
+
+To target the running local API, supply passwords matching your seeded accounts through `BUYER_PASSWORD` and `SELLER_PASSWORD` in your shell environment, then run:
+
+```powershell
+python -m syncally.cli.simulate_deal_flow --base-url http://127.0.0.1:8000 --no-color
+```
+
+The CLI also accepts `SYNCALLY_API_URL`, `--buyer-email`, `--seller-email`, `--buyer-password` and `--seller-password`. Its built-in test passwords are not the seed command's chosen passwords. A network-mode run creates deal/payment-intent records; if the health probe cannot reach the API it automatically falls back to the isolated harness. Read the printed mode before interpreting success as live-API verification.
+
+## Verification and contribution boundaries
+
+From an activated `backend/` terminal:
+
+```powershell
+python -m unittest discover -s tests -v
+python -m ruff check src tests
+```
+
+From `frontend/`:
+
+```powershell
+npm test
+npm run lint:check
+npm run build
+```
+
+Business rules stay in `domain/`, use cases in `application/`, and external integrations in `infrastructure/`. HTTP, workflow relay, workflow execution and payment processing remain separate process boundaries over shared services. PostgreSQL is the commercial source of truth; neither AI output, workflow history nor a browser redirect authorizes a commitment or proves payment.
 
 ## License
 
-SyncAlly is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE).

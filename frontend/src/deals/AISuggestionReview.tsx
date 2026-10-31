@@ -63,7 +63,23 @@ export default function AISuggestionReview({
   const [manualCurrencyOrUnit, setManualCurrencyOrUnit] = useState("");
   const [manualVisibility, setManualVisibility] = useState<Visibility>("PRIVATE");
   const [manualError, setManualError] = useState("");
-  const [proposal, setProposal] = useState<ProposalSuggestionDraft | null>(null);
+  const [proposalState, setProposalState] = useState<{
+    draft: ProposalSuggestionDraft;
+    signatures: Partial<Record<keyof ProposalSuggestionDraft, string>>;
+    invalidated: boolean;
+    observedSignatures: Partial<Record<keyof ProposalSuggestionDraft, string>>;
+  } | null>(null);
+  const proposalEditRevisionRef = useRef(0);
+  const activeRef = useRef(false);
+  useEffect(() => {
+    activeRef.current = true;
+    return () => { activeRef.current = false; };
+  }, []);
+  const [observedFacts, setObservedFacts] = useState({ facts, ids: new Set(facts.map((fact) => fact.id)) });
+  if (observedFacts.facts !== facts) {
+    setObservedFacts({ facts, ids: new Set([...observedFacts.ids, ...facts.map((fact) => fact.id)]) });
+  }
+  const [serverFactsSignature, setServerFactsSignature] = useState("");
   // The AI draft never picks the payment timing for a human; the proposer confirms it here.
   const [paymentTrigger, setPaymentTrigger] = useState<PaymentTrigger>(
     SUPPORTED_PAYMENT_TIMING[0].trigger,
@@ -117,16 +133,76 @@ export default function AISuggestionReview({
   const selectedPaymentTiming = SUPPORTED_PAYMENT_TIMING.find(
     (option) => option.trigger === paymentTrigger,
   ) ?? SUPPORTED_PAYMENT_TIMING[0];
-  const knownFactsById = new Map(facts.map((fact) => [fact.id, fact]));
-  for (const draft of factDrafts) {
-    const current = knownFactsById.get(draft.fact.id);
-    if (!current || draft.fact.version >= current.version) knownFactsById.set(draft.fact.id, draft.fact);
-  }
-  for (const fact of Object.values(factOverrides)) {
+  const authorized = (fact: DealFact) => fact.deal_id === dealId
+    && (fact.visibility === "SHAREABLE" || fact.owner_organization_id === organizationId);
+  const knownFactsById = new Map(facts.filter(authorized).map((fact) => [fact.id, fact]));
+  for (const fact of [...factDrafts.map((draft) => draft.fact), ...Object.values(factOverrides)]) {
     const current = knownFactsById.get(fact.id);
-    if (!current || fact.version >= current.version) knownFactsById.set(fact.id, fact);
+    // Local saves bridge callback batching. A missing, previously observed ID was revoked.
+    if (authorized(fact) && ((!current && !observedFacts.ids.has(fact.id))
+      || (current && fact.version > current.version))) knownFactsById.set(fact.id, fact);
   }
-  const missingFields = missingRequiredTradeFields([...knownFactsById.values()], serverMissingFields);
+  const synchronizedDrafts = factDrafts.flatMap((draft) => {
+    const fact = knownFactsById.get(draft.fact.id);
+    if (!fact) return [];
+    const editable = fact.status === "EXTRACTED" || fact.status === "NEEDS_CLARIFICATION";
+    return [{ ...draft, fact,
+      field: editable && draft.field !== draft.fact.field ? draft.field : fact.field,
+      value: editable && draft.value !== draft.fact.typed_value ? draft.value : fact.typed_value,
+      currencyOrUnit: editable && draft.currencyOrUnit !== draft.fact.currency_or_unit
+        ? draft.currencyOrUnit : fact.currency_or_unit,
+    }];
+  });
+  const factsSignature = JSON.stringify([...knownFactsById.values()]);
+  const missingFields = missingRequiredTradeFields([...knownFactsById.values()],
+    serverFactsSignature === factsSignature ? serverMissingFields : null);
+  const confirmedValues: Partial<Record<keyof ProposalSuggestionDraft, string>> = {};
+  const confirmedSignatures: Partial<Record<keyof ProposalSuggestionDraft, string>> = {};
+  const conflictingFields = new Set<keyof ProposalSuggestionDraft>();
+  const fieldNames: Record<RequiredTradeField, keyof ProposalSuggestionDraft> = {
+    item_description: "description", quantity: "quantity", unit: "unit", unit_price: "unitPrice",
+    delivery_destination: "deliveryDestination", delivery_date: "deliveryDate",
+  };
+  const confirmed = [...knownFactsById.values()].filter((fact) => fact.status === "CONFIRMED");
+  for (const { key } of REQUIRED_TRADE_FIELDS) {
+    const matching = confirmed.filter((fact) => requiredTradeField(fact.field) === key);
+    const field = fieldNames[key];
+    if (!matching.length) continue;
+    confirmedSignatures[field] = JSON.stringify(matching.map((fact) => [fact.id, fact.version, fact.typed_value, fact.currency_or_unit]).sort());
+    if (new Set(matching.map((fact) => fact.typed_value)).size > 1) conflictingFields.add(field);
+    else confirmedValues[field] = matching[0].typed_value;
+  }
+  if (!confirmedSignatures.unit && confirmedSignatures.quantity) {
+    const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
+    const units = new Set(quantities.map((fact) => fact.currency_or_unit).filter(Boolean));
+    if (units.size > 1) conflictingFields.add("unit");
+    else if (units.size === 1) {
+      confirmedValues.unit = [...units][0]!;
+      confirmedSignatures.unit = confirmedSignatures.quantity;
+    }
+  }
+  let proposal = proposalState?.draft ?? null;
+  let proposalInvalidated = proposalState?.invalidated ?? false;
+  if (proposal && proposalState) {
+    proposal = { ...proposal };
+    for (const [field] of PROPOSAL_FIELDS) {
+      const previous = proposalState.signatures[field];
+      const previouslyDerived = proposalState.observedSignatures[field];
+      const signature = confirmedSignatures[field];
+      if (conflictingFields.has(field) || ((previous || previouslyDerived) && !signature)) {
+        proposal = { ...proposal, [field]: "" };
+        proposalInvalidated = true;
+      } else if (signature && previous !== signature) {
+        proposal = { ...proposal, [field]: confirmedValues[field] ?? "" };
+      }
+    }
+    const observedSignatures = { ...proposalState.observedSignatures, ...confirmedSignatures };
+    if (JSON.stringify(observedSignatures) !== JSON.stringify(proposalState.observedSignatures)
+      || proposalInvalidated !== proposalState.invalidated) {
+      setProposalState({ ...proposalState, observedSignatures, invalidated: proposalInvalidated });
+    }
+  }
+
   const currentFactGuidance = hasFactSuggestionRun
     ? guidanceForMissingTradeFields(missingFields)
     : factSuggestionGuidance;
@@ -138,8 +214,10 @@ export default function AISuggestionReview({
     setPendingAction("facts");
     try {
       const result = await suggestDealFacts(dealId, organizationId);
+      if (!activeRef.current) return;
       if (revisionAtStart !== factStateRevisionRef.current) return;
-      const drafts = result.facts.map(toFactSuggestionDraft);
+      const drafts = result.facts.filter(authorized).map(toFactSuggestionDraft);
+      setServerFactsSignature(JSON.stringify([...new Map([...facts, ...result.facts].filter(authorized).map((fact) => [fact.id, fact])).values()]));
       setFactDrafts(drafts);
       setFactSuggestionGuidance(result.guidance_message);
       setHasFactSuggestionRun(true);
@@ -149,36 +227,41 @@ export default function AISuggestionReview({
       setServerMissingFields(REQUIRED_TRADE_FIELDS
         .filter(({ key }) => serverMissing.has(key))
         .map(({ key }) => key));
-      result.facts.forEach(onFactAdded);
+      result.facts.filter(authorized).forEach(onFactAdded);
       if (result.status !== "VALID") {
         setSuggestionError(result.issues.map((issue) => issue.message).join("; "));
       } else if (drafts.length === 0) {
         setSuggestionError("No supported facts were found in this organization's authorized conversation.");
       }
     } catch (caught) {
+      if (!activeRef.current) return;
       setSuggestionError(describeError(caught));
     } finally {
-      setPendingAction(null);
+      if (activeRef.current) setPendingAction(null);
     }
   }
 
   async function runProposalDraft() {
+    const editRevision = proposalEditRevisionRef.current;
     setSuggestionError("");
     setAgreementNotice("");
     setPendingAction("proposal");
     try {
       const result = await draftDealProposal(dealId, organizationId);
-      setProposal(toProposalDraft(result));
+      if (!activeRef.current) return;
+      if (editRevision !== proposalEditRevisionRef.current) return;
+      setProposalState({ draft: toProposalDraft(result), signatures: {}, invalidated: false, observedSignatures: {} });
       setPaymentTrigger(SUPPORTED_PAYMENT_TIMING[0].trigger);
     } catch (caught) {
+      if (!activeRef.current) return;
       setSuggestionError(describeError(caught));
     } finally {
-      setPendingAction(null);
+      if (activeRef.current) setPendingAction(null);
     }
   }
 
   async function createReviewedAgreement() {
-    if (!proposal) return;
+    if (!proposal || proposalInvalidated || conflictingFields.size > 0) return;
     setSuggestionError("");
     setAgreementNotice("");
     setPendingAction("agreement");
@@ -195,18 +278,22 @@ export default function AISuggestionReview({
         payment_trigger: paymentTrigger,
       };
       const agreement = await createAgreementFromReviewedTerms(dealId, organizationId, terms);
-      setProposal(null);
+      if (!activeRef.current) return;
+      setProposalState(null);
       setAgreementNotice(`Agreement version ${agreement.version_number} is ready for both parties to review.`);
       onAgreementCreated();
     } catch (caught) {
+      if (!activeRef.current) return;
       setSuggestionError(describeError(caught));
     } finally {
-      setPendingAction(null);
+      if (activeRef.current) setPendingAction(null);
     }
   }
 
   function updateFact(id: string, update: Partial<Pick<FactSuggestionDraft, "field" | "value" | "currencyOrUnit">>) {
-    setFactDrafts((current) => current.map((draft) => draft.fact.id === id ? { ...draft, ...update, error: "" } : draft));
+    const displayed = synchronizedDrafts.find((draft) => draft.fact.id === id);
+    setFactDrafts((current) => current.map((draft) => draft.fact.id === id
+      ? { ...(displayed ?? draft), ...update, error: "" } : draft));
   }
 
   async function reviewFact(draft: FactSuggestionDraft, action: FactReviewAction) {
@@ -215,15 +302,17 @@ export default function AISuggestionReview({
     setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id ? { ...item, pending: true } : item));
     try {
       const updated = await reviewDealFact(dealId, draft.fact.id, action);
+      if (!activeRef.current) return;
       setServerMissingFields(null);
       setFactDrafts((current) => current.map((item) => item.fact.id === updated.id ? toFactSuggestionDraft(updated) : item));
       setFactOverrides((current) => ({ ...current, [updated.id]: updated }));
       onFactUpdated(updated);
     } catch (caught) {
+      if (!activeRef.current) return;
       const error = describeError(caught);
       setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id ? { ...item, pending: false, error } : item));
     } finally {
-      factStateRevisionRef.current += 1;
+      if (activeRef.current) factStateRevisionRef.current += 1;
     }
   }
 
@@ -237,6 +326,7 @@ export default function AISuggestionReview({
         typed_value: draft.value,
         currency_or_unit: draft.currencyOrUnit,
       });
+      if (!activeRef.current) return;
       setServerMissingFields(null);
       setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id
         ? toFactSuggestionDraft(result.corrected_fact)
@@ -248,10 +338,11 @@ export default function AISuggestionReview({
       }));
       onFactCorrected(result.replaced_fact, result.corrected_fact);
     } catch (caught) {
+      if (!activeRef.current) return;
       const error = describeError(caught);
       setFactDrafts((current) => current.map((item) => item.fact.id === draft.fact.id ? { ...item, pending: false, error } : item));
     } finally {
-      factStateRevisionRef.current += 1;
+      if (activeRef.current) factStateRevisionRef.current += 1;
     }
   }
 
@@ -281,6 +372,7 @@ export default function AISuggestionReview({
         kind: "INFORMATIONAL",
         visibility: manualVisibility,
       });
+      if (!activeRef.current) return;
       setServerMissingFields(null);
       setFactDrafts((current) => [...current.filter((item) => item.fact.id !== fact.id), toFactSuggestionDraft(fact)]);
       setFactOverrides((current) => ({ ...current, [fact.id]: fact }));
@@ -291,10 +383,13 @@ export default function AISuggestionReview({
       setManualCurrencyOrUnit("");
       setManualVisibility("PRIVATE");
     } catch (caught) {
+      if (!activeRef.current) return;
       setManualError(describeError(caught));
     } finally {
-      factStateRevisionRef.current += 1;
-      setPendingAction(null);
+      if (activeRef.current) {
+        factStateRevisionRef.current += 1;
+        setPendingAction(null);
+      }
     }
   }
 
@@ -324,7 +419,7 @@ export default function AISuggestionReview({
             );
           })}
         </ul>
-        {factDrafts.length === 0 || missingFields.length > 0 ? (
+        {synchronizedDrafts.length === 0 || missingFields.length > 0 ? (
           <div className="terms-readiness__manual">
             <p>Don't see your terms? Add them manually.</p>
             <button
@@ -403,10 +498,10 @@ export default function AISuggestionReview({
         </div>
       ) : null}
 
-      {factDrafts.length > 0 ? (
+      {synchronizedDrafts.length > 0 ? (
         <div className="ai-suggestion-list" aria-label="Fact suggestions for review">
           <h3>Extracted fact suggestions</h3>
-          {factDrafts.map((draft) => {
+          {synchronizedDrafts.map((draft) => {
             const canReview = draft.fact.status === "EXTRACTED" || draft.fact.status === "NEEDS_CLARIFICATION";
             const sourceId = draft.fact.source_message_id;
             return (
@@ -460,10 +555,19 @@ export default function AISuggestionReview({
             <span className="badge badge--status-extracted">DRAFT - NOT AN AGREEMENT</span>
           </div>
           <p className="hint">Review and edit the AI-generated draft. It is not shared or approved from this screen.</p>
+          {proposalInvalidated || conflictingFields.size > 0 ? <p role="alert" className="form-error">Confirmed terms changed or conflict. Review the facts and request a fresh draft before sending.</p> : null}
           {PROPOSAL_FIELDS.map(([field, label]) => (
             <div className="field" key={field}>
               <label htmlFor={`proposal-${dealId}-${field}`}>{label}</label>
-              <input id={`proposal-${dealId}-${field}`} value={proposal[field]} onChange={(event) => setProposal((current) => current ? { ...current, [field]: event.target.value } : current)} />
+              <input id={`proposal-${dealId}-${field}`} value={proposal[field]} onChange={(event) => {
+                proposalEditRevisionRef.current += 1;
+                setProposalState({
+                  draft: { ...proposal, [field]: event.target.value },
+                  signatures: confirmedSignatures,
+                  invalidated: proposalInvalidated,
+                  observedSignatures: proposalState?.observedSignatures ?? {},
+                });
+              }} />
             </div>
           ))}
           <p className="proposal-currency">Currency: {proposal.currency}</p>
@@ -474,6 +578,7 @@ export default function AISuggestionReview({
               value={paymentTrigger}
               onChange={(event) => {
                 if (isPaymentTrigger(event.target.value)) {
+                  proposalEditRevisionRef.current += 1;
                   setPaymentTrigger(event.target.value);
                 }
               }}
@@ -490,7 +595,7 @@ export default function AISuggestionReview({
           <button
             type="button"
             className="button"
-            disabled={pendingAction !== null}
+            disabled={pendingAction !== null || proposalInvalidated || conflictingFields.size > 0}
             onClick={() => void createReviewedAgreement()}
           >
             {pendingAction === "agreement" ? "Saving agreement…" : "Send reviewed terms for bilateral approval"}

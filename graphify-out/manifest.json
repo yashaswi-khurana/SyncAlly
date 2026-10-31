@@ -1367,30 +1367,6 @@
     "ast_hash": "382f8bc8421e5fa7d6ce19a00bc4344d",
     "semantic_hash": "382f8bc8421e5fa7d6ce19a00bc4344d"
   },
-  "docs/engineering/plan.md.lock.json": {
-    "mtime": 1793445688.341289,
-    "seen": 1793446801.0104797,
-    "ast_hash": "ed97c965b752c1aac4a51be392f23642",
-    "semantic_hash": ""
-  },
-  "docs/engineering/decision.md": {
-    "mtime": 1793445635.7691338,
-    "seen": 1793446801.0106304,
-    "ast_hash": "a1cb67f4ca47480bdb05078214d6be0f",
-    "semantic_hash": ""
-  },
-  "docs/engineering/log.md": {
-    "mtime": 1793446745.5973206,
-    "seen": 1793446801.0106325,
-    "ast_hash": "ede1d422f3e0ea35c6355497c1da50df",
-    "semantic_hash": ""
-  },
-  "docs/engineering/plan.md": {
-    "mtime": 1793445688.341144,
-    "seen": 1793446801.0106342,
-    "ast_hash": "fdac585d9241dfaac814d9a7f9801be7",
-    "semantic_hash": ""
-  },
   "frontend/package-lock.json": {
     "mtime": 1792729557.637828,
     "seen": 1793445158.1168854,

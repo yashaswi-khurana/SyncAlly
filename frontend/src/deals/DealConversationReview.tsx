@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -24,7 +24,7 @@ type OrganizationState =
   | { status: "error"; message: string }
   | { status: "ready"; organizations: Organization[] };
 
-type ConversationState =
+type ConversationState = { dealId: string } & (
   | { status: "loading"; organizationId: string }
   | { status: "error"; organizationId: string; message: string }
   | {
@@ -32,15 +32,18 @@ type ConversationState =
       organizationId: string;
       messages: DealMessage[];
       facts: DealFact[];
-    };
+    });
 
 interface DealConversationReviewProps {
   deal: Deal;
   onAgreementCreated?: () => void;
+  onMessagesChanged?: (messages: DealMessage[]) => void;
   onMessageCreated?: () => void;
   selectedOrganizationId?: string;
   onOrganizationChange?: (organizationId: string) => void;
   revalidateIntervalMs?: number;
+  composerId?: string;
+  buttonLabel?: string;
 }
 
 type FactFilter = "all" | "needs-review" | "confirmed" | "private";
@@ -102,20 +105,103 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-function generateIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
+function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }: {
+  deal: Deal;
+  organization: Organization;
+  onSent: (message: DealMessage) => void;
+  composerId?: string;
+  buttonLabel?: string;
+}) {
+  const [body, setBody] = useState("");
+  const [visibility, setVisibility] = useState<Visibility>("SHAREABLE");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  const request = useRef<AbortController | null>(null);
+  const inputId = composerId ?? `deal-message-composer-${deal.id}`;
+  const sendButtonText = buttonLabel ?? "Send Message";
+  useEffect(() => () => { request.current?.abort(); }, []);
+
+  async function send() {
+    if (request.current) return;
+    const text = body.trim();
+    setSent(false);
+    if (!text || text.length > 8000) {
+      setError(!text ? "Enter a message before sending." : "Keep your message within 8,000 characters.");
+      return;
+    }
+    const controller = new AbortController();
+    request.current = controller;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const message = await createDealMessage(deal.id, {
+        body: text, visibility, organization_id: organization.id,
+        idempotency_key: crypto.randomUUID(),
+      }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      onSent(message);
+      setBody("");
+      setSent(true);
+    } catch (caught) {
+      if (!controller.signal.aborted) setError(describeError(caught));
+    } finally {
+      if (!controller.signal.aborted) {
+        request.current = null;
+        setSubmitting(false);
+      }
+    }
   }
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+
+  return (
+    <form className="message-composer" noValidate onSubmit={(event) => { event.preventDefault(); void send(); }}>
+      <p className="hint">Sending as {organization.legal_name} ({organizationRole(deal, organization.id)})</p>
+      <div className="field">
+        <label htmlFor={inputId}>Message</label>
+        <textarea id={inputId} rows={4} maxLength={8000}
+          aria-label="Post a message"
+          placeholder="Discuss trade terms (e.g. quantity, unit price, delivery port, timeline)..."
+          value={body} disabled={submitting}
+          aria-describedby={`message-help-${deal.id}${error ? ` message-error-${deal.id}` : ""}`}
+          aria-invalid={error ? true : undefined}
+          onChange={(event) => { setBody(event.target.value); setSent(false); setError(null); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
+              event.preventDefault(); void send();
+            }
+          }} />
+      </div>
+      <fieldset className="message-composer__visibility" disabled={submitting}>
+        <legend>Message visibility</legend>
+        <label><input type="radio" name="message-visibility" value="SHAREABLE"
+          checked={visibility === "SHAREABLE"} onChange={() => setVisibility("SHAREABLE")} />
+          <span><span aria-hidden="true">{"\u{1F310}"} </span>Shareable <small>Visible to both buyer and seller</small></span>
+        </label>
+        <label><input type="radio" name="message-visibility" value="PRIVATE"
+          checked={visibility === "PRIVATE"} onChange={() => setVisibility("PRIVATE")} />
+          <span><span aria-hidden="true">{"\u{1F512}"} </span>Private <small>Visible only to members of your organization</small></span>
+        </label>
+      </fieldset>
+      <div className="message-composer__actions">
+        <button type="submit" className="button" disabled={submitting}>{submitting ? "Sending..." : sendButtonText}</button>
+        <p id={`message-help-${deal.id}`} className="hint">Cmd/Ctrl + Enter to send</p>
+      </div>
+      {error ? <p id={`message-error-${deal.id}`} className="form-error" role="alert">{error} Your draft is saved here; you can try sending again.</p> : null}
+      {sent ? <p role="status">Message sent.</p> : null}
+    </form>
+  );
 }
 
 export default function DealConversationReview({
   deal,
   onAgreementCreated = () => {},
+  onMessagesChanged,
   onMessageCreated,
   selectedOrganizationId: controlledOrgId,
   onOrganizationChange,
   revalidateIntervalMs = 4000,
+  composerId,
+  buttonLabel,
 }: DealConversationReviewProps) {
   const [organizationState, setOrganizationState] = useState<OrganizationState>({
     status: "loading",
@@ -130,10 +216,6 @@ export default function DealConversationReview({
   const [actionError, setActionError] = useState<{ factId: string; message: string } | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
-  const [messageBody, setMessageBody] = useState("");
-  const [messageVisibility, setMessageVisibility] = useState<Visibility>("SHAREABLE");
-  const [submittingMessage, setSubmittingMessage] = useState(false);
-  const [messageError, setMessageError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,7 +252,7 @@ export default function DealConversationReview({
   );
   const activeOrganizationId = selectedOrganization?.id ?? "";
   const currentConversation =
-    conversationState?.status === "ready" && conversationState.organizationId === activeOrganizationId
+    conversationState?.status === "ready" && conversationState.organizationId === activeOrganizationId && conversationState.dealId === deal.id
       ? conversationState
       : null;
   const visibleFacts =
@@ -219,6 +301,7 @@ export default function DealConversationReview({
           setConversationState({
             status: "ready",
             organizationId: activeOrganizationId,
+            dealId: deal.id,
             messages,
             facts,
           });
@@ -229,6 +312,7 @@ export default function DealConversationReview({
           setConversationState({
             status: "error",
             organizationId: activeOrganizationId,
+            dealId: deal.id,
             message: describeError(caught),
           });
         }
@@ -238,7 +322,19 @@ export default function DealConversationReview({
     };
   }, [activeOrganizationId, deal.id, reloadCount]);
 
-  const conversationReady = conversationState?.status === "ready";
+  const conversationReady = currentConversation !== null;
+  const observedMessages = currentConversation?.messages;
+  useEffect(() => {
+    if (observedMessages) onMessagesChanged?.(observedMessages);
+  }, [observedMessages, onMessagesChanged]);
+
+  function appendMessage(message: DealMessage) {
+    setConversationState((current) =>
+      current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
+        ? { ...current, messages: [...current.messages.filter((item) => item.id !== message.id), message] }
+        : current);
+    onMessageCreated?.();
+  }
 
   useEffect(() => {
     if (!activeOrganizationId || !conversationReady) {
@@ -261,7 +357,7 @@ export default function DealConversationReview({
         const freshFacts = await listDealFacts(deal.id, activeOrganizationId);
         if (!cancelled) {
           setConversationState((current) => {
-            if (current?.status !== "ready" || current.organizationId !== activeOrganizationId) {
+            if (current?.status !== "ready" || current.organizationId !== activeOrganizationId || current.dealId !== deal.id) {
               return current;
             }
             if (areFactsEqual(current.facts, freshFacts)) {
@@ -331,7 +427,7 @@ export default function DealConversationReview({
     try {
       const updatedFact = await reviewDealFact(deal.id, fact.id, action);
       setConversationState((current) =>
-        current?.status === "ready" && current.organizationId === activeOrganizationId
+        current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
           ? {
               ...current,
               facts: current.facts.map((item) => (item.id === updatedFact.id ? updatedFact : item)),
@@ -352,7 +448,7 @@ export default function DealConversationReview({
     try {
       const updatedFact = await updateFactVisibility(deal.id, fact.id, nextVisibility);
       setConversationState((current) =>
-        current?.status === "ready" && current.organizationId === activeOrganizationId
+        current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
           ? {
               ...current,
               facts: current.facts.map((item) => (item.id === updatedFact.id ? updatedFact : item)),
@@ -367,7 +463,7 @@ export default function DealConversationReview({
   }
 
   function addSuggestedFact(fact: DealFact) {
-    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
+    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
       ? { ...current, facts: [...current.facts.filter((item) => item.id !== fact.id), fact] }
       : current);
     if (
@@ -375,10 +471,16 @@ export default function DealConversationReview({
       && currentConversation
       && !currentConversation.messages.some((message) => message.id === fact.source_message_id)
     ) {
+      const initialMessageIds = new Set(currentConversation.messages.map((message) => message.id));
       void listDealMessages(deal.id, activeOrganizationId).then((messages) => {
-        setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
-          ? { ...current, messages }
-          : current);
+        setConversationState((current) => {
+          if (current?.status !== "ready" || current.organizationId !== activeOrganizationId || current.dealId !== deal.id) return current;
+          // A confirmed send may arrive while this older transcript snapshot is in flight.
+          const fetchedIds = new Set(messages.map((message) => message.id));
+          const addedWhileLoading = current.messages.filter((message) =>
+            !initialMessageIds.has(message.id) && !fetchedIds.has(message.id));
+          return { ...current, messages: [...messages, ...addedWhileLoading] };
+        });
       }).catch(() => {
         // The fact remains saved; message refresh can be retried by reloading the conversation.
       });
@@ -386,48 +488,18 @@ export default function DealConversationReview({
   }
 
   function updateSuggestedFact(fact: DealFact) {
-    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
+    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
       ? { ...current, facts: current.facts.map((item) => item.id === fact.id ? fact : item) }
       : current);
   }
 
   function replaceSuggestedFact(replaced: DealFact, corrected: DealFact) {
-    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId
+    setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
       ? {
           ...current,
           facts: [...current.facts.map((item) => item.id === replaced.id ? replaced : item), corrected],
         }
       : current);
-  }
-
-  async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = messageBody.trim();
-    if (!trimmed || !activeOrganizationId) {
-      return;
-    }
-
-    setSubmittingMessage(true);
-    setMessageError(null);
-    try {
-      const createdMessage = await createDealMessage(deal.id, {
-        body: trimmed,
-        visibility: messageVisibility,
-        organization_id: activeOrganizationId,
-        idempotency_key: generateIdempotencyKey(),
-      });
-      setMessageBody("");
-      setConversationState((current) =>
-        current?.status === "ready" && current.organizationId === activeOrganizationId
-          ? { ...current, messages: [...current.messages, createdMessage] }
-          : current,
-      );
-      onMessageCreated?.();
-    } catch (caught) {
-      setMessageError(describeError(caught));
-    } finally {
-      setSubmittingMessage(false);
-    }
   }
 
   return (
@@ -479,7 +551,7 @@ export default function DealConversationReview({
             )}
             {!activeOrganizationId ? (
               <p className="empty-state">Choose which organization you are acting for to load its conversation.</p>
-            ) : conversationState?.organizationId !== activeOrganizationId ||
+            ) : conversationState?.organizationId !== activeOrganizationId || conversationState.dealId !== deal.id ||
               conversationState.status === "loading" ? (
               <p role="status">Loading conversation and facts…</p>
             ) : conversationState.status === "error" ? (
@@ -490,100 +562,41 @@ export default function DealConversationReview({
                 </button>
               </div>
             ) : (
-              <>
-                <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
-                  {visibleMessages.length === 0 ? (
-                    <li className="empty-state">No messages yet.</li>
-                  ) : (
-                    visibleMessages.map((message) => (
-                      <li
-                        key={message.id}
-                        id={`deal-message-${message.id}`}
-                        className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
-                      >
-                        <div className="communication-meta">
-                          <span>
-                            {message.source_type === "AGENT"
-                              ? `SyncAlly agent${message.author_agent_id ? ` · ${message.author_agent_id}` : ""}`
-                              : `Deal participant${message.author_user_id ? ` · ${message.author_user_id.slice(0, 8)}` : ""}`}
-                          </span>
-                          <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
-                        </div>
-                        <p className="message-body">{message.body}</p>
-                        <div className="communication-badges">
-                          <span className={`badge badge--${message.visibility.toLowerCase()}`}>
-                            {readable(message.visibility)}
-                          </span>
-                        </div>
-                      </li>
-                    ))
-                  )}
-                </ol>
-
-                <form
-                  className="message-composer"
-                  aria-label="Post a deal message"
-                  onSubmit={(event) => void handleSendMessage(event)}
-                >
-                  <div className="field">
-                    <label htmlFor="deal-message-input">Post a message</label>
-                    <textarea
-                      id="deal-message-input"
-                      name="message"
-                      value={messageBody}
-                      onChange={(event) => setMessageBody(event.target.value)}
-                      placeholder="Introduce trade terms (e.g. 500 units at USD 45, deliver to Toronto)..."
-                      rows={3}
-                      maxLength={8000}
-                      disabled={submittingMessage}
-                      required
-                    />
-                  </div>
-                  <div className="message-composer__controls">
-                    <div
-                      className="message-composer__visibility"
-                      role="radiogroup"
-                      aria-label="Message visibility"
+              <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
+                {visibleMessages.length === 0 ? (
+                  <li className="empty-state">No messages yet.</li>
+                ) : (
+                  visibleMessages.map((message) => (
+                    <li
+                      key={message.id}
+                      id={`deal-message-${message.id}`}
+                      className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
                     >
-                      <label className="radio-label">
-                        <input
-                          type="radio"
-                          name={`message-visibility-${deal.id}`}
-                          value="SHAREABLE"
-                          checked={messageVisibility === "SHAREABLE"}
-                          onChange={() => setMessageVisibility("SHAREABLE")}
-                          disabled={submittingMessage}
-                        />
-                        <span>Shareable</span>
-                      </label>
-                      <label className="radio-label">
-                        <input
-                          type="radio"
-                          name={`message-visibility-${deal.id}`}
-                          value="PRIVATE"
-                          checked={messageVisibility === "PRIVATE"}
-                          onChange={() => setMessageVisibility("PRIVATE")}
-                          disabled={submittingMessage}
-                        />
-                        <span>Private</span>
-                      </label>
-                    </div>
-                    <button
-                      type="submit"
-                      className="button button--compact"
-                      disabled={submittingMessage || !messageBody.trim()}
-                    >
-                      {submittingMessage ? "Sending…" : "Send message"}
-                    </button>
-                  </div>
-                  {messageError ? (
-                    <p className="form-error" role="alert">
-                      {messageError}
-                    </p>
-                  ) : null}
-                </form>
-              </>
+                      <div className="communication-meta">
+                        <span>
+                          {message.source_type === "AGENT"
+                            ? `SyncAlly agent${message.author_agent_id ? ` · ${message.author_agent_id}` : ""}`
+                            : `Deal participant${message.author_user_id ? ` · ${message.author_user_id.slice(0, 8)}` : ""}`}
+                        </span>
+                        <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
+                      </div>
+                      <p className="message-body">{message.body}</p>
+                      <div className="communication-badges">
+                        <span className={`badge badge--${message.visibility.toLowerCase()}`}>
+                          <span aria-hidden="true">{message.visibility === "PRIVATE" ? "\u{1F512}" : "\u{1F310}"} </span>
+                          {message.visibility === "PRIVATE" ? "Private" : "Shareable"}
+                        </span>
+                      </div>
+                    </li>
+                  ))
+                )}
+              </ol>
             )}
+            {currentConversation && selectedOrganization ? (
+              <MessageComposer key={`${deal.id}:${activeOrganizationId}`}
+                deal={deal} organization={selectedOrganization} onSent={appendMessage}
+                composerId={composerId} buttonLabel={buttonLabel} />
+            ) : null}
           </>
         )}
       </section>
@@ -645,7 +658,7 @@ export default function DealConversationReview({
           <p className="empty-state">No deal organization is available for your account.</p>
         ) : !activeOrganizationId ? (
           <p className="empty-state">Choose an organization above to load its facts.</p>
-        ) : conversationState?.organizationId !== activeOrganizationId ||
+        ) : conversationState?.organizationId !== activeOrganizationId || conversationState.dealId !== deal.id ||
           conversationState.status === "loading" ? (
           <p role="status">Loading conversation and facts…</p>
         ) : conversationState.status === "error" ? (

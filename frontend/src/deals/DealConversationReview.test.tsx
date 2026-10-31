@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  createDealMessage,
   listDealFacts,
   listDealMessages,
   listOrganizations,
@@ -20,6 +21,7 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    createDealMessage: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
     listOrganizations: vi.fn(),
@@ -553,4 +555,188 @@ describe("DealConversationReview", () => {
     expect(screen.getByText("Payment terms")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+});
+
+
+describe("message composer", () => {
+  const createMessage = vi.mocked(createDealMessage);
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co")]);
+    mockedListDealMessages.mockResolvedValue([]);
+    mockedListDealFacts.mockResolvedValue([]);
+    createMessage.mockResolvedValue(message({ id: "sent-message", body: "New terms", visibility: "SHAREABLE" }));
+  });
+
+  it("sends a trimmed shareable message, appends confirmation and observes scoped messages", async () => {
+    const observe = vi.fn();
+    render(<DealConversationReview deal={DEAL} onMessagesChanged={observe} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    expect(input).toHaveAttribute("id", `deal-message-composer-${DEAL.id}`);
+    expect(screen.getByRole("radio", { name: /^Shareable/ })).toBeChecked();
+    expect(screen.getByText("Sending as Buyer Co (Buyer)")).toBeInTheDocument();
+    expect(observe).toHaveBeenCalledWith([]);
+    fireEvent.change(input, { target: { value: "  New terms  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    expect(await screen.findByText("Message sent.")).toBeInTheDocument();
+    expect(createMessage).toHaveBeenCalledExactlyOnceWith(DEAL.id, {
+      body: "New terms", visibility: "SHAREABLE", organization_id: BUYER_ID,
+      idempotency_key: expect.any(String),
+    }, { signal: expect.any(AbortSignal) });
+    expect(input).toHaveValue("");
+    expect(document.getElementById("deal-message-sent-message")).toHaveTextContent("New terms");
+    await waitFor(() => expect(observe).toHaveBeenLastCalledWith([expect.objectContaining({ id: "sent-message" })]));
+  });
+
+  it("sends private messages with lock attribution and preserves privacy for the next message", async () => {
+    createMessage.mockResolvedValue(message({ id: "private-sent", body: "Internal price", visibility: "PRIVATE" }));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    fireEvent.change(await screen.findByLabelText("Message"), { target: { value: "Internal price" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Private/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    await screen.findByText("Message sent.");
+    expect(createMessage.mock.calls[0][1].visibility).toBe("PRIVATE");
+    const item = document.getElementById("deal-message-private-sent")!;
+    expect(item.querySelector(".badge--private")).toHaveTextContent("\u{1F512} Private");
+    expect(item).toHaveTextContent("Deal participant");
+    expect(screen.getByRole("radio", { name: /^Private/ })).toBeChecked();
+  });
+
+  it.each(["ctrlKey", "metaKey"])("submits once with %s+Enter and locks the pending composer", async (modifier) => {
+    let resolve!: (value: DealMessage) => void;
+    createMessage.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    fireEvent.change(input, { target: { value: "New terms" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter", [modifier]: true, isComposing: true });
+    expect(createMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter", [modifier]: true });
+    fireEvent.keyDown(input, { key: "Enter", [modifier]: true });
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(input).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /^Private/ })).toBeDisabled();
+    await act(async () => resolve(message({ id: "sent-message", body: "New terms" })));
+    expect(input).toBeEnabled();
+  });
+
+  it("blocks whitespace and oversize messages and retains a failed private draft for retry", async () => {
+    createMessage.mockRejectedValueOnce(new ApiError(503, "Service unavailable"));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    const send = screen.getByRole("button", { name: "Send Message" });
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.click(send);
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a message");
+    fireEvent.change(input, { target: { value: "a".repeat(8001) } });
+    fireEvent.click(send);
+    expect(screen.getByRole("alert")).toHaveTextContent("8,000 characters");
+    expect(createMessage).not.toHaveBeenCalled();
+    expect(input).toHaveAttribute("maxlength", "8000");
+    fireEvent.change(input, { target: { value: "Private draft" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Private/ }));
+    fireEvent.click(send);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Service unavailable");
+    expect(input).toHaveValue("Private draft");
+    expect(screen.getByRole("radio", { name: /^Private/ })).toBeChecked();
+    expect(send).toBeEnabled();
+    fireEvent.click(send);
+    await screen.findByText("Message sent.");
+    expect(createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires a party selection and hides confirmed private messages from the other context", async () => {
+    mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co"), organization(SELLER_ID, "Seller Co")]);
+    createMessage.mockResolvedValue(message({ id: "buyer-secret", body: "Buyer secret", visibility: "PRIVATE" }));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    const select = await screen.findByLabelText("Viewing as");
+    expect(screen.queryByLabelText("Message")).not.toBeInTheDocument();
+    fireEvent.change(select, { target: { value: BUYER_ID } });
+    fireEvent.change(await screen.findByLabelText("Message"), { target: { value: "Buyer secret" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Private/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    await screen.findByText("Buyer secret");
+    fireEvent.change(select, { target: { value: SELLER_ID } });
+    expect(await screen.findByLabelText("Message")).toHaveValue("");
+    expect(screen.queryByText("Buyer secret")).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Shareable/ })).toBeChecked();
+    expect(mockedListDealMessages).toHaveBeenLastCalledWith(DEAL.id, SELLER_ID);
+  });
+
+  it.each(["organization", "deal"])("aborts pending sends and ignores late success after changing %s", async (context) => {
+    mockedListOrganizations.mockResolvedValue([organization(BUYER_ID, "Buyer Co"), organization(SELLER_ID, "Seller Co")]);
+    let resolve!: (value: DealMessage) => void;
+    createMessage.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    const observe = vi.fn();
+    const { rerender } = render(<DealConversationReview deal={DEAL} onMessagesChanged={observe} revalidateIntervalMs={0} />);
+    fireEvent.change(await screen.findByLabelText("Viewing as"), { target: { value: BUYER_ID } });
+    fireEvent.change(await screen.findByLabelText("Message"), { target: { value: "Old private draft" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^Private/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    const signal = createMessage.mock.calls[0][2]?.signal;
+    if (context === "organization") fireEvent.change(screen.getByLabelText("Viewing as"), { target: { value: SELLER_ID } });
+    else rerender(<DealConversationReview deal={{ ...DEAL, id: "deal-2" }} onMessagesChanged={observe} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    expect(signal?.aborted).toBe(true);
+    expect(input).toHaveValue("");
+    fireEvent.change(input, { target: { value: "New context draft" } });
+    observe.mockClear();
+    await act(async () => resolve(message({ id: "late", body: "Old private draft" })));
+    expect(input).toHaveValue("New context draft");
+    expect(screen.queryByText("Old private draft")).not.toBeInTheDocument();
+    expect(screen.queryByText("Message sent.")).not.toBeInTheDocument();
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal old messages while a same-party new deal loads, or late errors after unmount", async () => {
+    mockedListDealMessages.mockResolvedValueOnce([message({ body: "Old deal secret" })]);
+    let reject!: (reason: Error) => void;
+    createMessage.mockImplementation(() => new Promise((_done, fail) => { reject = fail; }));
+    const observe = vi.fn();
+    const { rerender } = render(<DealConversationReview deal={DEAL} onMessagesChanged={observe} revalidateIntervalMs={0} />);
+    fireEvent.change(await screen.findByLabelText("Message"), { target: { value: "Unsent" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    mockedListDealMessages.mockImplementationOnce(() => new Promise(() => {}));
+    observe.mockClear();
+    rerender(<DealConversationReview deal={{ ...DEAL, id: "deal-2" }} onMessagesChanged={observe} revalidateIntervalMs={0} />);
+    expect(screen.queryByText("Old deal secret")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Message")).not.toBeInTheDocument();
+    await act(async () => reject(new Error("Old failure")));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(mockedListDealMessages).toHaveBeenLastCalledWith("deal-2", BUYER_ID));
+    expect(observe).not.toHaveBeenCalled();
+  });
+  it.each(["send-first", "refresh-first"])("preserves confirmed sends and fetched source messages (%s)", async (order) => {
+    let refresh!: (messages: DealMessage[]) => void;
+    mockedListDealMessages.mockResolvedValueOnce([]).mockImplementationOnce(() => new Promise((resolve) => { refresh = resolve; }));
+    mockedSuggestDealFacts.mockResolvedValue({
+      status: "VALID", issues: [], missing_fields: [], guidance_message: "Review this fact.",
+      facts: [fact({ id: "source-fact", field: "quantity", source_message_id: "source-message", source_span: "Source terms" })],
+    });
+    let send!: (value: DealMessage) => void;
+    createMessage.mockImplementation(() => new Promise((resolve) => { send = resolve; }));
+    const observe = vi.fn();
+    render(<DealConversationReview deal={DEAL} onMessagesChanged={observe} revalidateIntervalMs={0} />);
+    const input = await screen.findByLabelText("Message");
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+    await waitFor(() => expect(mockedListDealMessages).toHaveBeenCalledTimes(2));
+    fireEvent.change(input, { target: { value: "Confirmed new terms" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    const sent = message({ id: "confirmed", body: "Confirmed new terms" });
+    const source = message({ id: "source-message", body: "Source terms" });
+    if (order === "send-first") {
+      await act(async () => send(sent));
+      expect(screen.getByText("Confirmed new terms")).toBeInTheDocument();
+      await act(async () => refresh([source]));
+    } else {
+      await act(async () => refresh([source]));
+      await act(async () => send(sent));
+    }
+    expect(document.getElementById("deal-message-confirmed")).toHaveTextContent("Confirmed new terms");
+    expect(document.getElementById("deal-message-source-message")).toHaveTextContent("Source terms");
+    expect(observe).toHaveBeenLastCalledWith([source, sent]);
+    expect(input).toHaveValue("");
+    expect(screen.getByText("Message sent.")).toBeInTheDocument();
+  });
+
 });

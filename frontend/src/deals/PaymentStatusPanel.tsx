@@ -10,29 +10,34 @@ import {
 } from "../api/client";
 import type { OrganizationDirectoryItem, PaymentStatus } from "../api/types";
 
+/**
+ * PAY-01 extended the payment status record with recipient details, invoice link,
+ * and retry diagnostics. Keep the extended schema local to prevent transport widening.
+ */
+export interface ExtendedPaymentStatus extends PaymentStatus {
+  recipient_email?: string | null;
+  recipient_name?: string | null;
+  recipient_country_code?: string | null;
+  recipient_legal_name?: string | null;
+  invoice_url?: string | null;
+  invoice_number?: string | null;
+  retry_count?: number;
+  next_retry_at?: string | null;
+  failure_reason?: string | null;
+}
+
 type PaymentState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | {
       status: "ready";
-      payments: PaymentStatus[];
+      payments: ExtendedPaymentStatus[];
       agreementCommitted: boolean;
       sellerMember: boolean;
+      buyerMember: boolean;
       buyerOrganization: OrganizationDirectoryItem | null;
       milestone: { amount: string; currency: string } | null;
     };
-
-/**
- * PAY-01 added recipient details to the payment response, but the shared
- * `PaymentStatus` type has not caught up yet. Keep the extra fields local so
- * this screen can read them without widening the transport contract.
- */
-interface RecipientPaymentStatus extends PaymentStatus {
-  recipient_email?: string | null;
-  recipient_name?: string | null;
-  recipient_country_code?: string | null;
-  recipient_legal_name?: string | null;
-}
 
 interface RecipientPreview {
   legalName: string;
@@ -73,6 +78,54 @@ function textOrFallback(value: string | null | undefined, fallback: string): str
   return trimmed ? trimmed : fallback;
 }
 
+export function extractInvoiceNumber(payment: ExtendedPaymentStatus): string {
+  if (payment.invoice_number?.trim()) {
+    return payment.invoice_number.trim();
+  }
+  if (payment.invoice_url) {
+    const hashMatch = payment.invoice_url.match(/#([A-Za-z0-9._-]+)/);
+    if (hashMatch) {
+      return hashMatch[1];
+    }
+    const pathMatch = payment.invoice_url.match(/\/p\/#?([A-Za-z0-9._-]+)/);
+    if (pathMatch) {
+      return pathMatch[1];
+    }
+  }
+  return `INV-${payment.id.slice(0, 8).toUpperCase()}`;
+}
+
+export function formatCountdown(nextRetryAt: string | null | undefined, nowMs: number): number {
+  if (!nextRetryAt) return 45;
+  const parsedInt = parseInt(nextRetryAt, 10);
+  if (!isNaN(parsedInt) && !nextRetryAt.includes("-") && !nextRetryAt.includes(":")) {
+    return Math.max(0, parsedInt);
+  }
+  try {
+    const targetMs = new Date(nextRetryAt).getTime();
+    if (isNaN(targetMs)) return 45;
+    const diffSec = Math.round((targetMs - nowMs) / 1000);
+    return Math.max(0, diffSec);
+  } catch {
+    return 45;
+  }
+}
+
+export function formatLastAttempt(timestamp: string | null | undefined): string {
+  if (!timestamp) return "Just now";
+  const trimmed = timestamp.trim();
+  if (/^\d{1,2}:\d{2}\s*(?:AM|PM)?$/i.test(trimmed)) {
+    return trimmed;
+  }
+  try {
+    const date = new Date(trimmed);
+    if (isNaN(date.getTime())) return trimmed;
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  } catch {
+    return trimmed;
+  }
+}
+
 function describeStatus(status: string): { label: string; detail: string } {
   switch (status) {
     case "AUTHORIZED":
@@ -87,6 +140,11 @@ function describeStatus(status: string): { label: string; detail: string } {
         label: "Payment request needs reconciliation",
         detail: "Wait for the backend to check the provider before retrying.",
       };
+    case "RETRYING":
+      return {
+        label: "Retrying payment request",
+        detail: "The backend is retrying the payment request with PayPal.",
+      };
     case "SENT":
     case "PENDING":
       return { label: "Waiting for payment", detail: "The backend has not confirmed payment yet." };
@@ -95,6 +153,7 @@ function describeStatus(status: string): { label: string; detail: string } {
     case "PAID":
       return { label: "Paid", detail: "The backend has confirmed the full milestone amount." };
     case "FAILED":
+      return { label: "Needs attention", detail: "The payment request did not complete." };
     case "CANCELLED":
       return { label: "Needs attention", detail: "The payment request did not complete." };
     default:
@@ -128,27 +187,29 @@ export default function PaymentStatusPanel({
   const [authorizationError, setAuthorizationError] = useState("");
   const [authorizationNotice, setAuthorizationNotice] = useState("");
   const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const idempotencyKey = useRef<string | null>(null);
   const requestButtonRef = useRef<HTMLButtonElement>(null);
   const refreshButtonRef = useRef<HTMLButtonElement>(null);
   const confirmationDialogRef = useRef<HTMLDivElement>(null);
+  const requestGenerationRef = useRef(0);
 
   const recipientPreview: RecipientPreview | null =
     state.status === "ready"
       ? {
           legalName: textOrFallback(
-            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_legal_name ??
-              (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_name ??
+            state.payments[0]?.recipient_legal_name ??
+              state.payments[0]?.recipient_name ??
               state.buyerOrganization?.legal_name,
             "Not available",
           ),
           countryCode: textOrFallback(
-            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_country_code ??
+            state.payments[0]?.recipient_country_code ??
               state.buyerOrganization?.country_code,
             "Not available",
           ),
           billingEmail: textOrFallback(
-            (state.payments[0] as RecipientPaymentStatus | undefined)?.recipient_email ??
+            state.payments[0]?.recipient_email ??
               (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.billing_email ??
               (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.email,
             "Resolved by the backend at issuance",
@@ -159,8 +220,9 @@ export default function PaymentStatusPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const currentGeneration = ++requestGenerationRef.current;
     void Promise.all([
-      listPaymentStatuses(dealId),
+      listPaymentStatuses(dealId) as Promise<ExtendedPaymentStatus[]>,
       getCurrentAgreement(dealId).catch((caught: unknown) => {
         if (caught instanceof ApiError && caught.status === 404) return null;
         throw caught;
@@ -168,35 +230,35 @@ export default function PaymentStatusPanel({
       listOrganizations(),
     ]).then(
       ([payments, agreement, organizations]) => {
-        if (cancelled) return;
+        if (cancelled || currentGeneration !== requestGenerationRef.current) return;
+
+        const buyerOrgId = buyerOrganizationId ?? agreement?.terms?.buyer_id;
+        const isSellerMember = organizations.some((org) => org.id === sellerOrganizationId);
+        const isBuyerMember = buyerOrgId ? organizations.some((org) => org.id === buyerOrgId) : false;
 
         setState({
           status: "ready",
           payments,
           agreementCommitted: agreement?.status === "COMMITTED",
-          sellerMember: organizations.some((organization) => organization.id === sellerOrganizationId),
+          sellerMember: isSellerMember,
+          buyerMember: isBuyerMember,
           buyerOrganization: null,
           milestone: firstMilestoneAmount(payments, agreement),
         });
 
-        // The buyer's registered country is not part of the payment payload.
-        // Resolve it from the public organization directory via the agreement's
-        // buyer party or explicit prop, but never let a directory failure or
-        // latency block the ready payment state.
-        const buyerOrgId = buyerOrganizationId ?? agreement?.terms?.buyer_id;
         if (!buyerOrgId) return;
 
         void getOrganization(buyerOrgId)
           .catch(() => null)
           .then((buyerOrganization) => {
-            if (cancelled || !buyerOrganization) return;
+            if (cancelled || currentGeneration !== requestGenerationRef.current || !buyerOrganization) return;
             setState((prev) =>
               prev.status === "ready" ? { ...prev, buyerOrganization } : prev,
             );
           });
       },
       (caught: unknown) => {
-        if (cancelled) return;
+        if (cancelled || currentGeneration !== requestGenerationRef.current) return;
         setState({
           status: "error",
           message:
@@ -210,6 +272,63 @@ export default function PaymentStatusPanel({
       cancelled = true;
     };
   }, [buyerOrganizationId, dealId, reloadCount, reloadToken, sellerOrganizationId]);
+
+  // Transitional / active state auto-polling (every 10 seconds)
+  const hasTransitionalPayment =
+    state.status === "ready" &&
+    state.payments.some(
+      (payment) =>
+        payment.status === "CREATE_PENDING" ||
+        payment.status === "RETRYING" ||
+        payment.status === "SENT" ||
+        payment.status === "PENDING",
+    );
+
+  useEffect(() => {
+    if (!hasTransitionalPayment) return;
+
+    let cancelled = false;
+    let latestCompletedPollId = 0;
+    let nextPollId = 0;
+
+    const intervalId = window.setInterval(() => {
+      const pollGeneration = requestGenerationRef.current;
+      const pollId = ++nextPollId;
+
+      void (listPaymentStatuses(dealId) as Promise<ExtendedPaymentStatus[]>)
+        .then((payments) => {
+          if (cancelled || pollGeneration !== requestGenerationRef.current) return;
+          if (pollId < latestCompletedPollId) return;
+          latestCompletedPollId = pollId;
+          setState((prev) => (prev.status === "ready" ? { ...prev, payments } : prev));
+        })
+        .catch(() => {
+          // Do not overwrite ready state on transient network poll error
+        });
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [dealId, hasTransitionalPayment]);
+
+  // Live countdown ticker for RETRYING status
+  const hasRetryingPayment =
+    state.status === "ready" &&
+    state.payments.some((payment) => payment.status === "RETRYING");
+
+  useEffect(() => {
+    if (!hasRetryingPayment) return;
+
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [hasRetryingPayment]);
 
   useEffect(() => {
     if (!confirmationOpen) return;
@@ -274,7 +393,7 @@ export default function PaymentStatusPanel({
   }
 
   async function authorizePayment() {
-    if (state.status !== "ready" || !state.agreementCommitted || !state.sellerMember) return;
+    if (!canRequestPayment) return;
     setAuthorizing(true);
     setAuthorizationError("");
     setAuthorizationNotice("");
@@ -293,6 +412,31 @@ export default function PaymentStatusPanel({
       setAuthorizing(false);
     }
   }
+
+  async function handleRetryRequest() {
+    if (!canRequestPayment) return;
+    setAuthorizing(true);
+    setAuthorizationError("");
+    setAuthorizationNotice("");
+    const retryKey = crypto.randomUUID();
+    try {
+      await authorizeDealPayment(dealId, retryKey);
+      setAuthorizationNotice("The payment request retry is queued for the backend worker.");
+      setState({ status: "loading" });
+      setReloadCount((count) => count + 1);
+    } catch (caught) {
+      setAuthorizationError(
+        caught instanceof ApiError ? caught.message : "Unable to retry the payment request.",
+      );
+    } finally {
+      setAuthorizing(false);
+    }
+  }
+
+  const canRequestPayment =
+    state.status === "ready" && state.agreementCommitted && state.sellerMember;
+  const isBuyer = state.status === "ready" && (state.buyerMember || !state.sellerMember);
+  const isSeller = state.status === "ready" && state.sellerMember;
 
   return (
     <section className="card payment-status" aria-labelledby="payment-status-heading">
@@ -322,7 +466,7 @@ export default function PaymentStatusPanel({
       ) : null}
       {state.status === "ready" && state.payments.length === 0 ? (
         <>
-          {state.agreementCommitted && state.sellerMember ? (
+          {canRequestPayment ? (
             <div className="payment-status__message">
               <p>The agreement is committed. The seller can authorize its payment milestone.</p>
               <button
@@ -351,6 +495,10 @@ export default function PaymentStatusPanel({
           {state.payments.map((payment) => {
             const presentation = describeStatus(payment.status);
             const paidAmount = payment.reconciled_amount;
+            const invoiceNum = extractInvoiceNumber(payment);
+            const isFailed = payment.status === "FAILED" || payment.status === "CANCELLED";
+            const isRetrying = payment.status === "RETRYING";
+
             return (
               <article className="payment-status__item" key={payment.id}>
                 <div className="payment-status__summary">
@@ -358,7 +506,9 @@ export default function PaymentStatusPanel({
                     <h3>Milestone {payment.milestone_sequence}</h3>
                     <p>{displayAmount(payment.amount, payment.currency)}</p>
                   </div>
-                  <span className="badge">{presentation.label}</span>
+                  <span className={`badge ${isRetrying ? "badge--retrying" : isFailed ? "badge--danger" : ""}`}>
+                    {presentation.label}
+                  </span>
                 </div>
                 <p className="muted">{presentation.detail}</p>
                 {payment.status === "PARTIALLY_PAID" && paidAmount !== null ? (
@@ -371,6 +521,89 @@ export default function PaymentStatusPanel({
                   <p className="payment-status__checked">
                     Last checked by backend: {new Date(payment.last_checked_at).toLocaleString()}
                   </p>
+                ) : null}
+
+                {/* Retrying Observability Widget */}
+                {isRetrying ? (
+                  <div className="payment-status__retry-card" role="status">
+                    <div className="payment-status__retry-header">
+                      <span className="badge badge--retrying">Retrying</span>
+                      <h4>Automatic Retry Scheduled</h4>
+                    </div>
+                    <p className="payment-status__retry-meta">
+                      Payment request retry #{payment.retry_count ?? 1} in ~{formatCountdown(payment.next_retry_at, now)} seconds.
+                      {" "}Last attempt: {formatLastAttempt(payment.last_checked_at)}.
+                      {" "}Cause: {payment.failure_reason || "Cause unavailable"}.
+                    </p>
+                  </div>
+                ) : null}
+
+                {/* Failed State Observability Widget */}
+                {isFailed ? (
+                  <div className="payment-status__failure-card" role="alert">
+                    <div className="payment-status__failure-header">
+                      <span className="badge badge--danger">Failed</span>
+                      <h4>Payment Request Failed</h4>
+                    </div>
+                    <p className="payment-status__failure-cause">
+                      <strong>Cause:</strong> {payment.failure_reason || "Payment processing encountered an error."}
+                    </p>
+                    {canRequestPayment ? (
+                      <button
+                        type="button"
+                        className="button button--compact payment-status__retry-button"
+                        disabled={authorizing}
+                        onClick={handleRetryRequest}
+                      >
+                        {authorizing ? "Retrying…" : "Retry Request"}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {/* Buyer Invoice & Pay Action */}
+                {payment.invoice_url && isBuyer ? (
+                  <div className="payment-status__invoice-card">
+                    <div className="payment-status__invoice-card-header">
+                      <span className="eyebrow">PayPal Sandbox invoice ready</span>
+                      <p className="payment-status__invoice-number">
+                        Invoice #: <strong>{invoiceNum}</strong>
+                      </p>
+                    </div>
+                    <a
+                      href={payment.invoice_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="button payment-status__pay-button"
+                    >
+                      💳 View &amp; Pay PayPal Invoice
+                    </a>
+                    <div className="payment-status__instructions">
+                      <h4>Payment Instructions</h4>
+                      <p>
+                        Review your order details and milestone amount on PayPal. Click the button above to authorize
+                        your payment in PayPal Sandbox. SyncAlly will automatically detect the payment confirmation
+                        and mark this milestone as paid.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Seller Invoice Reference */}
+                {payment.invoice_url && isSeller && !isBuyer ? (
+                  <div className="payment-status__seller-invoice">
+                    <p>
+                      Invoice #: <strong>{invoiceNum}</strong> issued to buyer.
+                    </p>
+                    <a
+                      href={payment.invoice_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="button secondary button--compact"
+                    >
+                      View PayPal Invoice
+                    </a>
+                  </div>
                 ) : null}
               </article>
             );

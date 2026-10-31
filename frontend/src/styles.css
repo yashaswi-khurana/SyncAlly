@@ -3022,6 +3022,135 @@ body::after {
   gap: 12px;
 }
 
+.payment-status__invoice-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid rgba(0, 153, 255, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 153, 255, 0.05);
+}
+
+.payment-status__invoice-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.payment-status__invoice-number {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.payment-status__pay-button {
+  justify-self: start;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 12px 20px;
+  text-decoration: none;
+}
+
+.payment-status__instructions {
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.payment-status__instructions h4 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.payment-status__instructions p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.payment-status__retry-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 204, 102, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 204, 102, 0.08);
+}
+
+.payment-status__retry-header,
+.payment-status__failure-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.payment-status__retry-header h4,
+.payment-status__failure-header h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.badge--retrying,
+.badge--warning {
+  border-color: rgba(180, 121, 39, 0.4);
+  background: rgba(180, 121, 39, 0.15);
+  color: #89601e;
+}
+
+.badge--danger {
+  border-color: rgba(185, 54, 45, 0.45);
+  background: rgba(185, 54, 45, 0.15);
+  color: var(--danger);
+}
+
+.payment-status__retry-meta {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+.payment-status__failure-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(185, 54, 45, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(185, 54, 45, 0.08);
+}
+
+.payment-status__failure-cause {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+.payment-status__seller-invoice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 0.88rem;
+}
+
+.payment-status__seller-invoice p {
+  margin: 0;
+}
+
 .invoice-recipient-dialog {
   width: min(100%, 560px);
 }

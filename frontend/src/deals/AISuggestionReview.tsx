@@ -243,6 +243,8 @@ export default function AISuggestionReview({
 
   async function runProposalDraft() {
     const editRevision = proposalEditRevisionRef.current;
+    // Preserve the authorization/status context even before the first draft is visible.
+    const requestFactSignatures = { ...confirmedSignatures };
     setSuggestionError("");
     setAgreementNotice("");
     setPendingAction("proposal");
@@ -250,7 +252,7 @@ export default function AISuggestionReview({
       const result = await draftDealProposal(dealId, organizationId);
       if (!activeRef.current) return;
       if (editRevision !== proposalEditRevisionRef.current) return;
-      setProposalState({ draft: toProposalDraft(result), signatures: {}, invalidated: false, observedSignatures: {} });
+      setProposalState({ draft: toProposalDraft(result), signatures: {}, invalidated: false, observedSignatures: requestFactSignatures });
       setPaymentTrigger(SUPPORTED_PAYMENT_TIMING[0].trigger);
     } catch (caught) {
       if (!activeRef.current) return;

@@ -822,6 +822,29 @@ describe("synchronized fact review and proposal drafts", () => {
     expect(within(await screen.findByLabelText("Proposed terms draft")).getByLabelText("Quantity")).toHaveValue("36");
   });
 
+  it.each(["revoked", "rejected"] as const)("invalidates a first draft when its confirmed fact is %s during the request", async (change) => {
+    const shared = { ...quantity, owner_organization_id: SELLER_ID,
+      visibility: "SHAREABLE" as const, status: "CONFIRMED" as const, version: 1 };
+    mockedListDealFacts.mockResolvedValue([shared]);
+    let resolve!: (value: typeof draft) => void;
+    mockedDraftDealProposal.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Draft proposed terms" }));
+    expect(screen.queryByLabelText("Proposed terms draft")).not.toBeInTheDocument();
+    mockedListDealFacts.mockResolvedValue(change === "revoked" ? [] : [{ ...shared, status: "REJECTED", version: 2 }]);
+    fireEvent.focus(window);
+    await waitFor(() => {
+      if (change === "revoked") expect(screen.queryByRole("article", { name: "quantity: 12" })).not.toBeInTheDocument();
+      else expect(within(screen.getByRole("article", { name: "quantity: 12" })).getByText("rejected")).toBeInTheDocument();
+    });
+    await act(async () => resolve(draft));
+    const proposal = await screen.findByLabelText("Proposed terms draft");
+    expect(within(proposal).getByLabelText("Quantity")).toHaveValue("");
+    expect(within(proposal).getByRole("alert")).toHaveTextContent("request a fresh draft");
+    expect(within(proposal).getByRole("button", { name: "Send reviewed terms for bilateral approval" })).toBeDisabled();
+    expect(mockedCreateAgreementFromReviewedTerms).not.toHaveBeenCalled();
+  });
+
   it("discards older polling versions and removes revoked facts and their derived draft values", async () => {
     mockedListDealFacts.mockResolvedValue([{ ...quantity, status: "CONFIRMED", typed_value: "24", version: 2 }]);
     const proposal = await openReview();

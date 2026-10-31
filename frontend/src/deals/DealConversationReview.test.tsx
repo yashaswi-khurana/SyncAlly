@@ -575,7 +575,7 @@ describe("message composer", () => {
     expect(input).toHaveAttribute("id", `deal-message-composer-${DEAL.id}`);
     expect(screen.getByRole("radio", { name: /^Shareable/ })).toBeChecked();
     expect(screen.getByText("Sending as Buyer Co (Buyer)")).toBeInTheDocument();
-    expect(observe).toHaveBeenCalledWith([]);
+    await waitFor(() => expect(observe).toHaveBeenCalledWith([]));
     fireEvent.change(input, { target: { value: "  New terms  " } });
     fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
     expect(await screen.findByText("Message sent.")).toBeInTheDocument();

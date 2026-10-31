@@ -192,6 +192,7 @@ export default function PaymentStatusPanel({
   const requestButtonRef = useRef<HTMLButtonElement>(null);
   const refreshButtonRef = useRef<HTMLButtonElement>(null);
   const confirmationDialogRef = useRef<HTMLDivElement>(null);
+  const requestGenerationRef = useRef(0);
 
   const recipientPreview: RecipientPreview | null =
     state.status === "ready"
@@ -219,6 +220,7 @@ export default function PaymentStatusPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const currentGeneration = ++requestGenerationRef.current;
     void Promise.all([
       listPaymentStatuses(dealId) as Promise<ExtendedPaymentStatus[]>,
       getCurrentAgreement(dealId).catch((caught: unknown) => {
@@ -228,7 +230,7 @@ export default function PaymentStatusPanel({
       listOrganizations(),
     ]).then(
       ([payments, agreement, organizations]) => {
-        if (cancelled) return;
+        if (cancelled || currentGeneration !== requestGenerationRef.current) return;
 
         const buyerOrgId = buyerOrganizationId ?? agreement?.terms?.buyer_id;
         const isSellerMember = organizations.some((org) => org.id === sellerOrganizationId);
@@ -249,14 +251,14 @@ export default function PaymentStatusPanel({
         void getOrganization(buyerOrgId)
           .catch(() => null)
           .then((buyerOrganization) => {
-            if (cancelled || !buyerOrganization) return;
+            if (cancelled || currentGeneration !== requestGenerationRef.current || !buyerOrganization) return;
             setState((prev) =>
               prev.status === "ready" ? { ...prev, buyerOrganization } : prev,
             );
           });
       },
       (caught: unknown) => {
-        if (cancelled) return;
+        if (cancelled || currentGeneration !== requestGenerationRef.current) return;
         setState({
           status: "error",
           message:
@@ -271,21 +273,33 @@ export default function PaymentStatusPanel({
     };
   }, [buyerOrganizationId, dealId, reloadCount, reloadToken, sellerOrganizationId]);
 
-  // Transitional state auto-polling (every 10 seconds)
+  // Transitional / active state auto-polling (every 10 seconds)
   const hasTransitionalPayment =
     state.status === "ready" &&
     state.payments.some(
       (payment) =>
         payment.status === "CREATE_PENDING" ||
-        payment.status === "RETRYING",
+        payment.status === "RETRYING" ||
+        payment.status === "SENT" ||
+        payment.status === "PENDING",
     );
 
   useEffect(() => {
     if (!hasTransitionalPayment) return;
 
+    let cancelled = false;
+    let latestCompletedPollId = 0;
+    let nextPollId = 0;
+
     const intervalId = window.setInterval(() => {
+      const pollGeneration = requestGenerationRef.current;
+      const pollId = ++nextPollId;
+
       void (listPaymentStatuses(dealId) as Promise<ExtendedPaymentStatus[]>)
         .then((payments) => {
+          if (cancelled || pollGeneration !== requestGenerationRef.current) return;
+          if (pollId < latestCompletedPollId) return;
+          latestCompletedPollId = pollId;
           setState((prev) => (prev.status === "ready" ? { ...prev, payments } : prev));
         })
         .catch(() => {
@@ -294,6 +308,7 @@ export default function PaymentStatusPanel({
     }, 10000);
 
     return () => {
+      cancelled = true;
       window.clearInterval(intervalId);
     };
   }, [dealId, hasTransitionalPayment]);
@@ -378,7 +393,7 @@ export default function PaymentStatusPanel({
   }
 
   async function authorizePayment() {
-    if (state.status !== "ready" || !state.agreementCommitted || !state.sellerMember) return;
+    if (!canRequestPayment) return;
     setAuthorizing(true);
     setAuthorizationError("");
     setAuthorizationNotice("");
@@ -399,6 +414,7 @@ export default function PaymentStatusPanel({
   }
 
   async function handleRetryRequest() {
+    if (!canRequestPayment) return;
     setAuthorizing(true);
     setAuthorizationError("");
     setAuthorizationNotice("");
@@ -417,6 +433,8 @@ export default function PaymentStatusPanel({
     }
   }
 
+  const canRequestPayment =
+    state.status === "ready" && state.agreementCommitted && state.sellerMember;
   const isBuyer = state.status === "ready" && (state.buyerMember || !state.sellerMember);
   const isSeller = state.status === "ready" && state.sellerMember;
 
@@ -448,7 +466,7 @@ export default function PaymentStatusPanel({
       ) : null}
       {state.status === "ready" && state.payments.length === 0 ? (
         <>
-          {state.agreementCommitted && state.sellerMember ? (
+          {canRequestPayment ? (
             <div className="payment-status__message">
               <p>The agreement is committed. The seller can authorize its payment milestone.</p>
               <button
@@ -515,7 +533,7 @@ export default function PaymentStatusPanel({
                     <p className="payment-status__retry-meta">
                       Payment request retry #{payment.retry_count ?? 1} in ~{formatCountdown(payment.next_retry_at, now)} seconds.
                       {" "}Last attempt: {formatLastAttempt(payment.last_checked_at)}.
-                      {" "}Cause: {payment.failure_reason || "PayPal sandbox rate limit"}.
+                      {" "}Cause: {payment.failure_reason || "Cause unavailable"}.
                     </p>
                   </div>
                 ) : null}
@@ -530,14 +548,16 @@ export default function PaymentStatusPanel({
                     <p className="payment-status__failure-cause">
                       <strong>Cause:</strong> {payment.failure_reason || "Payment processing encountered an error."}
                     </p>
-                    <button
-                      type="button"
-                      className="button button--compact payment-status__retry-button"
-                      disabled={authorizing}
-                      onClick={handleRetryRequest}
-                    >
-                      {authorizing ? "Retrying…" : "Retry Request"}
-                    </button>
+                    {canRequestPayment ? (
+                      <button
+                        type="button"
+                        className="button button--compact payment-status__retry-button"
+                        disabled={authorizing}
+                        onClick={handleRetryRequest}
+                      >
+                        {authorizing ? "Retrying…" : "Retry Request"}
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
 

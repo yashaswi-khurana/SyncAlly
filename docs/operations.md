@@ -4,6 +4,13 @@ Use this guide for the local/demo API, Temporal workflow worker, Temporal outbox
 and PayPal Sandbox payment worker. PostgreSQL is the commercial source of truth.
 A workflow outcome, browser redirect or webhook body does not prove payment.
 
+For ordered installation, migrations, interactive demo seeding and all process
+terminals, start with the [root quickstart](../README.md#local-quickstart). The API,
+workflow worker and relay support local conversation/agreement work; real Sandbox
+invoice processing additionally requires the payment worker with configured
+`PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET`. Empty credentials make that worker
+exit; the API can still accept a durable payment request that awaits processing.
+
 ## Logging contract
 
 The documented API invocation and each worker entrypoint configure standard-library
@@ -203,6 +210,37 @@ Escalate when automatic retries make no progress, configuration cannot be verifi
 a provider outcome remains unknown or history/state disagree. Record local UUIDs,
 first/last observation time, status, retry count, next attempt time, process/version
 and actions already taken. Keep customer/provider evidence in restricted systems.
+
+## Demo and simulation boundaries
+
+The role switcher requires a seeded demo administrator session and server
+`APP_ENV=development` or `test`. Browser visibility (`VITE_ENABLE_DEV_SWITCHER` or
+Vite development mode) never grants server authority. Reset Demo Data deletes only
+deals whose two parties are seeded demo organizations and their related records;
+it does not cancel PayPal invoices or clear Temporal history. Do not use reset as
+payment recovery.
+
+From activated `backend/` with a valid local configuration:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+python -m syncally.cli.simulate_deal_flow --ci --no-color
+```
+
+This uses an isolated in-memory SQLite/FastAPI harness. It exercises the seven-step
+application lifecycle without launching PostgreSQL, Temporal, payment workers or
+PayPal. It may print a simulated invoice URL; exit 0 does not establish delivery
+or payment. Network mode targets `--base-url` (or `SYNCALLY_API_URL`) using
+`BUYER_PASSWORD` and `SELLER_PASSWORD`; it falls back to the isolated harness if its
+API health probe fails. Read the printed mode and verify the intended environment.
+Network runs create real records in the target database and may queue work for an
+already-running payment worker.
+
+In the app, use payment status/last-check time and available retry diagnostics as
+observations, not proof that a worker is progressing. An invoice link opens the
+provider invoice; verify its current state through the worker's reconciled records.
+The UI does not supply a manual retry API. Continue using the unknown-outcome and
+webhook procedures above for stalled or ambiguous work.
 
 ## Verification and remaining deployment gates
 

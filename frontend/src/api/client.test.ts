@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { API_REQUEST_TIMEOUT_MS, ApiError, createDealMessage } from "./client";
+import {
+  API_REQUEST_TIMEOUT_MS,
+  ApiError,
+  createDealMessage,
+  getDealMessageExistence,
+  getOrganization,
+} from "./client";
 import { clearAccessToken, setAccessToken } from "./tokenStore";
 import type { CreateMessageInput, DealMessage } from "./types";
 
@@ -354,5 +360,75 @@ describe("createDealMessage", () => {
       status: 0,
       message: "Unable to reach the SyncAlly API. Check that it is running.",
     });
+  });
+});
+
+describe("getDealMessageExistence", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    setAccessToken("access-token");
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    clearAccessToken();
+  });
+
+  it("requests the deal-wide existence endpoint and returns the boolean", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ has_messages: true }));
+
+    await expect(getDealMessageExistence(DEAL_ID)).resolves.toBe(true);
+    expect(lastRequest().url).toBe(`/deals/${DEAL_ID}/messages/existence`);
+  });
+
+  it("throws instead of treating a malformed payload as fresh", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({}));
+
+    await expect(getDealMessageExistence(DEAL_ID)).rejects.toThrow(
+      "The server returned an unexpected onboarding status.",
+    );
+  });
+});
+
+describe("getOrganization", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    setAccessToken("access-token");
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    clearAccessToken();
+  });
+
+  it("fetches public organization details by ID", async () => {
+    const orgId = "22222222-2222-2222-2222-222222222222";
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: orgId,
+        legal_name: "Global Freight Ltd",
+        country_code: "US",
+      }),
+    );
+
+    const result = await getOrganization(orgId);
+
+    expect(result).toEqual({
+      id: orgId,
+      legal_name: "Global Freight Ltd",
+      country_code: "US",
+    });
+    expect(lastRequest().url).toBe(`/organizations/${orgId}`);
+  });
+
+  it("propagates ApiError on 404 not found", async () => {
+    const missingId = "33333333-3333-3333-3333-333333333333";
+    fetchMock.mockResolvedValue(
+      jsonResponse({ detail: "Organization not found" }, 404),
+    );
+
+    await expect(getOrganization(missingId)).rejects.toThrow("Organization not found");
   });
 });

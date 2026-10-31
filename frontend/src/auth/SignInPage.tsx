@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, login } from "../api/client";
+import { ApiError, apiRequest, login } from "../api/client";
 import type { TokenResponse } from "../api/types";
+import { navigateToDeal, navigateToDeals } from "../router";
 import TradeFlowScene from "../deals/TradeFlowScene";
 
 function demoQuickFillEnabled() {
@@ -20,12 +21,47 @@ interface FieldErrors {
   password?: string;
 }
 
+function getInviteTokenFromHash(): string | null {
+  const hash = window.location.hash;
+  const rawPath = hash.startsWith("#") ? hash.slice(1) : hash;
+  const [, queryString] = rawPath.split("?");
+  if (queryString) {
+    const params = new URLSearchParams(queryString);
+    const token = params.get("token");
+    if (token) return token;
+  }
+  return null;
+}
+
 export default function SignInPage({ onSignIn }: SignInPageProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Counterparty invite state
+  const [inviteToken, setInviteToken] = useState<string | null>(getInviteTokenFromHash);
+  const [mode, setMode] = useState<"signin" | "invite">(() =>
+    getInviteTokenFromHash() ? "invite" : "signin",
+  );
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
+  const [inviteDisplayName, setInviteDisplayName] = useState("");
+  const [inviteOrgName, setInviteOrgName] = useState("");
+  const [inviteCountryCode, setInviteCountryCode] = useState("US");
+
+  useEffect(() => {
+    function onHashChange() {
+      const token = getInviteTokenFromHash();
+      setInviteToken(token);
+      if (token) {
+        setMode("invite");
+      }
+    }
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   function fillDemo(role: "buyer" | "seller") {
     setEmail(`${role}@syncally.demo`);
@@ -61,6 +97,86 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
         setFormError(caught.message);
       } else {
         setFormError("Sign in failed. Please try again.");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleInviteSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!inviteToken) return;
+
+    const nextErrors: FieldErrors = {};
+    if (inviteEmail.trim() === "") {
+      nextErrors.email = "Email is required.";
+    }
+    if (invitePassword === "") {
+      nextErrors.password = "Password is required.";
+    } else if (invitePassword.length < 8) {
+      nextErrors.password = "Password must be at least 8 characters.";
+    }
+
+    setFieldErrors(nextErrors);
+    setFormError(null);
+    if (Object.keys(nextErrors).length > 0) {
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const payload: {
+        token: string;
+        email: string;
+        password: string;
+        display_name?: string;
+        organization_legal_name?: string;
+        country_code?: string;
+      } = {
+        token: inviteToken,
+        email: inviteEmail.trim(),
+        password: invitePassword,
+        display_name: inviteDisplayName.trim() || undefined,
+      };
+      // A legal name creates a counterparty organization; team invitees join
+      // the inviting organization using the invitation's role instead.
+      if (inviteOrgName.trim()) {
+        payload.organization_legal_name = inviteOrgName.trim();
+        payload.country_code = inviteCountryCode.trim().toUpperCase() || "US";
+      }
+
+      const res = await apiRequest<{
+        status: string;
+        organization_id: string;
+        organization_legal_name: string;
+        user_id: string;
+        role: string;
+        deal_id: string | null;
+        access_token?: string;
+        refresh_token?: string;
+        token_type?: string;
+      }>("/invitations/accept", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+      if (res.access_token && res.refresh_token) {
+        onSignIn({
+          access_token: res.access_token,
+          refresh_token: res.refresh_token,
+          token_type: (res.token_type as "bearer") || "bearer",
+        });
+      }
+      if (res.deal_id) {
+        navigateToDeal(res.deal_id);
+      } else {
+        navigateToDeals();
+      }
+    } catch (caught) {
+      if (caught instanceof ApiError) {
+        setFormError(caught.message);
+      } else {
+        setFormError("Unable to accept invitation. Please try again.");
       }
     } finally {
       setSubmitting(false);
@@ -136,75 +252,194 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
         </section>
       </section>
 
-      <aside className="card auth-card" aria-labelledby="sign-in-heading">
-        <div className="auth-card__topline">
-          <span className="eyebrow">Workspace access</span>
-          <span className="auth-card__number">01 / 01</span>
-        </div>
-        <h2 id="sign-in-heading">Open your trade desk.</h2>
-        <p className="auth-card__intro">
-          Sign in with a provisioned buyer or seller account. Public registration is turned off.
-        </p>
-        <form className="form" onSubmit={handleSubmit} noValidate>
-          {demoQuickFillEnabled() ? (
-            <div className="auth-demo-fill" aria-label="Quick-fill demo accounts">
-              <span>TRY THE LOCAL DEMO</span>
-              <div>
-                <button type="button" onClick={() => fillDemo("buyer")}>Demo Buyer</button>
-                <button type="button" onClick={() => fillDemo("seller")}>Demo Seller</button>
-              </div>
-              <small>Enter the password configured for your local demo account.</small>
+      {mode === "invite" && inviteToken ? (
+        <aside className="card auth-card" aria-labelledby="invite-onboarding-heading">
+          <div className="auth-card__topline">
+            <span className="eyebrow">Counterparty Onboarding</span>
+            <span className="auth-card__number">01 / 01</span>
+          </div>
+          <h2 id="invite-onboarding-heading">Join via counterparty invite.</h2>
+          <p className="auth-card__intro">
+            Create your account and register your organization to immediately access the invited deal.
+          </p>
+          <form className="form" onSubmit={handleInviteSubmit} noValidate>
+            <div className="field">
+              <label htmlFor="invite-email">Email</label>
+              <input
+                id="invite-email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                value={inviteEmail}
+                aria-invalid={fieldErrors.email ? true : undefined}
+                onChange={(e) => setInviteEmail(e.target.value)}
+              />
+              {fieldErrors.email ? (
+                <p className="field-error" role="alert">
+                  {fieldErrors.email}
+                </p>
+              ) : null}
             </div>
-          ) : null}
-          <div className="field">
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="username"
-              value={email}
-              aria-invalid={fieldErrors.email ? true : undefined}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-            {fieldErrors.email ? (
-              <p className="field-error" role="alert">
-                {fieldErrors.email}
+            <div className="field">
+              <label htmlFor="invite-password">Password (min 8 characters)</label>
+              <input
+                id="invite-password"
+                name="password"
+                type="password"
+                autoComplete="new-password"
+                value={invitePassword}
+                aria-invalid={fieldErrors.password ? true : undefined}
+                onChange={(e) => setInvitePassword(e.target.value)}
+              />
+              {fieldErrors.password ? (
+                <p className="field-error" role="alert">
+                  {fieldErrors.password}
+                </p>
+              ) : null}
+            </div>
+            <div className="field">
+              <label htmlFor="invite-display-name">Your Name</label>
+              <input
+                id="invite-display-name"
+                name="displayName"
+                type="text"
+                autoComplete="name"
+                placeholder="e.g. Kenji Sato"
+                value={inviteDisplayName}
+                onChange={(e) => setInviteDisplayName(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="invite-org-name">Company Legal Name (Optional)</label>
+              <input
+                id="invite-org-name"
+                name="orgName"
+                type="text"
+                placeholder="e.g. Tokyo Exporters Ltd"
+                value={inviteOrgName}
+                onChange={(e) => setInviteOrgName(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="invite-country-code">Country Code (2 letters)</label>
+              <input
+                id="invite-country-code"
+                name="countryCode"
+                type="text"
+                maxLength={2}
+                placeholder="JP"
+                value={inviteCountryCode}
+                onChange={(e) => setInviteCountryCode(e.target.value.toUpperCase())}
+              />
+            </div>
+            {formError ? (
+              <p className="form-error" role="alert">
+                {formError}
               </p>
             ) : null}
+            <button type="submit" className="button auth-card__submit" disabled={submitting}>
+              <span>{submitting ? "Joining deal…" : "Create Account & Join Deal"}</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+            <div style={{ marginTop: 12, textAlign: "center" }}>
+              <button
+                type="button"
+                className="button ghost"
+                style={{ fontSize: "0.85rem" }}
+                onClick={() => setMode("signin")}
+              >
+                Already have an account? Sign in
+              </button>
+            </div>
+          </form>
+          <div className="auth-card__fineprint">
+            <span className="auth-card__fineprint-dot" aria-hidden="true" />
+            <span>Single-use invitation · auto-linked to trade room</span>
           </div>
-          <div className="field">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              aria-invalid={fieldErrors.password ? true : undefined}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            {fieldErrors.password ? (
-              <p className="field-error" role="alert">
-                {fieldErrors.password}
+        </aside>
+      ) : (
+        <aside className="card auth-card" aria-labelledby="sign-in-heading">
+          <div className="auth-card__topline">
+            <span className="eyebrow">Workspace access</span>
+            <span className="auth-card__number">01 / 01</span>
+          </div>
+          <h2 id="sign-in-heading">Open your trade desk.</h2>
+          <p className="auth-card__intro">
+            Sign in with a provisioned buyer or seller account. Public registration is turned off.
+          </p>
+          <form className="form" onSubmit={handleSubmit} noValidate>
+            {demoQuickFillEnabled() ? (
+              <div className="auth-demo-fill" aria-label="Quick-fill demo accounts">
+                <span>TRY THE LOCAL DEMO</span>
+                <div>
+                  <button type="button" onClick={() => fillDemo("buyer")}>Demo Buyer</button>
+                  <button type="button" onClick={() => fillDemo("seller")}>Demo Seller</button>
+                </div>
+                <small>Enter the password configured for your local demo account.</small>
+              </div>
+            ) : null}
+            <div className="field">
+              <label htmlFor="email">Email</label>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="username"
+                value={email}
+                aria-invalid={fieldErrors.email ? true : undefined}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+              {fieldErrors.email ? (
+                <p className="field-error" role="alert">
+                  {fieldErrors.email}
+                </p>
+              ) : null}
+            </div>
+            <div className="field">
+              <label htmlFor="password">Password</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                aria-invalid={fieldErrors.password ? true : undefined}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              {fieldErrors.password ? (
+                <p className="field-error" role="alert">
+                  {fieldErrors.password}
+                </p>
+              ) : null}
+            </div>
+            {formError ? (
+              <p className="form-error" role="alert">
+                {formError}
               </p>
             ) : null}
+            <button type="submit" className="button auth-card__submit" disabled={submitting}>
+              <span>{submitting ? "Signing in…" : "Enter workspace"}</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+            {inviteToken ? (
+              <div style={{ marginTop: 12, textAlign: "center" }}>
+                <button
+                  type="button"
+                  className="button ghost"
+                  style={{ fontSize: "0.85rem" }}
+                  onClick={() => setMode("invite")}
+                >
+                  ← Return to Invitation Sign-up
+                </button>
+              </div>
+            ) : null}
+          </form>
+          <div className="auth-card__fineprint">
+            <span className="auth-card__fineprint-dot" aria-hidden="true" />
+            <span>Development accounts · records saved to the local database</span>
           </div>
-          {formError ? (
-            <p className="form-error" role="alert">
-              {formError}
-            </p>
-          ) : null}
-          <button type="submit" className="button auth-card__submit" disabled={submitting}>
-            <span>{submitting ? "Signing in…" : "Enter workspace"}</span>
-            <span aria-hidden="true">↗</span>
-          </button>
-        </form>
-        <div className="auth-card__fineprint">
-          <span className="auth-card__fineprint-dot" aria-hidden="true" />
-          <span>Development accounts · records saved to the local database</span>
-        </div>
-      </aside>
+        </aside>
+      )}
 
       <footer className="auth-footer">
         <span>SYNCALLY / DEAL WORKSPACE</span>

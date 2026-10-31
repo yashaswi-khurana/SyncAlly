@@ -296,6 +296,29 @@ class SqlAlchemyCommunicationRepository:
             for message, conversation in rows
         ]
 
+    def has_any_message(self, deal_id: UUID, organization_id: UUID) -> bool:
+        """Report whether any message exists in the deal, ignoring visibility.
+
+        The organization only proves the caller is scoped to a deal party; it is
+        deliberately not used as a visibility filter. Only existence is exposed,
+        never content, author, counts, or timestamps.
+        """
+        self._require_deal_party(deal_id, organization_id)
+        row = self._db.scalar(
+            select(Message.id)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .join(Deal, Deal.id == Conversation.deal_id)
+            .where(
+                Conversation.deal_id == deal_id,
+                or_(
+                    Conversation.participant_organization_id == Deal.buyer_organization_id,
+                    Conversation.participant_organization_id == Deal.seller_organization_id,
+                ),
+            )
+            .limit(1)
+        )
+        return row is not None
+
     def get_message(
         self, message_id: UUID, deal_id: UUID, organization_id: UUID
     ) -> DomainMessage | None:

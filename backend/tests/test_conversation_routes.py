@@ -619,6 +619,57 @@ class ConversationRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+    def test_message_existence_is_true_for_a_private_counterparty_message(self) -> None:
+        secret = "seller private note"
+        self._message(
+            self.seller_conversation,
+            secret,
+            Visibility.PRIVATE,
+            author_user_id=self.seller_user.id,
+        )
+        self.session.commit()
+        self._authenticate(self._buyer_actor())
+
+        visible = self._request("GET", f"/deals/{self.deal.id}/messages")
+        self.assertEqual(visible.status_code, 200)
+        self.assertEqual(visible.json(), [])
+
+        response = self._request("GET", f"/deals/{self.deal.id}/messages/existence")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"has_messages": True})
+        self.assertNotIn(secret, response.text)
+
+    def test_message_existence_is_false_when_no_messages_exist(self) -> None:
+        self._authenticate(self._buyer_actor())
+
+        response = self._request("GET", f"/deals/{self.deal.id}/messages/existence")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"has_messages": False})
+
+    def test_message_existence_is_hidden_from_a_non_participant(self) -> None:
+        self._message(
+            self.buyer_conversation,
+            "buyer private",
+            Visibility.PRIVATE,
+            author_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+        self._authenticate(self._outsider_actor())
+
+        response = self._request("GET", f"/deals/{self.deal.id}/messages/existence")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("buyer private", response.text)
+
+    def test_message_existence_requires_authentication(self) -> None:
+        app.dependency_overrides[get_db] = lambda: self.session
+
+        response = self._request("GET", f"/deals/{self.deal.id}/messages/existence")
+
+        self.assertEqual(response.status_code, 401)
+
     def test_list_facts_returns_only_visible_facts(self) -> None:
         buyer_private = self._constraint(self.buyer.id, "buyer_only", Visibility.PRIVATE)
         seller_shareable = self._constraint(

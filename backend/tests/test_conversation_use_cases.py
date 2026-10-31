@@ -13,6 +13,7 @@ from syncally.application.conversations import (
     ConstraintReviewAction,
     OrganizationAccessDenied,
     add_message,
+    deal_has_any_message,
     list_visible_constraints,
     list_visible_messages,
     review_constraint,
@@ -101,6 +102,22 @@ class FakeCommunicationRepository:
         self, deal_id: UUID, organization_id: UUID, *, limit: int, offset: int
     ) -> list[Message]:
         return self._visible_messages(deal_id, organization_id)[offset : offset + limit]
+
+    def has_any_message(self, deal_id: UUID, organization_id: UUID) -> bool:
+        deal = self.deals.get(deal_id)
+        if deal is None or organization_id not in (
+            deal.buyer_organization_id,
+            deal.seller_organization_id,
+        ):
+            raise AssertionError("organization must be a party to the deal")
+        conversation_ids = {
+            conversation.id
+            for conversation in self.conversations.values()
+            if conversation.deal_id == deal_id
+        }
+        return any(
+            message.conversation_id in conversation_ids for message in self.messages
+        )
 
     def get_constraint_for_deal(
         self, deal_id: UUID, constraint_id: UUID, user_id: UUID
@@ -265,6 +282,26 @@ class ConversationUseCaseTests(unittest.TestCase):
         seller_view = list_visible_messages(self.seller, self.deal.id, self.repository)
         self.assertEqual({item.id for item in buyer_view}, {buyer_private.id, shareable.id})
         self.assertEqual({item.id for item in seller_view}, {seller_private.id, shareable.id})
+
+    def test_deal_has_any_message_ignores_visibility_for_both_parties(self) -> None:
+        self.assertFalse(deal_has_any_message(self.buyer, self.deal.id, self.repository))
+
+        add_message(
+            self.seller,
+            self.deal.id,
+            AddMessageCommand(body="seller private", visibility=Visibility.PRIVATE),
+            self.repository,
+        )
+
+        self.assertTrue(deal_has_any_message(self.buyer, self.deal.id, self.repository))
+        self.assertTrue(deal_has_any_message(self.seller, self.deal.id, self.repository))
+        self.assertEqual(
+            list_visible_messages(self.buyer, self.deal.id, self.repository), []
+        )
+
+        outsider = ActorContext(uuid4(), frozenset({self.buyer_id}))
+        with self.assertRaises(CommunicationNotFound):
+            deal_has_any_message(outsider, self.deal.id, self.repository)
 
     def test_list_facts_applies_visibility_for_each_party(self) -> None:
         seller_shareable = replace(

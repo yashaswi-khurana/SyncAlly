@@ -1,9 +1,9 @@
 {
   "backend/alembic/env.py": {
-    "mtime": 1792729515.3324766,
-    "seen": 1793433921.834971,
-    "ast_hash": "e7596792510af95b0610482418210b3c",
-    "semantic_hash": "e7596792510af95b0610482418210b3c"
+    "mtime": 1793448618.3711731,
+    "seen": 1793449051.2588613,
+    "ast_hash": "84a4a9408ac79f762d274b7d6b9178b2",
+    "semantic_hash": ""
   },
   "backend/alembic/versions/0001_initial_schema.py": {
     "mtime": 1792729515.3328805,
@@ -450,10 +450,10 @@
     "semantic_hash": "4e06096f00302450f6a58ea6bcada28b"
   },
   "backend/src/syncally/infrastructure/migration_config.py": {
-    "mtime": 1792729515.3396468,
-    "seen": 1793433921.8351104,
-    "ast_hash": "7f94327b257da3f678639fc6bfa95f30",
-    "semantic_hash": "7f94327b257da3f678639fc6bfa95f30"
+    "mtime": 1793448902.8379872,
+    "seen": 1793449051.2589898,
+    "ast_hash": "0357708e25b07336a6f1775cb6700376",
+    "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/models/__init__.py": {
     "mtime": 1792729515.3396468,
@@ -1371,6 +1371,30 @@
     "mtime": 1793447819.0392745,
     "seen": 1793447835.518761,
     "ast_hash": "9c05c249211603fb967eafa4ae1ec717",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_migration_lock.py": {
+    "mtime": 1793448962.8858435,
+    "seen": 1793449051.2590787,
+    "ast_hash": "e55b1294c95326a0b4195ce3c1739bb8",
+    "semantic_hash": ""
+  },
+  "decision.md": {
+    "mtime": 1793448361.9783754,
+    "seen": 1793449051.2592087,
+    "ast_hash": "3de28e3b1b68f09c2becc1e320ab7292",
+    "semantic_hash": ""
+  },
+  "log.md": {
+    "mtime": 1793449023.4377337,
+    "seen": 1793449051.2592287,
+    "ast_hash": "ef1d041575c22e0f29fbae707db7863d",
+    "semantic_hash": ""
+  },
+  "plan.md": {
+    "mtime": 1793448418.9455957,
+    "seen": 1793449051.2592301,
+    "ast_hash": "6fbfbf7604449b249f6e48ac173ffdb7",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

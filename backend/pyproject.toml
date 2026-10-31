@@ -25,6 +25,9 @@ dev = [
     "ruff>=0.9,<1.0",
 ]
 
+[project.scripts]
+simulate-deal-flow = "syncally.cli.simulate_deal_flow:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

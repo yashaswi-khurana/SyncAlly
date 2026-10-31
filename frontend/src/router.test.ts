@@ -3,11 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   dealPath,
   invitePath,
-  navigateToCreateDeal,
-  navigateToDeal,
-  navigateToDeals,
-  navigateToInvite,
-  navigateToOrganizations,
   organizationsPath,
   parseRoute,
 } from "./router";

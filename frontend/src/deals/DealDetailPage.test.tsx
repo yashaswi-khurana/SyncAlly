@@ -309,6 +309,7 @@ describe("DealDetailPage", () => {
         organization_id: DEAL.buyer_organization_id,
         idempotency_key: expect.any(String),
       }),
+      expect.anything(),
     );
 
     expect(await screen.findByText("We need 500 units at USD 45.")).toBeInTheDocument();

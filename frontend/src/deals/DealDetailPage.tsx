@@ -670,6 +670,8 @@ export default function DealDetailPage({
         <CommercialDocumentPanel dealId={deal.id} />
         <DealConversationReview
           deal={deal}
+          composerId="deal-message-input"
+          buttonLabel="Send message"
           selectedOrganizationId={selectedOrganizationId}
           onOrganizationChange={handleOrganizationChange}
           onAgreementCreated={() => setAgreementReloadToken((token) => token + 1)}

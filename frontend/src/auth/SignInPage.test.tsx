@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, apiRequest, login } from "../api/client";
@@ -17,6 +17,62 @@ const mockedApiRequest = vi.mocked(apiRequest);
 const mockedLogin = vi.mocked(login);
 
 describe("SignInPage", () => {
+  function typedToken(kind: "TEAM" | "COUNTERPARTY") {
+    return `header.${btoa(JSON.stringify({ version: 1, kind, recipient_email: "recipient@example.com" }))}.signature`;
+  }
+
+  it("typed TEAM acceptance never submits own-organization details and resets on a new token", async () => {
+    const token = typedToken("TEAM");
+    window.location.hash = `#/invite?token=${token}`;
+    mockedApiRequest.mockRejectedValueOnce(new ApiError(403, "Invitation is addressed to a different account"));
+    render(<SignInPage onSignIn={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "Join your team." })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Company Legal Name/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "wrong@example.com" } });
+    fireEvent.change(screen.getByLabelText(/Password \(12/), { target: { value: "SecurePassword123!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Accept team invitation" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("different account");
+    expect(mockedApiRequest).toHaveBeenCalledWith("/invitations/accept", expect.objectContaining({ body: JSON.stringify({ token, email: "wrong@example.com", password: "SecurePassword123!" }) }));
+    window.location.hash = `#/invite?token=${typedToken("COUNTERPARTY")}`;
+    fireEvent(window, new Event("hashchange"));
+    expect(await screen.findByLabelText("Company Legal Name")).toHaveValue("");
+    expect(screen.getByLabelText("Email")).toHaveValue("");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("requires own-company details for typed COUNTERPARTY before acceptance", async () => {
+    window.location.hash = `#/invite?token=${typedToken("COUNTERPARTY")}`;
+    render(<SignInPage onSignIn={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "recipient@example.com" } });
+    fireEvent.change(screen.getByLabelText(/Password \(12/), { target: { value: "SecurePassword123!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Account & Join Deal" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("company legal name is required");
+    expect(mockedApiRequest).not.toHaveBeenCalled();
+  });
+
+  it("ignores late acceptance tokens and navigation after the invitation changes", async () => {
+    window.location.hash = `#/invite?token=${typedToken("TEAM")}`;
+    let resolveAcceptance!: (result: unknown) => void;
+    mockedApiRequest.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAcceptance = resolve;
+    }));
+    const onSignIn = vi.fn();
+    render(<SignInPage onSignIn={onSignIn} />);
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "recipient@example.com" } });
+    fireEvent.change(screen.getByLabelText(/Password \(12/), { target: { value: "SecurePassword123!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Accept team invitation" }));
+    const nextHash = `#/invite?token=${typedToken("COUNTERPARTY")}`;
+    window.location.hash = nextHash;
+    fireEvent(window, new Event("hashchange"));
+    await act(async () => resolveAcceptance({
+      access_token: "stale-token", refresh_token: "stale-refresh", deal_id: "stale-deal",
+    }));
+    expect(onSignIn).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe(nextHash);
+    expect(screen.getByLabelText("Company Legal Name")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Create Account & Join Deal" })).toBeEnabled();
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
@@ -119,6 +175,70 @@ describe("SignInPage", () => {
     expect(screen.getByRole("button", { name: "Create Account & Join Deal" })).toBeInTheDocument();
   });
 
+  it.each([0, 6, 7, 8, 9, 10, 11, 129].flatMap((length) =>
+    ["p", "\u{1F600}"].map((character) => ({ length, character })),
+  ))(
+    "rejects an invitation password of $length code points ($character) without submitting",
+    async ({ length, character }) => {
+      window.location.hash = "#/invite?token=valid-team-token";
+      const onSignIn = vi.fn();
+      render(<SignInPage onSignIn={onSignIn} />);
+
+      fireEvent.change(screen.getByLabelText("Email"), {
+        target: { value: "teammate@example.com" },
+      });
+      fireEvent.change(screen.getByLabelText("Password (12–128 characters)"), {
+        target: { value: character.repeat(length) },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Create Account & Join Deal" }));
+
+      const message = length === 0
+        ? "Password is required."
+        : length < 12
+          ? "Password must be at least 12 characters."
+          : "Password must be at most 128 characters.";
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(screen.getByLabelText("Password (12–128 characters)")).toHaveAttribute("aria-invalid", "true");
+      expect(mockedApiRequest).not.toHaveBeenCalled();
+      expect(mockedLogin).not.toHaveBeenCalled();
+      expect(onSignIn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([12, 65, 128].flatMap((length) =>
+    ["p", "\u{1F600}"].map((character) => ({ length, character })),
+  ))("accepts an invitation password of $length code points ($character) unchanged", async ({ length, character }) => {
+    window.location.hash = "#/invite?token=valid-team-token";
+    const onSignIn = vi.fn();
+    const tokens = {
+      access_token: "new-access-token",
+      refresh_token: "new-refresh-token",
+      token_type: "bearer",
+    };
+    mockedApiRequest.mockResolvedValueOnce({ status: "ACCEPTED", deal_id: null, ...tokens });
+    render(<SignInPage onSignIn={onSignIn} />);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "teammate@example.com" },
+    });
+    const passwordInput = screen.getByLabelText("Password (12–128 characters)");
+    expect(passwordInput).not.toHaveAttribute("minlength");
+    expect(passwordInput).not.toHaveAttribute("maxlength");
+    fireEvent.change(passwordInput, { target: { value: character.repeat(length) } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Account & Join Deal" }));
+
+    await waitFor(() => expect(onSignIn).toHaveBeenCalledWith(tokens));
+    expect(mockedApiRequest).toHaveBeenCalledWith("/invitations/accept", {
+      method: "POST",
+      body: JSON.stringify({
+        token: "valid-team-token",
+        email: "teammate@example.com",
+        password: character.repeat(length),
+      }),
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("submits counterparty onboarding form and triggers onSignIn with tokens", async () => {
     window.location.hash = "#/invite?token=valid-counterparty-token";
     const onSignIn = vi.fn();
@@ -140,7 +260,7 @@ describe("SignInPage", () => {
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "kenji@tokyo.jp" },
     });
-    fireEvent.change(screen.getByLabelText("Password (min 8 characters)"), {
+    fireEvent.change(screen.getByLabelText("Password (12–128 characters)"), {
       target: { value: "password123!" },
     });
     fireEvent.change(screen.getByLabelText("Company Legal Name (Optional)"), {
@@ -193,7 +313,7 @@ describe("SignInPage", () => {
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "teammate@example.com" },
     });
-    fireEvent.change(screen.getByLabelText("Password (min 8 characters)"), {
+    fireEvent.change(screen.getByLabelText("Password (12–128 characters)"), {
       target: { value: "password123!" },
     });
 

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApiError, apiRequest, login } from "../api/client";
-import type { TokenResponse } from "../api/types";
+import type { InvitationAcceptance, InvitationAcceptanceInput, TokenResponse } from "../api/types";
+import { invitationPresentation } from "./invitationPresentation";
 import { navigateToDeal, navigateToDeals } from "../router";
 import TradeFlowScene from "../deals/TradeFlowScene";
 
@@ -50,14 +51,24 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
   const [inviteDisplayName, setInviteDisplayName] = useState("");
   const [inviteOrgName, setInviteOrgName] = useState("");
   const [inviteCountryCode, setInviteCountryCode] = useState("US");
+  const currentInviteRef = useRef(inviteToken);
+  const intent = invitationPresentation(inviteToken);
 
   useEffect(() => {
     function onHashChange() {
       const token = getInviteTokenFromHash();
+      if (currentInviteRef.current === token) return;
+      currentInviteRef.current = token;
       setInviteToken(token);
-      if (token) {
-        setMode("invite");
-      }
+      setMode(token ? "invite" : "signin");
+      setInviteEmail("");
+      setInvitePassword("");
+      setInviteDisplayName("");
+      setInviteOrgName("");
+      setInviteCountryCode("US");
+      setFieldErrors({});
+      setFormError(null);
+      setSubmitting(false);
     }
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -105,34 +116,35 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
 
   async function handleInviteSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!inviteToken) return;
+    if (!inviteToken || submitting || intent.kind === "INVALID") return;
+    const acceptingToken = inviteToken;
 
     const nextErrors: FieldErrors = {};
     if (inviteEmail.trim() === "") {
       nextErrors.email = "Email is required.";
     }
+    const passwordLength = Array.from(invitePassword).length;
     if (invitePassword === "") {
       nextErrors.password = "Password is required.";
-    } else if (invitePassword.length < 8) {
-      nextErrors.password = "Password must be at least 8 characters.";
+    } else if (passwordLength < 12) {
+      nextErrors.password = "Password must be at least 12 characters.";
+    } else if (passwordLength > 128) {
+      nextErrors.password = "Password must be at most 128 characters.";
     }
 
     setFieldErrors(nextErrors);
     setFormError(null);
+    if (intent.kind === "COUNTERPARTY" && !inviteOrgName.trim()) {
+      setFormError("Your company legal name is required.");
+      return;
+    }
     if (Object.keys(nextErrors).length > 0) {
       return;
     }
 
     setSubmitting(true);
     try {
-      const payload: {
-        token: string;
-        email: string;
-        password: string;
-        display_name?: string;
-        organization_legal_name?: string;
-        country_code?: string;
-      } = {
+      const payload: InvitationAcceptanceInput = {
         token: inviteToken,
         email: inviteEmail.trim(),
         password: invitePassword,
@@ -140,25 +152,17 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       };
       // A legal name creates a counterparty organization; team invitees join
       // the inviting organization using the invitation's role instead.
-      if (inviteOrgName.trim()) {
+      if (intent.kind !== "TEAM" && inviteOrgName.trim()) {
         payload.organization_legal_name = inviteOrgName.trim();
         payload.country_code = inviteCountryCode.trim().toUpperCase() || "US";
       }
 
-      const res = await apiRequest<{
-        status: string;
-        organization_id: string;
-        organization_legal_name: string;
-        user_id: string;
-        role: string;
-        deal_id: string | null;
-        access_token?: string;
-        refresh_token?: string;
-        token_type?: string;
-      }>("/invitations/accept", {
+      const res = await apiRequest<InvitationAcceptance>("/invitations/accept", {
         method: "POST",
         body: JSON.stringify(payload),
       });
+
+      if (currentInviteRef.current !== acceptingToken) return;
 
       if (res.access_token && res.refresh_token) {
         onSignIn({
@@ -173,13 +177,14 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
         navigateToDeals();
       }
     } catch (caught) {
+      if (currentInviteRef.current !== acceptingToken) return;
       if (caught instanceof ApiError) {
         setFormError(caught.message);
       } else {
         setFormError("Unable to accept invitation. Please try again.");
       }
     } finally {
-      setSubmitting(false);
+      if (currentInviteRef.current === acceptingToken) setSubmitting(false);
     }
   }
 
@@ -255,14 +260,16 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       {mode === "invite" && inviteToken ? (
         <aside className="card auth-card" aria-labelledby="invite-onboarding-heading">
           <div className="auth-card__topline">
-            <span className="eyebrow">Counterparty Onboarding</span>
+            <span className="eyebrow">{intent.kind === "TEAM" ? "Team invitation" : "Counterparty Onboarding"}</span>
             <span className="auth-card__number">01 / 01</span>
           </div>
-          <h2 id="invite-onboarding-heading">Join via counterparty invite.</h2>
+          <h2 id="invite-onboarding-heading">{intent.kind === "TEAM" ? "Join your team." : "Join via counterparty invite."}</h2>
           <p className="auth-card__intro">
             Create your account and register your organization to immediately access the invited deal.
           </p>
           <form className="form" onSubmit={handleInviteSubmit} noValidate>
+            {intent.recipientEmail ? <p>Addressed to {intent.recipientEmail}</p> : null}
+            {intent.kind === "INVALID" ? <p role="alert">Invalid invitation token</p> : null}
             <div className="field">
               <label htmlFor="invite-email">Email</label>
               <input
@@ -270,6 +277,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                 name="email"
                 type="email"
                 autoComplete="email"
+                maxLength={320}
                 value={inviteEmail}
                 aria-invalid={fieldErrors.email ? true : undefined}
                 onChange={(e) => setInviteEmail(e.target.value)}
@@ -281,7 +289,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
               ) : null}
             </div>
             <div className="field">
-              <label htmlFor="invite-password">Password (min 8 characters)</label>
+              <label htmlFor="invite-password">Password (12–128 characters)</label>
               <input
                 id="invite-password"
                 name="password"
@@ -304,23 +312,25 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                 name="displayName"
                 type="text"
                 autoComplete="name"
+                maxLength={200}
                 placeholder="e.g. Kenji Sato"
                 value={inviteDisplayName}
                 onChange={(e) => setInviteDisplayName(e.target.value)}
               />
             </div>
-            <div className="field">
-              <label htmlFor="invite-org-name">Company Legal Name (Optional)</label>
+            {intent.kind !== "TEAM" ? <div className="field">
+              <label htmlFor="invite-org-name">{intent.kind === "COUNTERPARTY" ? "Company Legal Name" : "Company Legal Name (Optional)"}</label>
               <input
                 id="invite-org-name"
                 name="orgName"
                 type="text"
+                maxLength={200}
                 placeholder="e.g. Tokyo Exporters Ltd"
                 value={inviteOrgName}
                 onChange={(e) => setInviteOrgName(e.target.value)}
               />
-            </div>
-            <div className="field">
+            </div> : null}
+            {intent.kind !== "TEAM" ? <div className="field">
               <label htmlFor="invite-country-code">Country Code (2 letters)</label>
               <input
                 id="invite-country-code"
@@ -331,14 +341,14 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                 value={inviteCountryCode}
                 onChange={(e) => setInviteCountryCode(e.target.value.toUpperCase())}
               />
-            </div>
+            </div> : null}
             {formError ? (
               <p className="form-error" role="alert">
                 {formError}
               </p>
             ) : null}
-            <button type="submit" className="button auth-card__submit" disabled={submitting}>
-              <span>{submitting ? "Joining deal…" : "Create Account & Join Deal"}</span>
+            <button type="submit" className="button auth-card__submit" disabled={submitting || intent.kind === "INVALID"}>
+              <span>{submitting ? "Joining deal…" : intent.kind === "TEAM" ? "Accept team invitation" : "Create Account & Join Deal"}</span>
               <span aria-hidden="true">↗</span>
             </button>
             <div style={{ marginTop: 12, textAlign: "center" }}>

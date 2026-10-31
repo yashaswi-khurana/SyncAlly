@@ -23,6 +23,47 @@ export interface Deal {
   seller_organization_id: string;
   status: string;
   version: number;
+  pending_counterparty?: boolean;
+}
+
+export interface CounterpartyInvitationInput {
+  buyer_organization_id: string;
+  recipient_email: string;
+  legal_name: string;
+  country_code: string;
+}
+
+export interface Invitation {
+  token: string;
+  invite_url: string;
+  organization_id: string;
+  organization_legal_name: string;
+  deal_id: string | null;
+  role: string;
+  expires_at: string;
+  kind?: "TEAM" | "COUNTERPARTY" | null;
+  pending_counterparty?: boolean;
+}
+
+export interface InvitationAcceptanceInput {
+  token: string;
+  email?: string;
+  password?: string;
+  display_name?: string;
+  organization_legal_name?: string;
+  country_code?: string;
+}
+
+export interface InvitationAcceptance {
+  status: string;
+  organization_id: string;
+  organization_legal_name: string;
+  user_id: string;
+  role: string;
+  deal_id: string | null;
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
 }
 
 export type AgreementStatus = "PENDING_APPROVAL" | "COMMITTED" | "SUPERSEDED" | "VOIDED";
@@ -76,6 +117,11 @@ export interface AgreementLineItem {
 }
 
 export interface AgreementVersion {
+  id?: string | null;
+  proposal_id?: string | null;
+  is_current?: boolean | null;
+  evidence?: AgreementEvidence[];
+  grounding?: "UNMAPPED";
   deal_id: string;
   version_number: number;
   terms_hash: string;
@@ -108,6 +154,8 @@ export interface AgreementVersion {
 }
 
 export interface AgreementApproval {
+  id?: string | null;
+  agreement_version_id?: string | null;
   deal_id: string;
   version_number: number;
   organization_id: string;
@@ -117,21 +165,90 @@ export interface AgreementApproval {
   created_at: string;
 }
 
+export interface AgreementEvidence {
+  trace_enabled: boolean;
+  state: "AVAILABLE" | "UNAVAILABLE" | "CHANGED" | "UNKNOWN";
+  grounding: "UNMAPPED";
+  fact_id?: string;
+  version?: number;
+  agreement_version_id?: string;
+  terms_hash?: string;
+  organization_id?: string;
+  source_message_id?: string;
+  source_span?: string;
+}
+
+export interface AgreementHistory {
+  deal_id: string;
+  organization_id: string;
+  current_version_id: string | null;
+  versions: AgreementVersion[];
+}
+
+export interface AgreementComparison {
+  before: AgreementVersion;
+  after: AgreementVersion;
+  changes: {
+    fields: Array<{ field: string; before: unknown; after: unknown }>;
+    collections: Record<string, {
+      added: unknown[];
+      removed: unknown[];
+      modified: Array<{ before: unknown; after: unknown }>;
+    }>;
+  };
+}
+
+export type PaymentIntentStatus =
+  | "AUTHORIZED"
+  | "CREATE_PENDING"
+  | "CREATE_UNKNOWN"
+  | "PROVIDER_CREATED"
+  | "SENT"
+  | "PENDING"
+  | "PARTIALLY_PAID"
+  | "PAID"
+  | "FAILED"
+  | "CANCELLED";
+
+export type PaymentMode = "PAYPAL_SANDBOX" | "OFFLINE_DEMO";
+
+export interface PaymentPreview {
+  execution_mode: PaymentMode;
+  provider: "PAYPAL" | "OFFLINE_DEMO";
+}
+
 export interface PaymentStatus {
   id: string;
   milestone_sequence: number;
   amount: string;
   currency: string;
-  status: string;
+  status: PaymentIntentStatus;
+  requires_polling?: boolean;
   reconciled_amount: string | null;
   last_checked_at: string | null;
   last_reconciled_at: string | null;
+  invoice_url?: string | null;
+  recipient_email?: string | null;
+  recipient_name?: string | null;
+  retry_count?: number;
+  next_retry_at?: string | null;
+  outbox_status?: "PENDING" | "PROCESSING" | "RETRYING" | "DELIVERED" | "FAILED" | "DEAD_LETTER" | null;
+  retry_scheduled_at?: string | null;
+  lease_expires_at?: string | null;
+  failure_reason?: string | null;
+  provider?: string;
+  execution_mode?: PaymentMode | "LEGACY_UNRESOLVED";
+  reconciliation_source?: "NONE" | "LEGACY_UNVERIFIED" | PaymentMode;
+  invoice_reference?: string | null;
+  version?: number;
 }
 
 export interface PaymentAuthorization {
   id: string;
   status: string;
   already_existed: boolean;
+  provider?: string;
+  execution_mode?: PaymentMode | "LEGACY_UNRESOLVED";
 }
 
 export interface CommercialDocumentDraft {
@@ -181,6 +298,25 @@ export interface MessageExistence {
   has_messages: boolean;
 }
 
+export interface ThreadPreviewInput {
+  text: string;
+  organization_id: string;
+}
+
+export interface ThreadImportInput extends ThreadPreviewInput {
+  digest: string;
+  confirmed: boolean;
+  visibility?: Visibility;
+  shareable_confirmed?: boolean;
+}
+
+export interface ThreadImportPreview {
+  text: string;
+  digest: string;
+  headers: Array<{ label: string; value: string; verified: false }>;
+  warnings: string[];
+}
+
 export interface DealFact {
   id: string;
   deal_id: string;
@@ -201,12 +337,21 @@ export interface DealFact {
 
 export type FactReviewAction = "confirm" | "reject" | "clarify";
 
+export interface AIProvenance {
+  provider: "offline" | "openai" | "unknown";
+  mode: "offline" | "openai" | "openai_with_offline_fallback" | "unknown";
+  model: string | null;
+  context_scope: "authorized" | "shareable_only" | "authorized_private" | "unknown";
+  fallback_reason: "missing_credentials" | "transient_exhausted" | null;
+}
+
 export interface FactSuggestionResult {
   status: "VALID" | "INVALID" | "NEEDS_CLARIFICATION";
   issues: Array<{ schema_version: number; code: string; path: string; message: string }>;
   facts: DealFact[];
   missing_fields: string[];
   guidance_message: string;
+  provenance?: AIProvenance;
 }
 
 export interface ProposalSuggestion {
@@ -219,6 +364,7 @@ export interface ProposalSuggestion {
   delivery_destination: string;
   delivery_date: string | null;
   status: "DRAFT";
+  provenance?: AIProvenance;
 }
 
 /**
@@ -230,13 +376,92 @@ export interface ProposalSuggestion {
  * timing is unambiguous. The due condition is derived from the trigger by the
  * domain contract.
  */
-export interface ReviewedProposalTerms extends Omit<ProposalSuggestion, "status"> {
+export interface ReviewedProposalTerms extends Omit<ProposalSuggestion, "status" | "provenance"> {
   payment_trigger: PaymentTrigger;
 }
 
 export interface FactCorrectionResult {
   replaced_fact: DealFact;
   corrected_fact: DealFact;
+}
+
+export type NegotiationAction = "submit" | "counter" | "accept" | "reject" | "supersede" | "expire";
+
+export interface ProposalBase {
+  id: string;
+  terms_hash: string;
+  status: string;
+}
+
+export interface CandidateAcknowledgement {
+  id: string;
+  version_number: number;
+  terms_hash: string;
+  proposal_id: string;
+}
+
+export interface NegotiationProposal extends ProposalBase {
+  proposal_number: number;
+  author_organization_id: string;
+  based_on_proposal_id: string | null;
+  terms: AgreementVersion["terms"];
+  lifecycle_origin: "LEGACY" | "HUMAN_ROUNDS";
+  created_at: string;
+  expires_at: string | null;
+  metadata_schema_version: number;
+  evidence_refs: Array<{
+    metadata_schema_version: number;
+    fact_id: string;
+    version: number;
+    owner_organization_id: string;
+    visibility: string;
+    source_message_id: string | null;
+    source_span: string | null;
+  }>;
+}
+
+export interface NegotiationView {
+  deal_id: string;
+  deal_revision: number;
+  organization_id: string;
+  max_rounds: number;
+  round_count: number;
+  escalated: boolean;
+  history_ambiguous: boolean;
+  eligible_actions: NegotiationAction[];
+  latest: NegotiationProposal | null;
+  proposals: NegotiationProposal[];
+  current_candidate: CandidateAcknowledgement | null;
+  history: Array<{
+    id: string;
+    action: NegotiationAction | "escalate";
+    proposal_id: string | null;
+    predecessor_id: string | null;
+    candidate_id: string | null;
+    invalidated_candidate_id: string | null;
+    actor_organization_id: string;
+    from_status: string | null;
+    to_status: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface NegotiationInput {
+  command_id: string;
+  expected_deal_revision: number;
+  organization_id: string;
+  base: ProposalBase | null;
+  terms?: ReviewedProposalTerms;
+  expires_at?: string | null;
+  supersede_current_candidate?: CandidateAcknowledgement | null;
+  evidence?: Array<{ fact_id: string; version: number }>;
+}
+
+export interface NegotiationResult {
+  outcome: "APPLIED" | "ESCALATION_REQUIRED";
+  deal_revision: number;
+  proposal_id: string | null;
+  candidate_id: string | null;
 }
 
 export interface CreateDealInput {
@@ -257,7 +482,7 @@ export interface CreateDealInput {
 export interface CreateMessageInput {
   body: string;
   visibility: Visibility;
-  idempotency_key: string;
+  idempotency_key?: string | null;
   source_type?: string;
   source_reference?: string;
   organization_id?: string;

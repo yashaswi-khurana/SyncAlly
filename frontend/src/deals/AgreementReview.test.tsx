@@ -5,8 +5,12 @@ import {
   ApiError,
   commitAgreementVersion,
   getCurrentAgreement,
+  getAgreementHistory,
+  getAgreementVersion,
+  compareAgreementVersions,
   listOrganizations,
   recordAgreementDecision,
+  getTradePack,
 } from "../api/client";
 import type { AgreementVersion, Organization } from "../api/types";
 import AgreementReview from "./AgreementReview";
@@ -17,8 +21,12 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     commitAgreementVersion: vi.fn(),
     getCurrentAgreement: vi.fn(),
+    getAgreementHistory: vi.fn(),
+    getAgreementVersion: vi.fn(),
+    compareAgreementVersions: vi.fn(),
     listOrganizations: vi.fn(),
     recordAgreementDecision: vi.fn(),
+    getTradePack: vi.fn(),
   };
 });
 
@@ -90,6 +98,9 @@ function renderReview() {
 
 describe("AgreementReview", () => {
   beforeEach(() => {
+    vi.mocked(getAgreementHistory).mockResolvedValue({ deal_id: DEAL_ID, organization_id: BUYER_ID, current_version_id: "current", versions: [AGREEMENT, { ...AGREEMENT, id: "old", version_number: 2, status: "SUPERSEDED" }] });
+    vi.mocked(getAgreementVersion).mockImplementation(async (_deal, number) => ({ ...AGREEMENT, id: number === 2 ? "old" : "current", version_number: number, status: number === 2 ? "SUPERSEDED" : "PENDING_APPROVAL" }));
+    vi.mocked(compareAgreementVersions).mockResolvedValue({ before: { ...AGREEMENT, version_number: 2 }, after: AGREEMENT, changes: { fields: [], collections: {} } });
     mockedGetCurrent.mockResolvedValue(AGREEMENT);
     mockedListOrganizations.mockResolvedValue([BUYER]);
     mockedRecordDecision.mockResolvedValue({
@@ -109,6 +120,90 @@ describe("AgreementReview", () => {
   });
 
   afterEach(() => vi.clearAllMocks());
+
+  it("downloads the displayed historical committed snapshot and returns to the exact current one", async () => {
+    const current = { ...AGREEMENT, id: "current", status: "COMMITTED" as const };
+    const old = { ...current, id: "old", version_number: 2, terms_hash: "b".repeat(64) };
+    mockedGetCurrent.mockResolvedValue(current);
+    vi.mocked(getAgreementHistory).mockResolvedValue({ deal_id: DEAL_ID, organization_id: BUYER_ID,
+      current_version_id: "current", versions: [current, old] });
+    vi.mocked(getAgreementVersion).mockImplementation(async (_deal, number) => number === 2 ? old : current);
+    vi.mocked(getTradePack).mockRejectedValue(new ApiError(413, "Test export too large"));
+    renderReview();
+    fireEvent.click(await screen.findByRole("button", { name: "Download trade pack" }));
+    await screen.findByText("Test export too large");
+    expect(getTradePack).toHaveBeenLastCalledWith(DEAL_ID, current, BUYER_ID, "zip", expect.any(AbortSignal));
+    fireEvent.change(screen.getByLabelText("Agreement version"), { target: { value: "2" } });
+    expect(screen.queryByRole("button", { name: "Download trade pack" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Download trade pack" }));
+    expect(getTradePack).toHaveBeenLastCalledWith(DEAL_ID, old, BUYER_ID, "zip", expect.any(AbortSignal));
+    expect(screen.queryByRole("button", { name: "Approve this version" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Agreement version"), { target: { value: "0" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Download trade pack" }));
+    expect(getTradePack).toHaveBeenLastCalledWith(DEAL_ID, current, BUYER_ID, "zip", expect.any(AbortSignal));
+  });
+
+  it("hides exports when exact current identity disagrees or remains unavailable", async () => {
+    mockedGetCurrent.mockResolvedValue({ ...AGREEMENT, id: "current", status: "COMMITTED" });
+    vi.mocked(getAgreementVersion).mockResolvedValue({ ...AGREEMENT, id: "other", status: "COMMITTED" });
+    renderReview();
+    await waitFor(() => expect(getAgreementVersion).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Download trade pack" })).not.toBeInTheDocument();
+  });
+
+  it("loads exact historical versions read-only and clears evidence immediately on selection", async () => {
+    vi.mocked(getAgreementVersion).mockResolvedValueOnce({ ...AGREEMENT, id: "current", evidence: [{ state: "AVAILABLE", grounding: "UNMAPPED", trace_enabled: true, agreement_version_id: "current", terms_hash: AGREEMENT.terms_hash, organization_id: BUYER_ID, source_span: "Frozen quote" }] });
+    renderReview();
+    expect(await screen.findByText("Frozen quote")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Agreement version"), { target: { value: "2" } });
+    expect(screen.queryByText("Frozen quote")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve this version" })).not.toBeInTheDocument();
+    expect(await screen.findByText(/Historical version/)).toBeInTheDocument();
+    expect(getAgreementVersion).toHaveBeenCalledWith(DEAL_ID, 2, BUYER_ID, expect.any(AbortSignal));
+    expect(recordAgreementDecision).not.toHaveBeenCalled();
+  });
+
+  it("compares selected versions without enabling approval commands", async () => {
+    renderReview();
+    await screen.findByLabelText("Compare before");
+    fireEvent.change(screen.getByLabelText("Compare before"), { target: { value: "2" } });
+    expect(await screen.findByLabelText("Structured agreement comparison")).toBeInTheDocument();
+    expect(compareAgreementVersions).toHaveBeenCalledWith(DEAL_ID, 2, 3, BUYER_ID, expect.any(AbortSignal));
+    expect(screen.queryByRole("button", { name: "Approve this version" })).not.toBeInTheDocument();
+  });
+
+  it("retains historical access after the current candidate has been removed", async () => {
+    mockedGetCurrent.mockRejectedValue(new ApiError(404, "No current agreement"));
+    vi.mocked(getAgreementHistory).mockResolvedValue({ deal_id: DEAL_ID, organization_id: BUYER_ID, current_version_id: null,
+      versions: [{ ...AGREEMENT, id: "old", version_number: 2, status: "VOIDED" }] });
+    renderReview();
+    expect(await screen.findByText(/Historical version/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Agreement version")).toHaveValue("2");
+    expect(screen.queryByRole("button", { name: "Approve this version" })).not.toBeInTheDocument();
+  });
+
+  it("blocks commands and old source quotes when the exact read hash changed", async () => {
+    vi.mocked(getAgreementVersion).mockResolvedValue({ ...AGREEMENT, terms_hash: "b".repeat(64) });
+    renderReview();
+    expect(await screen.findByText("The agreement changed or is unavailable.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve this version" })).not.toBeInTheDocument();
+    expect(mockedRecordDecision).not.toHaveBeenCalled();
+  });
+
+  it("aborts old version reads and ignores late evidence on party change", async () => {
+    let resolveOld!: (agreement: AgreementVersion) => void;
+    vi.mocked(getAgreementVersion).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    const props = { dealId: DEAL_ID, buyerOrganizationId: BUYER_ID, sellerOrganizationId: SELLER_ID };
+    const view = render(<AgreementReview {...props} selectedOrganizationId={BUYER_ID} />);
+    await waitFor(() => expect(getAgreementVersion).toHaveBeenCalled());
+    const signal = vi.mocked(getAgreementVersion).mock.calls[0][3]!;
+    view.rerender(<AgreementReview {...props} selectedOrganizationId={SELLER_ID} />);
+    expect(signal.aborted).toBe(true);
+    resolveOld({ ...AGREEMENT, id: "current", evidence: [{ trace_enabled: true, state: "AVAILABLE", grounding: "UNMAPPED",
+      organization_id: BUYER_ID, agreement_version_id: "current", terms_hash: AGREEMENT.terms_hash, source_span: "Late private quote" }] });
+    await screen.findByText("VERSION 3");
+    expect(screen.queryByText("Late private quote")).not.toBeInTheDocument();
+  });
 
   it("shows saved terms and submits the exact displayed version and hash", async () => {
     const approvedAgreement: AgreementVersion = {
@@ -227,6 +322,7 @@ describe("AgreementReview", () => {
         DEAL_ID,
         AGREEMENT.version_number,
         AGREEMENT.terms_hash,
+        BUYER_ID,
       ),
     );
     expect(await screen.findByText(/committed\. its terms are read-only/i)).toBeInTheDocument();

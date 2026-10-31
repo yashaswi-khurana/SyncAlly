@@ -33,6 +33,7 @@ def record_paypal_webhook_event(db: Session, event: Mapping[str, Any]) -> bool:
     intent = db.scalar(
         select(PaymentIntent).where(
             PaymentIntent.provider == "PAYPAL",
+            PaymentIntent.execution_mode == "PAYPAL_SANDBOX",
             PaymentIntent.provider_invoice_id == invoice_id,
         )
     )

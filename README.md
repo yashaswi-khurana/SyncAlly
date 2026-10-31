@@ -2,7 +2,7 @@
 
 SyncAlly is a proposed platform for helping buyers and sellers turn commercial conversations into reviewed trade terms, mutually approved agreements, operational documents, and payment requests.
 
-> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. Public self-registration and product invitation/acceptance are not implemented; product invitations remain planned. Deal creation, the create/detail browser flow, bilateral agreement approval, and the durable Temporal deal workflow with its separate worker process are implemented. Local PostgreSQL and Temporal development services and an opt-in worker restart smoke test are provided in `infra/`; external payment integration remains planned.
+> **Project status:** The foundation includes a FastAPI API with health checks, JWT authentication and refresh rotation, protected deal reads, PostgreSQL persistence and migrations, framework-independent domain foundations, and a React/TypeScript frontend shell. Local demo accounts can be provisioned with a development/test-only seed command. F4 adds recipient-bound team/counterparty invitations, invitation signup, private pending deals, and atomic acceptance; unrestricted public self-registration remains disabled. Deal creation, the create/detail browser flow, bilateral agreement approval, and the durable Temporal deal workflow with its separate worker process are implemented. Local PostgreSQL and Temporal development services and an opt-in worker restart smoke test are provided in `infra/`; external payment integration remains planned.
 
 ## Architecture
 
@@ -101,7 +101,9 @@ python -m syncally.cli.seed_demo
 
 The command asks for each password without displaying it. Use `buyer@syncally.demo` or
 `seller@syncally.demo` to sign in. It is disabled outside development/test; public
-self-registration and organization invitations are not available yet.
+self-registration is disabled. Recipient-bound invitation signup/acceptance is supported;
+matching a signup email is not verified mailbox ownership. See the
+[F4 walkthrough and migration safeguards](docs/operations.md#f4-counterparty-onboarding).
 
 The API exposes `GET /health` for process health and `GET /health/database` to verify
 that it can acquire and use a database connection. It does not yet check workflow-worker

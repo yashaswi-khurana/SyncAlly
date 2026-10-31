@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as apiClient from "../api/client";
@@ -17,6 +17,22 @@ const mockedListOrganizations = vi.mocked(apiClient.listOrganizations);
 const mockedApiRequest = vi.mocked(apiClient.apiRequest);
 
 describe("OrganizationsSettingsPage", () => {
+  it("typed team invitation hides company fields and calls membership refresh", async () => {
+    const token = `header.${btoa(JSON.stringify({ version: 1, kind: "TEAM", recipient_email: "recipient@example.com" }))}.signature`;
+    window.location.hash = `#/invite?token=${token}`;
+    const result = { status: "ACCEPTED", organization_id: "inviting-org", organization_legal_name: "Team Ltd", user_id: "recipient", role: "MEMBER", deal_id: null };
+    mockedApiRequest.mockResolvedValueOnce(result);
+    const onAccepted = vi.fn().mockResolvedValue(undefined);
+    const { unmount } = render(<OrganizationsSettingsPage onAccepted={onAccepted} />);
+    expect(await screen.findByRole("heading", { name: "Accept team invitation" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Company Legal Name/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Accept & Join" }));
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(result, expect.any(Function)));
+    const isCurrentInvitation = onAccepted.mock.calls[0][1] as () => boolean;
+    expect(isCurrentInvitation()).toBe(true);
+    unmount();
+    expect(isCurrentInvitation()).toBe(false);
+  });
   beforeEach(() => {
     window.location.hash = "#/settings/organizations";
     mockedListOrganizations.mockResolvedValue([
@@ -41,11 +57,11 @@ describe("OrganizationsSettingsPage", () => {
     window.location.hash = "";
   });
 
-  it("renders page header and Invite Counterparty button", async () => {
+  it("renders page header and Invite team member button", async () => {
     render(<OrganizationsSettingsPage />);
 
     expect(screen.getByRole("heading", { name: "Organizations." })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Invite Counterparty" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Invite team member" })).toBeInTheDocument();
   });
 
   it("opens the invite modal and generates a shareable link with one click", async () => {
@@ -69,11 +85,13 @@ describe("OrganizationsSettingsPage", () => {
 
     render(<OrganizationsSettingsPage />);
 
-    const inviteBtn = screen.getByRole("button", { name: "Invite Counterparty" });
+    const inviteBtn = screen.getByRole("button", { name: "Invite team member" });
     fireEvent.click(inviteBtn);
 
-    expect(screen.getByRole("heading", { name: "Invite Counterparty" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Invite team member" })).toBeInTheDocument();
     await screen.findByRole("option", { name: "Demo Seller Co (US)" });
+    expect(screen.queryByLabelText(/Deal ID/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Team member email"), { target: { value: " Teammate@Example.com " } });
 
     const generateBtn = screen.getByRole("button", { name: "Generate Invite Link" });
     fireEvent.click(generateBtn);
@@ -83,6 +101,7 @@ describe("OrganizationsSettingsPage", () => {
         "/organizations/11111111-1111-1111-1111-111111111111/invitations",
         expect.objectContaining({
           method: "POST",
+          body: JSON.stringify({ recipient_email: "teammate@example.com" }),
         }),
       );
     });
@@ -159,6 +178,26 @@ describe("OrganizationsSettingsPage", () => {
       expect(screen.queryByText(/Successfully joined/i)).not.toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: "Accept & Join" })).toBeInTheDocument();
+  });
+
+  it("does not refresh membership from a late response for a previous invitation", async () => {
+    window.location.hash = "#/invite?token=first-token";
+    let resolveAcceptance!: (result: unknown) => void;
+    mockedApiRequest.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAcceptance = resolve;
+    }));
+    const onAccepted = vi.fn();
+    render(<OrganizationsSettingsPage onAccepted={onAccepted} />);
+    fireEvent.click(screen.getByRole("button", { name: "Accept & Join" }));
+    window.location.hash = "#/invite?token=second-token";
+    fireEvent(window, new Event("hashchange"));
+    await act(async () => resolveAcceptance({
+      status: "ACCEPTED", organization_legal_name: "Previous Ltd", deal_id: "stale-deal",
+    }));
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Successfully joined/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept & Join" })).toBeEnabled();
+    expect(window.location.hash).toBe("#/invite?token=second-token");
   });
 
   it("keeps the accept outcome when the hash changes but the token is unchanged", async () => {

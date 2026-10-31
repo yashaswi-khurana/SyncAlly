@@ -29,6 +29,7 @@ class Deal:
     _status: DealStatus = field(default=DealStatus.DRAFT, init=False, repr=False)
     current_agreement_version_id: AgreementVersionId | None = None
     version: int = 0
+    pending_counterparty: bool = False
 
     def __init__(
         self,
@@ -39,6 +40,7 @@ class Deal:
         status: DealStatus = DealStatus.DRAFT,
         current_agreement_version_id: AgreementVersionId | None = None,
         version: int = 0,
+        pending_counterparty: bool = False,
     ) -> None:
         self.id = id
         self.buyer_organization_id = buyer_organization_id
@@ -47,6 +49,7 @@ class Deal:
         self._status = status
         self.current_agreement_version_id = current_agreement_version_id
         self.version = version
+        self.pending_counterparty = pending_counterparty
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -70,6 +73,12 @@ class Deal:
         if self.current_agreement_version_id != agreement_version_id:
             raise InvariantViolation("Agreement version is no longer current for this deal")
         self._transition(DealStatus.PENDING_APPROVALS, DealStatus.AGREED)
+
+    def replace_pending_candidate(self, agreement_version_id: AgreementVersionId) -> None:
+        if self.current_agreement_version_id != agreement_version_id:
+            raise InvariantViolation("Candidate is no longer current")
+        self._transition(DealStatus.PENDING_APPROVALS, DealStatus.NEGOTIATING)
+        self.current_agreement_version_id = None
 
     def begin_execution(self) -> None:
         self._transition(DealStatus.AGREED, DealStatus.EXECUTING)

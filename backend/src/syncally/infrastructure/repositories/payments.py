@@ -29,10 +29,12 @@ from syncally.application.payments import (
     PaymentIntentAuthorizationOutcome,
     PaymentIntentCommandMismatch,
     PaymentMilestoneNotFound,
+    PaymentModeChanged,
     PaymentStatusRecord,
     authorize_payment_intent,
 )
 from syncally.domain.agreements.agreement import AgreementStatus
+from syncally.domain.payments.intent import PaymentExecutionMode
 from syncally.domain.payments.intent import PaymentIntent as DomainPaymentIntent
 from syncally.domain.payments.intent import PaymentMilestone as DomainPaymentMilestone
 from syncally.domain.shared.identifiers import (
@@ -69,7 +71,16 @@ class ExtendedPaymentStatusRecord(PaymentStatusRecord):
     recipient_name: str | None = None
     retry_count: int = 0
     next_retry_at: datetime | None = None
+    outbox_status: str | None = None
+    retry_scheduled_at: datetime | None = None
+    lease_expires_at: datetime | None = None
     failure_reason: str | None = None
+
+
+def _utc_timestamp(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _build_invoice_url(
@@ -159,6 +170,10 @@ class SqlAlchemyPaymentIntentRepository:
         if existing is not None:
             return self._matching_outcome_or_raise(existing, command)
 
+        mode = PaymentExecutionMode(command.execution_mode)
+        if command.expected_mode is not None and command.expected_mode != mode:
+            raise PaymentModeChanged("Payment mode changed; preview the new authorization again")
+
         try:
             self._db.add(
                 PaymentIntent(
@@ -172,6 +187,9 @@ class SqlAlchemyPaymentIntentRepository:
                     amount=command.amount.amount,
                     currency=command.amount.currency,
                     status=_PAYMENT_INTENT_AUTHORIZED_STATUS,
+                    provider=mode.provider,
+                    execution_mode=mode.value,
+                    reconciliation_source="NONE",
                     idempotency_key=command.idempotency_key,
                     version=0,
                     created_at=now,
@@ -192,7 +210,9 @@ class SqlAlchemyPaymentIntentRepository:
             raise DuplicateActivePaymentIntent(
                 "An active payment intent already exists for this milestone"
             ) from error
-        return PaymentIntentAuthorizationOutcome(intent_id=command.id, already_existed=False)
+        return PaymentIntentAuthorizationOutcome(
+            intent_id=command.id, already_existed=False, provider=mode.provider, execution_mode=mode.value
+        )
 
     def list_for_agreement(self, agreement_version_id: UUID) -> list[PaymentStatusRecord]:
         """Read each milestone's latest status with buyer contact and retry diagnostics."""
@@ -296,15 +316,34 @@ class SqlAlchemyPaymentIntentRepository:
                         if intent.reconciled_amount is not None
                         else None
                     ),
-                    last_checked_at=intent.last_checked_at,
-                    last_reconciled_at=intent.last_reconciled_at,
+                    last_checked_at=_utc_timestamp(intent.last_checked_at),
+                    last_reconciled_at=_utc_timestamp(intent.last_reconciled_at),
+                    provider=intent.provider,
+                    execution_mode=intent.execution_mode,
+                    reconciliation_source=intent.reconciliation_source,
+                    invoice_reference=intent.provider_invoice_id if intent.execution_mode == "OFFLINE_DEMO" else None,
+                    version=intent.version,
                     invoice_url=_build_invoice_url(
                         intent.provider, intent.provider_invoice_id, intent.status
-                    ),
+                    ) if intent.execution_mode == "PAYPAL_SANDBOX" else None,
                     recipient_email=recipient_email,
                     recipient_name=recipient_name,
                     retry_count=outbox.retry_count if outbox is not None else 0,
                     next_retry_at=next_retry_at,
+                    outbox_status=outbox.status if outbox is not None else None,
+                    retry_scheduled_at=(
+                        next_retry_at
+                        if outbox is not None and (
+                            outbox.status == "RETRYING"
+                            or (outbox.status == "PENDING" and outbox.retry_count > 0)
+                        )
+                        else None
+                    ),
+                    lease_expires_at=(
+                        next_retry_at
+                        if outbox is not None and outbox.status == "PROCESSING"
+                        else None
+                    ),
                     failure_reason=failure_reason,
                 )
             )
@@ -328,7 +367,10 @@ class SqlAlchemyPaymentIntentRepository:
             and existing.amount == command.amount.amount
             and existing.currency == command.amount.currency
         ):
-            return PaymentIntentAuthorizationOutcome(intent_id=existing.id, already_existed=True)
+            return PaymentIntentAuthorizationOutcome(
+                intent_id=existing.id, already_existed=True,
+                provider=existing.provider, execution_mode=existing.execution_mode,
+            )
         raise IdempotencyKeyReused(
             f"Idempotency key {command.idempotency_key!r} is already used by a different payment authorization"
         )

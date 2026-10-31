@@ -10,16 +10,18 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, date, datetime
-from typing import NoReturn
+from typing import Literal, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
 from syncally.application.ai import (
+    AIConfigurationError,
+    AIProvenance,
     AISuggestionProvider,
     AITransientError,
     draft_proposal_from_context,
@@ -37,13 +39,18 @@ from syncally.application.conversations import (
     ConstraintNotFound,
     ConstraintReviewAction,
     CreateManualConstraintCommand,
+    MessageIdempotencyConflict,
     OrganizationAccessDenied,
+    ThreadImportStale,
+    ThreadImportValidationError,
     add_message,
     correct_constraint,
     create_manual_constraint,
     deal_has_any_message,
+    import_thread,
     list_visible_constraints,
     list_visible_messages,
+    preview_thread_import,
     review_constraint,
     select_ai_context,
 )
@@ -66,7 +73,7 @@ from syncally.domain.conversations import (
     Visibility,
 )
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
-from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
+from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     AuditEvent,
@@ -98,6 +105,14 @@ class AddMessageRequest(BaseModel):
     visibility: Visibility
     source_reference: str | None = Field(default=None, max_length=500)
     organization_id: UUID | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Idempotency key must not be blank")
+        return value
 
     @field_validator("body", mode="before")
     @classmethod
@@ -127,6 +142,38 @@ class MessageResponse(BaseModel):
     source_type: str
     source_reference: str | None
     created_at: datetime
+
+
+class ThreadPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(strict=True, min_length=1, max_length=8000)
+    organization_id: UUID | None = None
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class ThreadImportRequest(ThreadPreviewRequest):
+    digest: str = Field(strict=True, pattern=r"^plaintext-thread:v1:[0-9a-f]{64}$")
+    confirmed: StrictBool
+    visibility: Visibility = Visibility.PRIVATE
+    shareable_confirmed: StrictBool = False
+
+
+class ThreadHeaderResponse(BaseModel):
+    label: str
+    value: str
+    verified: Literal[False] = False
+
+
+class ThreadPreviewResponse(BaseModel):
+    text: str
+    digest: str
+    headers: list[ThreadHeaderResponse]
+    warnings: list[str]
 
 
 class MessageExistenceResponse(BaseModel):
@@ -168,6 +215,7 @@ class FactSuggestionResponse(BaseModel):
     facts: list[ConstraintResponse]
     missing_fields: list[str]
     guidance_message: str
+    provenance: AIProvenance = AIProvenance()
 
 
 class ProposalSuggestionResponse(BaseModel):
@@ -180,6 +228,7 @@ class ProposalSuggestionResponse(BaseModel):
     delivery_destination: str
     delivery_date: date | None
     status: str = "DRAFT"
+    provenance: AIProvenance = AIProvenance()
 
 
 class AISuggestionRequest(BaseModel):
@@ -238,13 +287,14 @@ def get_communication_repository(
 
 
 def get_ai_suggestion_provider() -> AISuggestionProvider:
-    """Use the deterministic demo provider locally; require a chosen provider elsewhere."""
-    if settings.app_env.lower() not in {"development", "test"}:
+    """Select an explicitly configured provider for this invocation only."""
+    try:
+        return ConfiguredAIProvider(settings)
+    except AIConfigurationError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI suggestions are not configured",
-        )
-    return DemoAISuggestionProvider()
+        ) from None
 
 
 def _validation_issue_responses(result: ValidationResult) -> list[ValidationIssueResponse]:
@@ -343,8 +393,10 @@ def suggest_facts_route(
     """Run the scoped fake/provider on explicit request and save unreviewed candidates."""
     try:
         context = select_ai_context(actor, deal_id, payload.organization_id, repository)
+        repository.require_participant_membership(deal_id, context.organization_id, actor.user_id)
         db.rollback()  # Do not hold a database transaction while the provider runs.
         result = extract_facts_from_context(context, provider)
+        repository.require_participant_membership(deal_id, context.organization_id, actor.user_id)
         facts = persist_fact_candidates(actor, deal_id, result, repository)
         db.commit()
         current_constraints = _list_all_visible_constraints(
@@ -375,6 +427,7 @@ def suggest_facts_route(
         facts=[_to_constraint_response(fact) for fact in facts],
         missing_fields=missing_fields,
         guidance_message=_fact_suggestion_guidance(missing_fields),
+        provenance=result.provenance,
     )
 
 
@@ -390,8 +443,10 @@ def suggest_proposal_route(
     """Return validated draft terms; this route cannot save or approve an agreement."""
     try:
         context = select_ai_context(actor, deal_id, payload.organization_id, repository)
+        repository.require_participant_membership(deal_id, context.organization_id, actor.user_id)
         db.rollback()
         result = draft_proposal_from_context(context, provider)
+        repository.require_participant_membership(deal_id, context.organization_id, actor.user_id)
     except AITransientError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -418,6 +473,7 @@ def suggest_proposal_route(
         currency=proposal.currency,
         delivery_destination=proposal.delivery_destination,
         delivery_date=proposal.delivery_date,
+        provenance=result.provenance,
     )
 
 
@@ -530,9 +586,9 @@ def _raise_review_error(error: Exception) -> NoReturn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     if isinstance(error, OrganizationAccessDenied):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
-    if isinstance(error, (ConcurrentConstraintUpdate, InvalidTransition)):
+    if isinstance(error, (ConcurrentConstraintUpdate, InvalidTransition, MessageIdempotencyConflict, ThreadImportStale)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-    if isinstance(error, (AmbiguousOrganization, InvariantViolation)):
+    if isinstance(error, (AmbiguousOrganization, InvariantViolation, ThreadImportValidationError)):
         raise HTTPException(status_code=422, detail=str(error)) from error
     if isinstance(error, CommunicationScopeError):
         raise HTTPException(
@@ -563,16 +619,69 @@ def add_message_route(
                 visibility=payload.visibility,
                 source_reference=payload.source_reference,
                 organization_id=payload.organization_id,
+                idempotency_key=payload.idempotency_key,
             ),
             repository,
         )
     except (
         CommunicationNotFound,
+        MessageIdempotencyConflict,
         OrganizationAccessDenied,
         AmbiguousOrganization,
         InvariantViolation,
         CommunicationScopeError,
     ) as exc:
+        _raise_review_error(exc)
+    db.commit()
+    return _to_message_response(message)
+
+
+@router.post("/messages/import/preview", response_model=ThreadPreviewResponse)
+def preview_thread_route(
+    deal_id: UUID,
+    payload: ThreadPreviewRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+) -> ThreadPreviewResponse:
+    try:
+        preview = preview_thread_import(
+            actor, deal_id, payload.text, repository, organization_id=payload.organization_id
+        )
+    except (
+        CommunicationNotFound, OrganizationAccessDenied, AmbiguousOrganization,
+        ThreadImportValidationError, CommunicationScopeError,
+    ) as exc:
+        _raise_review_error(exc)
+    return ThreadPreviewResponse(
+        text=preview.text,
+        digest=preview.digest,
+        headers=[ThreadHeaderResponse(label=label, value=value) for label, value in preview.headers],
+        warnings=list(preview.warnings),
+    )
+
+
+@router.post("/messages/import", status_code=201, response_model=MessageResponse)
+def import_thread_route(
+    deal_id: UUID,
+    payload: ThreadImportRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: CommunicationRepository = Depends(get_communication_repository),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    try:
+        message = import_thread(
+            actor, deal_id, payload.text, payload.digest, repository,
+            confirmed=payload.confirmed,
+            visibility=payload.visibility,
+            shareable_confirmed=payload.shareable_confirmed,
+            organization_id=payload.organization_id,
+        )
+    except (
+        CommunicationNotFound, OrganizationAccessDenied, AmbiguousOrganization,
+        ThreadImportValidationError, ThreadImportStale, MessageIdempotencyConflict,
+        CommunicationScopeError, InvariantViolation,
+    ) as exc:
+        db.rollback()
         _raise_review_error(exc)
     db.commit()
     return _to_message_response(message)

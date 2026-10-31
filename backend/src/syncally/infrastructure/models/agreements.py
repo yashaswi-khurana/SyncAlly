@@ -10,11 +10,14 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,7 +27,15 @@ from syncally.infrastructure.models.mixins import TimestampMixin
 
 class AgreementVersion(Base):
     __tablename__ = "agreement_versions"
-    __table_args__ = (UniqueConstraint("deal_id", "version_number"),)
+    __table_args__ = (
+        UniqueConstraint("deal_id", "version_number"),
+        UniqueConstraint("id", "deal_id", name="uq_agreement_scope"),
+        ForeignKeyConstraint(["proposal_id", "deal_id"], ["proposals.id", "proposals.deal_id"], name="fk_agreement_proposal_scope"),
+        CheckConstraint("version_number > 0", name="ck_agreement_version_positive"),
+        Index("uq_agreement_pending_deal", "deal_id", unique=True,
+              sqlite_where=text("status = 'PENDING_APPROVAL'"),
+              postgresql_where=text("status = 'PENDING_APPROVAL'")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id", ondelete="CASCADE"), nullable=False)

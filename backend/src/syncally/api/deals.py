@@ -46,6 +46,7 @@ class DealResponse(BaseModel):
     seller_organization_id: UUID
     status: str
     version: int
+    pending_counterparty: bool = False
 
 
 class DealSummaryResponse(DealResponse):
@@ -66,6 +67,7 @@ def _to_response(deal: Deal) -> DealResponse:
         seller_organization_id=deal.seller_organization_id,
         status=deal.status.value,
         version=deal.version,
+        pending_counterparty=deal.pending_counterparty,
     )
 
 

@@ -9,6 +9,7 @@ needed to keep two simultaneous requests from double-committing.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -23,6 +24,7 @@ from syncally.application.agreements import (
     AgreementAlreadyCommitted,
     AgreementNotFound,
     AgreementVersionConflict,
+    AmbiguousAgreementOrganization,
     AuditEventDraft,
     CommitAgreementCommand,
     CreateAgreementDraftCommand,
@@ -39,6 +41,7 @@ from syncally.application.agreements import (
     create_reviewed_agreement_draft,
     record_approval,
 )
+from syncally.application.documents import export_display_terms
 from syncally.application.workflow_notifications import NotificationKind
 from syncally.domain.agreements.agreement import Agreement as DomainAgreement
 from syncally.domain.agreements.agreement import AgreementStatus, ApprovalDecision
@@ -68,11 +71,15 @@ from syncally.domain.shared.identifiers import (
     ProposalId,
     UserId,
 )
+from syncally.infrastructure.counterparty_onboarding import is_pending, lock_deal
 from syncally.infrastructure.models import (
     AgreementVersion,
     Approval,
     AuditEvent,
+    Constraint,
+    Conversation,
     Deal,
+    Message,
     NegotiationSession,
     Obligation,
     Organization,
@@ -137,18 +144,154 @@ class SqlAlchemyAgreementRepository:
     def __init__(self, db: Session) -> None:
         self._db = db
 
+    def read_versions(self, deal_id: UUID, user_id: UUID, organization_id: UUID | None,
+                      numbers: tuple[int, ...] | None = None, *,
+                      commitment_only: bool = False) -> dict[str, Any]:
+        deal = self._db.get(Deal, deal_id, populate_existing=True)
+        if deal is None:
+            raise AgreementNotFound("Deal not found")
+        parties = set(self._db.scalars(select(OrganizationMember.organization_id)
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(OrganizationMember.user_id == user_id, OrganizationMember.status == "ACTIVE",
+                   Organization.status == "ACTIVE", User.status == "ACTIVE",
+                   OrganizationMember.organization_id.in_([deal.buyer_organization_id, deal.seller_organization_id]))))
+        if not parties or (organization_id is not None and organization_id not in parties):
+            raise AgreementNotFound("Deal not found")
+        if organization_id is None and len(parties) != 1:
+            raise AmbiguousAgreementOrganization("Choose the acting organization")
+        party = organization_id or next(iter(parties))
+        query = select(AgreementVersion).where(AgreementVersion.deal_id == deal_id)
+        if numbers is not None:
+            query = query.where(AgreementVersion.version_number.in_(numbers))
+        rows = list(self._db.scalars(query.order_by(AgreementVersion.version_number.desc())
+                                    .execution_options(populate_existing=True)))
+        if numbers is not None and {row.version_number for row in rows} != set(numbers):
+            raise AgreementNotFound("Agreement version not found")
+        return {"deal_id": str(deal_id), "organization_id": str(party),
+                "current_version_id": str(deal.current_agreement_version_id) if deal.current_agreement_version_id else None,
+                "versions": [self._read_projection(row, party, deal, commitment_only=commitment_only) for row in rows]}
+
+    def _read_projection(self, row: AgreementVersion, party: UUID, deal: Deal, *,
+                         commitment_only: bool = False) -> dict[str, Any]:
+        display = export_display_terms(row.canonical_terms_json) if commitment_only else row.canonical_terms_json
+        terms = TradeTerms.from_canonical_json(display)
+        if (terms.terms_hash != row.terms_hash or terms.buyer_id != deal.buyer_organization_id
+                or terms.seller_id != deal.seller_organization_id):
+            raise AgreementVersionConflict("Stored agreement is inconsistent")
+        approvals = list(self._db.scalars(select(Approval).where(
+            Approval.agreement_version_id == row.id, Approval.deal_id == row.deal_id)
+            .order_by(Approval.organization_id).execution_options(populate_existing=True)))
+        if commitment_only:
+            return {"id": str(row.id), "deal_id": str(row.deal_id), "version_number": row.version_number,
+                    "terms_hash": row.terms_hash, "status": row.status, "terms": display,
+                    "created_at": as_utc(row.created_at),
+                    "committed_at": as_utc(row.committed_at) if row.committed_at else None,
+                    "approvals": [{"agreement_version_id": str(approval.agreement_version_id),
+                        "deal_id": str(approval.deal_id), "version_number": row.version_number,
+                        "organization_id": str(approval.organization_id),
+                        "decision": approval.decision, "terms_hash": approval.terms_hash}
+                        for approval in approvals]}
+        proposal = self._db.scalar(select(Proposal).where(Proposal.id == row.proposal_id,
+            Proposal.deal_id == row.deal_id).execution_options(populate_existing=True))
+        refs = row.canonical_terms_json.get("_f6_evidence")
+        if refs is None:
+            refs = proposal.evidence_refs if proposal is not None and proposal.terms_hash == row.terms_hash else []
+        evidence = [self._read_evidence(ref, row, party) for ref in (refs or [])]
+        payment = terms.payment_terms[0] if len(terms.payment_terms) == 1 else None
+        return {"id": str(row.id), "deal_id": str(row.deal_id), "version_number": row.version_number,
+                "proposal_id": str(row.proposal_id), "terms_hash": row.terms_hash, "status": row.status,
+                "terms": terms.to_storage_dict(), "created_at": as_utc(row.created_at),
+                "committed_at": as_utc(row.committed_at) if row.committed_at else None,
+                "is_current": deal.current_agreement_version_id == row.id,
+                "payment_trigger": payment.trigger if payment else None,
+                "payment_due_condition": payment.due_condition if payment else None,
+                "approvals": [{"id": str(approval.id), "agreement_version_id": str(row.id),
+                    "deal_id": str(row.deal_id), "version_number": row.version_number,
+                    "organization_id": str(approval.organization_id), "user_id": str(approval.user_id),
+                    "decision": approval.decision, "terms_hash": approval.terms_hash,
+                    "created_at": as_utc(approval.created_at)} for approval in approvals],
+                "evidence": evidence, "grounding": "UNMAPPED"}
+
+    def _read_evidence(self, ref: Any, row: AgreementVersion, party: UUID) -> dict[str, Any]:
+        import hashlib
+
+        disabled: dict[str, Any] = {"trace_enabled": False, "state": "UNAVAILABLE", "grounding": "UNMAPPED"}
+        if not isinstance(ref, dict):
+            return disabled
+        try:
+            if (type(ref.get("metadata_schema_version")) is not int
+                    or ref["metadata_schema_version"] != 1
+                    or type(ref.get("version")) is not int or ref["version"] < 1):
+                return disabled
+            identifiers = {}
+            for key in ("fact_id", "owner_organization_id", "source_message_id"):
+                value = ref.get(key)
+                if not isinstance(value, str) or len(value) != 36:
+                    return disabled
+                identifiers[key] = UUID(value)
+                if str(identifiers[key]) != value.lower():
+                    return disabled
+            for key in ("visibility", "source_visibility"):
+                if not isinstance(ref.get(key), str) or ref[key] not in (
+                    "PRIVATE", "INTERNAL", "SHAREABLE"
+                ):
+                    return disabled
+            span = ref.get("source_span")
+            body_hash = ref.get("source_body_hash")
+            if (not isinstance(span, str) or not span.strip() or len(span) > 8_000
+                    or not isinstance(body_hash, str) or len(body_hash) != 64
+                    or any(character not in "0123456789abcdef" for character in body_hash)):
+                return disabled
+            owner = identifiers["owner_organization_id"]
+            if owner != party and ref.get("visibility") != "SHAREABLE":
+                return disabled
+            fact = self._db.get(Constraint, identifiers["fact_id"], populate_existing=True)
+            if (fact is None or fact.deal_id != row.deal_id or fact.owner_organization_id != owner
+                    or (owner != party and fact.visibility != "SHAREABLE")):
+                return disabled
+            source = None
+            if ref.get("source_message_id"):
+                source = self._db.execute(select(Message, Conversation).join(Conversation,
+                    Conversation.id == Message.conversation_id).where(Message.id == identifiers["source_message_id"],
+                    Conversation.deal_id == row.deal_id).execution_options(populate_existing=True)).one_or_none()
+            if source is None:
+                return disabled
+            message, conversation = source
+            if conversation.participant_organization_id != owner:
+                return disabled
+            if owner != party and (ref.get("source_visibility") != "SHAREABLE" or message.visibility != "SHAREABLE"):
+                return disabled
+            public = {**disabled, "fact_id": ref["fact_id"], "version": ref["version"],
+                      "agreement_version_id": str(row.id), "terms_hash": row.terms_hash,
+                      "organization_id": str(party)}
+            if (fact.version != ref["version"] or fact.status != "CONFIRMED"
+                    or str(fact.source_message_id) != ref.get("source_message_id")
+                    or fact.source_span != ref.get("source_span")):
+                return {**public, "state": "CHANGED"}
+            if not ref.get("source_message_id") or not ref.get("source_body_hash"):
+                return {**public, "state": "UNKNOWN"}
+            span = ref.get("source_span")
+            if (hashlib.sha256(message.body.encode("utf-8")).hexdigest() != ref["source_body_hash"]
+                    or not isinstance(span, str) or message.body.count(span) != 1):
+                return {**public, "state": "CHANGED"}
+            return {**public, "state": "AVAILABLE", "trace_enabled": True,
+                    "source_message_id": str(message.id), "source_span": span}
+        except (KeyError, ValueError, TypeError):
+            return disabled
+
     def create_draft(
         self, command: CreateAgreementDraftCommand, *, now: datetime
     ) -> DomainAgreement:
         # Locking the deal serializes draft creation against a concurrent
         # approval or commit, so only one version can become current.
-        deal_row = self._db.scalar(
-            select(Deal).where(Deal.id == command.deal_id).with_for_update()
-        )
+        deal_row = lock_deal(self._db, command.deal_id)
         if deal_row is None:
             raise AgreementNotFound("Deal not found")
         if not self._is_active_participant(deal_row, command.user_id):
             raise AgreementAccessDenied("User must be an active member of a deal party")
+        if is_pending(self._db, command.deal_id):
+            raise AgreementVersionConflict("Awaiting counterparty acceptance")
 
         proposal_row = self._db.scalar(
             select(Proposal).where(
@@ -158,6 +301,19 @@ class SqlAlchemyAgreementRepository:
         )
         if proposal_row is None:
             raise ProposalNotFound("Proposal not found for this deal")
+        if self._db.scalar(
+            select(Proposal.id)
+            .where(
+                Proposal.deal_id == command.deal_id,
+                Proposal.lifecycle_origin == "HUMAN_ROUNDS",
+            )
+            .limit(1)
+        ) is not None:
+            raise AgreementVersionConflict(
+                "Human rounds require explicit negotiation and candidate replacement"
+            )
+        if proposal_row.lifecycle_origin == "HUMAN_ROUNDS":
+            raise AgreementVersionConflict("Human proposals require explicit negotiation acceptance")
         if proposal_row.status in _TERMINAL_PROPOSAL_STATUSES:
             raise AgreementVersionConflict(
                 f"Proposal is {proposal_row.status} and cannot become an agreement"
@@ -203,6 +359,8 @@ class SqlAlchemyAgreementRepository:
             created_by=command.user_id,
             created_at=now,
         )
+        version_row.canonical_terms_json = {**version_row.canonical_terms_json,
+                            "_f6_evidence": deepcopy(proposal_row.evidence_refs or [])}
         self._db.add(version_row)
         deal_row.status = domain_deal.status.value
         deal_row.current_agreement_version_id = version_id
@@ -214,19 +372,22 @@ class SqlAlchemyAgreementRepository:
         self, command: CreateReviewedAgreementDraftCommand, *, now: datetime
     ) -> DomainAgreement:
         """Persist the reviewed proposal and agreement snapshot atomically."""
-        deal_row = self._db.scalar(
-            select(Deal).where(Deal.id == command.deal_id).with_for_update()
-        )
+        deal_row = lock_deal(self._db, command.deal_id)
         if deal_row is None:
             raise AgreementNotFound("Deal not found")
         if not self._is_active_participant(deal_row, command.user_id):
             raise AgreementAccessDenied("User must be an active member of a deal party")
+        if is_pending(self._db, command.deal_id):
+            raise AgreementVersionConflict("Awaiting counterparty acceptance")
         if command.author_organization_id not in (
             deal_row.buyer_organization_id,
             deal_row.seller_organization_id,
         ):
             raise UnauthorizedApproval("Proposal author must be a party to this deal")
         self._require_active_member(command.author_organization_id, command.user_id)
+        if self._db.scalar(select(Proposal.id).where(Proposal.deal_id == command.deal_id,
+                                                     Proposal.lifecycle_origin == "HUMAN_ROUNDS").limit(1)) is not None:
+            raise AgreementVersionConflict("Human rounds require explicit negotiation and candidate replacement")
         if (
             command.terms.buyer_id != OrganizationId(deal_row.buyer_organization_id)
             or command.terms.seller_id != OrganizationId(deal_row.seller_organization_id)
@@ -399,11 +560,11 @@ class SqlAlchemyAgreementRepository:
         # Locking the deal row serializes this against a concurrent commit()
         # (which locks the same row), so the staleness/party checks below see
         # a consistent snapshot of which version is current.
-        deal_row = self._db.scalar(
-            select(Deal).where(Deal.id == command.deal_id).with_for_update()
-        )
+        deal_row = lock_deal(self._db, command.deal_id)
         if deal_row is None:
             raise AgreementNotFound("Deal not found")
+        if is_pending(self._db, command.deal_id):
+            raise AgreementVersionConflict("Awaiting counterparty acceptance")
 
         version_row = self._get_version(command.deal_id, command.version_number)
         if version_row is None:
@@ -482,15 +643,24 @@ class SqlAlchemyAgreementRepository:
     def commit(
         self, command: CommitAgreementCommand, *, now: datetime
     ) -> tuple[DomainAgreement, bool]:
-        deal_row = self._db.scalar(
-            select(Deal).where(Deal.id == command.deal_id).with_for_update()
-        )
+        deal_row = lock_deal(self._db, command.deal_id)
         if deal_row is None:
             raise AgreementNotFound("Deal not found")
+        if is_pending(self._db, command.deal_id):
+            raise AgreementVersionConflict("Awaiting counterparty acceptance")
 
         version_row = self._get_version(command.deal_id, command.expected_version)
         if version_row is None:
             raise AgreementNotFound("Agreement version not found")
+        proposal = self._db.get(Proposal, version_row.proposal_id)
+        if proposal is not None and proposal.lifecycle_origin == "HUMAN_ROUNDS" and command.user_id is None:
+            raise UnauthorizedApproval("Human candidate commitment requires a verified actor")
+        if command.user_id is not None:
+            if command.organization_id not in (deal_row.buyer_organization_id, deal_row.seller_organization_id):
+                raise UnauthorizedApproval("Commit actor must select a deal party")
+            self._require_active_member(command.organization_id, command.user_id)
+        if version_row.status == AgreementStatus.SUPERSEDED.value:
+            raise StaleAgreementVersion("Agreement version was superseded; reload before continuing")
         if (
             version_row.status == AgreementStatus.PENDING_APPROVAL.value
             and deal_row.current_agreement_version_id != version_row.id

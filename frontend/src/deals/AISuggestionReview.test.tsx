@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDealFact,
   correctDealFact,
+  draftDealProposal,
+  getNegotiation,
+  negotiateDeal,
   reviewDealFact,
   suggestDealFacts,
 } from "../api/client";
-import type { DealFact } from "../api/types";
+import type { AIProvenance, DealFact } from "../api/types";
 import AISuggestionReview from "./AISuggestionReview";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -16,7 +19,8 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     createDealFact: vi.fn(),
     correctDealFact: vi.fn(),
-    createAgreementFromReviewedTerms: vi.fn(),
+    getNegotiation: vi.fn(),
+    negotiateDeal: vi.fn(),
     draftDealProposal: vi.fn(),
     reviewDealFact: vi.fn(),
     suggestDealFacts: vi.fn(),
@@ -82,7 +86,65 @@ function suggestionResult(facts: DealFact[], missing_fields: string[]) {
 }
 
 describe("AISuggestionReview readiness and manual entry", () => {
+  it.each([
+    ["offline", null, "Offline"],
+    ["openai", null, "OpenAI"],
+    ["offline", "missing_credentials", "Offline fallback"],
+    ["offline", "transient_exhausted", "Offline fallback"],
+  ] as const)("shows actual %s invocation and safe fallback reason %s without approval", async (provider, reason, label) => {
+    const provenance: AIProvenance = {
+      provider, fallback_reason: reason,
+      mode: reason ? "openai_with_offline_fallback" : provider,
+      model: provider === "openai" ? "operator-test-model" : null,
+      context_scope: provider === "openai" ? "shareable_only" : "authorized",
+    };
+    mockedSuggestDealFacts.mockResolvedValue({ ...suggestionResult([fact()], []), provenance });
+    renderReview();
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+    const metadata = await screen.findByLabelText("Fact invocation provenance");
+    expect(metadata).toHaveTextContent(`Last fact invocation: ${label}`);
+    if (reason) expect(metadata).toHaveTextContent(reason === "missing_credentials" ? "Missing credentials" : "Temporary provider failure");
+    if (provider === "openai") expect(metadata).toHaveTextContent("Model: operator-test-model | Shareable context only");
+    expect(screen.getByText("Human review required")).toBeInTheDocument();
+    expect(mockedReviewDealFact).not.toHaveBeenCalled();
+    expect(negotiateDeal).not.toHaveBeenCalled();
+  });
+
+  it("labels legacy facts and legacy invocations unknown, never invents historical provenance", async () => {
+    mockedSuggestDealFacts.mockResolvedValue(suggestionResult([fact()], []));
+    renderReview([fact()]);
+    expect(screen.getByText("Stored fact provenance: Unknown (legacy)")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+    expect(await screen.findByLabelText("Fact invocation provenance")).toHaveTextContent("Unknown (legacy)");
+  });
+
+  it("shows proposal provider/model separately from facts and keeps provenance out of reviewed terms", async () => {
+    const proposal = {
+      schema_version: 1, description: "Widgets", quantity: "12", unit: "boxes",
+      unit_price: "2.50", currency: "USD" as const, delivery_destination: "Toronto",
+      delivery_date: "2026-12-01", status: "DRAFT" as const,
+      provenance: { provider: "openai" as const, mode: "openai" as const, model: "operator-test-model",
+        context_scope: "authorized_private" as const, fallback_reason: null },
+    };
+    vi.mocked(draftDealProposal).mockResolvedValue(proposal);
+    vi.mocked(negotiateDeal).mockRejectedValue(new Error("test stop"));
+    renderReview();
+    fireEvent.click(screen.getByRole("button", { name: "Draft proposed terms" }));
+    expect(await screen.findByLabelText("Proposal invocation provenance")).toHaveTextContent("OpenAI | Mode: openai | Model: operator-test-model | Private context permitted");
+    expect(negotiateDeal).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Submit reviewed proposal" }));
+    await waitFor(() => expect(negotiateDeal).toHaveBeenCalled());
+    expect(vi.mocked(negotiateDeal).mock.calls[0][2].terms).toEqual({
+      schema_version: 1, description: "Widgets", quantity: "12", unit: "boxes",
+      unit_price: "2.50", currency: "USD", delivery_destination: "Toronto",
+      delivery_date: "2026-12-01", payment_trigger: "seller_invoice",
+    });
+  });
+
   beforeEach(() => {
+    vi.mocked(getNegotiation).mockResolvedValue({ deal_id: DEAL_ID, organization_id: ORGANIZATION_ID, deal_revision: 0,
+      latest: null, current_candidate: null, eligible_actions: ["submit"], round_count: 0, max_rounds: 5,
+      escalated: false, history_ambiguous: false, proposals: [], history: [] });
     mockedCreateDealFact.mockReset();
     mockedCorrectDealFact.mockReset();
     mockedReviewDealFact.mockReset();

@@ -9,6 +9,7 @@ schemas, and SQLAlchemy so the rules can be tested against a fake repository.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -26,6 +27,29 @@ from syncally.domain.agreements.obligations import (
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.errors import DomainError
+
+
+def compare_agreement_terms(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    before_copy = json.loads(TradeTerms.from_canonical_json(before).canonical_json())
+    after_copy = json.loads(TradeTerms.from_canonical_json(after).canonical_json())
+    collections: dict[str, Any] = {}
+    for name in ("line_items", "shipments", "payment_terms"):
+        removed = list(before_copy.pop(name))
+        added = list(after_copy.pop(name))
+        for entry in list(removed):
+            if entry in added:
+                removed.remove(entry)
+                added.remove(entry)
+        modified = []
+        if len(removed) == len(added) == 1:
+            modified = [{"before": removed.pop(), "after": added.pop()}]
+        collections[name] = {"added": added, "removed": removed, "modified": modified}
+    fields = [
+        {"field": name, "before": before_copy[name], "after": after_copy[name]}
+        for name in sorted(before_copy)
+        if before_copy[name] != after_copy[name]
+    ]
+    return {"fields": fields, "collections": collections}
 
 
 class AgreementNotFound(DomainError):
@@ -106,6 +130,8 @@ class CommitAgreementCommand:
     deal_id: UUID
     expected_version: int
     expected_terms_hash: str
+    user_id: UUID | None = None
+    organization_id: UUID | None = None
 
 
 @dataclass(frozen=True)

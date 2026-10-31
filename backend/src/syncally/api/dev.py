@@ -3,42 +3,28 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, field_validator
-from sqlalchemy import and_, delete, func, or_, select
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 # Reuse the production login pipeline so dev tokens cannot drift from real claims or TTLs.
 from syncally.api.auth import TokenResponse, _decode_token, _issue_tokens, bearer_scheme
-from syncally.cli.seed_demo import DEMO_IDENTITIES, seed_demo_data
+from syncally.application.identity import ActorContext
+from syncally.application.payment_processing import PaymentNeedsAction
+from syncally.cli.seed_demo import DEMO_IDENTITIES, DemoCollisionError, seed_demo_data
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
-from syncally.infrastructure.demo_lifecycle import lock_demo_reset
 from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.models import (
-    AgreementVersion,
-    Approval,
-    AuditEvent,
-    Base,
-    Constraint,
-    Conversation,
-    Deal,
-    Message,
-    NegotiationSession,
-    Obligation,
-    Organization,
     OrganizationMember,
-    OutboxEvent,
-    PaymentIntent,
-    PaymentMilestone,
-    Proposal,
     User,
-    WebhookEvent,
 )
+from syncally.infrastructure.repositories.offline_payments import queue_simulated_reconciliation
 
 _LOCAL_ENVIRONMENTS = frozenset({"development", "test"})
 _DEMO_ROLE_EMAILS = {
@@ -62,7 +48,7 @@ def _require_dev_environment() -> None:
 def _require_demo_admin(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
-) -> None:
+) -> ActorContext:
     """Require a bearer token belonging to an active seeded demo administrator."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
@@ -97,6 +83,7 @@ def _require_demo_admin(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="An active demo administrator session is required",
         )
+    return actor
 
 
 router = APIRouter(
@@ -121,71 +108,24 @@ class DevResetResponse(BaseModel):
     deleted: dict[str, int]
 
 
-def _missing_demo_emails(db: Session) -> list[str]:
-    missing: list[str] = []
-    for identity in DEMO_IDENTITIES:
-        # A missing password would make seed_demo_data prompt interactively.
-        user = db.scalar(select(User).where(User.email == identity.email))
-        if user is None or not user.password_hash:
-            missing.append(identity.email)
-    return missing
+class SimulatePaymentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str = Field(min_length=1, max_length=256, pattern=r"\S")
+    expected_version: int = Field(ge=0, strict=True)
+    outcome: Literal["PENDING", "PARTIALLY_PAID", "PAID"]
+    paid_amount: str = Field(min_length=1, max_length=64)
 
 
-def _require_seeded_demo_identities(db: Session) -> None:
-    if _missing_demo_emails(db):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Demo identities are not seeded. Run "
-                "`python -m syncally.cli.seed_demo` from backend/ first."
-            ),
-        )
-
-
-def _demo_organization_ids(db: Session) -> list[UUID]:
-    names = [identity.organization_name for identity in DEMO_IDENTITIES]
-    return list(
-        db.scalars(
-            select(Organization.id).where(
-                Organization.legal_name.in_(names),
-                Organization.country_code == "US",
-            )
-        )
-    )
-
-
-def _related_ids(
-    db: Session, model: type[Base], column: Any, values: list[UUID]
-) -> list[UUID]:
-    if not values:
-        return []
-    return list(db.scalars(select(model.id).where(column.in_(values))))
-
-
-def _aggregate_scope(
-    model: type[Base],
-    deal_ids: list[UUID],
-    agreement_ids: list[UUID],
-    payment_intent_ids: list[UUID],
-) -> Any:
-    return or_(
-        and_(model.aggregate_type == "deal", model.aggregate_id.in_(deal_ids)),
-        and_(
-            model.aggregate_type == "agreement",
-            model.aggregate_id.in_(agreement_ids),
-        ),
-        and_(
-            model.aggregate_type == "payment_intent",
-            model.aggregate_id.in_(payment_intent_ids),
-        ),
-    )
-
-
-def _delete_scoped(db: Session, model: type[Base], *criteria: Any) -> int:
-    count = int(db.scalar(select(func.count()).select_from(model).where(*criteria)) or 0)
-    if count:
-        db.execute(delete(model).where(*criteria))
-    return count
+@router.post("/payments/{intent_id}/simulate-reconciliation", status_code=202)
+def simulate_payment(intent_id: UUID, payload: SimulatePaymentRequest,
+                     actor: ActorContext = Depends(_require_demo_admin), db: Session = Depends(get_db)) -> dict:
+    try:
+        event = queue_simulated_reconciliation(db, intent_id, user_id=actor.user_id, **payload.model_dump())
+        return {"event_id": str(event.id), "intent_id": str(intent_id), "execution_mode": "OFFLINE_DEMO", "status": "QUEUED"}
+    except PaymentNeedsAction as error:
+        code = 404 if error.code == "PAYMENT_INTENT_NOT_FOUND" else 403 if error.code == "PAYMENT_SIMULATION_FORBIDDEN" else 422 if error.code == "PAYMENT_RECONCILIATION_REJECTED" else 409
+        raise HTTPException(status_code=code, detail=error.detail) from error
 
 
 @router.post("/switch-role", response_model=TokenResponse)
@@ -206,84 +146,13 @@ def switch_role(
 
 @router.post("/reset-demo", response_model=DevResetResponse)
 def reset_demo(db: Session = Depends(get_db)) -> DevResetResponse:
-    """Clear deal data for the seeded demo organizations, then re-seed demo identities.
-
-    A deal is in scope only when both its buyer and seller are the seeded demo
-    organizations. Deals involving any non-demo organization, and their audit and
-    outbox rows, are left untouched.
-    """
-    # Hold this transaction lock through the destructive transaction and the
-    # idempotent seed commit below. Deal creation and the payment worker use the
-    # same lock for demo-owned data.
-    lock_demo_reset(db)
-    _require_seeded_demo_identities(db)
-
-    organization_ids = _demo_organization_ids(db)
-    if organization_ids:
-        deal_ids = list(
-            db.scalars(
-                select(Deal.id).where(
-                    Deal.buyer_organization_id.in_(organization_ids),
-                    Deal.seller_organization_id.in_(organization_ids),
-                )
-            )
-        )
-    else:
-        deal_ids = []
-
-    agreement_ids = _related_ids(
-        db, AgreementVersion, AgreementVersion.deal_id, deal_ids
-    )
-    conversation_ids = _related_ids(db, Conversation, Conversation.deal_id, deal_ids)
-    payment_intent_ids = _related_ids(db, PaymentIntent, PaymentIntent.deal_id, deal_ids)
-
-    # Child rows must be removed before the rows they reference.
-    deleted: dict[str, int] = {}
-    deleted["webhook_events"] = _delete_scoped(
-        db, WebhookEvent, WebhookEvent.payment_intent_id.in_(payment_intent_ids)
-    )
-    deleted["payment_intents"] = _delete_scoped(
-        db, PaymentIntent, PaymentIntent.deal_id.in_(deal_ids)
-    )
-    deleted["payment_milestones"] = _delete_scoped(
-        db, PaymentMilestone, PaymentMilestone.deal_id.in_(deal_ids)
-    )
-    deleted["obligations"] = _delete_scoped(
-        db, Obligation, Obligation.deal_id.in_(deal_ids)
-    )
-    deleted["approvals"] = _delete_scoped(db, Approval, Approval.deal_id.in_(deal_ids))
-    deleted["agreement_versions"] = _delete_scoped(
-        db, AgreementVersion, AgreementVersion.deal_id.in_(deal_ids)
-    )
-    deleted["proposals"] = _delete_scoped(db, Proposal, Proposal.deal_id.in_(deal_ids))
-    deleted["negotiation_sessions"] = _delete_scoped(
-        db, NegotiationSession, NegotiationSession.deal_id.in_(deal_ids)
-    )
-    deleted["constraints"] = _delete_scoped(
-        db, Constraint, Constraint.deal_id.in_(deal_ids)
-    )
-    deleted["messages"] = _delete_scoped(
-        db, Message, Message.conversation_id.in_(conversation_ids)
-    )
-    deleted["conversations"] = _delete_scoped(
-        db, Conversation, Conversation.deal_id.in_(deal_ids)
-    )
-    deleted["outbox_events"] = _delete_scoped(
-        db,
-        OutboxEvent,
-        _aggregate_scope(OutboxEvent, deal_ids, agreement_ids, payment_intent_ids),
-    )
-    deleted["audit_events"] = _delete_scoped(
-        db,
-        AuditEvent,
-        _aggregate_scope(AuditEvent, deal_ids, agreement_ids, payment_intent_ids),
-    )
-    deleted["deals"] = _delete_scoped(db, Deal, Deal.id.in_(deal_ids))
-
-    seed_demo_data(db, (None, None))
-    db.commit()
+    """Atomically restore only the explicitly marked curated fixture."""
+    try:
+        deleted = seed_demo_data(db, reset=True, require_existing_passwords=True)
+    except DemoCollisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return DevResetResponse(
         status="success",
-        message="Demo deal data cleared; demo identities and organizations restored.",
+        message="Curated demo draft restored; unmarked deals and passwords preserved.",
         deleted=deleted,
     )

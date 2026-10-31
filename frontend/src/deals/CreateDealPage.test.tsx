@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, apiRequest, createDeal, listOrganizations } from "../api/client";
+import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, listOrganizations } from "../api/client";
 import type { Organization } from "../api/types";
 import CreateDealPage from "./CreateDealPage";
 
@@ -11,6 +11,7 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     listOrganizations: vi.fn(),
     createDeal: vi.fn(),
+    createCounterpartyInvitation: vi.fn(),
     apiRequest: vi.fn(),
   };
 });
@@ -52,6 +53,30 @@ describe("CreateDealPage", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/loading organizations/i);
     expect(await screen.findByLabelText("Buyer organization")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create deal" })).toBeInTheDocument();
+  });
+
+  it("creates a pending deal through invite mode and exposes a copyable link before navigation", async () => {
+    mockedListOrganizations.mockResolvedValue([organization()]);
+    vi.mocked(createCounterpartyInvitation).mockResolvedValue({ token: "bound-token", invite_url: "https://app.example/#/invite?token=bound-token", organization_id: BUYER_ID, organization_legal_name: "Buyer Co", deal_id: "pending-deal", role: "ADMIN", expires_at: "2026-11-07T12:00:00Z", kind: "COUNTERPARTY", pending_counterparty: true });
+    const onCreated = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<CreateDealPage onCreated={onCreated} />);
+    await screen.findByLabelText("Buyer organization");
+    fireEvent.click(screen.getByRole("radio", { name: "Invite counterparty" }));
+    expect(screen.queryByRole("combobox", { name: "Seller organization" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Counterparty email"), { target: { value: " Seller@Example.com " } });
+    fireEvent.change(screen.getByLabelText("Counterparty company legal name"), { target: { value: "Seller Ltd" } });
+    fireEvent.change(screen.getByLabelText("Country code"), { target: { value: "JP" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+    expect(await screen.findByRole("heading", { name: "Awaiting counterparty" })).toBeInTheDocument();
+    expect(createCounterpartyInvitation).toHaveBeenCalledWith({ buyer_organization_id: BUYER_ID, recipient_email: "seller@example.com", legal_name: "Seller Ltd", country_code: "JP" });
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(mockedCreateDeal).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Copy Link" }));
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open pending deal" }));
+    expect(onCreated).toHaveBeenCalledWith("pending-deal");
   });
 
   it("shows an empty state when the account has no organizations", async () => {

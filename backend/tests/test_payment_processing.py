@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from unittest.mock import patch
 from uuid import uuid4
 
 from syncally.application.payment_processing import (
@@ -209,6 +210,63 @@ class FakeInvoiceProvider:
 
 
 class PaymentProcessingTests(unittest.TestCase):
+    def test_configuration_defaults_and_production_offline_rejection(self) -> None:
+        from pydantic import ValidationError
+
+        from syncally.config import Settings
+
+        self.assertEqual(Settings(_env_file=None, app_env="test", payment_mode="PAYPAL_SANDBOX").payment_mode, "PAYPAL_SANDBOX")
+        self.assertEqual(Settings(_env_file=None, app_env="test", payment_mode="OFFLINE_DEMO").payment_mode, "OFFLINE_DEMO")
+        with self.assertRaisesRegex(ValidationError, "only allowed in development/test"):
+            Settings(_env_file=None, app_env="production", payment_mode="OFFLINE_DEMO")
+
+    def test_missing_sandbox_credentials_never_resolves_offline(self) -> None:
+        from types import SimpleNamespace
+
+        from pydantic import SecretStr
+
+        from syncally.infrastructure.offline_payments import PaymentProviderResolver
+
+        work = _work_item(_request(), status=PaymentIntentStatus.CREATE_UNKNOWN)
+        config = SimpleNamespace(paypal_client_id="", paypal_client_secret=SecretStr(""))
+        with patch("syncally.config.PayPalSettings", return_value=config):
+            with self.assertRaises(PaymentNeedsAction) as caught:
+                PaymentProviderResolver().resolve(work)
+        self.assertEqual(caught.exception.code, "PAYMENT_PROVIDER_CONFIGURATION_MISSING")
+        self.assertEqual(work.status, PaymentIntentStatus.CREATE_UNKNOWN)
+
+    def test_offline_restart_is_deterministic_unpaid_and_never_constructs_remote_adapters(self) -> None:
+        from syncally.infrastructure.offline_payments import PaymentProviderResolver
+
+        request = _request()
+        work = replace(_work_item(request, status=PaymentIntentStatus.CREATE_PENDING,
+            request_payload_hash=request.payload_hash, provider_create_started_at=datetime(2020, 1, 1, tzinfo=UTC)),
+            provider="OFFLINE_DEMO", execution_mode="OFFLINE_DEMO")
+        repository = FakeProcessingRepository(work)
+        with patch("syncally.config.PayPalSettings", side_effect=AssertionError("offline credentials")), patch("syncally.config.GmailSettings", side_effect=AssertionError("offline SMTP")):
+            resolver = PaymentProviderResolver()
+            process_payment_intent(request.payment_intent_id, repository, resolver.resolve(work))
+            self.assertIsNone(resolver.notifier(repository.work))
+            process_payment_intent(request.payment_intent_id, repository, resolver.resolve(repository.work))
+        self.assertEqual(repository.work.status, PaymentIntentStatus.SENT)
+        self.assertEqual(repository.work.provider_invoice_id, f"OFFLINE-{request.payment_intent_id}")
+        self.assertNotIn("create_invoice", repository.calls)
+
+    def test_mismatched_mode_cannot_fall_back_or_change_uncertain_state(self) -> None:
+        request = _request()
+        work = replace(_work_item(request, status=PaymentIntentStatus.CREATE_UNKNOWN), provider="UNKNOWN", execution_mode="LEGACY_UNRESOLVED")
+        repository = FakeProcessingRepository(work)
+        with self.assertRaises(PaymentNeedsAction):
+            process_payment_intent(request.payment_intent_id, repository, FakeInvoiceProvider())
+        self.assertEqual(repository.work.status, PaymentIntentStatus.CREATE_UNKNOWN)
+        self.assertEqual(repository.calls, ["load"])
+    def test_payment_status_terminal_classification(self) -> None:
+        terminal = {"PAID", "FAILED", "CANCELLED"}
+        self.assertEqual(len(PaymentIntentStatus), 10)
+        for status in PaymentIntentStatus:
+            with self.subTest(status=status):
+                self.assertEqual(status.is_terminal, status.value in terminal)
+
     def test_reconciliation_rejects_mismatched_authorized_amount(self) -> None:
         request = _request()
         repository = FakeProcessingRepository(
@@ -731,16 +789,10 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
     """Test extended PaymentStatusResponse and SqlAlchemyPaymentIntentRepository query mapping."""
 
     def setUp(self) -> None:
-        import asyncio
-        import httpx
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
         from sqlalchemy.pool import StaticPool
-        from syncally.api.auth import get_current_actor
-        from syncally.api.main import app
-        from syncally.api.payments import PaymentStatusResponse
-        from syncally.application.identity import ActorContext
-        from syncally.infrastructure.database import get_db
+
         from syncally.infrastructure.models import (
             AgreementVersion,
             Approval,
@@ -749,15 +801,9 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
             NegotiationSession,
             Organization,
             OrganizationMember,
-            OutboxEvent,
-            PaymentIntent,
             PaymentMilestone,
             Proposal,
             User,
-        )
-        from syncally.infrastructure.repositories.payments import (
-            ExtendedPaymentStatusRecord,
-            SqlAlchemyPaymentIntentRepository,
         )
 
         self.engine = create_engine(
@@ -831,6 +877,7 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
         self.session.flush()
 
         from test_domain_fixes import build_terms
+
         from syncally.domain.shared.identifiers import OrganizationId
 
         terms = build_terms(
@@ -905,6 +952,7 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
             currency="USD",
             status="AUTHORIZED",
             reconciled_amount=None,
+            requires_polling=True,
             last_checked_at=None,
             last_reconciled_at=None,
         )
@@ -915,6 +963,165 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
         self.assertEqual(response.retry_count, 0)
         self.assertIsNone(response.next_retry_at)
         self.assertIsNone(response.failure_reason)
+
+    def _saved_intent(self):
+        from syncally.infrastructure.models import PaymentIntent
+
+        intent = PaymentIntent(
+            deal_id=self.deal.id,
+            agreement_version_id=self.agreement.id,
+            payment_milestone_id=self.milestone.id,
+            seller_organization_id=self.seller_org.id,
+            payer_organization_id=self.buyer_org.id,
+            authorized_by=self.seller_admin.id,
+            amount=Decimal("100.00"),
+            currency="USD",
+            status="AUTHORIZED",
+            idempotency_key="snapshot-contract",
+        )
+        self.session.add(intent)
+        self.session.commit()
+        return intent
+
+    def _snapshot(self, *, buyer=False):
+        import asyncio
+
+        import httpx
+
+        from syncally.api.auth import get_current_actor
+        from syncally.api.main import app
+        from syncally.application.identity import ActorContext
+        from syncally.infrastructure.database import get_db
+
+        actor = ActorContext(
+            self.buyer_admin.id if buyer else self.seller_admin.id,
+            frozenset([self.buyer_org.id if buyer else self.seller_org.id]),
+        )
+        app.dependency_overrides[get_db] = lambda: self.session
+        app.dependency_overrides[get_current_actor] = lambda: actor
+
+        async def request():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.get(f"/deals/{self.deal.id}/payments")
+
+        response = asyncio.run(request())
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()[0]
+
+    def test_snapshot_all_statuses_are_read_only_for_both_participants(self) -> None:
+        from unittest.mock import patch
+
+        from sqlalchemy import event
+
+        intent = self._saved_intent()
+        statements = []
+
+        def record_statement(connection, cursor, statement, parameters, context, many):
+            statements.append(statement.strip().split()[0].upper())
+
+        event.listen(self.engine, "before_cursor_execute", record_statement)
+        try:
+            for status in PaymentIntentStatus:
+                intent.status = status.value
+                self.session.commit()
+                statements.clear()
+                with self.subTest(status=status), patch(
+                    "syncally.infrastructure.paypal.PayPalSandboxInvoiceProvider",
+                    side_effect=AssertionError("Snapshot must not call a provider"),
+                ):
+                    seller = self._snapshot()
+                    buyer = self._snapshot(buyer=True)
+                    self.assertEqual(seller, buyer)
+                    self.assertEqual(seller["status"], status.value)
+                    self.assertEqual(seller["requires_polling"], not status.is_terminal)
+                    for field in ("outbox_status", "retry_scheduled_at", "lease_expires_at"):
+                        self.assertIsNone(seller[field])
+                    self.assertEqual(set(statements), {"SELECT"})
+                    self.assertFalse(self.session.new or self.session.dirty or self.session.deleted)
+        finally:
+            event.remove(self.engine, "before_cursor_execute", record_statement)
+
+    def test_snapshot_outbox_diagnostics_distinguish_schedule_and_lease(self) -> None:
+        from syncally.infrastructure.models import OutboxEvent
+
+        intent = self._saved_intent()
+        checked = datetime(2026, 10, 26, 11, 0, tzinfo=UTC)
+        timestamp = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+        intent.last_checked_at = checked
+        intent.last_reconciled_at = checked
+        outbox = OutboxEvent(
+            aggregate_type="payment_intent",
+            aggregate_id=intent.id,
+            event_type="PAYMENT_INTENT_AUTHORIZED",
+            payload={"payment_intent_id": str(intent.id)},
+            status="PENDING",
+        )
+        self.session.add(outbox)
+        cases = [
+            ("PENDING", 0, timestamp, False, False),
+            ("PENDING", 2, timestamp, True, False),
+            ("PENDING", 2, None, False, False),
+            ("PROCESSING", 2, timestamp, False, True),
+            ("PROCESSING", 0, None, False, False),
+            ("RETRYING", 2, timestamp, True, False),
+            ("DELIVERED", 2, timestamp, False, False),
+            ("FAILED", 2, timestamp, False, False),
+            ("DEAD_LETTER", 2, timestamp, False, False),
+        ]
+        for status, count, next_attempt, schedule, lease in cases:
+            with self.subTest(status=status, count=count, timestamp=next_attempt):
+                outbox.status = status
+                outbox.retry_count = count
+                outbox.next_attempt_at = next_attempt
+                self.session.commit()
+                seller = self._snapshot()
+                self.assertEqual(seller, self._snapshot(buyer=True))
+                self.assertEqual(seller["status"], "AUTHORIZED")
+                self.assertTrue(seller["requires_polling"])
+                self.assertEqual(seller["outbox_status"], status)
+                self.assertEqual(seller["retry_count"], count)
+                serialized = "2026-10-26T12:00:00Z" if next_attempt else None
+                self.assertEqual(seller["next_retry_at"], serialized)
+                self.assertEqual(seller["retry_scheduled_at"], serialized if schedule else None)
+                self.assertEqual(seller["lease_expires_at"], serialized if lease else None)
+                self.assertEqual(seller["last_checked_at"], "2026-10-26T11:00:00Z")
+                self.assertEqual(seller["last_reconciled_at"], "2026-10-26T11:00:00Z")
+
+    def test_snapshot_openapi_contract_uses_exact_payment_enum(self) -> None:
+        from pydantic import ValidationError
+
+        from syncally.api.main import app
+        from syncally.api.payments import PaymentStatusResponse
+
+        schemas = app.openapi()["components"]["schemas"]
+        snapshot = schemas["PaymentStatusResponse"]
+        self.assertEqual(
+            schemas["PaymentIntentStatus"]["enum"],
+            [status.value for status in PaymentIntentStatus],
+        )
+        self.assertEqual(snapshot["properties"]["status"]["$ref"],
+                         "#/components/schemas/PaymentIntentStatus")
+        self.assertIn("requires_polling", snapshot["required"])
+        self.assertEqual(snapshot["properties"]["requires_polling"]["type"], "boolean")
+        self.assertEqual(
+            snapshot["properties"]["outbox_status"]["anyOf"],
+            [{"$ref": "#/components/schemas/PaymentOutboxStatus"}, {"type": "null"}],
+        )
+        self.assertEqual(schemas["PaymentOutboxStatus"]["enum"], [
+            "PENDING", "PROCESSING", "RETRYING", "DELIVERED", "FAILED", "DEAD_LETTER",
+        ])
+        for field in ("retry_scheduled_at", "lease_expires_at"):
+            self.assertEqual(snapshot["properties"][field]["anyOf"], [
+                {"type": "string", "format": "date-time"}, {"type": "null"},
+            ])
+        with self.assertRaises(ValidationError):
+            PaymentStatusResponse(
+                id=uuid4(), milestone_sequence=1, amount="100", currency="USD",
+                status="RETRYING", requires_polling=True, reconciled_amount=None,
+                last_checked_at=None, last_reconciled_at=None,
+            )
 
     def test_payment_status_response_full_fields(self) -> None:
         from syncally.api.payments import PaymentStatusResponse
@@ -927,6 +1134,7 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
             currency="USD",
             status="SENT",
             reconciled_amount="50.00",
+            requires_polling=True,
             last_checked_at=None,
             last_reconciled_at=None,
             invoice_url="https://www.sandbox.paypal.com/invoice/p/#paypal-invoice-1",
@@ -1101,6 +1309,9 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].retry_count, 4)
         self.assertEqual(records[0].next_retry_at, retry_time)
+        self.assertEqual(records[0].outbox_status, "RETRYING")
+        self.assertEqual(records[0].retry_scheduled_at, retry_time)
+        self.assertIsNone(records[0].lease_expires_at)
         self.assertIsNone(records[0].invoice_url)
 
     def test_repository_list_for_agreement_maps_failure_reason(self) -> None:
@@ -1134,7 +1345,9 @@ class PaymentStatusExtendedModelTests(unittest.TestCase):
 
     def test_route_get_payments_exposed_to_both_seller_and_buyer(self) -> None:
         import asyncio
+
         import httpx
+
         from syncally.api.auth import get_current_actor
         from syncally.api.main import app
         from syncally.application.identity import ActorContext

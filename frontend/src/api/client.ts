@@ -1,9 +1,15 @@
 import { getAccessToken } from "./tokenStore";
 import type {
   CreateDealInput,
+  CounterpartyInvitationInput,
+  Invitation,
+  InvitationAcceptance,
+  InvitationAcceptanceInput,
   CreateMessageInput,
   CreateOrganizationInput,
   AgreementApproval,
+  AgreementHistory,
+  AgreementComparison,
   AgreementVersion,
   CommercialDocumentDraft,
   CreateDealFactInput,
@@ -15,22 +21,30 @@ import type {
   FactSuggestionResult,
   FactReviewAction,
   MessageExistence,
+  NegotiationAction,
+  NegotiationInput,
+  NegotiationResult,
+  NegotiationView,
   Organization,
   OrganizationDirectoryItem,
   OrganizationMember,
   PaymentAuthorization,
+  PaymentMode,
+  PaymentPreview,
   PaymentStatus,
   ProposalSuggestion,
   ReviewedProposalTerms,
   TokenResponse,
+  ThreadImportInput,
+  ThreadImportPreview,
+  ThreadPreviewInput,
   Visibility,
 } from "./types";
 
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
 
 /**
- * Upper bound for any API call. Matches the backend's provider timeout so a
- * request cannot outlive the server-side work it is waiting on.
+ * Upper bound for any API call, above the AI boundary's 20.5-second remote budget.
  */
 export const API_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -91,9 +105,9 @@ async function readErrorDetail(response: Response): Promise<unknown> {
   }
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiRequest<T>(path: string, init: RequestInit = {}, responseType: "json" | "blob" = "json"): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set("Accept", "application/json");
+  headers.set("Accept", responseType === "blob" ? "application/zip, text/html" : "application/json");
   if (init.body !== undefined) {
     headers.set("Content-Type", "application/json");
   }
@@ -129,7 +143,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     if (response.status === 204) {
       return undefined as T;
     }
-    return (await response.json()) as T;
+    return (await (responseType === "blob" ? response.blob() : response.json())) as T;
   } catch (error) {
     if (error instanceof ApiError) {
       throw error;
@@ -196,34 +210,82 @@ export function createDeal(input: CreateDealInput): Promise<Deal> {
   });
 }
 
+export function createCounterpartyInvitation(input: CounterpartyInvitationInput): Promise<Invitation> {
+  return apiRequest<Invitation>("/deals/counterparty-invitations", {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
+export function acceptInvitation(input: InvitationAcceptanceInput): Promise<InvitationAcceptance> {
+  return apiRequest<InvitationAcceptance>("/invitations/accept", {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
 export function getDeal(dealId: string): Promise<Deal> {
   return apiRequest<Deal>(`/deals/${encodeURIComponent(dealId)}`);
 }
 
-export function getCurrentAgreement(dealId: string): Promise<AgreementVersion> {
+export function getCurrentAgreement(dealId: string, options?: { organizationId?: string; signal?: AbortSignal }): Promise<AgreementVersion> {
+  const party = options?.organizationId ? `?organization_id=${encodeURIComponent(options.organizationId)}` : "";
   return apiRequest<AgreementVersion>(
-    `/deals/${encodeURIComponent(dealId)}/agreements/current`,
+    `/deals/${encodeURIComponent(dealId)}/agreements/current${party}`, { signal: options?.signal },
   );
 }
 
-export function listPaymentStatuses(dealId: string): Promise<PaymentStatus[]> {
-  return apiRequest<PaymentStatus[]>(`/deals/${encodeURIComponent(dealId)}/payments`);
+export function getAgreementHistory(dealId: string, organizationId: string, signal?: AbortSignal): Promise<AgreementHistory> {
+  return apiRequest<AgreementHistory>(`/deals/${encodeURIComponent(dealId)}/agreements/history?organization_id=${encodeURIComponent(organizationId)}`, { signal });
+}
+
+export function getAgreementVersion(dealId: string, number: number, organizationId: string, signal?: AbortSignal): Promise<AgreementVersion> {
+  return apiRequest<AgreementVersion>(`/deals/${encodeURIComponent(dealId)}/agreements/versions/${number}?organization_id=${encodeURIComponent(organizationId)}`, { signal });
+}
+
+export function compareAgreementVersions(dealId: string, before: number, after: number, organizationId: string, signal?: AbortSignal): Promise<AgreementComparison> {
+  const params = new URLSearchParams({ before: String(before), after: String(after), organization_id: organizationId });
+  return apiRequest<AgreementComparison>(`/deals/${encodeURIComponent(dealId)}/agreements/compare?${params}`, { signal });
+}
+
+export function listPaymentStatuses(
+  dealId: string,
+  options?: { signal?: AbortSignal },
+): Promise<PaymentStatus[]> {
+  return apiRequest<PaymentStatus[]>(`/deals/${encodeURIComponent(dealId)}/payments`, {
+    signal: options?.signal,
+  });
 }
 
 export function authorizeDealPayment(
   dealId: string,
   idempotencyKey: string,
+  expectedMode?: PaymentMode,
 ): Promise<PaymentAuthorization> {
   return apiRequest<PaymentAuthorization>(`/deals/${encodeURIComponent(dealId)}/payments`, {
     method: "POST",
-    body: JSON.stringify({ idempotency_key: idempotencyKey }),
+    body: JSON.stringify({ idempotency_key: idempotencyKey, expected_mode: expectedMode }),
   });
+}
+
+export function previewDealPayment(dealId: string, signal?: AbortSignal): Promise<PaymentPreview> {
+  return apiRequest<PaymentPreview>(`/deals/${encodeURIComponent(dealId)}/payments/preview`, { signal });
 }
 
 export function getCommercialDocumentDraft(dealId: string): Promise<CommercialDocumentDraft> {
   return apiRequest<CommercialDocumentDraft>(
     `/deals/${encodeURIComponent(dealId)}/documents/commercial-draft`,
   );
+}
+
+export type TradePackFormat = "html" | "zip";
+
+export function getTradePack(
+  dealId: string, agreement: Pick<AgreementVersion, "id" | "version_number" | "terms_hash">,
+  organizationId: string, format: TradePackFormat, signal?: AbortSignal,
+): Promise<Blob> {
+  if (!agreement.id || !organizationId) return Promise.reject(new ApiError(409, "An exact saved version and organization are required"));
+  const params = new URLSearchParams({ agreement_version_id: agreement.id,
+    terms_hash: agreement.terms_hash, organization_id: organizationId, format });
+  return apiRequest<Blob>(`/deals/${encodeURIComponent(dealId)}/documents/versions/${agreement.version_number}/trade-pack?${params}`, { signal }, "blob");
 }
 
 export function recordAgreementDecision(
@@ -249,10 +311,11 @@ export function commitAgreementVersion(
   dealId: string,
   versionNumber: number,
   termsHash: string,
+  organizationId?: string,
 ): Promise<AgreementVersion> {
   return apiRequest<AgreementVersion>(
     `/deals/${encodeURIComponent(dealId)}/agreements/${versionNumber}/commit`,
-    { method: "POST", body: JSON.stringify({ terms_hash: termsHash }) },
+    { method: "POST", body: JSON.stringify({ terms_hash: termsHash, ...(organizationId ? { organization_id: organizationId } : {}) }) },
   );
 }
 
@@ -271,6 +334,27 @@ export function createAgreementFromReviewedTerms(
       }),
     },
   );
+}
+
+export function getNegotiation(
+  dealId: string,
+  organizationId: string,
+  options?: { signal?: AbortSignal; offset?: number },
+): Promise<NegotiationView> {
+  const query = new URLSearchParams({ organization_id: organizationId });
+  if (options?.offset !== undefined) query.set("offset", String(options.offset));
+  return apiRequest<NegotiationView>(`/deals/${encodeURIComponent(dealId)}/negotiation?${query}`, { signal: options?.signal });
+}
+
+export function negotiateDeal(
+  dealId: string,
+  action: NegotiationAction,
+  input: NegotiationInput,
+  options?: { signal?: AbortSignal },
+): Promise<NegotiationResult> {
+  return apiRequest<NegotiationResult>(`/deals/${encodeURIComponent(dealId)}/negotiation/${action}`, {
+    method: "POST", body: JSON.stringify(input), signal: options?.signal,
+  });
 }
 
 export function createDealMessage(
@@ -292,6 +376,34 @@ export function createDealMessage(
       source_type,
       source_reference,
       organization_id,
+    }),
+    signal: options?.signal,
+  });
+}
+
+export function previewDealThreadImport(
+  dealId: string,
+  input: ThreadPreviewInput,
+  options?: { signal?: AbortSignal },
+): Promise<ThreadImportPreview> {
+  return apiRequest<ThreadImportPreview>(`/deals/${encodeURIComponent(dealId)}/messages/import/preview`, {
+    method: "POST",
+    body: JSON.stringify({ text: input.text, organization_id: input.organization_id }),
+    signal: options?.signal,
+  });
+}
+
+export function importDealThread(
+  dealId: string,
+  input: ThreadImportInput,
+  options?: { signal?: AbortSignal },
+): Promise<DealMessage> {
+  return apiRequest<DealMessage>(`/deals/${encodeURIComponent(dealId)}/messages/import`, {
+    method: "POST",
+    body: JSON.stringify({
+      text: input.text, organization_id: input.organization_id, digest: input.digest,
+      confirmed: input.confirmed, visibility: input.visibility ?? "PRIVATE",
+      shareable_confirmed: input.shareable_confirmed ?? false,
     }),
     signal: options?.signal,
   });

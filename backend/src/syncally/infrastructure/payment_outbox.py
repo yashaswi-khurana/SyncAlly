@@ -22,12 +22,14 @@ from syncally.application.payment_processing import (
     reconcile_payment_intent,
 )
 from syncally.application.payments import (
+    OFFLINE_RECONCILIATION_EVENT_TYPE,
     PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
     PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
 )
 from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.infrastructure.demo_lifecycle import lock_demo_payment_processing
 from syncally.infrastructure.models import OutboxEvent
+from syncally.infrastructure.offline_payments import PaymentProviderResolver
 from syncally.operations import Operation, log_operation
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,7 @@ def _claim_statement(now: datetime):
                 (
                     PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
                     PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
+                    OFFLINE_RECONCILIATION_EVENT_TYPE,
                 )
             )
         )
@@ -95,7 +98,7 @@ def claim_next_payment_event(
 def dispatch_one_payment_event(
     session_factory: Callable[[], Session],
     repository: PaymentProcessingRepository,
-    provider: PaymentInvoiceProvider,
+    provider: PaymentInvoiceProvider | PaymentProviderResolver | None = None,
     *,
     notifier: PaymentInvoiceNotifier | None = None,
     now: datetime | None = None,
@@ -123,7 +126,7 @@ def dispatch_one_payment_event(
             session_factory,
             event,
             repository,
-            provider,
+            provider or PaymentProviderResolver(),
             notifier=notifier,
             now=now,
         )
@@ -133,7 +136,7 @@ def _process_claimed_payment_event(
     session_factory: Callable[[], Session],
     event: _ClaimedPaymentEvent,
     repository: PaymentProcessingRepository,
-    provider: PaymentInvoiceProvider,
+    provider: PaymentInvoiceProvider | PaymentProviderResolver,
     *,
     notifier: PaymentInvoiceNotifier | None,
     now: datetime | None,
@@ -157,9 +160,19 @@ def _process_claimed_payment_event(
                 "PAYMENT_OUTBOX_PAYLOAD_INVALID",
                 "The payment outbox payload contains an invalid intent ID.",
             ) from error
+        work = repository.load(payment_intent_id)
+        if work is None:
+            raise PaymentNeedsAction("PAYMENT_INTENT_NOT_FOUND", "The authorized payment intent no longer exists; inspect the outbox event.")
+        if (event.event_type == OFFLINE_RECONCILIATION_EVENT_TYPE and work.execution_mode != "OFFLINE_DEMO") or (event.event_type == PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE and work.execution_mode != "PAYPAL_SANDBOX"):
+            raise PaymentNeedsAction("PAYMENT_PROVENANCE_UNRESOLVED", "Reconciliation event and persisted payment mode differ.")
+        resolver = provider if isinstance(provider, PaymentProviderResolver) else None
+        if resolver is not None:
+            provider = resolver.resolve(work)
         if event.event_type == PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE:
             process_payment_intent(payment_intent_id, repository, provider)
-            if notifier is not None:
+            if work.execution_mode == "PAYPAL_SANDBOX" and resolver is not None:
+                notifier = notifier or resolver.notifier(work)
+            if notifier is not None and work.execution_mode == "PAYPAL_SANDBOX":
                 work = repository.load(payment_intent_id)
                 if work is None:
                     raise PaymentNeedsAction(
@@ -185,7 +198,7 @@ def _process_claimed_payment_event(
                         )
                     notifier.send_invoice_notice(notice)
         else:
-            if event.event_type != PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE:
+            if event.event_type not in {PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE, OFFLINE_RECONCILIATION_EVENT_TYPE}:
                 raise PaymentNeedsAction(
                     "PAYMENT_OUTBOX_EVENT_UNSUPPORTED",
                     "The payment outbox event type is unsupported; inspect it manually.",
@@ -203,6 +216,29 @@ def _process_claimed_payment_event(
                     "PAYMENT_OUTBOX_PAYLOAD_INVALID",
                     "The payment outbox payload contains an invalid webhook event ID.",
                 ) from error
+            if event.event_type == OFFLINE_RECONCILIATION_EVENT_TYPE:
+                from syncally.infrastructure.models import PaymentIntent, WebhookEvent
+                from syncally.infrastructure.repositories.offline_payments import simulation_state
+
+                try:
+                    with session_factory() as db:
+                        row = db.get(PaymentIntent, payment_intent_id)
+                        observation = db.get(WebhookEvent, webhook_event_id)
+                        if row is None or observation is None:
+                            raise PaymentNeedsAction("PAYMENT_RECONCILIATION_RECORD_MISSING", "Simulation record is missing.")
+                        state = simulation_state(row, observation.raw_payload)
+                    repository.record_reconciliation(payment_intent_id, state, outbox_event_id=event.id,
+                        webhook_event_id=webhook_event_id, lease_until=event.lease_until)
+                except PaymentNeedsAction as error:
+                    repository.record_reconciliation_failure(
+                        payment_intent_id,
+                        outbox_event_id=event.id,
+                        webhook_event_id=webhook_event_id,
+                        lease_until=event.lease_until,
+                        error_code=error.code,
+                        error_detail=error.detail,
+                    )
+                return True
             reconcile_payment_intent(
                 payment_intent_id,
                 outbox_event_id=event.id,
@@ -257,7 +293,7 @@ def _process_claimed_payment_event(
 def dispatch_pending_payment_events(
     session_factory: Callable[[], Session],
     repository: PaymentProcessingRepository,
-    provider: PaymentInvoiceProvider,
+    provider: PaymentInvoiceProvider | PaymentProviderResolver | None = None,
     *,
     batch_size: int,
     notifier: PaymentInvoiceNotifier | None = None,
@@ -296,7 +332,7 @@ def _finish_event(
         )
         if row is None:
             # Reconciliation commits its own guarded outcome and logs it there.
-            if event.event_type != PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE:
+            if event.event_type not in {PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE, OFFLINE_RECONCILIATION_EVENT_TYPE}:
                 log_operation(logger, Operation.PAYMENT_LEASE_LOST, outbox_event_id=event.id)
             return
         row.status = status

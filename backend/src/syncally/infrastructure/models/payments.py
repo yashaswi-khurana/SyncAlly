@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    DDL,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
     text,
 )
@@ -25,6 +27,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE, Base
 from syncally.infrastructure.models.mixins import TimestampMixin
+from syncally.infrastructure.payment_schema import SQLITE_PAYMENT_IDENTITY_TRIGGER
 
 
 class PaymentMilestone(TimestampMixin, Base):
@@ -59,6 +62,18 @@ class PaymentIntent(TimestampMixin, Base):
     __tablename__ = "payment_intents"
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_payment_intent_amount_positive"),
+        CheckConstraint(
+            "(provider = 'PAYPAL' AND execution_mode = 'PAYPAL_SANDBOX') OR "
+            "(provider = 'OFFLINE_DEMO' AND execution_mode = 'OFFLINE_DEMO') OR "
+            "(provider <> 'PAYPAL' AND execution_mode = 'LEGACY_UNRESOLVED')",
+            name="ck_payment_intent_provider_mode",
+        ),
+        CheckConstraint(
+            "reconciliation_source IN ('NONE', 'LEGACY_UNVERIFIED') OR "
+            "(reconciliation_source = 'PAYPAL_SANDBOX' AND execution_mode = 'PAYPAL_SANDBOX') OR "
+            "(reconciliation_source = 'OFFLINE_DEMO' AND execution_mode = 'OFFLINE_DEMO')",
+            name="ck_payment_intent_reconciliation_source",
+        ),
         # At most one non-terminal intent per milestone: the persistence-level
         # guard against starting a second PayPal invoice for the same money.
         Index(
@@ -90,6 +105,8 @@ class PaymentIntent(TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="AUTHORIZED")
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="PAYPAL")
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="PAYPAL_SANDBOX")
+    reconciliation_source: Mapped[str] = mapped_column(String(32), nullable=False, default="NONE")
     provider_invoice_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     request_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -100,6 +117,13 @@ class PaymentIntent(TimestampMixin, Base):
     failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+event.listen(
+    PaymentIntent.__table__,
+    "after_create",
+    DDL(SQLITE_PAYMENT_IDENTITY_TRIGGER).execute_if(dialect="sqlite"),
+)
 
 
 class WebhookEvent(Base):

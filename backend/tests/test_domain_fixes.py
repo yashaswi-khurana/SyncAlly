@@ -90,6 +90,51 @@ def build_proposal(
     )
 
 
+class HumanNegotiationTests(TestCase):
+    def test_terminal_successor_preserves_snapshot_and_limit(self) -> None:
+        now = datetime.now(UTC)
+        terms = build_terms()
+        deal_id = DealId(uuid4())
+        session = NegotiationSession(NegotiationSessionId(uuid4()), deal_id, 1)
+        first = build_proposal(deal_id=deal_id, terms=terms, created_at=now)
+        session.submit(first, now=now)
+        first.reject()
+        successor = build_proposal(deal_id=deal_id, terms=terms, based_on=first.id)
+        self.assertEqual(session.submit(successor, now=now, current_proposal=first), NegotiationSubmissionOutcome.ESCALATION_REQUIRED)
+        self.assertEqual(first.status, ProposalStatus.REJECTED)
+        self.assertEqual(session.current_proposal_id, first.id)
+        session = NegotiationSession(NegotiationSessionId(uuid4()), deal_id, 5, 1, first.id)
+        session.submit(successor, now=now, current_proposal=first)
+        self.assertEqual(first.status, ProposalStatus.REJECTED)
+        with self.assertRaises(InvalidTransition):
+            first.terms = build_terms()
+
+    def test_expiry_is_explicit_aware_and_bounded(self) -> None:
+        now = datetime.now(UTC)
+        terms = build_terms()
+        deal_id = DealId(uuid4())
+        for deadline in (now.replace(tzinfo=None), now, now + timedelta(days=30, seconds=1)):
+            with self.assertRaises(InvariantViolation):
+                build_proposal(deal_id=deal_id, terms=terms, created_at=now, expires_at=deadline)
+        proposal = build_proposal(deal_id=deal_id, terms=terms, created_at=now, expires_at=now + timedelta(days=30))
+        with self.assertRaises(InvalidTransition):
+            proposal.expire(now=now)
+        with self.assertRaises(InvalidTransition):
+            proposal.accept_as_candidate(now=now + timedelta(days=30))
+        self.assertEqual(proposal.status, ProposalStatus.SUBMITTED)
+        proposal.expire(now=now + timedelta(days=30))
+        self.assertEqual(proposal.status, ProposalStatus.EXPIRED)
+
+    def test_action_authority_is_human_party_specific(self) -> None:
+        proposal = build_proposal(deal_id=DealId(uuid4()), terms=build_terms())
+        for action in ("counter", "accept", "reject"):
+            with self.assertRaises(InvalidTransition):
+                proposal.authorize_action(action, proposal.author_organization_id)
+            proposal.authorize_action(action, proposal.terms.seller_id)
+        with self.assertRaises(InvalidTransition):
+            proposal.authorize_action("supersede", proposal.terms.seller_id)
+
+
 class DecimalCanonicalizationTests(TestCase):
     def test_money_addition_is_exact_beyond_default_decimal_precision(self) -> None:
         first = Money(Decimal("999999999999999998000000000.000000001"), "USD")

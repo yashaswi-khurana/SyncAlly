@@ -1,11 +1,17 @@
 """HTTP contract tests for the agreement draft, approval, and commit routes."""
 
 import asyncio
+import hashlib
 import json
 import unittest
+from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
+from io import BytesIO
 from typing import Any
+from unittest.mock import patch
+from uuid import uuid4
+from zipfile import ZipFile
 
 import httpx
 from sqlalchemy import create_engine, select
@@ -24,7 +30,10 @@ from syncally.infrastructure.models import (
     Approval,
     AuditEvent,
     Base,
+    Constraint,
+    Conversation,
     Deal,
+    Message,
     NegotiationSession,
     Obligation,
     Organization,
@@ -170,6 +179,12 @@ class AgreementRouteTests(unittest.TestCase):
         self.assertEqual(self._commit(1).status_code, 200)
 
     def _add_pending_version(self, version_number: int, *, make_current: bool) -> AgreementVersion:
+        if make_current:
+            for pending in self.session.scalars(select(AgreementVersion).where(
+                AgreementVersion.deal_id == self.deal.id, AgreementVersion.status == "PENDING_APPROVAL"
+            )):
+                pending.status = "SUPERSEDED"
+            self.session.flush()
         version = AgreementVersion(
             deal_id=self.deal.id,
             proposal_id=self.proposal.id,
@@ -194,6 +209,293 @@ class AgreementRouteTests(unittest.TestCase):
         response = self._create_draft()
 
         self.assertEqual(response.status_code, 401)
+
+    def _trade_pack(self, version=None, *, format="zip", hash=None, organization=None, deal=None):
+        version = version or self.session.scalar(select(AgreementVersion).where(AgreementVersion.version_number == 1))
+        return self._request("GET", f"/deals/{deal or self.deal.id}/documents/versions/{version.version_number}/trade-pack"
+            f"?agreement_version_id={version.id}&terms_hash={hash or version.terms_hash}"
+            f"&organization_id={organization or self.seller.id}&format={format}")
+
+    def test_trade_pack_historical_exact_identity_and_both_parties_deterministic(self):
+        self._commit_current_agreement()
+        old = self.session.scalar(select(AgreementVersion))
+        old.canonical_terms_json = {**old.canonical_terms_json, "_f6_evidence": [{"private": "DO NOT EXPORT"}]}
+        self.session.commit()
+        self._add_pending_version(2, make_current=True)
+        response = self._trade_pack(old)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertIn("attachment; filename=", response.headers["content-disposition"])
+        self.assertTrue(response.headers["content-disposition"].isascii())
+        with ZipFile(BytesIO(response.content)) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            self.assertEqual(manifest["agreement_version_id"], str(old.id))
+            self.assertNotIn("_f6_evidence", str(manifest))
+            self.assertNotIn("Seller Co", archive.read("trade-pack.html").decode())
+            self.assertEqual(hashlib.sha256(archive.read("canonical-terms.json")).hexdigest(), old.terms_hash)
+            self.assertEqual(archive.read("trade-pack.html"), self._trade_pack(old, format="html").content)
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.assertEqual(response.content, self._trade_pack(old, organization=self.buyer.id).content)
+        self.assertFalse(self.session.new)
+        self.assertFalse(self.session.dirty)
+
+    def test_trade_pack_required_identity_auth_and_conflicts(self):
+        self._commit_current_agreement()
+        version = self.session.scalar(select(AgreementVersion))
+        base = f"/deals/{self.deal.id}/documents/versions/1/trade-pack"
+        self.assertEqual(self._request("GET", base).status_code, 422)
+        self.assertEqual(self._trade_pack(hash="0" * 64).status_code, 409)
+        self.assertEqual(self._request("GET", base + f"?agreement_version_id={uuid4()}&terms_hash={version.terms_hash}&organization_id={self.seller.id}").status_code, 409)
+        self.assertEqual(self._trade_pack(deal=uuid4()).status_code, 404)
+        pending = self._add_pending_version(2, make_current=True)
+        self.assertEqual(self._trade_pack(pending).status_code, 409)
+        approval = self.session.scalar(select(Approval))
+        approval.terms_hash = "0" * 64
+        self.session.commit()
+        self.assertEqual(self._trade_pack(version).status_code, 409)
+        self._authenticate(self._actor(self.outsider_user, self.outsider))
+        self.assertEqual(self._trade_pack(version).status_code, 404)
+        app.dependency_overrides.pop(get_current_actor)
+        self.assertEqual(self._trade_pack(version).status_code, 401)
+
+    def test_trade_pack_renders_all_persisted_entries_without_demo_recommit_validation(self):
+        self._commit_current_agreement()
+        version = self.session.scalar(select(AgreementVersion))
+        display = self.terms.to_storage_dict()
+        for key in ("line_items", "shipments", "payment_terms"):
+            display[key] *= 2
+        display["incoterm"] = "FOB"
+        display["cancellation_terms"] = 'Review <script>alert("x")</script>'
+        from syncally.domain.agreements.trade_terms import TradeTerms
+        terms = TradeTerms.from_canonical_json(display)
+        version.canonical_terms_json = {**display, "_f6_evidence": [{"private": "NEVER EXPORT"}]}
+        version.terms_hash = terms.terms_hash
+        for approval in self.session.scalars(select(Approval)):
+            approval.terms_hash = terms.terms_hash
+        self.session.commit()
+        original = deepcopy(version.canonical_terms_json)
+        with patch.object(TradeTerms, "validate_for_commit", side_effect=AssertionError("Must not recommit")):
+            response = self._trade_pack(version)
+        self.assertEqual(response.status_code, 200, response.text)
+        with ZipFile(BytesIO(response.content)) as archive:
+            html = archive.read("trade-pack.html").decode()
+            self.assertIn("Item 2", html)
+            self.assertIn("Shipment 2", html)
+            self.assertIn("Payment term 2", html)
+            self.assertIn("FOB", html)
+            self.assertIn("&lt;script&gt;", html)
+            self.assertNotIn("<script>", html)
+            self.assertEqual(archive.read("canonical-terms.json").decode(), terms.canonical_json())
+        self.assertEqual(version.canonical_terms_json, original)
+        self.assertEqual(version.terms_hash, terms.terms_hash)
+
+    def test_trade_pack_rejects_cross_deal_version_and_stored_party_mismatch(self):
+        self._commit_current_agreement()
+        version = self.session.scalar(select(AgreementVersion))
+        other = Deal(buyer_organization_id=self.buyer.id, seller_organization_id=self.seller.id)
+        self.session.add(other)
+        self.session.flush()
+        foreign = AgreementVersion(deal_id=other.id, proposal_id=self.proposal.id, version_number=1,
+            canonical_terms_json=self.terms.to_storage_dict(), terms_hash=self.terms.terms_hash,
+            status="COMMITTED", created_by=self.buyer_user.id)
+        self.session.add(foreign)
+        self.session.commit()
+        base = f"/deals/{self.deal.id}/documents/versions/1/trade-pack"
+        self.assertEqual(self._request("GET", base + f"?agreement_version_id={foreign.id}&terms_hash={version.terms_hash}&organization_id={self.seller.id}").status_code, 409)
+        display = deepcopy(version.canonical_terms_json)
+        display["buyer_id"] = str(self.outsider.id)
+        from syncally.domain.agreements.trade_terms import TradeTerms
+        version.canonical_terms_json = display
+        version.terms_hash = TradeTerms.from_canonical_json(display).terms_hash
+        self.session.commit()
+        self.assertEqual(self._trade_pack(version).status_code, 409)
+
+    def test_trade_pack_rechecks_database_membership_org_user_and_size(self):
+        self._commit_current_agreement()
+        self.assertEqual(self._trade_pack(organization=self.buyer.id).status_code, 404)
+        member = self.session.scalar(select(OrganizationMember).where(OrganizationMember.user_id == self.seller_user.id))
+        for entity in (member, self.seller, self.seller_user):
+            entity.status = "INACTIVE"
+            self.session.commit()
+            self.assertEqual(self._trade_pack().status_code, 404)
+            entity.status = "ACTIVE"
+            self.session.commit()
+        with patch("syncally.application.documents.MAX_DISPLAY_JSON_BYTES", 10):
+            self.assertEqual(self._trade_pack().status_code, 413)
+        version = self.session.scalar(select(AgreementVersion))
+        version.canonical_terms_json = {**version.canonical_terms_json, "unknown": "secret"}
+        self.session.commit()
+        self.assertEqual(self._trade_pack().status_code, 409)
+
+    def test_history_exact_compare_keep_equal_hash_versions_and_own_decisions(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        first = self._add_pending_version(1, make_current=True)
+        self.assertEqual(self._approve(1).status_code, 200)
+        second = self._add_pending_version(2, make_current=True)
+        base = f"/deals/{self.deal.id}/agreements"
+        history = self._request("GET", base + "/history")
+        self.assertEqual(history.status_code, 200, history.text)
+        versions = history.json()["versions"]
+        self.assertEqual([version["id"] for version in versions], [str(second.id), str(first.id)])
+        self.assertEqual(versions[1]["status"], "SUPERSEDED")
+        self.assertEqual(len(versions[1]["approvals"]), 1)
+        self.assertEqual(versions[1]["approvals"][0]["agreement_version_id"], str(first.id))
+        self.assertEqual(versions[0]["approvals"], [])
+        exact = self._request("GET", base + "/versions/1")
+        self.assertEqual(exact.json()["id"], str(first.id))
+        comparison = self._request("GET", base + "/compare?before=1&after=2")
+        self.assertEqual(comparison.status_code, 200, comparison.text)
+        self.assertEqual(comparison.json()["changes"]["fields"], [])
+        self.assertEqual(self._approve(1).status_code, 409)
+        self.assertEqual(list(self.session.scalars(select(Obligation))), [])
+        self.assertEqual(list(self.session.scalars(select(AuditEvent))), [])
+
+    def test_history_reauthorizes_revoked_and_selected_party_before_exposure(self) -> None:
+        self._add_pending_version(1, make_current=True)
+        base = f"/deals/{self.deal.id}/agreements"
+        self._authenticate(self._actor(self.outsider_user, self.outsider))
+        self.assertEqual(self._request("GET", base + "/history").status_code, 404)
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.assertEqual(self._request("GET", base + f"/versions/1?organization_id={self.seller.id}").status_code, 404)
+        member = self.session.scalar(select(OrganizationMember).where(OrganizationMember.user_id == self.buyer_user.id))
+        member.status = "INACTIVE"
+        self.session.commit()
+        for suffix in ("/history", "/versions/1", "/compare?before=1&after=1"):
+            response = self._request("GET", base + suffix)
+            self.assertEqual(response.status_code, 404, response.text)
+            self.assertNotIn(self.terms.terms_hash, response.text)
+
+    def test_exact_history_scopes_cross_deal_numbers_and_all_stored_statuses(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        old = self._add_pending_version(1, make_current=True)
+        old.status = "VOIDED"
+        self.deal.current_agreement_version_id = None
+        self.session.commit()
+        base = f"/deals/{self.deal.id}/agreements"
+        response = self._request("GET", base + "/versions/1")
+        self.assertEqual(response.json()["status"], "VOIDED")
+        self.assertFalse(response.json()["is_current"])
+        self.assertEqual(self._get_current().status_code, 404)
+        other = Deal(buyer_organization_id=self.buyer.id, seller_organization_id=self.seller.id)
+        self.session.add(other)
+        self.session.flush()
+        negotiation = NegotiationSession(deal_id=other.id, max_rounds=5)
+        self.session.add(negotiation)
+        self.session.flush()
+        proposal = Proposal(deal_id=other.id, negotiation_session_id=negotiation.id, proposal_number=1,
+            author_organization_id=self.buyer.id, terms_json=self.terms.to_storage_dict(), terms_hash=self.terms.terms_hash)
+        self.session.add(proposal)
+        self.session.flush()
+        self.session.add(AgreementVersion(deal_id=other.id, proposal_id=proposal.id, version_number=9,
+            canonical_terms_json=self.terms.to_storage_dict(), terms_hash=self.terms.terms_hash,
+            status="COMMITTED", created_by=self.buyer_user.id, committed_at=datetime.now(UTC)))
+        self.session.commit()
+        for suffix in ("/versions/9", "/compare?before=1&after=9"):
+            response = self._request("GET", base + suffix)
+            self.assertEqual(response.status_code, 404, response.text)
+            self.assertNotIn(self.terms.terms_hash, response.text)
+        self.assertEqual(self._request("GET", base + "/history").json()["versions"][0]["id"], str(old.id))
+
+    def test_exact_evidence_validates_snapshot_before_tracing_and_redacts_private_refs(self) -> None:
+        conversation = Conversation(
+            deal_id=self.deal.id, participant_organization_id=self.buyer.id
+        )
+        self.session.add(conversation)
+        self.session.flush()
+        message = Message(
+            conversation_id=conversation.id, author_user_id=self.buyer_user.id,
+            body="Review-only public quote", visibility="SHAREABLE", source_type="USER",
+        )
+        self.session.add(message)
+        self.session.flush()
+        fact = Constraint(
+            deal_id=self.deal.id, owner_organization_id=self.buyer.id,
+            field="quantity", typed_value="1", kind="INFORMATIONAL", status="CONFIRMED",
+            visibility="SHAREABLE", version=1, source_message_id=message.id,
+            source_span=message.body, confirmed_by=self.buyer_user.id,
+            confirmed_at=datetime.now(UTC),
+        )
+        self.session.add(fact)
+        self.session.commit()
+        version = self._add_pending_version(1, make_current=True)
+        valid = {
+            "metadata_schema_version": 1, "fact_id": str(fact.id), "version": 1,
+            "owner_organization_id": str(self.buyer.id), "visibility": "SHAREABLE",
+            "source_message_id": str(message.id), "source_span": message.body,
+            "source_body_hash": hashlib.sha256(message.body.encode()).hexdigest(),
+            "source_visibility": "SHAREABLE",
+        }
+        malformed = [
+            {**valid, "version": value} for value in (True, False, "1", 1.0, 0, -1, None)
+        ]
+        malformed.extend(
+            {**valid, "metadata_schema_version": value} for value in (999, True, "1", None)
+        )
+        malformed.extend(
+            {**valid, "source_span": value} for value in (True, [], None, "", " ", "x" * 8_001)
+        )
+        for key in ("fact_id", "owner_organization_id", "source_message_id"):
+            malformed.extend({**valid, key: value} for value in (True, 1, [], "invalid"))
+        for key in ("visibility", "source_visibility"):
+            malformed.extend({**valid, key: value} for value in (True, [], "PUBLIC"))
+        malformed.extend(
+            {**valid, "source_body_hash": value} for value in (True, [], "x" * 64, "a" * 63)
+        )
+        malformed.extend({key: value for key, value in valid.items() if key != missing}
+                         for missing in valid)
+        malformed.extend([None, True, "invalid", []])
+        malformed.append({**valid, "version": True, "metadata_schema_version": 999})
+        malformed.append({**valid, "visibility": "PRIVATE", "version": True})
+        malformed.append({**valid, "source_visibility": "PRIVATE", "version": True})
+        unavailable = {"trace_enabled": False, "state": "UNAVAILABLE", "grounding": "UNMAPPED"}
+        path = f"/deals/{self.deal.id}/agreements/versions/1"
+        for index, ref in enumerate(malformed):
+            with self.subTest(index=index, ref=ref):
+                snapshot = {**self.terms.to_storage_dict(), "_f6_evidence": [ref]}
+                version.canonical_terms_json = deepcopy(snapshot)
+                self.session.commit()
+                for user, organization in ((self.buyer_user, self.buyer), (self.seller_user, self.seller)):
+                    self._authenticate(self._actor(user, organization))
+                    response = self._request("GET", path + f"?organization_id={organization.id}")
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()["evidence"], [unavailable])
+                    self.assertEqual(response.json()["terms_hash"], self.terms.terms_hash)
+                self.session.refresh(version)
+                self.assertEqual(version.canonical_terms_json, snapshot)
+
+        version.canonical_terms_json = {**self.terms.to_storage_dict(), "_f6_evidence": [valid]}
+        self.session.commit()
+        for user, organization in ((self.buyer_user, self.buyer), (self.seller_user, self.seller)):
+            self._authenticate(self._actor(user, organization))
+            response = self._request("GET", path + f"?organization_id={organization.id}")
+            self.assertEqual(response.status_code, 200, response.text)
+            evidence = response.json()["evidence"][0]
+            self.assertTrue(evidence["trace_enabled"])
+            self.assertEqual(evidence["state"], "AVAILABLE")
+            self.assertEqual(evidence["source_span"], message.body)
+            self.assertEqual(evidence["source_message_id"], str(message.id))
+            self.assertEqual(evidence["version"], 1)
+        for private_ref in ({**valid, "visibility": "PRIVATE"},
+                            {**valid, "source_visibility": "PRIVATE"}):
+            version.canonical_terms_json = {**self.terms.to_storage_dict(), "_f6_evidence": [private_ref]}
+            self.session.commit()
+            response = self._request("GET", path + f"?organization_id={self.seller.id}")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["evidence"], [unavailable])
+
+    def test_legacy_proposal_id_still_creates_draft_without_human_rounds(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+
+        response = self._create_draft()
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["terms_hash"], self.terms.terms_hash)
+        self.assertEqual(response.json()["version_number"], 1)
+        self.assertEqual(response.json()["status"], "PENDING_APPROVAL")
+        self.assertEqual(self.session.scalar(select(Proposal)), self.proposal)
+        self.assertEqual(list(self.session.scalars(select(Approval))), [])
 
     def test_current_agreement_read_returns_exact_terms_and_approval_state(self) -> None:
         self._authenticate(self._actor(self.buyer_user, self.buyer))
@@ -262,6 +564,67 @@ class AgreementRouteTests(unittest.TestCase):
             "organization_id": str(self.buyer.id),
             **overrides,
         }
+
+    def _human_submit(self) -> httpx.Response:
+        from uuid import uuid4
+        session = self.session.scalar(select(NegotiationSession))
+        session.current_proposal_id = self.proposal.id
+        self.session.commit()
+        return self._request("POST", f"/deals/{self.deal.id}/negotiation/submit", json={
+            "command_id": str(uuid4()), "expected_deal_revision": self.deal.version,
+            "organization_id": str(self.buyer.id),
+            "base": {"id": str(self.proposal.id), "terms_hash": self.proposal.terms_hash, "status": self.proposal.status},
+            "terms": self._reviewed_terms(),
+        })
+
+    def test_human_proposal_http_journey_is_separate_from_bilateral_approval(self) -> None:
+        from uuid import uuid4
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        submitted = self._human_submit()
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        self.assertEqual(self._get_current().status_code, 404)
+        self.assertEqual(self._request("POST", f"/deals/{self.deal.id}/agreements", json={"proposal_id": submitted.json()["proposal_id"]}).status_code, 409)
+        self.assertEqual(self._request("POST", f"/deals/{self.deal.id}/agreements/from-reviewed-terms", json=self._reviewed_terms()).status_code, 409)
+        read = self._request("GET", f"/deals/{self.deal.id}/negotiation?organization_id={self.buyer.id}")
+        self.assertEqual(read.status_code, 200, read.text)
+        self.assertEqual(read.json()["eligible_actions"], ["supersede"])
+        base = {field: read.json()["latest"][field] for field in ("id", "terms_hash", "status")}
+        body = {"command_id": str(uuid4()), "expected_deal_revision": read.json()["deal_revision"], "base": base,
+                "organization_id": str(self.seller.id)}
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        accepted = self._request("POST", f"/deals/{self.deal.id}/negotiation/accept", json=body)
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(self._get_current().json()["approvals"], [])
+        self.assertEqual(self._request("POST", f"/deals/{self.deal.id}/negotiation/accept", json=body).json(), accepted.json())
+        current = self._get_current().json()
+        self.assertEqual(self._request("POST", f"/deals/{self.deal.id}/agreements/1/approve", json={"terms_hash": current["terms_hash"]}).status_code, 200)
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.assertEqual(self._request("POST", f"/deals/{self.deal.id}/agreements/1/approve", json={"terms_hash": current["terms_hash"]}).status_code, 200)
+        self.assertEqual(self._commit(1, terms_hash=current["terms_hash"]).status_code, 200)
+
+    def test_negotiation_http_fresh_access_and_dual_selector(self) -> None:
+        self._authenticate(self._actor(self.outsider_user, self.outsider))
+        self.assertEqual(self._request("GET", f"/deals/{self.deal.id}/negotiation").status_code, 404)
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        self.session.add(OrganizationMember(user_id=self.buyer_user.id, organization_id=self.seller.id, status="ACTIVE"))
+        self.session.commit()
+        self.assertEqual(self._request("GET", f"/deals/{self.deal.id}/negotiation").status_code, 422)
+        self.assertEqual(self._request("GET", f"/deals/{self.deal.id}/negotiation?organization_id={self.buyer.id}").status_code, 200)
+        self.buyer_user.status = "INACTIVE"
+        self.session.commit()
+        self.assertEqual(self._request("GET", f"/deals/{self.deal.id}/negotiation?organization_id={self.buyer.id}").status_code, 404)
+
+    def test_negotiation_http_rejects_naive_deadline_and_unknown_authority_fields(self) -> None:
+        from uuid import uuid4
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        body = {"command_id": str(uuid4()), "expected_deal_revision": 0, "base": None,
+                "organization_id": str(self.buyer.id), "terms": self._reviewed_terms(), "expires_at": "2030-01-01T00:00:00"}
+        response = self._request("POST", f"/deals/{self.deal.id}/negotiation/submit", json=body)
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn("2030-01-01T00:00:00", response.text)
+        body.pop("expires_at")
+        body["status"] = "COMMITTED"
+        self.assertEqual(self._request("POST", f"/deals/{self.deal.id}/negotiation/submit", json=body).status_code, 422)
 
     def test_reviewed_terms_accept_an_omitted_payment_timing_during_rollout(self) -> None:
         # Older clients predate the field and may hit a new instance before the

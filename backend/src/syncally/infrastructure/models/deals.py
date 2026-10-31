@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from syncally.infrastructure.models.base import UUID_TYPE, Base
 from syncally.infrastructure.models.mixins import TimestampMixin
@@ -35,6 +35,27 @@ class Deal(TimestampMixin, Base):
     current_proposal_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, nullable=True)
     current_agreement_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    onboarding: Mapped[CounterpartyOnboarding | None] = relationship(lazy="selectin")
+
+
+class CounterpartyOnboarding(Base):
+    __tablename__ = "counterparty_onboardings"
+    __table_args__ = (
+        UniqueConstraint("deal_id", name="uq_counterparty_onboarding_deal"),
+        UniqueConstraint("shell_organization_id", name="uq_counterparty_onboarding_shell"),
+        CheckConstraint("buyer_organization_id <> shell_organization_id", name="ck_onboarding_distinct_parties"),
+    )
+
+    invitation_jti: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True)
+    deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id"), nullable=False)
+    buyer_organization_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id"), nullable=False)
+    shell_organization_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id"), nullable=False)
+    inviter_user_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("users.id"), nullable=False)
+    recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recipient_organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("organizations.id"), nullable=True)
 
 
 class Conversation(Base):
@@ -81,6 +102,10 @@ class Message(Base):
             name="ck_message_source_matches_author",
         ),
         CheckConstraint("length(trim(body)) > 0", name="ck_message_body_nonempty"),
+        UniqueConstraint(
+            "conversation_id", "author_user_id", "idempotency_key",
+            name="uq_messages_conversation_author_idempotency_key",
+        ),
         Index("ix_messages_conversation_visibility_created", "conversation_id", "visibility", "created_at"),
     )
 
@@ -92,6 +117,8 @@ class Message(Base):
     visibility: Mapped[str] = mapped_column(String(32), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    idempotency_fingerprint: Mapped[str | None] = mapped_column(String(67), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

@@ -2,29 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApiError, apiRequest, listOrganizations } from "../api/client";
-import type { Organization } from "../api/types";
-import { navigateToDeal, navigateToDeals, navigateToOrganizations } from "../router";
+import type { Invitation as CreateInvitationResponse, InvitationAcceptance as AcceptInvitationResponse, Organization } from "../api/types";
+import { invitationPresentation } from "../auth/invitationPresentation";
+import { navigateToDeal, navigateToDeals, navigateToOrganizations, parseRoute } from "../router";
 import OrganizationsPanel from "./OrganizationsPanel";
 import Reveal from "../ui/Reveal";
-
-interface CreateInvitationResponse {
-  token: string;
-  invite_url: string;
-  organization_id: string;
-  organization_legal_name: string;
-  deal_id: string | null;
-  role: string;
-  expires_at: string;
-}
-
-interface AcceptInvitationResponse {
-  status: string;
-  organization_id: string;
-  organization_legal_name: string;
-  user_id: string;
-  role: string;
-  deal_id: string | null;
-}
 
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
@@ -39,12 +21,14 @@ function describeError(caught: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
-export default function OrganizationsSettingsPage() {
+export default function OrganizationsSettingsPage({ onAccepted }: {
+  onAccepted?: (result: AcceptInvitationResponse, isCurrentInvitation: () => boolean) => Promise<void>;
+}) {
   // Invite Generator Modal State
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [adminOrganizations, setAdminOrganizations] = useState<Organization[]>([]);
   const [selectedOrgId, setSelectedOrgId] = useState("");
-  const [dealIdInput, setDealIdInput] = useState("");
+  const [recipientEmail, setRecipientEmail] = useState("");
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generatedInvite, setGeneratedInvite] = useState<CreateInvitationResponse | null>(null);
@@ -59,6 +43,8 @@ export default function OrganizationsSettingsPage() {
   const [acceptedResult, setAcceptedResult] = useState<AcceptInvitationResponse | null>(null);
   // Tracks which token the accept outcome above belongs to, so a new invite starts clean.
   const lastInviteTokenRef = useRef<string | null>(null);
+  const invitationGenerationRef = useRef(0);
+  const intent = invitationPresentation(inviteToken);
 
   // Extract invite token from hash on mount and hashchange
   useEffect(() => {
@@ -68,18 +54,25 @@ export default function OrganizationsSettingsPage() {
       const [, queryString] = rawPath.split("?");
       const token = (queryString ? new URLSearchParams(queryString).get("token") : null) ?? null;
       if (token !== lastInviteTokenRef.current) {
+        invitationGenerationRef.current += 1;
         // A different invitation is being opened: discard the previous invitation's outcome
         // so its result or error cannot leak into the new accept flow.
         lastInviteTokenRef.current = token;
         setAcceptedResult(null);
         setAcceptError(null);
+        setAcceptOrgName("");
+        setAcceptCountryCode("US");
+        setAccepting(false);
       }
       setInviteToken(token);
     }
 
     checkHashForInvite();
     window.addEventListener("hashchange", checkHashForInvite);
-    return () => window.removeEventListener("hashchange", checkHashForInvite);
+    return () => {
+      invitationGenerationRef.current += 1;
+      window.removeEventListener("hashchange", checkHashForInvite);
+    };
   }, []);
 
   // Fetch admin organizations when opening the invite modal
@@ -110,6 +103,10 @@ export default function OrganizationsSettingsPage() {
       setGenerateError("Please select an organization where you are an admin.");
       return;
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail.trim())) {
+      setGenerateError("Enter the team member's email address.");
+      return;
+    }
 
     setGenerating(true);
     setGenerateError(null);
@@ -119,7 +116,7 @@ export default function OrganizationsSettingsPage() {
         {
           method: "POST",
           body: JSON.stringify({
-            deal_id: dealIdInput.trim() || null,
+            recipient_email: recipientEmail.trim().toLowerCase(),
           }),
         },
       );
@@ -134,9 +131,8 @@ export default function OrganizationsSettingsPage() {
   async function handleCopyLink() {
     if (!generatedInvite) return;
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(generatedInvite.invite_url);
-      }
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(generatedInvite.invite_url);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch {
@@ -145,7 +141,19 @@ export default function OrganizationsSettingsPage() {
   }
 
   async function handleAcceptInvite() {
-    if (!inviteToken) return;
+    if (!inviteToken || accepting || intent.kind === "INVALID") return;
+    if (intent.kind === "COUNTERPARTY" && !acceptOrgName.trim()) {
+      setAcceptError("Your company legal name is required.");
+      return;
+    }
+    const acceptingToken = inviteToken;
+    const acceptingGeneration = invitationGenerationRef.current;
+    const isCurrentInvitation = () => {
+      const currentRoute = parseRoute(window.location.hash);
+      return invitationGenerationRef.current === acceptingGeneration &&
+        lastInviteTokenRef.current === acceptingToken &&
+        currentRoute.name === "organizations" && currentRoute.inviteToken === acceptingToken;
+    };
     setAccepting(true);
     setAcceptError(null);
     try {
@@ -154,7 +162,7 @@ export default function OrganizationsSettingsPage() {
         organization_legal_name?: string;
         country_code?: string;
       } = { token: inviteToken };
-      if (acceptOrgName.trim()) {
+      if (intent.kind !== "TEAM" && acceptOrgName.trim()) {
         payload.organization_legal_name = acceptOrgName.trim();
         payload.country_code = acceptCountryCode.trim().toUpperCase() || "US";
       }
@@ -163,11 +171,13 @@ export default function OrganizationsSettingsPage() {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      if (!isCurrentInvitation()) return;
       setAcceptedResult(res);
+      await onAccepted?.(res, isCurrentInvitation);
     } catch (caught) {
-      setAcceptError(describeError(caught));
+      if (isCurrentInvitation()) setAcceptError(describeError(caught));
     } finally {
-      setAccepting(false);
+      if (isCurrentInvitation()) setAccepting(false);
     }
   }
 
@@ -194,7 +204,7 @@ export default function OrganizationsSettingsPage() {
             className="button"
             onClick={handleOpenInviteModal}
           >
-            Invite Counterparty
+            Invite team member
           </button>
         </div>
       </Reveal>
@@ -216,7 +226,7 @@ export default function OrganizationsSettingsPage() {
               <div>
                 <span className="eyebrow">Onboarding</span>
                 <h3 id="invite-modal-title" className="display" style={{ fontSize: "1.25rem" }}>
-                  Invite Counterparty
+                  Invite team member
                 </h3>
               </div>
               <button
@@ -230,8 +240,7 @@ export default function OrganizationsSettingsPage() {
             </div>
 
             <p className="muted" style={{ fontSize: "0.9rem", marginBottom: 16 }}>
-              Generate a shareable link that allows a counterparty to sign up, join your organization,
-              and immediately link into bilateral deals.
+              Team membership invitation
             </p>
 
             <form className="form" onSubmit={handleGenerateInvite} noValidate>
@@ -256,16 +265,15 @@ export default function OrganizationsSettingsPage() {
               </div>
 
               <div className="field">
-                <label htmlFor="invite-modal-deal">Link to Deal ID (Optional)</label>
+                <label htmlFor="invite-modal-email">Team member email</label>
                 <input
-                  id="invite-modal-deal"
-                  type="text"
-                  placeholder="e.g. 12345678-1234-1234-1234-123456789abc"
-                  value={dealIdInput}
-                  onChange={(e) => setDealIdInput(e.target.value)}
+                  id="invite-modal-email"
+                  type="email"
+                  maxLength={320}
+                  value={recipientEmail}
+                  onChange={(e) => setRecipientEmail(e.target.value)}
                   disabled={generating}
                 />
-                <p className="hint">If provided, the counterparty is immediately associated with this deal.</p>
               </div>
 
               {generateError && (
@@ -338,7 +346,7 @@ export default function OrganizationsSettingsPage() {
               <div>
                 <span className="eyebrow">Invitation</span>
                 <h3 id="accept-modal-title" className="display" style={{ fontSize: "1.25rem" }}>
-                  Accept Invitation
+                  {intent.kind === "TEAM" ? "Accept team invitation" : intent.kind === "COUNTERPARTY" ? "Accept counterparty invitation" : "Accept Invitation"}
                 </h3>
               </div>
               <button
@@ -358,19 +366,20 @@ export default function OrganizationsSettingsPage() {
                   Accepting will grant your account access to trade documents and bilateral deals.
                 </p>
 
-                <div className="field" style={{ marginBottom: 12 }}>
-                  <label htmlFor="accept-org-name">Your Company Legal Name (Optional)</label>
+                {intent.recipientEmail ? <p className="muted">Addressed to {intent.recipientEmail}</p> : null}
+                {intent.kind === "INVALID" ? <p role="alert">Invalid invitation token</p> : null}
+                {intent.kind !== "TEAM" ? <div className="field" style={{ marginBottom: 12 }}>
+                  <label htmlFor="accept-org-name">{intent.kind === "COUNTERPARTY" ? "Your Company Legal Name" : "Your Company Legal Name (Optional)"}</label>
                   <input
                     id="accept-org-name"
                     type="text"
-                    placeholder="Leave blank to join inviting organization"
+                    maxLength={200}
                     value={acceptOrgName}
                     onChange={(e) => setAcceptOrgName(e.target.value)}
                   />
-                  <p className="hint">If provided, creates your counterparty company and links into the deal.</p>
-                </div>
+                </div> : null}
 
-                {acceptOrgName.trim() ? (
+                {intent.kind !== "TEAM" && acceptOrgName.trim() ? (
                   <div className="field" style={{ marginBottom: 12 }}>
                     <label htmlFor="accept-country-code">Country Code (2 letters)</label>
                     <input
@@ -394,7 +403,7 @@ export default function OrganizationsSettingsPage() {
                   <button
                     type="button"
                     className="button"
-                    disabled={accepting}
+                    disabled={accepting || intent.kind === "INVALID"}
                     onClick={handleAcceptInvite}
                   >
                     {accepting ? "Accepting…" : "Accept & Join"}

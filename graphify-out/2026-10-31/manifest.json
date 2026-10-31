@@ -66,10 +66,10 @@
     "semantic_hash": "fcfdc84016593115588662e3b823311d"
   },
   "backend/alembic/versions/0011_organization_active_legal_name_index.py": {
-    "mtime": 1793434087.397833,
-    "seen": 1793445158.1166236,
-    "ast_hash": "8ecaeb82518cd6cb09f1ccecad587b09",
-    "semantic_hash": "8ecaeb82518cd6cb09f1ccecad587b09"
+    "mtime": 1793447819.0392745,
+    "seen": 1793447835.518499,
+    "ast_hash": "c090dc4a98d21339bd59b00daec1d88d",
+    "semantic_hash": ""
   },
   "backend/pyproject.toml": {
     "mtime": 1793434087.397833,
@@ -1278,16 +1278,16 @@
     "semantic_hash": "912b13ac1ea1f70cab72fb1c3a66e2db"
   },
   "ARCHITECTURE.md": {
-    "mtime": 1792729557.6261919,
-    "seen": 1793433921.8353536,
-    "ast_hash": "7aaf6f022db45031cbd1795441676397",
-    "semantic_hash": "7aaf6f022db45031cbd1795441676397"
+    "mtime": 1793447819.0359356,
+    "seen": 1793447835.5189319,
+    "ast_hash": "af2397ef5519ecff7c1203523fa456d0",
+    "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1792729557.6262982,
-    "seen": 1793433921.8353572,
-    "ast_hash": "8605cd7cf319c8bdec1f46a0e7613aab",
-    "semantic_hash": "8605cd7cf319c8bdec1f46a0e7613aab"
+    "mtime": 1793447819.0362024,
+    "seen": 1793447835.5189342,
+    "ast_hash": "7c1296c927bb1178204f39ee73a454b0",
+    "semantic_hash": ""
   },
   "backend/README.md": {
     "mtime": 1793434087.397833,
@@ -1344,10 +1344,10 @@
     "semantic_hash": "2d9bdb37a9213b6401ba3d123b483007"
   },
   "docs/operations.md": {
-    "mtime": 1792729557.636828,
-    "seen": 1793433921.8353744,
-    "ast_hash": "b5192b7d398e16b3583efa09f605d16b",
-    "semantic_hash": "b5192b7d398e16b3583efa09f605d16b"
+    "mtime": 1793447819.0405986,
+    "seen": 1793447835.5189562,
+    "ast_hash": "b405c1e6954d8b231cda78bc7a212cb4",
+    "semantic_hash": ""
   },
   "frontend/README.md": {
     "mtime": 1792729557.636828,
@@ -1367,28 +1367,10 @@
     "ast_hash": "382f8bc8421e5fa7d6ce19a00bc4344d",
     "semantic_hash": "382f8bc8421e5fa7d6ce19a00bc4344d"
   },
-  "docs/engineering/plan.md.lock.json": {
-    "mtime": 1793445688.341289,
-    "seen": 1793446801.0104797,
-    "ast_hash": "ed97c965b752c1aac4a51be392f23642",
-    "semantic_hash": ""
-  },
-  "docs/engineering/decision.md": {
-    "mtime": 1793445635.7691338,
-    "seen": 1793446801.0106304,
-    "ast_hash": "a1cb67f4ca47480bdb05078214d6be0f",
-    "semantic_hash": ""
-  },
-  "docs/engineering/log.md": {
-    "mtime": 1793446745.5973206,
-    "seen": 1793446801.0106325,
-    "ast_hash": "ede1d422f3e0ea35c6355497c1da50df",
-    "semantic_hash": ""
-  },
-  "docs/engineering/plan.md": {
-    "mtime": 1793445688.341144,
-    "seen": 1793446801.0106342,
-    "ast_hash": "fdac585d9241dfaac814d9a7f9801be7",
+  "backend/tests/test_organization_index_migration.py": {
+    "mtime": 1793447819.0392745,
+    "seen": 1793447835.518761,
+    "ast_hash": "9c05c249211603fb967eafa4ae1ec717",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

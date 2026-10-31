@@ -1,13 +1,9 @@
 """Poll outbox_events and relay committed-agreement events to Temporal.
 
-Each pending row is claimed, dispatched, and marked delivered (or left
-pending for retry) in its own transaction - never a lease/claimed state that
-could get stuck if the process dies, and never a batch-wide transaction held
-open across a Temporal call. On Postgres, ``FOR UPDATE SKIP LOCKED`` lets two
-dispatcher processes split a backlog without blocking each other; on SQLite
-(unit tests) that clause doesn't exist, so no lock is taken at all - the real
-safety net against double delivery is Temporal's own "already started"
-idempotency for the deal's stable workflow ID, not the DB lock.
+Claims commit durable attempt evidence and a bounded lease under the demo
+reset coordination lock. External calls run without a database transaction.
+Expired leases can be reclaimed after a crash; fenced outcomes cannot overwrite
+a newer claim. Temporal's stable workflow and notification IDs handle redelivery.
 """
 
 from __future__ import annotations
@@ -17,7 +13,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from random import uniform
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from syncally.application.outbox import (
@@ -30,10 +26,12 @@ from syncally.application.payments import (
     PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
     PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
 )
+from syncally.infrastructure.demo_lifecycle import lock_outbox_dispatch
 from syncally.infrastructure.models import OutboxEvent
 from syncally.operations import Operation, log_operation
 
 logger = logging.getLogger(__name__)
+_DISPATCH_LEASE = timedelta(minutes=5)
 
 # This dispatcher only knows how to talk to Temporal: a different event type
 # it has never heard of still gets claimed and permanently failed (there's no
@@ -60,7 +58,7 @@ def claim_next_pending_event(db: Session, *, now: datetime | None = None) -> Out
     stmt = _claim_statement(now=now)
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         stmt = stmt.with_for_update(skip_locked=True)
-    return db.scalar(stmt)
+    return db.scalar(stmt.execution_options(populate_existing=True))
 
 
 def apply_dispatch_result(
@@ -89,15 +87,56 @@ def dispatch_one_pending_event(
     db: Session, starter: DealWorkflowStarter, *, now: datetime | None = None
 ) -> bool:
     """Claim and dispatch one pending row. Returns False when none are pending."""
+    now = now or datetime.now(UTC)
+    lock_outbox_dispatch(db)
     row = claim_next_pending_event(db, now=now)
     if row is None:
+        db.commit()
         return False
+
+    db.expunge(row)
+    lease_until = now + _DISPATCH_LEASE
+    claimed_id = db.scalar(
+        update(OutboxEvent)
+        .where(
+            OutboxEvent.id == row.id,
+            OutboxEvent.status == "PENDING",
+            or_(OutboxEvent.next_attempt_at.is_(None), OutboxEvent.next_attempt_at <= now),
+        )
+        .values(dispatch_started_at=now, next_attempt_at=lease_until)
+        .returning(OutboxEvent.id)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    if claimed_id is None:
+        return False
+    row.dispatch_started_at = now
+    row.next_attempt_at = lease_until
 
     result = dispatch_outbox_event(
         PendingOutboxEvent(id=row.id, event_type=row.event_type, payload=row.payload),
         starter,
     )
     apply_dispatch_result(row, result, now=now)
+    completed_id = db.scalar(
+        update(OutboxEvent)
+        .where(
+            OutboxEvent.id == row.id,
+            OutboxEvent.status == "PENDING",
+            OutboxEvent.dispatch_started_at == now,
+            OutboxEvent.next_attempt_at == lease_until,
+        )
+        .values(
+            status=row.status, retry_count=row.retry_count,
+            delivered_at=row.delivered_at, next_attempt_at=row.next_attempt_at,
+            error_detail=row.error_detail,
+        )
+        .returning(OutboxEvent.id)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    if completed_id is None:
+        return True
     fields = dict(
         outbox_event_id=row.id,
         deal_id=row.payload.get("deal_id") if isinstance(row.payload, Mapping) else None,
@@ -107,7 +146,6 @@ def dispatch_one_pending_event(
         next_attempt_at=row.next_attempt_at,
         failure_kind="PERMANENT" if result.permanent_failure else "TRANSIENT" if not result.delivered else None,
     )
-    db.commit()
     level = {"FAILED": logging.ERROR, "PENDING": logging.WARNING}.get(fields["status"], logging.INFO)
     log_operation(logger, Operation.OUTBOX_COMPLETED, level=level, **fields)
     return True

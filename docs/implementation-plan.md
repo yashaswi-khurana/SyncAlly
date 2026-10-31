@@ -22,7 +22,7 @@ This plan tracks the constrained first demo from the shared [demo contract in is
 - Message/fact review, proposal creation and negotiation workflows, bilateral approval, and committed agreement persistence.
 - PayPal Sandbox invoice creation and reconciliation.
 - Frontend connection to the API and user-facing product flows.
-- Product onboarding through organization invitations, acceptance, and password setup.
+- Independent production-readiness review and live PostgreSQL/browser verification of F4 onboarding.
 
 See [README](../README.md), [system architecture](../ARCHITECTURE.md), and the [architecture decision record](architecture/04-architecture-decision-record.md) for more detail. Architecture documents describe intended behavior where the implementation status above says work is still planned.
 
@@ -54,8 +54,133 @@ Email/password login, verified-token identity, database-backed memberships, orga
 creation, and admin membership for existing users are implemented. Public self-registration
 is disabled to match the demo contract. From `backend/`, run
 `python -m syncally.cli.seed_demo` after migrations to provision the demo buyer and seller;
-the command prompts for passwords and hashes them in the app. Product onboarding through an
-organization admin invitation, invite acceptance, and password setup remains planned work.
+the command prompts for passwords and hashes them in the app.
+
+### F4 - Counterparty onboarding (implemented, awaiting independent review)
+
+An ACTIVE buyer ADMIN can use New deal / Invite counterparty or
+`POST /deals/counterparty-invitations` to atomically create an INACTIVE private seller
+shell, human DRAFT deal, durable recipient binding, audit, and identifier-only outbox
+wakeup. Ordinary active-organization deal creation and directory selection remain available.
+Migration `0015_counterparty_onboarding` descends from `0014`; it never infers pending
+state from legacy names or missing memberships. Pending human preparation is allowed,
+but messages, thread import, and persisted proposals/negotiation are blocked.
+
+Versioned TEAM invitations bind a normalized recipient and grant MEMBER. COUNTERPARTY
+invitations bind the exact buyer/deal/shell and create the recipient's separate organization
+with ADMIN membership. Acceptance rechecks current database identity and inviter authority,
+locks and validates the unused binding and pristine DRAFT deal, replaces only its seller,
+increments version, creates the recipient conversation, consumes the invitation, and issues
+tokens in one transaction. It never approves an agreement or authorizes a payment.
+Both acceptance screens reset on token changes; App refreshes memberships and uses the
+server-returned deal ID, ignoring stale-session refreshes.
+
+Genuinely legacy invitations retain their bearer-capability contract. Unknown or malformed
+typed claims cannot fall back to it. Token possession and matching signup email are not
+verified mailbox ownership; stronger recipient verification, especially for team access,
+is a separate security recommendation. No email is sent. F5 is not included.
+See [the operations walkthrough](operations.md#f4-counterparty-onboarding) for rollout,
+rollback, two-person acceptance, and the required PostgreSQL/browser environment gates.
+
+F4 validation on 2026-10-31: the focused backend slice ran 138 tests with no failures
+or errors and 9 PostgreSQL-dependent skips; the full backend suite ran 629 tests with
+no failures or errors and 20 environment skips. Focused frontend tests passed 212/212;
+the full frontend suite passed 328/328. The documented backend Ruff gate, frontend
+`lint:check`, production build, and `git diff --check` passed. Existing payment-panel
+lint warnings and the large Three.js bundle warning remain outside F4.
+PostgreSQL concurrency/fresh migration and the real two-person browser walkthrough
+remain unexecuted. F4 is ready for independent code review, not production sign-off.
+
+### F5 - Persisted human negotiation (implemented, environment gates outstanding)
+
+F5 adds explicit human submit/counter/accept-as-candidate/reject/supersede/expire commands,
+immutable canonical terms snapshots and persisted actor-organization/user action history.
+Latest-base and revision checks, fresh database authorization, F4 pending-state rejection,
+durable round-limit escalation and atomic candidate replacement are enforced under the
+deal lock. New acceptance creates a fresh empty-approval candidate even for equal hashes;
+legacy drafting contracts remain available without bypassing human rounds. Private evidence
+is reauthorized/redacted at projection. Migration 0016 is additive after the preserved 0015.
+The AI/detail UI uses these commands; agreement approval and execution stay separate.
+F6 is not included.
+
+Validation on 2026-10-31: focused negotiation/migration 33 tests (27 pass, six PostgreSQL
+skips), domain 20/20, agreement routes/domain/repository 46/46; isolated full backend
+668 tests (642 pass, 26 database/service skips). Five file-backed SQLite race scenarios
+pass, including candidate replacement versus decisions and injected lock-winner rollback;
+SQLite does not prove PostgreSQL locking. Backend Ruff `src tests` passes. Focused
+frontend negotiation/AI/detail/client 92/92 and full frontend 336/336 pass; lint/typecheck
+and production build pass with three existing payment-panel warnings and a large Three.js
+chunk warning. The full backend runner bootstraps local SQLite/offline configuration,
+removes application environment variables before tests, and disables Temporal test-server
+startup for this invocation only under the no-services constraint.
+
+Live PostgreSQL fresh migration/races require `TEST_POSTGRES_URL`, which is not configured.
+Desktop/mobile two-party browser verification remains unexecuted under the no-services
+constraint. F5 is ready for independent review, not production sign-off.
+See [F5 operations](operations.md#f5-persisted-human-negotiation).
+
+### F6 - Agreement history and comparison (implemented, environment gates outstanding)
+
+F6 adds fresh database-authorized history, exact-version and structured comparison GETs,
+version-owned recorded approvals, and read-only historical review in AgreementReview.
+Equal-hash versions remain distinct. Comparison normalizes copies without changing stored
+terms/hashes and preserves duplicate counts; ambiguous entry matching stays added/removed.
+Exact-proposal evidence references are frozen in existing version JSON metadata for new
+snapshots. Current source authorization, frozen privacy and source integrity are rechecked
+on each read. Legacy/changed/ambiguous/missing sources do not enable tracing or fabricate
+term grounding. F7 amendments and F10 structured authoring remain excluded; migrations
+0012-0016 and prior accepted work are preserved.
+
+Validation on 2026-10-31: focused backend agreement/negotiation/domain 107 tests,
+101 pass and six PostgreSQL skips; full isolated backend 679 tests, 652 pass and 27
+database/service skips, zero failures/errors and Python exit 0. Focused frontend
+AgreementReview/client/detail 88/88 and full frontend 342/342 pass. Backend Ruff,
+frontend lint/typecheck, production build and whitespace checks pass. Three existing
+payment-panel lint warnings and the large Three.js chunk warning remain unchanged.
+The backend runner uses SQLite/offline bootstrap, removes service configuration and
+disables Temporal test-server startup for this invocation. Real PostgreSQL/service
+validation and desktop/mobile two-party browser verification remain unexecuted under
+the no-services constraint. F6 is ready for independent review, not production sign-off.
+See [F6 API contract](../backend/README.md#f6-agreement-history-and-comparison).
+
+### F11a - Explicit payment modes (implemented, review ready)
+
+F11a extends the existing single-milestone payment path, not F10/multi-milestone
+authoring. New intent mode is selected exclusively by server configuration, persisted
+atomically with provider/outbox identity, and immutable thereafter. Matching replays
+retain their original mode across configuration changes. Per-intent worker dispatch
+has no fake fallback, fabricated offline URLs, remote construction for offline work,
+or automatic paid transition. The protected demo-scoped command queues explicit
+simulated observations; worker commit rechecks scope/version/lease and records
+`OFFLINE_DEMO` source plus `SIMULATION/OFFLINE_DEMO` success audit. Rejected evidence
+receives atomic needs-action completion without changing payment truth. Real PayPal
+webhooks remain separate. Typed UI labels distinguish offline, Sandbox and unknown
+evidence, including the seller's preview confirmation.
+
+Additive 0017 preserves migrations 0012-0016 and historical payment values/indexes.
+Legacy PayPal routing remains Sandbox with unverified historical evidence; other
+legacy providers remain unresolved, never converted to demo history. Downgrade
+refuses provenance loss, and payment-history reset protections remain unchanged.
+The CLI's explicit offline harness shares the adapter and prints stored unpaid
+truth; unavailable backends never silently switch databases. Importing the CLI
+no longer mutates process logger levels (regression-tested).
+
+Validation on 2026-10-31: focused payment 83 tests, dev routes 20, webhook 3 and
+demo 41 passed before repairs; focused repository 24 and CLI/operations 12 passed
+after repairs; explicit CLI CI wiring also passes. Full isolated backend: 699 tests,
+672 pass, 27 skips, zero failures
+or errors. Skips comprise 17 PostgreSQL-dependent tests, nine Temporal test-server
+tests and one local PostgreSQL/Temporal smoke test. The invocation bootstraps
+SQLite/offline configuration, removes service environment variables and disables
+Temporal server startup without altering test code. Frontend: 17 files, 346 tests
+passed. Ruff `src tests`, frontend lint/typecheck and production build pass, with
+three pre-existing payment-panel warnings and the existing Three.js chunk warning.
+
+No agents, commits, real services or credentials were used. Live PostgreSQL
+migration/locking execution, desktop/mobile two-party browser verification and
+F11b Sandbox create/pay/webhook verification remain unexecuted. F11a is ready for
+independent code review, not production sign-off. See
+[F11a operating contract](operations.md#f11a-explicit-payment-modes).
 
 ## Team Rules
 
@@ -299,7 +424,7 @@ membership) remains planned.
 
 **What to build:** Add a small interface for fact extraction and proposal drafting. Add a fake implementation for tests. Add one real provider only after the team chooses it. Set time and retry limits; parse output with S4-01 schemas. Use LangGraph only if a simple typed function is not enough.
 
-**Contract code:** The `AISuggestionProvider` port, `AIRetryPolicy`, the bounded `extract_facts`/`draft_proposal` use cases, and deterministic providers are implemented in `application/ai.py` and `infrastructure/ai/`. Output is parsed with the S4-01 schemas and grounded against the S4-02 filtered context. The explicit review API and UI are integrated; no real provider is selected. See [the AI provider boundary](architecture/06-ai-provider-boundary.md).
+**Contract code:** F2 implements one OpenAI Chat Completions HTTP adapter behind the existing `AISuggestionProvider` port, promoting the existing httpx version constraint to runtime. Offline remains the default; remote mode requires explicit egress permission, operator-configured model and masked environment credentials. Private message/constraint egress requires the private flag plus the selected organization's trusted UUID allowlist entry and normal database authorization. Two 10-second attempts and 0.5-second backoff, 128 KiB request/streamed response limits, 4096 output tokens, strict domain JSON and locally grounded proposal citations bound the integration. Only explicit missing-credential or exhausted-transient fallback is allowed. API/UI provenance is additive and invocation-only, never reviewed terms or fabricated per-fact history. HTTP is transaction-free with selected membership reauthorization before persistence. `store=false` does not promise zero retention. Mocked transport/context/route/frontend evaluation makes no real-provider, account or model availability claim; `gpt-4.1-mini` is an operator example only. No migrations, onboarding, negotiation, or changes to B1-B4/Q1/F1a/F3 are included. See [the AI provider boundary](architecture/06-ai-provider-boundary.md).
 
 **Done when:**
 - Tests run with the fake and need no network or API key.

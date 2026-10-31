@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Any, NoReturn
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,7 @@ from syncally.application.agreements import (
     StaleAgreementVersion,
     UnauthorizedApproval,
     WrongTermsHash,
+    compare_agreement_terms,
     get_current_agreement,
     resolve_party_organization,
 )
@@ -135,6 +136,7 @@ class CommitAgreementRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     terms_hash: str = _TERMS_HASH_FIELD
+    organization_id: UUID | None = None
 
 
 class ApprovalResponse(BaseModel):
@@ -147,6 +149,8 @@ class ApprovalResponse(BaseModel):
     decision: str
     terms_hash: str
     created_at: datetime
+    id: UUID | None = None
+    agreement_version_id: UUID | None = None
 
 
 class AgreementVersionResponse(BaseModel):
@@ -166,6 +170,55 @@ class AgreementVersionResponse(BaseModel):
     created_at: datetime
     committed_at: datetime | None = None
     approvals: list[ApprovalResponse] = Field(default_factory=list)
+    id: UUID | None = None
+    proposal_id: UUID | None = None
+    is_current: bool | None = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    grounding: str = "UNMAPPED"
+
+
+def get_agreement_repository(db: Session = Depends(get_db)) -> SqlAlchemyAgreementRepository:
+    return SqlAlchemyAgreementRepository(db)
+
+
+@router.get("/history")
+def read_agreement_history_route(
+    deal_id: UUID, organization_id: UUID | None = None,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+) -> dict[str, Any]:
+    try:
+        return repository.read_versions(deal_id, actor.user_id, organization_id)
+    except Exception as exc:
+        _raise_agreement_error(exc)
+
+
+@router.get("/versions/{number}", response_model=AgreementVersionResponse)
+def read_exact_agreement_route(
+    deal_id: UUID, number: int = Path(ge=1), organization_id: UUID | None = None,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+) -> AgreementVersionResponse:
+    try:
+        result = repository.read_versions(deal_id, actor.user_id, organization_id, (number,))
+        return AgreementVersionResponse.model_validate(result["versions"][0])
+    except Exception as exc:
+        _raise_agreement_error(exc)
+
+
+@router.get("/compare")
+def compare_agreements_route(
+    deal_id: UUID, before: int = Query(ge=1), after: int = Query(ge=1), organization_id: UUID | None = None,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+) -> dict[str, Any]:
+    try:
+        result = repository.read_versions(deal_id, actor.user_id, organization_id, (before, after))
+        versions = {version["version_number"]: version for version in result["versions"]}
+        return {"before": versions[before], "after": versions[after],
+                "changes": compare_agreement_terms(versions[before]["terms"], versions[after]["terms"])}
+    except Exception as exc:
+        _raise_agreement_error(exc)
 
 
 def get_deal_repository(db: Session = Depends(get_db)) -> DealRepository:
@@ -173,15 +226,12 @@ def get_deal_repository(db: Session = Depends(get_db)) -> DealRepository:
     return SqlAlchemyDealRepository(db)
 
 
-def get_agreement_repository(db: Session = Depends(get_db)) -> SqlAlchemyAgreementRepository:
-    """Provide the agreement read port for the current request."""
-    return SqlAlchemyAgreementRepository(db)
-
-
 def _to_agreement_response(agreement: Agreement) -> AgreementVersionResponse:
     payment_terms = agreement.terms.payment_terms
     single_payment = payment_terms[0] if len(payment_terms) == 1 else None
     return AgreementVersionResponse(
+        id=agreement.version_id,
+        is_current=True,
         deal_id=agreement.deal_id,
         version_number=agreement.version_number,
         terms_hash=agreement.terms_hash,
@@ -215,6 +265,7 @@ def _to_approval_response(
 @router.get("/current", response_model=AgreementVersionResponse)
 def read_current_agreement_route(
     deal_id: UUID,
+    organization_id: UUID | None = None,
     actor: ActorContext = Depends(get_current_actor),
     deal_repository: DealRepository = Depends(get_deal_repository),
     agreement_repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
@@ -227,6 +278,10 @@ def read_current_agreement_route(
             deal_repository,
             agreement_repository,
         )
+        if organization_id is not None:
+            result = agreement_repository.read_versions(deal_id, actor.user_id, organization_id,
+                                                         (agreement.version_number,))
+            return AgreementVersionResponse.model_validate(result["versions"][0])
     except Exception as exc:
         _raise_agreement_error(exc)
     return _to_agreement_response(agreement)
@@ -432,13 +487,16 @@ def commit_agreement_route(
 ) -> AgreementVersionResponse:
     """Commit the exact version once both verified parties approved it."""
     try:
-        get_deal(actor, deal_id, deal_repository)
+        deal = get_deal(actor, deal_id, deal_repository)
+        organization_id = resolve_party_organization(actor, deal, payload.organization_id)
         agreement = commit_agreement_in_transaction(
             db,
             CommitAgreementCommand(
                 deal_id=deal_id,
                 expected_version=version_number,
                 expected_terms_hash=payload.terms_hash,
+                user_id=actor.user_id,
+                organization_id=organization_id,
             ),
         )
     except Exception as exc:

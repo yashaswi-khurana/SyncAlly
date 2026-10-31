@@ -12,10 +12,15 @@ from syncally.application.conversations import (
     ConstraintNotFound,
     ConstraintReviewAction,
     OrganizationAccessDenied,
+    ThreadImportStale,
+    ThreadImportValidationError,
     add_message,
     deal_has_any_message,
+    import_thread,
     list_visible_constraints,
     list_visible_messages,
+    message_fingerprint,
+    preview_thread_import,
     review_constraint,
 )
 from syncally.application.identity import ActorContext
@@ -70,6 +75,10 @@ class FakeCommunicationRepository:
             )
             self.conversations[key] = conversation
         return conversation
+
+    def require_participant_membership(self, deal_id: UUID, organization_id: UUID, user_id: UUID) -> None:
+        if (organization_id, user_id) not in self.memberships:
+            raise CommunicationNotFound("Deal not found")
 
     def add_message(self, message: Message) -> Message:
         conversation = next(
@@ -186,6 +195,58 @@ class ConversationUseCaseTests(unittest.TestCase):
         )
         self.repository.constraints[self.constraint.id] = self.constraint
 
+    def test_thread_preview_preserves_literal_text_and_never_writes(self) -> None:
+        text = "  From: Someone <spoof@example.test>\r\nTo: Buyer\r\nSubject: Caf\u00e9\r\n\r\n> quoted\r\n\r\nFrom: Other\r\nPrice: \u20ac9 \U0001f600  "
+        preview = preview_thread_import(self.buyer, self.deal.id, text, self.repository)
+        self.assertEqual(preview.text, text.strip())
+        self.assertEqual(preview.headers[0], ("From", " Someone <spoof@example.test>"))
+        self.assertIn("Ambiguous From labels; all literal values retained.", preview.warnings)
+        self.assertTrue(preview.digest.startswith("plaintext-thread:v1:"))
+        self.assertEqual(preview.digest, preview_thread_import(
+            self.buyer, self.deal.id, text.strip(), self.repository
+        ).digest)
+        self.assertEqual(self.repository.conversations, {})
+        self.assertEqual(self.repository.messages, [])
+
+    def test_thread_import_digest_covers_exact_interior_and_literal_headers(self) -> None:
+        text = "From: Unknown\nTo: Buyer\nDate: not a date\nSent: literal\nSubject: Terms\n\n> quoted\nPrice: \u20ac9"
+        preview = preview_thread_import(self.buyer, self.deal.id, text, self.repository)
+        self.assertEqual(preview.headers, (
+            ("From", " Unknown"), ("To", " Buyer"), ("Date", " not a date"),
+            ("Sent", " literal"), ("Subject", " Terms"),
+        ))
+        for changed in (text.replace("\n", "\r\n"), text.replace("> quoted", ">  quoted"), text.replace("Unknown", "Other")):
+            self.assertNotEqual(preview.digest, preview_thread_import(self.buyer, self.deal.id, changed, self.repository).digest)
+            with self.assertRaises(ThreadImportStale):
+                import_thread(self.buyer, self.deal.id, changed, preview.digest, self.repository, confirmed=True)
+        self.assertEqual(self.repository.messages, [])
+        self.assertEqual(self.repository.conversations, {})
+
+    def test_thread_import_rejects_missing_confirmation_oversize_and_invalid_unicode_without_writes(self) -> None:
+        preview = preview_thread_import(self.buyer, self.deal.id, "Text", self.repository)
+        for options in ({"confirmed": False}, {"confirmed": True, "visibility": Visibility.SHAREABLE}):
+            with self.assertRaises(ThreadImportValidationError):
+                import_thread(self.buyer, self.deal.id, "Text", preview.digest, self.repository, **options)
+        for text in ("", " \n ", "x" * 8001, "  " + "x" * 8001 + "  ", "\ufeff" + "x" * 8000, "\ud800"):
+            with self.assertRaises(ThreadImportValidationError):
+                preview_thread_import(self.buyer, self.deal.id, text, self.repository)
+        self.assertEqual(self.repository.messages, [])
+        self.assertEqual(self.repository.conversations, {})
+
+    def test_thread_import_normalized_code_point_boundary(self) -> None:
+        normalized = "x" * 7995 + "\r\n \u0085x"
+        canonical = preview_thread_import(self.buyer, self.deal.id, normalized, self.repository)
+        for whitespace in ("  ", "\u0085", "\u001c\u001d\u001e\u001f", "\u00a0\u2003\u3000"):
+            with self.subTest(whitespace=repr(whitespace)):
+                text = whitespace + normalized + whitespace
+                preview = preview_thread_import(self.buyer, self.deal.id, text, self.repository)
+                self.assertEqual(preview.text, normalized)
+                self.assertEqual(preview.digest, canonical.digest)
+                imported = import_thread(self.buyer, self.deal.id, text, canonical.digest, self.repository, confirmed=True)
+                self.assertEqual(imported.body, normalized)
+        bom = "\ufeff" + "x" * 7999
+        self.assertEqual(preview_thread_import(self.buyer, self.deal.id, bom, self.repository).text, bom)
+
     def test_add_message_derives_author_and_owner_from_the_actor(self) -> None:
         message = add_message(
             self.buyer,
@@ -200,6 +261,28 @@ class ConversationUseCaseTests(unittest.TestCase):
         conversation = self.repository.conversations[(self.deal.id, self.buyer_id)]
         self.assertEqual(message.conversation_id, conversation.id)
         self.assertEqual(self.repository.messages, [message])
+
+    def test_key_propagation_normalization_and_versioned_fingerprint(self) -> None:
+        message = add_message(
+            self.buyer, self.deal.id,
+            AddMessageCommand(body="  Terms  ", visibility=Visibility.PRIVATE,
+                              source_reference="  upload:1  ", idempotency_key=" opaque "),
+            self.repository,
+        )
+        self.assertEqual(message.body, "Terms")
+        self.assertEqual(message.source_reference, "upload:1")
+        self.assertEqual(message.idempotency_key, " opaque ")
+        fingerprint = message_fingerprint(message)
+        self.assertTrue(fingerprint.startswith("v1:"))
+        self.assertEqual(len(fingerprint), 67)
+        normalized = replace(message, body=" Terms ", source_reference=" upload:1 ",
+                             id=uuid4(), created_at=datetime.now(UTC), author_user_id=UserId(uuid4()),
+                             conversation_id=ConversationId(uuid4()), idempotency_key="another-key")
+        self.assertEqual(message_fingerprint(normalized), fingerprint)
+        for change in ({"body": "Other"}, {"visibility": Visibility.SHAREABLE}, {"source_reference": "upload:2"}):
+            self.assertNotEqual(message_fingerprint(replace(message, **change)), fingerprint)
+        self.assertEqual(message_fingerprint(replace(message, source_reference=None)),
+                         message_fingerprint(replace(message, source_reference=" \t ")))
 
     def test_add_message_rejects_an_organization_the_actor_does_not_belong_to(self) -> None:
         with self.assertRaises(OrganizationAccessDenied):

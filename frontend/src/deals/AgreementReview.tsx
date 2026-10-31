@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
   commitAgreementVersion,
   getCurrentAgreement,
+  getAgreementHistory,
+  getAgreementVersion,
+  compareAgreementVersions,
   listOrganizations,
   recordAgreementDecision,
 } from "../api/client";
-import type { AgreementApproval, AgreementVersion, Organization } from "../api/types";
+import type { AgreementApproval, AgreementVersion, AgreementHistory, AgreementComparison, Organization } from "../api/types";
 import { paymentTimingLabel } from "../api/types";
+import CommercialDocumentPanel from "./CommercialDocumentPanel";
 
 interface AgreementReviewProps {
   dealId: string;
@@ -16,11 +20,13 @@ interface AgreementReviewProps {
   sellerOrganizationId: string;
   reloadToken?: number;
   onCommitted?: () => void;
+  selectedOrganizationId?: string;
+  onOrganizationChange?: (organizationId: string) => void;
 }
 
 type AgreementState =
   | { status: "loading" }
-  | { status: "empty" }
+  | { status: "empty"; organizations?: Organization[] }
   | { status: "error"; message: string }
   | { status: "ready"; agreement: AgreementVersion; organizations: Organization[] };
 
@@ -44,24 +50,90 @@ function approvalFor(
   return approvals.find((approval) => approval.organization_id === organizationId);
 }
 
+function ComparedValue({ value }: { value: unknown }) {
+  if (value !== null && typeof value === "object") return <dl className="agreement-terms__item">
+    {Object.entries(value).map(([field, entry]) => <div key={field}><dt>{field.replaceAll("_", " ")}</dt><dd><ComparedValue value={entry} /></dd></div>)}
+  </dl>;
+  return <>{value === null ? "Not specified" : String(value)}</>;
+}
+
 export default function AgreementReview({
   dealId,
   buyerOrganizationId,
   sellerOrganizationId,
   reloadToken = 0,
   onCommitted,
+  selectedOrganizationId: sharedOrganizationId,
+  onOrganizationChange,
 }: AgreementReviewProps) {
   const [state, setState] = useState<AgreementState>({ status: "loading" });
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
+  const selectedPartyRef = useRef("");
   const [reloadCount, setReloadCount] = useState(0);
   const [pendingDecision, setPendingDecision] = useState<"approve" | "reject" | "commit" | null>(null);
   const [decisionError, setDecisionError] = useState("");
   const [stale, setStale] = useState(false);
+  const [viewedVersion, setViewedVersion] = useState(0);
+  const [compareBefore, setCompareBefore] = useState(0);
+  const [history, setHistory] = useState<{ key: string; data: AgreementHistory } | null>(null);
+  const [versionView, setVersionView] = useState<{ key: string; agreement?: AgreementVersion; comparison?: AgreementComparison; error?: string } | null>(null);
+  const actingOrganizationId = sharedOrganizationId ?? selectedOrganizationId;
+  const context = useRef("");
+  const contextSignature = JSON.stringify([dealId, actingOrganizationId, reloadToken, reloadCount, viewedVersion, compareBefore]);
+  useEffect(() => { context.current = contextSignature; }, [contextSignature]);
+  const loadContext = JSON.stringify([dealId, sharedOrganizationId, reloadToken, reloadCount]);
+  const [observedContext, setObservedContext] = useState(loadContext);
+  if (observedContext !== loadContext) {
+    setObservedContext(loadContext);
+    setState({ status: "loading" });
+    setPendingDecision(null);
+    setStale(false);
+    setDecisionError("");
+    setViewedVersion(0);
+    setCompareBefore(0);
+    setHistory(null);
+    setVersionView(null);
+  }
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+
+  const historyKey = JSON.stringify([dealId, actingOrganizationId, reloadToken, reloadCount]);
+  useEffect(() => {
+    if (!actingOrganizationId || state.status !== "ready") return;
+    const controller = new AbortController();
+    void getAgreementHistory(dealId, actingOrganizationId, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setHistory({ key: historyKey, data }); })
+      .catch(() => { if (!controller.signal.aborted) setHistory(null); });
+    return () => controller.abort();
+  }, [dealId, actingOrganizationId, reloadToken, reloadCount, historyKey, state.status]);
+
+  useEffect(() => {
+    if (!actingOrganizationId || state.status !== "ready") return;
+    const controller = new AbortController();
+    const number = viewedVersion || state.agreement.version_number;
+    void Promise.all([
+      getAgreementVersion(dealId, number, actingOrganizationId, controller.signal),
+      compareBefore ? compareAgreementVersions(dealId, compareBefore, number, actingOrganizationId, controller.signal) : Promise.resolve(undefined),
+    ]).then(([agreement, comparison]) => {
+      if (agreement.deal_id !== dealId || agreement.version_number !== number
+        || (comparison && (comparison.before.deal_id !== dealId || comparison.after.deal_id !== dealId
+          || comparison.before.version_number !== compareBefore || comparison.after.version_number !== number
+          || comparison.after.terms_hash !== agreement.terms_hash))) throw new Error("Version response mismatch");
+      if (!controller.signal.aborted) setVersionView({ key: contextSignature, agreement, comparison });
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setVersionView({ key: contextSignature, error: apiMessage(error) });
+    });
+    return () => controller.abort();
+  }, [dealId, actingOrganizationId, viewedVersion, compareBefore, contextSignature, state]);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([getCurrentAgreement(dealId), listOrganizations()])
-      .then(([agreement, organizations]) => {
+    const controller = new AbortController();
+    void Promise.all([getCurrentAgreement(dealId, { organizationId: sharedOrganizationId, signal: controller.signal }).catch((error: unknown) => {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }), listOrganizations()])
+      .then(async ([agreement, organizations]) => {
         if (cancelled) return;
         const parties = organizations.filter(
           (organization) =>
@@ -75,6 +147,22 @@ export default function AgreementReview({
               ? parties[0].id
               : "",
         );
+        if (!agreement) {
+          const party = sharedOrganizationId || selectedPartyRef.current || (parties.length === 1 ? parties[0].id : "");
+          if (party) {
+            const saved = await getAgreementHistory(dealId, party, controller.signal);
+            if (cancelled) return;
+            if (saved.versions.length) {
+              const latest = saved.versions[0];
+              setHistory({ key: JSON.stringify([dealId, party, reloadToken, reloadCount]), data: saved });
+              setViewedVersion(latest.version_number);
+              setState({ status: "ready", agreement: latest, organizations: parties });
+              return;
+            }
+          }
+          setState({ status: "empty", organizations: parties });
+          return;
+        }
         setState({ status: "ready", agreement, organizations: parties });
       })
       .catch((error: unknown) => {
@@ -87,11 +175,16 @@ export default function AgreementReview({
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [dealId, buyerOrganizationId, sellerOrganizationId, reloadCount, reloadToken]);
+  }, [dealId, buyerOrganizationId, sellerOrganizationId, sharedOrganizationId, reloadCount, reloadToken]);
 
   async function decide(decision: "approve" | "reject") {
-    if (state.status !== "ready") return;
+    if (state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || viewedVersion || compareBefore) return;
+    if (state.agreement.is_current === false) return;
+    if (versionView?.key === contextSignature && (versionView.error || versionView.agreement?.is_current === false
+      || versionView.agreement?.terms_hash !== state.agreement.terms_hash)) return;
+    const atStart = context.current;
     setPendingDecision(decision);
     setDecisionError("");
     setStale(false);
@@ -101,10 +194,12 @@ export default function AgreementReview({
         state.agreement.version_number,
         state.agreement.terms_hash,
         decision,
-        selectedOrganizationId || undefined,
+        actingOrganizationId || undefined,
       );
+      if (!active.current || atStart !== context.current) return;
       reloadAgreement();
     } catch (error) {
+      if (!active.current || atStart !== context.current) return;
       if (error instanceof ApiError && error.status === 409) {
         setStale(true);
         setDecisionError(
@@ -114,12 +209,16 @@ export default function AgreementReview({
         setDecisionError(apiMessage(error));
       }
     } finally {
-      setPendingDecision(null);
+      if (active.current && atStart === context.current) setPendingDecision(null);
     }
   }
 
   async function commitCurrentAgreement() {
-    if (state.status !== "ready") return;
+    if (state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || viewedVersion || compareBefore) return;
+    if (state.agreement.is_current === false) return;
+    if (versionView?.key === contextSignature && (versionView.error || versionView.agreement?.is_current === false
+      || versionView.agreement?.terms_hash !== state.agreement.terms_hash)) return;
+    const atStart = context.current;
     setPendingDecision("commit");
     setDecisionError("");
     setStale(false);
@@ -128,10 +227,13 @@ export default function AgreementReview({
         dealId,
         state.agreement.version_number,
         state.agreement.terms_hash,
+        actingOrganizationId,
       );
+      if (!active.current || atStart !== context.current) return;
       onCommitted?.();
       reloadAgreement();
     } catch (error) {
+      if (!active.current || atStart !== context.current) return;
       if (error instanceof ApiError && error.status === 409) {
         setStale(true);
         setDecisionError(
@@ -141,7 +243,7 @@ export default function AgreementReview({
         setDecisionError(apiMessage(error));
       }
     } finally {
-      setPendingDecision(null);
+      if (active.current && atStart === context.current) setPendingDecision(null);
     }
   }
 
@@ -152,6 +254,12 @@ export default function AgreementReview({
     setReloadCount((count) => count + 1);
   }
 
+  function changeParty(organizationId: string) {
+    selectedPartyRef.current = organizationId;
+    setSelectedOrganizationId(organizationId);
+    onOrganizationChange?.(organizationId);
+  }
+
   return (
     <section className="card agreement-review" aria-labelledby="agreement-review-heading">
       <div className="panel-head">
@@ -160,13 +268,19 @@ export default function AgreementReview({
           <h2 id="agreement-review-heading">Agreement review</h2>
         </div>
         {state.status === "ready" ? (
-          <span className="badge badge--kind">VERSION {state.agreement.version_number}</span>
+          <span className="badge badge--kind">VERSION {viewedVersion || state.agreement.version_number}</span>
         ) : null}
       </div>
 
       {state.status === "loading" ? <p role="status">Loading saved agreement…</p> : null}
       {state.status === "empty" ? (
         <div className="empty-state">
+          {state.organizations && state.organizations.length > 1 ? <div className="field">
+            <label htmlFor={`agreement-empty-party-${dealId}`}>Review as organization</label>
+            <select id={`agreement-empty-party-${dealId}`} value={actingOrganizationId} onChange={(event) => {
+              changeParty(event.target.value); setReloadCount((count) => count + 1);
+            }}><option value="">Choose an organization</option>{state.organizations.map((party) => <option key={party.id} value={party.id}>{party.legal_name}</option>)}</select>
+          </div> : null}
           <p>No saved agreement version is ready for review yet.</p>
           <button type="button" className="button secondary" onClick={reloadAgreement}>
             Reload agreement
@@ -183,13 +297,42 @@ export default function AgreementReview({
       ) : null}
 
       {state.status === "ready" ? (() => {
-        const agreement = state.agreement;
+        const currentView = versionView?.key === contextSignature ? versionView : null;
+        const currentHistory = history?.key === historyKey ? history.data : null;
+        const partySelector = state.organizations.length > 1 ? <div className="field agreement-review__party-choice">
+          <label htmlFor={`agreement-party-${dealId}`}>{viewedVersion ? "Review as organization" : "Approve as organization"}</label>
+          <select id={`agreement-party-${dealId}`} value={actingOrganizationId} disabled={pendingDecision !== null}
+            onChange={(event) => changeParty(event.target.value)}>
+            <option value="">Choose an organization</option>
+            {state.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.legal_name}</option>)}
+          </select>
+        </div> : null;
+        const selectors = currentHistory ? <div className="field">
+          <label htmlFor={`agreement-version-${dealId}`}>Agreement version</label>
+          <select id={`agreement-version-${dealId}`} value={viewedVersion} disabled={pendingDecision !== null}
+            onChange={(event) => setViewedVersion(Number(event.target.value))}>
+            <option value={0}>Current version</option>
+            {currentHistory.versions.map((version) => <option key={version.id ?? version.version_number} value={version.version_number}>
+              Version {version.version_number} · {version.status.replaceAll("_", " ")}
+            </option>)}
+          </select>
+          <label htmlFor={`agreement-compare-${dealId}`}>Compare before</label>
+          <select id={`agreement-compare-${dealId}`} value={compareBefore} disabled={pendingDecision !== null}
+            onChange={(event) => setCompareBefore(Number(event.target.value))}>
+            <option value={0}>No comparison</option>
+            {currentHistory.versions.map((version) => <option key={version.id ?? version.version_number} value={version.version_number}>Version {version.version_number}</option>)}
+          </select>
+        </div> : null;
+        if ((viewedVersion || compareBefore) && !currentView?.agreement) return <>{partySelector}{selectors}<p role={currentView?.error ? "alert" : "status"}>{currentView?.error ?? "Loading saved version…"}</p></>;
+        const agreement = viewedVersion ? currentView!.agreement! : state.agreement;
         const buyerApproval = approvalFor(agreement.approvals, buyerOrganizationId);
         const sellerApproval = approvalFor(agreement.approvals, sellerOrganizationId);
-        const myApproval = selectedOrganizationId
-          ? approvalFor(agreement.approvals, selectedOrganizationId)
+        const myApproval = actingOrganizationId
+          ? approvalFor(agreement.approvals, actingOrganizationId)
           : undefined;
-        const canDecide = agreement.status === "PENDING_APPROVAL";
+        const readConflict = !viewedVersion && currentView && (currentView.error || currentView.agreement?.is_current === false
+          || currentView.agreement?.terms_hash !== agreement.terms_hash);
+        const canDecide = agreement.status === "PENDING_APPROVAL" && agreement.is_current !== false && !viewedVersion && !compareBefore && !readConflict;
         // Prefer the explicit, hashed projection; fall back to the nested terms
         // so a cached payload from before that field existed still renders.
         const paymentTiming = agreement.payment_trigger && agreement.payment_due_condition
@@ -207,6 +350,30 @@ export default function AgreementReview({
           && sellerApproval.terms_hash === agreement.terms_hash;
         return (
           <>
+            {partySelector}
+            {selectors}
+            {viewedVersion ? <p role="status">Historical version · Read-only</p> : null}
+            {readConflict ? <div role="alert"><p>The agreement changed or is unavailable.</p><button type="button" className="button secondary" onClick={reloadAgreement}>Reload agreement</button></div> : null}
+            {currentView?.comparison ? <div aria-label="Structured agreement comparison">
+              <h3>Version {currentView.comparison.before.version_number} to {currentView.comparison.after.version_number}</h3>
+              {currentView.comparison.changes.fields.map((change) => <dl key={change.field}>
+                <dt>{change.field.replaceAll("_", " ")}</dt><dd><ComparedValue value={change.before} /> → <ComparedValue value={change.after} /></dd>
+              </dl>)}
+              {Object.entries(currentView.comparison.changes.collections).map(([name, changes]) => <div key={name}>
+                <h4>{name.replaceAll("_", " ")}</h4>
+                {changes.added.map((entry, index) => <div key={`added-${index}`}><strong>Added</strong><ComparedValue value={entry} /></div>)}
+                {changes.removed.map((entry, index) => <div key={`removed-${index}`}><strong>Removed</strong><ComparedValue value={entry} /></div>)}
+                {changes.modified.map((entry, index) => <div key={`modified-${index}`}><strong>Modified · Before</strong><ComparedValue value={entry.before} /><strong>After</strong><ComparedValue value={entry.after} /></div>)}
+              </div>)}
+            </div> : null}
+            {currentView?.agreement?.evidence?.length ? <div aria-label="Agreement evidence trace">
+              <h3>Referenced evidence · Unmapped to terms</h3>
+              {currentView.agreement.evidence.map((ref, index) => <div key={index}>
+                <p>{ref.state}{ref.fact_id ? ` · Fact ${ref.fact_id} version ${ref.version}` : ""}</p>
+                {ref.trace_enabled && ref.organization_id === actingOrganizationId && ref.agreement_version_id === currentView.agreement?.id
+                  && ref.terms_hash === agreement.terms_hash && !stale && !readConflict ? <blockquote>{ref.source_span}</blockquote> : null}
+              </div>)}
+            </div> : null}
             <div className="agreement-review__summary">
               <div>
                 <span className="fact-source__label">VERSION STATUS</span>
@@ -228,6 +395,14 @@ export default function AgreementReview({
               <p className="agreement-review__notice" role="status">
                 This agreement is committed. Its terms are read-only and cannot be changed in place.
               </p>
+            ) : null}
+
+            {agreement.status === "COMMITTED" && agreement.id && actingOrganizationId
+              && currentView?.agreement?.id === agreement.id
+              && currentView.agreement.terms_hash === agreement.terms_hash
+              && currentView.agreement.status === "COMMITTED" && !stale && !readConflict ? (
+              <CommercialDocumentPanel key={contextSignature} dealId={dealId} agreement={agreement}
+                organizationId={actingOrganizationId} contextKey={contextSignature} />
             ) : null}
 
             {paymentTiming.length > 0 ? (
@@ -296,6 +471,7 @@ export default function AgreementReview({
                     <span className={`badge ${approval?.decision === "APPROVE" ? "badge--status-confirmed" : approval?.decision === "REJECT" ? "badge--status-rejected" : "badge--status-extracted"}`}>
                       {approval?.decision ?? "AWAITING DECISION"}
                     </span>
+                    {approval ? <div><span>Actor {approval.user_id}</span> <time dateTime={approval.created_at}>{new Date(approval.created_at).toLocaleString()}</time><code className="agreement-review__hash">{approval.terms_hash}</code></div> : null}
                   </div>
                 );
               })}
@@ -303,21 +479,6 @@ export default function AgreementReview({
 
             {canDecide ? (
               <>
-                {state.organizations.length > 1 ? (
-                  <div className="field agreement-review__party-choice">
-                    <label htmlFor={`agreement-party-${dealId}`}>Approve as organization</label>
-                    <select
-                      id={`agreement-party-${dealId}`}
-                      value={selectedOrganizationId}
-                      onChange={(event) => setSelectedOrganizationId(event.target.value)}
-                    >
-                      <option value="">Choose an organization</option>
-                      {state.organizations.map((organization) => (
-                        <option key={organization.id} value={organization.id}>{organization.legal_name}</option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
                 {myApproval ? (
                   <p className="hint">Your organization recorded {myApproval.decision.toLowerCase()} for this exact version.</p>
                 ) : null}
@@ -326,7 +487,7 @@ export default function AgreementReview({
                   <button
                     type="button"
                     className="button"
-                    disabled={stale || !selectedOrganizationId || pendingDecision !== null || myApproval?.decision === "APPROVE"}
+                    disabled={stale || !actingOrganizationId || pendingDecision !== null || myApproval?.decision === "APPROVE"}
                     onClick={() => void decide("approve")}
                   >
                     {pendingDecision === "approve" ? "Submitting approval…" : "Approve this version"}
@@ -334,7 +495,7 @@ export default function AgreementReview({
                   <button
                     type="button"
                     className="button secondary"
-                    disabled={stale || !selectedOrganizationId || pendingDecision !== null || myApproval?.decision === "REJECT"}
+                    disabled={stale || !actingOrganizationId || pendingDecision !== null || myApproval?.decision === "REJECT"}
                     onClick={() => void decide("reject")}
                   >
                     {pendingDecision === "reject" ? "Submitting rejection…" : "Reject this version"}
@@ -348,7 +509,7 @@ export default function AgreementReview({
                     <button
                       type="button"
                       className="button"
-                      disabled={stale || pendingDecision !== null}
+                      disabled={stale || !actingOrganizationId || pendingDecision !== null}
                       onClick={() => void commitCurrentAgreement()}
                     >
                       {pendingDecision === "commit" ? "Committing agreement…" : "Commit approved agreement"}

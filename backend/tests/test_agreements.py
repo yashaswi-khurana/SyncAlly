@@ -18,6 +18,7 @@ from syncally.application.agreements import (
     StaleAgreementVersion,
     UnauthorizedApproval,
     WrongTermsHash,
+    compare_agreement_terms,
 )
 from syncally.domain.agreements.agreement import ApprovalDecision
 from syncally.domain.agreements.trade_terms import (
@@ -50,6 +51,49 @@ from syncally.infrastructure.repositories.agreements import (
 
 
 class AgreementCommitTests(unittest.TestCase):
+    def test_comparison_normalizes_copies_and_preserves_duplicate_counts(self) -> None:
+        from copy import deepcopy
+
+        before = build_terms().to_storage_dict()
+        after = deepcopy(before)
+        after["line_items"][0]["quantity"] += ".000"
+        after["delivery_location"] = after["delivery_location"].upper()
+        saved = deepcopy(after)
+        result = compare_agreement_terms(before, after)
+        self.assertEqual(result["fields"], [])
+        self.assertTrue(all(not value for group in result["collections"].values() for value in group.values()))
+        self.assertEqual(after, saved)
+        before["shipments"] *= 2
+        result = compare_agreement_terms(before, after)
+        self.assertEqual(len(result["collections"]["shipments"]["removed"]), 1)
+        self.assertEqual(result["collections"]["shipments"]["modified"], [])
+
+    def test_comparison_all_collections_exact_matches_first_and_ambiguous_pairs(self) -> None:
+        from copy import deepcopy
+
+        before = build_terms().to_storage_dict()
+        for name in ("line_items", "shipments", "payment_terms"):
+            before[name] = [deepcopy(before[name][0]) for _ in range(3)]
+        after = deepcopy(before)
+        after["line_items"][0]["description"] = "Chair"
+        after["line_items"][1]["description"] = "Table"
+        after["shipments"][0]["destination"] = "New warehouse"
+        after["payment_terms"][0]["trigger"] = "delivery"
+        saved_before, saved_after = deepcopy(before), deepcopy(after)
+        result = compare_agreement_terms(before, after)
+        self.assertEqual(len(result["collections"]["line_items"]["added"]), 2)
+        self.assertEqual(len(result["collections"]["line_items"]["removed"]), 2)
+        self.assertEqual(result["collections"]["line_items"]["modified"], [])
+        for name in ("shipments", "payment_terms"):
+            self.assertEqual(len(result["collections"][name]["modified"]), 1)
+        for name in ("line_items", "shipments", "payment_terms"):
+            after[name].reverse()
+        self.assertEqual(compare_agreement_terms(before, after), result)
+        self.assertEqual(before, saved_before)
+        for name in ("line_items", "shipments", "payment_terms"):
+            after[name].reverse()
+        self.assertEqual(after, saved_after)
+
     def setUp(self) -> None:
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",

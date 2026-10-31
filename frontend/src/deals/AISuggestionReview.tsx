@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ApiError, correctDealFact, createAgreementFromReviewedTerms, createDealFact, draftDealProposal, reviewDealFact, suggestDealFacts } from "../api/client";
-import type { DealFact, FactReviewAction, PaymentTrigger, ReviewedProposalTerms, Visibility } from "../api/types";
+import { ApiError, correctDealFact, createDealFact, draftDealProposal, getNegotiation, negotiateDeal, reviewDealFact, suggestDealFacts } from "../api/client";
+import type { AIProvenance, DealFact, FactReviewAction, NegotiationInput, NegotiationView, PaymentTrigger, ReviewedProposalTerms, Visibility } from "../api/types";
 import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import {
   REQUIRED_TRADE_FIELDS,
@@ -24,6 +24,8 @@ interface AISuggestionReviewProps {
   onFactUpdated: (fact: DealFact) => void;
   onFactCorrected: (replaced: DealFact, corrected: DealFact) => void;
   onAgreementCreated?: () => void;
+  pendingCounterparty?: boolean;
+  negotiation?: NegotiationView | null;
 }
 
 const PROPOSAL_FIELDS: Array<[keyof ProposalSuggestionDraft, string]> = [
@@ -42,6 +44,22 @@ function describeError(caught: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
+function invocationLabel(provenance: AIProvenance | undefined): string {
+  if (!provenance || provenance.provider === "unknown") return "Unknown (legacy)";
+  const label = provenance.provider === "openai" ? "OpenAI"
+    : provenance.fallback_reason ? "Offline fallback" : "Offline";
+  const scopes = {
+    authorized: "Authorized local context", shareable_only: "Shareable context only",
+    authorized_private: "Private context permitted", unknown: "Unknown context scope",
+  };
+  const reasons = {
+    missing_credentials: "Missing credentials", transient_exhausted: "Temporary provider failure",
+  };
+  return [label, `Mode: ${provenance.mode}`, provenance.model ? `Model: ${provenance.model}` : null,
+    scopes[provenance.context_scope], provenance.fallback_reason ? reasons[provenance.fallback_reason] : null,
+  ].filter(Boolean).join(" | ");
+}
+
 export default function AISuggestionReview({
   dealId,
   organizationId,
@@ -51,12 +69,16 @@ export default function AISuggestionReview({
   onFactUpdated,
   onFactCorrected,
   onAgreementCreated = () => {},
+  pendingCounterparty = false,
+  negotiation,
 }: AISuggestionReviewProps) {
   const [factDrafts, setFactDrafts] = useState<FactSuggestionDraft[]>([]);
   const [factOverrides, setFactOverrides] = useState<Record<string, DealFact>>({});
   const [factSuggestionGuidance, setFactSuggestionGuidance] = useState("");
   const [serverMissingFields, setServerMissingFields] = useState<RequiredTradeField[] | null>(null);
   const [hasFactSuggestionRun, setHasFactSuggestionRun] = useState(false);
+  const [factProvenance, setFactProvenance] = useState<AIProvenance>();
+  const [proposalProvenance, setProposalProvenance] = useState<AIProvenance>();
   const [manualEntryOpen, setManualEntryOpen] = useState(false);
   const [manualField, setManualField] = useState<RequiredTradeField>("item_description");
   const [manualValue, setManualValue] = useState("");
@@ -86,6 +108,13 @@ export default function AISuggestionReview({
   );
   const [suggestionError, setSuggestionError] = useState("");
   const [agreementNotice, setAgreementNotice] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [replacementAcknowledgement, setReplacementAcknowledgement] = useState("");
+  const [submissionStale, setSubmissionStale] = useState(false);
+  const submittedCommand = useRef<{ signature: string; id: string } | null>(null);
+  const submissionContext = useRef("");
+  const candidateSignature = JSON.stringify(negotiation?.current_candidate);
+  const replacementConfirmed = replacementAcknowledgement === candidateSignature;
   const [pendingAction, setPendingAction] = useState<"facts" | "proposal" | "agreement" | "manual" | null>(null);
   const factStateRevisionRef = useRef(0);
   const manualTriggerRef = useRef<HTMLButtonElement>(null);
@@ -154,6 +183,8 @@ export default function AISuggestionReview({
     }];
   });
   const factsSignature = JSON.stringify([...knownFactsById.values()]);
+  const contextSignature = JSON.stringify([dealId, organizationId, factsSignature, negotiation?.deal_revision, negotiation?.latest?.id]);
+  useEffect(() => { submissionContext.current = contextSignature; }, [contextSignature]);
   const missingFields = missingRequiredTradeFields([...knownFactsById.values()],
     serverFactsSignature === factsSignature ? serverMissingFields : null);
   const confirmedValues: Partial<Record<keyof ProposalSuggestionDraft, string>> = {};
@@ -254,6 +285,7 @@ export default function AISuggestionReview({
       if (!activeRef.current) return;
       if (revisionAtStart !== factStateRevisionRef.current) return;
       const drafts = result.facts.filter(authorized).map(toFactSuggestionDraft);
+      setFactProvenance(result.provenance);
       setServerFactsSignature(JSON.stringify([...new Map([...facts, ...result.facts].filter(authorized).map((fact) => [fact.id, fact])).values()]));
       setFactDrafts(drafts);
       setFactSuggestionGuidance(result.guidance_message);
@@ -289,6 +321,7 @@ export default function AISuggestionReview({
       const result = await draftDealProposal(dealId, organizationId);
       if (!activeRef.current) return;
       if (editRevision !== proposalEditRevisionRef.current) return;
+      setProposalProvenance(result.provenance);
       setProposalState({ draft: toProposalDraft(result), signatures: {}, invalidated: false, observedSignatures: requestFactSignatures });
       setPaymentTrigger(SUPPORTED_PAYMENT_TIMING[0].trigger);
     } catch (caught) {
@@ -300,8 +333,9 @@ export default function AISuggestionReview({
   }
 
   async function createReviewedAgreement() {
-    if (!proposal || proposalInvalidated || conflictingFields.size > 0) return;
-    const requestFactsSignature = factsSignature;
+    if (pendingCounterparty || submissionStale || pendingAction || !proposal || proposalInvalidated || conflictingFields.size > 0) return;
+    const requestContext = submissionContext.current;
+    const editRevision = proposalEditRevisionRef.current;
     setSuggestionError("");
     setAgreementNotice("");
     setPendingAction("agreement");
@@ -317,17 +351,42 @@ export default function AISuggestionReview({
         delivery_date: proposal.deliveryDate || null,
         payment_trigger: paymentTrigger,
       };
-      const agreement = await createAgreementFromReviewedTerms(dealId, organizationId, terms);
-      if (!activeRef.current) return;
-      if (factsSignature !== requestFactsSignature || proposalInvalidated || conflictingFields.size > 0) {
-        setSuggestionError("Proposal terms changed while the agreement was being submitted. Please review the updated terms.");
+      const context = negotiation ?? await getNegotiation(dealId, organizationId);
+      if (!activeRef.current || requestContext !== submissionContext.current) return;
+      const action = context.eligible_actions.includes("counter") ? "counter" : "submit";
+      if (context.deal_id !== dealId || context.organization_id !== organizationId || !context.eligible_actions.includes(action)) {
+        setSubmissionStale(true);
+        setSuggestionError("Reload negotiation and review the latest round before submitting.");
         return;
       }
+      if (context.current_candidate && !replacementConfirmed) {
+        setSuggestionError("Confirm replacement of the current candidate before submitting.");
+        return;
+      }
+      const input: Omit<NegotiationInput, "command_id"> = {
+        expected_deal_revision: context.deal_revision, organization_id: organizationId,
+        base: context.latest ? { id: context.latest.id, terms_hash: context.latest.terms_hash, status: context.latest.status } : null,
+        terms, expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+        supersede_current_candidate: context.current_candidate,
+        evidence: confirmed.filter((fact) => fact.visibility === "PRIVATE" || fact.source_message_id !== null)
+          .map((fact) => ({ fact_id: fact.id, version: fact.version })),
+      };
+      const signature = JSON.stringify([dealId, action, input]);
+      if (submittedCommand.current?.signature !== signature) submittedCommand.current = { signature, id: crypto.randomUUID() };
+      const result = await negotiateDeal(dealId, action, { ...input, command_id: submittedCommand.current.id });
+      if (!activeRef.current) return;
+      if (requestContext !== submissionContext.current || editRevision !== proposalEditRevisionRef.current) {
+        setSubmissionStale(true);
+        setSuggestionError("Proposal context changed during submission. Reload negotiation before continuing.");
+        return;
+      }
+      submittedCommand.current = null;
       setProposalState(null);
-      setAgreementNotice(`Agreement version ${agreement.version_number} is ready for both parties to review.`);
+      setAgreementNotice(result.outcome === "ESCALATION_REQUIRED" ? "Negotiation requires escalation." : "Proposal submitted.");
       onAgreementCreated();
     } catch (caught) {
       if (!activeRef.current) return;
+      if (caught instanceof ApiError && caught.status === 409) setSubmissionStale(true);
       setSuggestionError(describeError(caught));
     } finally {
       if (activeRef.current) setPendingAction(null);
@@ -448,8 +507,10 @@ export default function AISuggestionReview({
         <span className="communication-index" aria-hidden="true">03 / REVIEW</span>
       </div>
       <p className="muted">
-        Demo AI suggestions run only after you request them. Extracted facts are saved as private, unconfirmed candidates for this organization. Draft edits never approve an agreement or start a payment.
+        AI suggestions are unreviewed. Draft edits never approve an agreement or start a payment.
       </p>
+      {hasFactSuggestionRun ? <p className="hint" aria-label="Fact invocation provenance">Last fact invocation: {invocationLabel(factProvenance)}</p>
+        : knownFactsById.size > 0 ? <p className="hint">Stored fact provenance: Unknown (legacy)</p> : null}
       <section className="terms-readiness" aria-labelledby={`terms-readiness-heading-${dealId}`}>
         <h3 id={`terms-readiness-heading-${dealId}`}>Terms Readiness Checklist</h3>
         <ul className="terms-readiness__list">
@@ -600,6 +661,7 @@ export default function AISuggestionReview({
             <span className="badge badge--status-extracted">DRAFT - NOT AN AGREEMENT</span>
           </div>
           <p className="hint">Review and edit the AI-generated draft. It is not shared or approved from this screen.</p>
+          <p className="hint" aria-label="Proposal invocation provenance">Proposal invocation: {invocationLabel(proposalProvenance)}</p>
           {proposalInvalidated || conflictingFields.size > 0 ? <p role="alert" className="form-error">Confirmed terms changed or conflict. Review the facts and request a fresh draft before sending.</p> : null}
           {PROPOSAL_FIELDS.map(([field, label]) => (
             <div className="field" key={field}>
@@ -637,15 +699,29 @@ export default function AISuggestionReview({
             Due condition: {selectedPaymentTiming.dueCondition}
           </p>
           <p className="hint">Editing this draft does not create or approve an agreement and cannot start a payment.</p>
+          <div className="field">
+            <label htmlFor={`proposal-expiry-${dealId}`}>Proposal deadline (optional)</label>
+            <input id={`proposal-expiry-${dealId}`} type="datetime-local" value={expiresAt} disabled={pendingAction !== null}
+              onChange={(event) => { proposalEditRevisionRef.current += 1; setExpiresAt(event.target.value); }} />
+          </div>
+          {negotiation?.current_candidate ? <label>
+            <input type="checkbox" checked={replacementConfirmed} disabled={pendingAction !== null}
+              onChange={(event) => setReplacementAcknowledgement(event.target.checked ? candidateSignature : "")} />
+            Replace candidate version {negotiation.current_candidate.version_number} and invalidate its approvals
+          </label> : null}
+          {submissionStale ? <button type="button" className="button secondary" onClick={() => {
+            setSubmissionStale(false); setSuggestionError(""); onAgreementCreated();
+          }}>Reload negotiation</button> : null}
           <button
             type="button"
             className="button"
-            disabled={pendingAction !== null || proposalInvalidated || conflictingFields.size > 0}
+            disabled={pendingCounterparty || submissionStale || negotiation === null || pendingAction !== null || proposalInvalidated || conflictingFields.size > 0
+              || Boolean(negotiation && !negotiation.eligible_actions.some((action) => action === "submit" || action === "counter"))
+              || Boolean(negotiation?.current_candidate && !replacementConfirmed)}
             onClick={() => void createReviewedAgreement()}
           >
-            {pendingAction === "agreement" ? "Saving agreement…" : "Send reviewed terms for bilateral approval"}
+            {pendingAction === "agreement" ? "Submitting proposal..." : negotiation?.eligible_actions.includes("counter") ? "Submit counterproposal" : "Submit reviewed proposal"}
           </button>
-          <p className="hint">Both parties must approve and commit this saved version before payment can begin.</p>
         </div>
       ) : null}
     </section>

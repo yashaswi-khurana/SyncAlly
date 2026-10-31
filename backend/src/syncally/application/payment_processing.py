@@ -141,7 +141,7 @@ class PaymentInvoiceNotice:
 
 @dataclass(frozen=True, slots=True)
 class PaymentInvoiceReconciliation:
-    """Current invoice identity and payment state fetched from PayPal."""
+    """Current invoice identity and explicitly sourced normalized payment state."""
 
     provider_invoice_id: str
     invoice_number: str
@@ -165,6 +165,9 @@ class PaymentWorkItem:
     failure_code: str | None = None
     failure_detail: str | None = None
     provider_create_started_at: datetime | None = None
+    provider: str = "PAYPAL"
+    execution_mode: str = "PAYPAL_SANDBOX"
+    version: int = 0
 
     @property
     def lookup(self) -> PaymentInvoiceLookup:
@@ -282,6 +285,8 @@ def process_payment_intent(
             "The authorized payment intent no longer exists; inspect the outbox event.",
         )
 
+    require_payment_provider(work, provider)
+
     if work.status in {
         PaymentIntentStatus.SENT,
         PaymentIntentStatus.PENDING,
@@ -352,7 +357,7 @@ def process_payment_intent(
                     payment_intent_id, "PAYMENT_CREATE_TIME_UNKNOWN", detail
                 )
                 raise PaymentNeedsAction("PAYMENT_CREATE_TIME_UNKNOWN", detail)
-            if _request_id_retry_window_expired(work.provider_create_started_at, now):
+            if work.execution_mode == "PAYPAL_SANDBOX" and _request_id_retry_window_expired(work.provider_create_started_at, now):
                 detail = "PayPal's safe request-ID retry window expired; reconcile the invoice manually."
                 repository.mark_manual_action(
                     payment_intent_id, "PAYMENT_CREATE_RETRY_WINDOW_EXPIRED", detail
@@ -370,6 +375,8 @@ def process_payment_intent(
             repository.mark_failure(payment_intent_id, code, detail)
             raise PaymentNeedsAction(code, detail)
         if (
+            work.execution_mode == "PAYPAL_SANDBOX"
+            and
             work.provider_create_started_at is not None
             and _request_id_retry_window_expired(work.provider_create_started_at, now)
         ):
@@ -463,6 +470,9 @@ def reconcile_payment_intent(
                 "PAYMENT_INTENT_NOT_FOUND",
                 "The payment intent no longer exists; inspect the webhook reconciliation event.",
             )
+        require_payment_provider(work, provider)
+        if work.execution_mode != "PAYPAL_SANDBOX":
+            raise PaymentNeedsAction("PAYMENT_PROVENANCE_UNRESOLVED", "PayPal reconciliation requires a Sandbox intent.")
         if not work.provider_invoice_id:
             raise PaymentNeedsAction(
                 "PAYMENT_PROVIDER_REFERENCE_MISSING",
@@ -477,6 +487,7 @@ def reconcile_payment_intent(
             or result.amount != work.amount
             or result.payment_state.provider_reference != work.provider_invoice_id
             or result.payment_state.paid_amount.currency != work.amount.currency
+            or result.payment_state.source != "PAYPAL_SANDBOX"
         ):
             raise PaymentNeedsAction(
                 "PAYPAL_RECONCILIATION_MISMATCH",
@@ -500,6 +511,12 @@ def reconcile_payment_intent(
             error_detail=error.detail,
         )
         raise
+
+
+def require_payment_provider(work: PaymentWorkItem, provider: PaymentInvoiceProvider) -> None:
+    pairs = {("PAYPAL", "PAYPAL_SANDBOX"), ("OFFLINE_DEMO", "OFFLINE_DEMO")}
+    if (work.provider, work.execution_mode) not in pairs or getattr(provider, "execution_mode", "PAYPAL_SANDBOX") != work.execution_mode:
+        raise PaymentNeedsAction("PAYMENT_PROVENANCE_UNRESOLVED", "Payment provider and persisted mode do not match; inspect manually.")
 
 
 def _request_id_retry_window_expired(started_at: datetime, now: datetime | None) -> bool:

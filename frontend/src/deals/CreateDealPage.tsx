@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, apiRequest, createDeal, listOrganizations } from "../api/client";
-import type { Organization } from "../api/types";
+import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, listOrganizations } from "../api/client";
+import type { Invitation, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 
 type DirectoryItem = Pick<Organization, "id" | "legal_name" | "country_code">;
@@ -64,6 +64,12 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [reloadCount, setReloadCount] = useState(0);
+  const [mode, setMode] = useState<"directory" | "invite">("directory");
+  const [recipientEmail, setRecipientEmail] = useState("");
+  const [counterpartyName, setCounterpartyName] = useState("");
+  const [countryCode, setCountryCode] = useState("US");
+  const [invitation, setInvitation] = useState<Invitation | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,7 +97,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   }, [reloadCount]);
 
   useEffect(() => {
-    if (!query.trim() || seller) return;
+    if (mode !== "directory" || !query.trim() || seller) return;
     let cancelled = false;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
@@ -112,7 +118,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [query, seller, searchRetry]);
+  }, [query, seller, searchRetry, mode]);
 
   const results = searchState.status === "ready" ? searchState.items : [];
   const listOpen = searchOpen && results.length > 0;
@@ -139,19 +145,33 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     if (buyerOrganizationId === "") {
       nextErrors.buyer = "Choose the buyer organization.";
     }
-    if (!seller) {
+    if (mode === "invite") {
+      const buyer = organizationsState.status === "ready" ? organizationsState.organizations.find((org) => org.id === buyerOrganizationId) : null;
+      if (buyer?.role !== "ADMIN") nextErrors.buyer = "An organization admin is required to invite a counterparty.";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail.trim()) || !counterpartyName.trim() || !/^[A-Z]{2}$/.test(countryCode.trim().toUpperCase())) {
+        nextErrors.seller = "Enter the counterparty email, company legal name, and two-letter country code.";
+      }
+    } else if (!seller) {
       nextErrors.seller = "Choose a seller organization from the search results.";
     } else if (seller.id === buyerOrganizationId) {
       nextErrors.seller = "Buyer and seller must be different organizations.";
     }
     setFieldErrors(nextErrors);
     setSubmitError(null);
-    if (Object.keys(nextErrors).length > 0 || !seller) {
+    if (Object.keys(nextErrors).length > 0) {
       return;
     }
 
     setSubmitting(true);
     try {
+      if (mode === "invite") {
+        const result = await createCounterpartyInvitation({ buyer_organization_id: buyerOrganizationId,
+          recipient_email: recipientEmail.trim().toLowerCase(), legal_name: counterpartyName.trim(),
+          country_code: countryCode.trim().toUpperCase() });
+        setInvitation(result);
+        return;
+      }
+      if (!seller) return;
       const deal = await createDeal({
         buyer_organization_id: buyerOrganizationId,
         seller_organization_id: seller.id,
@@ -235,7 +255,27 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
             You act for the buyer organization. The seller must be a different active
             organization.
           </p>
-          <form className="form" onSubmit={handleSubmit} noValidate style={{ marginTop: 22 }}>
+          {invitation ? (
+            <div className="form" style={{ marginTop: 22 }}>
+              <h3>Awaiting counterparty</h3>
+              <label htmlFor="counterparty-link">Counterparty invitation link</label>
+              <input id="counterparty-link" readOnly value={invitation.invite_url} />
+              <p className="muted">Expires {new Date(invitation.expires_at).toLocaleString()}</p>
+              <div className="actions">
+                <button type="button" className="button" onClick={() => {
+                  if (!navigator.clipboard?.writeText) { setSubmitError("Clipboard unavailable. The link is available above."); return; }
+                  void navigator.clipboard.writeText(invitation.invite_url).then(() => setCopied(true), () => setSubmitError("Clipboard unavailable. The link is available above."));
+                }}>{copied ? "Copied!" : "Copy Link"}</button>
+                <button type="button" className="button secondary" onClick={() => invitation.deal_id && onCreated(invitation.deal_id)}>Open pending deal</button>
+              </div>
+              {submitError ? <p role="alert">{submitError}</p> : null}
+            </div>
+          ) : <form className="form" onSubmit={handleSubmit} noValidate style={{ marginTop: 22 }}>
+            <fieldset disabled={submitting}>
+              <legend>Counterparty</legend>
+              <label><input type="radio" name="counterparty-mode" checked={mode === "directory"} onChange={() => { setMode("directory"); setFieldErrors({}); }} /> Existing organization</label>
+              <label><input type="radio" name="counterparty-mode" checked={mode === "invite"} onChange={() => { setMode("invite"); setFieldErrors({}); }} /> Invite counterparty</label>
+            </fieldset>
             <div className="field">
               <label htmlFor="buyer-organization">Buyer organization</label>
               <select
@@ -263,7 +303,12 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 </p>
               ) : null}
             </div>
-            <div className="field">
+            {mode === "invite" ? <>
+              <div className="field"><label htmlFor="counterparty-email">Counterparty email</label><input id="counterparty-email" type="email" maxLength={320} disabled={submitting} value={recipientEmail} onChange={(event) => setRecipientEmail(event.target.value)} /></div>
+              <div className="field"><label htmlFor="counterparty-name">Counterparty company legal name</label><input id="counterparty-name" maxLength={200} disabled={submitting} value={counterpartyName} onChange={(event) => setCounterpartyName(event.target.value)} /></div>
+              <div className="field"><label htmlFor="counterparty-country">Country code</label><input id="counterparty-country" maxLength={2} disabled={submitting} value={countryCode} onChange={(event) => setCountryCode(event.target.value.toUpperCase())} /></div>
+              {fieldErrors.seller ? <p role="alert">{fieldErrors.seller}</p> : null}
+            </> : <div className="field">
               <label htmlFor="seller-organization">Seller organization</label>
               <input
                 id="seller-organization"
@@ -346,7 +391,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                   {fieldErrors.seller}
                 </p>
               ) : null}
-            </div>
+            </div>}
             {submitError ? (
               <p className="form-error" role="alert">
                 {submitError}
@@ -355,7 +400,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
             <button type="submit" className="button" disabled={submitting}>
               {submitting ? "Creating deal…" : "Create deal"}
             </button>
-          </form>
+          </form>}
         </section>
       </Reveal>
     </div>

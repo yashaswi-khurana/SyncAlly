@@ -16,6 +16,8 @@ from syncally.application.conversations import (
     MAX_PAGE_SIZE,
     ConcurrentConstraintUpdate,
     ConstraintNotFound,
+    MessageIdempotencyConflict,
+    message_fingerprint,
 )
 from syncally.application.workflow_notifications import NotificationKind
 from syncally.domain.conversations import (
@@ -42,6 +44,7 @@ from syncally.domain.shared.identifiers import (
     OrganizationId,
     UserId,
 )
+from syncally.infrastructure.counterparty_onboarding import is_pending, lock_deal
 from syncally.infrastructure.models import (
     Constraint,
     Conversation,
@@ -58,6 +61,20 @@ from syncally.infrastructure.workflow_notifications import queue_deal_workflow_n
 
 class CommunicationScopeError(ValueError):
     """A conversation or constraint is outside the given deal/organization scope."""
+
+
+def _is_unique_violation(error: IntegrityError, name: str, columns: str) -> bool:
+    original = error.orig
+    diagnostic = getattr(original, "diag", None)
+    if diagnostic is not None:
+        return (
+            getattr(original, "sqlstate", getattr(original, "pgcode", None)) == "23505"
+            and diagnostic.constraint_name == name
+        )
+    return (
+        getattr(original, "sqlite_errorcode", None) == 2067
+        and str(original) == f"UNIQUE constraint failed: {columns}"
+    )
 
 
 def _page_bounds(limit: int, offset: int) -> tuple[int, int]:
@@ -93,6 +110,7 @@ def _message_to_domain(
         visibility=Visibility.from_storage(row.visibility),
         source_type=MessageSourceType(row.source_type),
         source_reference=row.source_reference if include_source_reference else None,
+        idempotency_key=row.idempotency_key if include_source_reference else None,
         created_at=as_utc(row.created_at),
     )
 
@@ -129,6 +147,13 @@ class SqlAlchemyCommunicationRepository:
 
     def __init__(self, db: Session) -> None:
         self._db = db
+
+    def _ensure_outer_transaction(self) -> None:
+        connection = self._db.connection()
+        if connection.dialect.name == "sqlite":
+            driver = connection.connection.driver_connection
+            if not driver.in_transaction:
+                connection.exec_driver_sql("BEGIN")
 
     def add_conversation(self, conversation: DomainConversation) -> DomainConversation:
         self._require_deal_party(
@@ -189,11 +214,16 @@ class SqlAlchemyCommunicationRepository:
         row first; the loser's insert violates the constraint, so it rolls back to a
         savepoint and re-reads the winner instead of surfacing a 500.
         """
+        lock_deal(self._db, deal_id, shared=True)
         self._require_deal_party(deal_id, organization_id)
+        if is_pending(self._db, deal_id):
+            raise CommunicationScopeError("Awaiting counterparty acceptance; messages are not available")
         row = self._find_conversation(deal_id, organization_id)
         if row is not None:
             return _conversation_to_domain(row)
 
+        self._ensure_outer_transaction()
+        self._db.flush()
         try:
             with self._db.begin_nested():
                 row = Conversation(
@@ -203,7 +233,13 @@ class SqlAlchemyCommunicationRepository:
                 )
                 self._db.add(row)
                 self._db.flush()
-        except IntegrityError:
+        except IntegrityError as error:
+            if not _is_unique_violation(
+                error, "uq_conversations_deal_participant",
+                "conversations.deal_id, conversations.participant_organization_id",
+            ):
+                raise
+            self._require_deal_party(deal_id, organization_id)
             row = self._find_conversation(deal_id, organization_id)
             if row is None:
                 raise
@@ -227,15 +263,12 @@ class SqlAlchemyCommunicationRepository:
             visibility = Visibility(message.visibility)
         except (TypeError, ValueError) as error:
             raise CommunicationScopeError("Message visibility is invalid") from error
-        conversation = self._db.get(Conversation, message.conversation_id)
-        if conversation is None:
-            raise CommunicationScopeError(
-                "Message conversation is missing or outside the message scope"
-            )
-        if message.author_user_id is not None:
-            self._require_active_member(
-                conversation.participant_organization_id, message.author_user_id
-            )
+        conversation = self._require_message_access(message)
+        fingerprint = message_fingerprint(message) if message.idempotency_key is not None else None
+        if message.idempotency_key is not None:
+            existing = self._find_keyed_message(message)
+            if existing is not None:
+                return self._replay_message(existing, fingerprint)
         row = Message(
             id=message.id,
             conversation_id=message.conversation_id,
@@ -245,17 +278,84 @@ class SqlAlchemyCommunicationRepository:
             visibility=visibility.value,
             source_type=message.source_type.value,
             source_reference=message.source_reference,
+            idempotency_key=message.idempotency_key,
+            idempotency_fingerprint=fingerprint,
             created_at=as_utc(message.created_at),
         )
-        self._db.add(row)
+        self._ensure_outer_transaction()
         self._db.flush()
-        queue_deal_workflow_notification(
-            self._db,
-            deal_id=conversation.deal_id,
-            record_id=message.id,
-            kind=NotificationKind.MESSAGE_RECEIVED,
-        )
+        try:
+            with self._db.begin_nested():
+                self._db.add(row)
+                self._db.flush()
+                queue_deal_workflow_notification(
+                    self._db,
+                    deal_id=conversation.deal_id,
+                    record_id=message.id,
+                    kind=NotificationKind.MESSAGE_RECEIVED,
+                )
+        except IntegrityError as error:
+            if message.idempotency_key is None or not _is_unique_violation(
+                error, "uq_messages_conversation_author_idempotency_key",
+                "messages.conversation_id, messages.author_user_id, messages.idempotency_key",
+            ):
+                raise
+            self._require_message_access(message)
+            existing = self._find_keyed_message(message)
+            if existing is None:
+                raise
+            return self._replay_message(existing, fingerprint)
         return _message_to_domain(row)
+
+    def _find_keyed_message(self, message: DomainMessage) -> Message | None:
+        return self._db.scalar(
+            select(Message).where(
+                Message.conversation_id == message.conversation_id,
+                Message.author_user_id == message.author_user_id,
+                Message.idempotency_key == message.idempotency_key,
+            ).execution_options(populate_existing=True)
+        )
+
+    def _replay_message(self, row: Message, fingerprint: str | None) -> DomainMessage:
+        if row.idempotency_fingerprint != fingerprint:
+            raise MessageIdempotencyConflict("Idempotency key already used for a different message")
+        return _message_to_domain(row)
+
+    def _require_message_access(self, message: DomainMessage) -> Conversation:
+        conversation = self._db.scalar(
+            select(Conversation).where(Conversation.id == message.conversation_id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        if conversation is None:
+            raise CommunicationScopeError(
+                "Message conversation is missing or outside the message scope"
+            )
+        lock_deal(self._db, conversation.deal_id, shared=True)
+        if message.author_user_id is not None:
+            allowed = self._db.scalar(
+                select(Deal.id)
+                .join(OrganizationMember, OrganizationMember.organization_id == conversation.participant_organization_id)
+                .join(Organization, Organization.id == OrganizationMember.organization_id)
+                .join(User, User.id == OrganizationMember.user_id)
+                .where(
+                    Deal.id == conversation.deal_id,
+                    or_(Deal.buyer_organization_id == conversation.participant_organization_id,
+                        Deal.seller_organization_id == conversation.participant_organization_id),
+                    OrganizationMember.user_id == message.author_user_id,
+                    OrganizationMember.status == "ACTIVE",
+                    Organization.status == "ACTIVE",
+                    User.status == "ACTIVE",
+                )
+                .with_for_update(read=True, of=(Deal, OrganizationMember, Organization, User))
+            )
+            if allowed is None:
+                raise CommunicationScopeError("Deal not found")
+        else:
+            self._require_deal_party(conversation.deal_id, conversation.participant_organization_id)
+        if is_pending(self._db, conversation.deal_id):
+            raise CommunicationScopeError("Awaiting counterparty acceptance; messages are not available")
+        return conversation
 
     def list_messages(
         self,
@@ -429,6 +529,27 @@ class SqlAlchemyCommunicationRepository:
     ) -> DomainDeal | None:
         """Load a deal only when the user is an active member of a deal party."""
         return SqlAlchemyDealRepository(self._db).get_for_participant(deal_id, user_id)
+
+    def require_participant_membership(
+        self, deal_id: UUID, organization_id: UUID, user_id: UUID
+    ) -> None:
+        allowed = self._db.scalar(
+            select(Deal.id)
+            .join(OrganizationMember, OrganizationMember.organization_id == organization_id)
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(
+                Deal.id == deal_id,
+                or_(Deal.buyer_organization_id == organization_id,
+                    Deal.seller_organization_id == organization_id),
+                OrganizationMember.user_id == user_id,
+                OrganizationMember.status == "ACTIVE",
+                Organization.status == "ACTIVE",
+                User.status == "ACTIVE",
+            )
+        )
+        if allowed is None:
+            raise CommunicationScopeError("Deal not found")
 
     def lock_deal_for_fact_persistence(
         self, deal_id: UUID, user_id: UUID

@@ -1,16 +1,20 @@
 """Tests for the outbox-to-Temporal dispatcher (S6-01)."""
 
 import asyncio
+import importlib.util
 import os
 import unittest
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import temporalio.common
 import temporalio.exceptions
-from sqlalchemy import create_engine, delete, select, text
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import Column, MetaData, Table, create_engine, delete, inspect, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -274,16 +278,83 @@ class OutboxDispatcherTests(unittest.TestCase):
 
     def test_crash_after_start_before_delivery_commit_is_safe_to_retry(self) -> None:
         starter = FakeDealWorkflowStarter()
+        now = datetime.now(UTC)
         with Session(self.engine) as crashed:
-            with patch.object(crashed, "commit", side_effect=RuntimeError("process stopped")):
+            commit = crashed.commit
+            commits = 0
+
+            def crash_on_delivery():
+                nonlocal commits
+                commits += 1
+                if commits == 2:
+                    raise RuntimeError("process stopped")
+                commit()
+
+            with patch.object(crashed, "commit", side_effect=crash_on_delivery):
                 with self.assertRaisesRegex(RuntimeError, "process stopped"):
-                    dispatch_one_pending_event(crashed, starter)
+                    dispatch_one_pending_event(crashed, starter, now=now)
         with Session(self.engine) as recovered:
-            self.assertEqual(recovered.scalar(select(OutboxEvent)).status, "PENDING")
-            self.assertTrue(dispatch_one_pending_event(recovered, starter))
+            row = recovered.scalar(select(OutboxEvent))
+            self.assertEqual(row.status, "PENDING")
+            self.assertIsNotNone(row.dispatch_started_at)
+            self.assertEqual(row.retry_count, 0)
+            self.assertFalse(dispatch_one_pending_event(recovered, starter, now=now))
+            self.assertTrue(dispatch_one_pending_event(recovered, starter, now=now + timedelta(minutes=5)))
             self.assertEqual(recovered.scalar(select(OutboxEvent)).status, "DELIVERED")
         self.assertEqual(len(starter.calls), 2)
         self.assertEqual(len(starter._started_ids), 1)
+
+    def test_claim_commit_failure_never_calls_starter(self) -> None:
+        starter = FakeDealWorkflowStarter()
+        with Session(self.engine) as crashed:
+            with patch.object(crashed, "commit", side_effect=RuntimeError("claim not committed")):
+                with self.assertRaisesRegex(RuntimeError, "claim not committed"):
+                    dispatch_one_pending_event(crashed, starter)
+        self.assertEqual(starter.calls, [])
+        with Session(self.engine) as observer:
+            row = observer.scalar(select(OutboxEvent))
+            self.assertIsNone(row.dispatch_started_at)
+            self.assertIsNone(row.next_attempt_at)
+
+    def test_interrupted_external_call_releases_transaction_and_lease_recovers(self) -> None:
+        now = datetime.now(UTC)
+        starter = FakeDealWorkflowStarter()
+        with Session(self.engine) as interrupted:
+            def stop_process(**kwargs):
+                self.assertFalse(interrupted.in_transaction())
+                raise KeyboardInterrupt("process interrupted")
+
+            with patch.object(starter, "start_deal_workflow", side_effect=stop_process):
+                with self.assertRaises(KeyboardInterrupt):
+                    dispatch_one_pending_event(interrupted, starter, now=now)
+        with Session(self.engine) as recovered:
+            row = recovered.scalar(select(OutboxEvent))
+            self.assertIsNotNone(row.dispatch_started_at)
+            self.assertEqual(row.retry_count, 0)
+            self.assertFalse(dispatch_one_pending_event(recovered, starter, now=now))
+            self.assertTrue(dispatch_one_pending_event(recovered, starter, now=now + timedelta(minutes=5)))
+            self.assertEqual(recovered.scalar(select(OutboxEvent)).retry_count, 0)
+
+    def test_expired_dispatch_result_cannot_overwrite_newer_claim(self) -> None:
+        now = datetime.now(UTC)
+        recovered_starter = FakeDealWorkflowStarter()
+
+        class LateFailingStarter:
+            def start_deal_workflow(starter_self, **kwargs):
+                with Session(self.engine) as recovered:
+                    self.assertTrue(dispatch_one_pending_event(
+                        recovered, recovered_starter, now=now + timedelta(minutes=5)
+                    ))
+                raise WorkflowStartTransientError("late failure")
+
+        self.assertTrue(dispatch_one_pending_event(self.session, LateFailingStarter(), now=now))
+        with Session(self.engine) as observer:
+            row = observer.scalar(select(OutboxEvent))
+            self.assertEqual(row.status, "DELIVERED")
+            self.assertEqual(row.retry_count, 0)
+            self.assertIsNone(row.error_detail)
+            self.assertIsNone(row.next_attempt_at)
+            self.assertEqual(row.dispatch_started_at, (now + timedelta(minutes=5)).replace(tzinfo=None))
 
     def test_invalid_payload_shapes_are_failed_and_do_not_block_queue(self) -> None:
         for payload in (None, [], {}, {"deal_id": None}, {"deal_id": 123},
@@ -488,6 +559,41 @@ class OutboxDispatcherTests(unittest.TestCase):
             build_deal_workflow_id(self.deal.id), f"deal/{self.deal.id}/lifecycle"
         )
         self.assertEqual(build_deal_workflow_id(self.deal.id), build_deal_workflow_id(self.deal.id))
+
+
+class OutboxDispatchMigrationTests(unittest.TestCase):
+    def test_0014_upgrade_and_downgrade_preserve_legacy_events(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "alembic/versions/0014_outbox_dispatch_started_at.py"
+        spec = importlib.util.spec_from_file_location("outbox_dispatch_migration", path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        self.assertEqual(migration.down_revision, "0013_curated_demo_fixture")
+        legacy = Table(
+            "outbox_events", MetaData(),
+            *(Column(column.name, column.type, primary_key=column.primary_key, nullable=column.nullable)
+              for column in OutboxEvent.__table__.columns if column.name != "dispatch_started_at"),
+        )
+        engine = create_engine("sqlite://")
+        try:
+            with engine.begin() as connection:
+                legacy.create(connection)
+                connection.execute(legacy.insert().values(
+                    id=uuid4(), aggregate_type="deal", aggregate_id=uuid4(),
+                    event_type="DEAL_NOTIFICATION", payload={"kind": "DEAL_CREATED"},
+                    status="PENDING", retry_count=0, created_at=datetime.now(UTC),
+                ))
+                original = connection.execute(select(legacy)).all()
+                migration.op = Operations(MigrationContext.configure(connection))
+                migration.upgrade()
+                self.assertIsNone(connection.scalar(select(OutboxEvent.dispatch_started_at)))
+                self.assertEqual(connection.execute(select(legacy)).all(), original)
+                connection.execute(OutboxEvent.__table__.update().values(dispatch_started_at=datetime.now(UTC)))
+                self.assertIsNotNone(connection.scalar(select(OutboxEvent.dispatch_started_at)))
+                migration.downgrade()
+                self.assertNotIn("dispatch_started_at", {column["name"] for column in inspect(connection).get_columns("outbox_events")})
+                self.assertEqual(connection.execute(select(legacy)).all(), original)
+        finally:
+            engine.dispose()
 
 
 @unittest.skipUnless(os.environ.get("TEST_POSTGRES_URL"), "Set TEST_POSTGRES_URL for PostgreSQL locking tests")

@@ -1,7 +1,11 @@
 """Application configuration via environment variables."""
 
 import re
+from ipaddress import ip_address
 from pathlib import Path
+from typing import Literal
+from urllib.parse import unquote, urlsplit
+from uuid import UUID
 
 from jwt.algorithms import HMACAlgorithm, get_default_algorithms
 from pydantic import SecretStr, model_validator
@@ -56,6 +60,7 @@ class Settings(BaseSettings):
     # Fail closed when a deployment forgets to set APP_ENV. Local .env files
     # should opt into development explicitly.
     app_env: str = "production"
+    public_frontend_url: str | None = None
     debug: bool = False
     database_url: str = ""
     jwt_secret: str = ""
@@ -72,10 +77,19 @@ class Settings(BaseSettings):
     temporal_tls: bool = False
     outbox_poll_interval_seconds: float = 2.0
     outbox_batch_size: int = 25
+    ai_provider: Literal["offline", "openai", "openai_with_offline_fallback"] = "offline"
+    payment_mode: Literal["PAYPAL_SANDBOX", "OFFLINE_DEMO"] = "PAYPAL_SANDBOX"
+    ai_remote_egress_enabled: bool = False
+    ai_remote_allow_private: bool = False
+    ai_remote_private_organization_ids: frozenset[UUID] = frozenset()
+    openai_api_key: SecretStr = SecretStr("")
+    openai_model: str = ""
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":
         local_environment = self.app_env.lower() in {"development", "test"}
+        if self.payment_mode == "OFFLINE_DEMO" and not local_environment:
+            raise ValueError("OFFLINE_DEMO payments are only allowed in development/test")
         if not self.database_url.strip():
             if local_environment:
                 self.database_url = "postgresql+psycopg://localhost:5432/syncally"
@@ -111,6 +125,72 @@ class Settings(BaseSettings):
             raise ValueError("OUTBOX_POLL_INTERVAL_SECONDS must be positive")
         if not local_environment and not self.temporal_tls:
             raise ValueError("TEMPORAL_TLS must be enabled outside development/test")
+        return self
+
+    @model_validator(mode="after")
+    def validate_public_frontend_url(self) -> "Settings":
+        local_environment = self.app_env.lower() in {"development", "test"}
+        value = self.public_frontend_url
+        if value is None:
+            if not local_environment:
+                raise ValueError("PUBLIC_FRONTEND_URL must be configured outside development/test")
+            value = "http://localhost:5173"
+        error = "PUBLIC_FRONTEND_URL must be a valid frontend base URL"
+        if (
+            not value
+            or any(character.isspace() or ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+            or any(character in value for character in ("\\", "?", "#"))
+            or re.search(r"%(?![0-9a-fA-F]{2})", value)
+        ):
+            raise ValueError(error)
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(error) from exc
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.netloc.endswith(":")
+            or not re.fullmatch(r"(?:\[[0-9a-fA-F:.]+\]|[^:\[\]]+)(?::[0-9]+)?", parsed.netloc)
+            or (port is not None and not 1 <= port <= 65535)
+        ):
+            raise ValueError(error)
+        try:
+            address = ip_address(hostname)
+        except ValueError:
+            address = None
+            labels = hostname.removesuffix(".").split(".")
+            if (
+                len(hostname) > 253
+                or any(not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label) for label in labels)
+                or re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", labels[-1])
+            ):
+                raise ValueError(error)
+        if not local_environment and (
+            parsed.scheme != "https"
+            or (address is not None and (
+                not address.is_global
+                or address.is_multicast
+                or getattr(address, "is_site_local", False)
+            ))
+            or (address is None and (
+                "." not in hostname.rstrip(".")
+                or hostname.lower().rstrip(".").endswith((".localhost", ".local"))
+            ))
+        ):
+            raise ValueError("PUBLIC_FRONTEND_URL must use HTTPS and a public host outside development/test")
+        decoded_path = unquote(parsed.path)
+        if (
+            re.search(r"%(?:2f|5c|25)", parsed.path, re.IGNORECASE)
+            or any(segment in {".", ".."} for segment in decoded_path.split("/"))
+            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in decoded_path)
+        ):
+            raise ValueError(error)
+        self.public_frontend_url = value.rstrip("/")
         return self
 
     model_config = SettingsConfigDict(

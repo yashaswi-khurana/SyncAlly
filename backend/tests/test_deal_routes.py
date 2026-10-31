@@ -97,12 +97,14 @@ class DealRouteTests(unittest.TestCase):
                 "seller_organization_id",
                 "status",
                 "version",
+                "pending_counterparty",
             },
         )
         self.assertEqual(body["buyer_organization_id"], str(buyer.id))
         self.assertEqual(body["seller_organization_id"], str(seller.id))
         self.assertEqual(body["status"], "DRAFT")
         self.assertEqual(body["version"], 0)
+        self.assertFalse(body["pending_counterparty"])
 
     def test_create_deal_rejects_invalid_input(self) -> None:
         _, buyer, seller = self._seed_participants()
@@ -259,6 +261,7 @@ class DealRouteTests(unittest.TestCase):
                 "seller_organization_id": str(seller.id),
                 "status": "DRAFT",
                 "version": 0,
+                "pending_counterparty": False,
             },
         )
 
@@ -327,6 +330,7 @@ class DealRouteTests(unittest.TestCase):
                     "seller_organization_id": str(seller.id),
                     "status": "DRAFT",
                     "version": 0,
+                    "pending_counterparty": False,
                     "viewer_role": "SELLER",
                 }
             ],

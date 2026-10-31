@@ -21,6 +21,7 @@ from syncally.application.agreements import (
 from syncally.application.deals import DealRepository
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import AgreementStatus
+from syncally.domain.payments.intent import PaymentExecutionMode
 from syncally.domain.shared.errors import DomainError
 from syncally.domain.shared.money import Money
 
@@ -45,6 +46,10 @@ class IdempotencyKeyReused(DomainError):
     """The idempotency key already belongs to a different payment authorization."""
 
 
+class PaymentModeChanged(DomainError):
+    """The preview mode differs from the mode for a new authorization."""
+
+
 @dataclass(frozen=True, slots=True)
 class PaymentStatusRecord:
     """Safe persisted payment fields needed by a deal status screen."""
@@ -56,6 +61,11 @@ class PaymentStatusRecord:
     reconciled_amount: Money | None
     last_checked_at: datetime | None
     last_reconciled_at: datetime | None
+    provider: str = "UNKNOWN"
+    execution_mode: str = "LEGACY_UNRESOLVED"
+    reconciliation_source: str = "LEGACY_UNVERIFIED"
+    invoice_reference: str | None = None
+    version: int = 0
 
 
 class PaymentStatusRepository(Protocol):
@@ -67,6 +77,7 @@ class PaymentStatusRepository(Protocol):
 
 PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE = "PAYMENT_INTENT_AUTHORIZED"
 PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE = "PAYPAL_WEBHOOK_RECONCILIATION_REQUESTED"
+OFFLINE_RECONCILIATION_EVENT_TYPE = "OFFLINE_PAYMENT_RECONCILIATION_REQUESTED"
 
 
 @dataclass(frozen=True)
@@ -82,6 +93,8 @@ class AuthorizePaymentIntentCommand:
     authorized_by: UUID
     amount: Money
     idempotency_key: str
+    execution_mode: PaymentExecutionMode = PaymentExecutionMode.PAYPAL_SANDBOX
+    expected_mode: PaymentExecutionMode | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +110,8 @@ class PaymentIntentAuthorizationOutcome:
 
     intent_id: UUID
     already_existed: bool
+    provider: str = "PAYPAL"
+    execution_mode: str = "PAYPAL_SANDBOX"
 
 
 class PaymentIntentRepository(Protocol):

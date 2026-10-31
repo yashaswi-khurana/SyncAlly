@@ -12,8 +12,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import monotonic
 from time import sleep as default_sleep
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from syncally.application.conversations import (
@@ -39,8 +40,8 @@ from syncally.domain.ai.contracts import (
 from syncally.domain.conversations import Constraint, ConstraintKind, ConstraintStatus, Visibility
 from syncally.domain.shared.identifiers import ConstraintId, DealId, OrganizationId
 
-DEFAULT_MAX_ATTEMPTS = 3
-DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_MAX_ATTEMPTS = 2
+DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_BACKOFF_SECONDS = 0.5
 
 
@@ -54,6 +55,29 @@ class AITransientError(AIProviderError):
 
 class AIPermanentError(AIProviderError):
     """A non-retryable provider failure, such as malformed provider output."""
+
+
+class AIConfigurationError(AIProviderError):
+    """Remote suggestions require explicit operator configuration."""
+
+
+@dataclass(frozen=True, slots=True)
+class AIProvenance:
+    provider: Literal["offline", "openai", "unknown"] = "unknown"
+    mode: Literal["offline", "openai", "openai_with_offline_fallback", "unknown"] = "unknown"
+    model: str | None = None
+    context_scope: Literal["authorized", "shareable_only", "authorized_private", "unknown"] = "unknown"
+    fallback_reason: Literal["missing_credentials", "transient_exhausted"] | None = None
+
+
+def provider_provenance(provider: AISuggestionProvider) -> AIProvenance:
+    provenance = getattr(provider, "provenance", None)
+    return provenance if isinstance(provenance, AIProvenance) else AIProvenance()
+
+
+def _provider_context(context: AiContext, provider: AISuggestionProvider) -> AiContext:
+    prepare = getattr(provider, "prepare_context", None)
+    return prepare(context) if prepare is not None else context
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +155,7 @@ class FactExtractionResult:
 
     result: ValidationResult
     candidates: tuple[ScopedFactCandidate, ...]
+    provenance: AIProvenance = AIProvenance()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "candidates", tuple(self.candidates))
@@ -144,6 +169,7 @@ class ProposalDraftResult:
 
     result: ValidationResult
     proposal: ProposedTerms | None
+    provenance: AIProvenance = AIProvenance()
 
     def __post_init__(self) -> None:
         if self.result.status is ValidationStatus.VALID and self.proposal is None:
@@ -186,17 +212,21 @@ def call_with_bounded_retry[T](
     failures are retried at most ``policy.max_attempts`` times and then surface
     as a single ``AITransientError`` for the caller (or worker) to retry later.
     """
-    last_error: AITransientError | None = None
+    deadline = monotonic() + policy.max_attempts * policy.timeout_seconds + (policy.max_attempts - 1) * policy.backoff_seconds
     for attempt in range(1, policy.max_attempts + 1):
+        if monotonic() >= deadline:
+            break
         try:
-            return operation()
-        except AITransientError as error:
-            last_error = error
-            if attempt < policy.max_attempts:
+            value = operation()
+            if monotonic() >= deadline:
+                raise AITransientError("AI provider deadline exceeded")
+            return value
+        except AITransientError:
+            if attempt < policy.max_attempts and monotonic() + policy.backoff_seconds < deadline:
                 sleep(policy.backoff_seconds)
     raise AITransientError(
         f"AI provider was unavailable after {policy.max_attempts} attempts"
-    ) from last_error
+    ) from None
 
 
 def extract_facts(
@@ -227,24 +257,31 @@ def extract_facts_from_context(
     sleep: Callable[[float], None] = default_sleep,
 ) -> FactExtractionResult:
     """Call the provider and validate candidates after authorized context is loaded."""
+    context = _provider_context(context, provider)
     request = FactExtractionRequest(context=context)
 
     try:
-        facts = call_with_bounded_retry(
-            lambda: provider.extract_facts(request, timeout_seconds=policy.timeout_seconds),
-            policy,
-            sleep=sleep,
-        )
+        try:
+            facts = call_with_bounded_retry(
+                lambda: provider.extract_facts(request, timeout_seconds=policy.timeout_seconds),
+                policy,
+                sleep=sleep,
+            )
+        except AITransientError:
+            fallback = getattr(provider, "fallback_facts", None)
+            if fallback is None:
+                raise
+            facts = fallback(request, timeout_seconds=policy.timeout_seconds)
         candidates = scope_extracted_facts(
             facts,
             authorized_messages={message.id: message.body for message in context.messages},
             owner_organization_id=context.organization_id,
         )
     except AIPermanentError as error:
-        return _rejected_fact_result("AI_OUTPUT_INVALID", str(error))
+        return _rejected_fact_result("AI_OUTPUT_INVALID", str(error), provider_provenance(provider))
     except AIContractError as error:
-        return _rejected_fact_result("AI_OUTPUT_UNGROUNDED", str(error))
-    return FactExtractionResult(ValidationResult.valid(), candidates)
+        return _rejected_fact_result("AI_OUTPUT_UNGROUNDED", str(error), provider_provenance(provider))
+    return FactExtractionResult(ValidationResult.valid(), candidates, provider_provenance(provider))
 
 
 def draft_proposal(
@@ -270,14 +307,21 @@ def draft_proposal_from_context(
     sleep: Callable[[float], None] = default_sleep,
 ) -> ProposalDraftResult:
     """Call a provider with an already authorized, transaction-free context."""
+    context = _provider_context(context, provider)
     request = ProposalDraftRequest(context=context)
 
     try:
-        proposal = call_with_bounded_retry(
-            lambda: provider.draft_proposal(request, timeout_seconds=policy.timeout_seconds),
-            policy,
-            sleep=sleep,
-        )
+        try:
+            proposal = call_with_bounded_retry(
+                lambda: provider.draft_proposal(request, timeout_seconds=policy.timeout_seconds),
+                policy,
+                sleep=sleep,
+            )
+        except AITransientError:
+            fallback = getattr(provider, "fallback_proposal", None)
+            if fallback is None:
+                raise
+            proposal = fallback(request, timeout_seconds=policy.timeout_seconds)
     except AIPermanentError as error:
         issue = ValidationIssue(
             schema_version=AI_SCHEMA_VERSION,
@@ -285,8 +329,8 @@ def draft_proposal_from_context(
             path="proposal",
             message=str(error),
         )
-        return ProposalDraftResult(ValidationResult.invalid((issue,)), None)
-    return ProposalDraftResult(ValidationResult.valid(), proposal)
+        return ProposalDraftResult(ValidationResult.invalid((issue,)), None, provider_provenance(provider))
+    return ProposalDraftResult(ValidationResult.valid(), proposal, provider_provenance(provider))
 
 
 def persist_fact_candidates(
@@ -376,11 +420,13 @@ def _list_all_constraints_for_owner(
         offset += len(page)
 
 
-def _rejected_fact_result(code: str, message: str) -> FactExtractionResult:
+def _rejected_fact_result(
+    code: str, message: str, provenance: AIProvenance = AIProvenance(),
+) -> FactExtractionResult:
     issue = ValidationIssue(
         schema_version=AI_SCHEMA_VERSION,
         code=code,
         path="facts",
         message=message,
     )
-    return FactExtractionResult(ValidationResult.invalid((issue,)), ())
+    return FactExtractionResult(ValidationResult.invalid((issue,)), (), provenance)

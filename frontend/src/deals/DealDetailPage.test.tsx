@@ -7,14 +7,17 @@ import {
   createDealMessage,
   getCommercialDocumentDraft,
   getCurrentAgreement,
+  getAgreementVersion,
+  getTradePack,
   getDeal,
+  getNegotiation,
   getOrganization,
   listDealFacts,
   listDealMessages,
   listOrganizations,
   listPaymentStatuses,
 } from "../api/client";
-import type { Deal } from "../api/types";
+import type { AgreementVersion, Deal } from "../api/types";
 import DealDetailPage from "./DealDetailPage";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -24,9 +27,14 @@ vi.mock("../api/client", async (importOriginal) => {
     apiRequest: vi.fn(),
     createDealMessage: vi.fn(),
     getCommercialDocumentDraft: vi.fn(),
+    getTradePack: vi.fn(),
     getDeal: vi.fn(),
+    getNegotiation: vi.fn(),
     getOrganization: vi.fn(),
     getCurrentAgreement: vi.fn(),
+    getAgreementHistory: vi.fn().mockResolvedValue({ versions: [] }),
+    getAgreementVersion: vi.fn().mockRejectedValue(new actual.ApiError(404, "No version")),
+    compareAgreementVersions: vi.fn().mockRejectedValue(new actual.ApiError(404, "No comparison")),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
     listOrganizations: vi.fn(),
@@ -83,6 +91,10 @@ describe("DealDetailPage", () => {
   });
 
   beforeEach(() => {
+    vi.mocked(getAgreementVersion).mockReset().mockRejectedValue(new ApiError(404, "No version"));
+    vi.mocked(getNegotiation).mockImplementation(async (dealId, organizationId) => ({ deal_id: dealId, organization_id: organizationId,
+      deal_revision: 0, latest: null, current_candidate: null, eligible_actions: ["submit"], round_count: 0, max_rounds: 5,
+      escalated: false, history_ambiguous: false, proposals: [], history: [] }));
     mockedListPaymentStatuses.mockResolvedValue([]);
     mockedGetCommercialDocumentDraft.mockRejectedValue(
       new ApiError(409, "Agreement not committed"),
@@ -118,12 +130,45 @@ describe("DealDetailPage", () => {
     expect(screen.getByText(DEAL.seller_organization_id)).toBeInTheDocument();
   });
 
+  it("shares the selected party with committed downloads and never fetches the legacy latest draft", async () => {
+    const agreement = { id: "version-1", deal_id: DEAL.id, version_number: 1, status: "COMMITTED",
+      terms_hash: "a".repeat(64), created_at: "2026-10-31T10:00:00Z", approvals: [],
+      terms: { line_items: [], shipments: [], payment_terms: [] } } as unknown as AgreementVersion;
+    mockedGetDeal.mockResolvedValue({ ...DEAL, status: "AGREED" });
+    mockedGetCurrentAgreement.mockResolvedValue(agreement);
+    vi.mocked(getAgreementVersion).mockResolvedValue(agreement);
+    vi.mocked(getTradePack).mockRejectedValueOnce(new ApiError(409, "Test conflict"));
+    render(<DealDetailPage dealId={DEAL.id} onBackToDeals={vi.fn()} freshnessIntervalMs={0} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Download trade pack" }));
+    expect(getTradePack).toHaveBeenCalledWith(DEAL.id, agreement, DEAL.buyer_organization_id, "zip", expect.any(AbortSignal));
+    await screen.findByText("Test conflict");
+    expect(mockedGetCommercialDocumentDraft).not.toHaveBeenCalled();
+  });
+
   it("shows a not found state for a missing or forbidden deal", async () => {
     mockedGetDeal.mockRejectedValue(new ApiError(404, "Deal not found"));
 
     render(<DealDetailPage dealId="missing" onBackToDeals={vi.fn()} />);
 
     expect(await screen.findByRole("heading", { name: "Deal not found" })).toBeInTheDocument();
+  });
+
+  it("blocks pending send/import/proposal controls and recovers after acceptance", async () => {
+    mockedGetDeal.mockResolvedValue({ ...DEAL, pending_counterparty: true });
+    render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} freshnessIntervalMs={0} />);
+    expect(await screen.findByRole("heading", { name: "Awaiting counterparty" })).toBeInTheDocument();
+    const composer = await screen.findByRole("textbox", { name: /message/i });
+    fireEvent.change(composer, { target: { value: "Human draft terms" } });
+    expect(composer).toHaveValue("Human draft terms");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(screen.queryByRole("heading", { name: "Import thread" })).not.toBeInTheDocument();
+    expect(mockedCreateDealMessage).not.toHaveBeenCalled();
+    mockedGetDeal.mockResolvedValue({ ...DEAL, pending_counterparty: false, version: 1 });
+    fireEvent.click(screen.getByRole("button", { name: /Refresh room/ }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Awaiting counterparty" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("heading", { name: "Import thread" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    expect(composer).toHaveValue("Human draft terms");
   });
 
   it("shows an error state that can be retried", async () => {
@@ -848,7 +893,7 @@ describe("DealDetailPage", () => {
     }
   });
 
-  it("renders the Invite Counterparty button and opens the invitation modal", async () => {
+  it("renders the Invite team member button and opens the invitation modal", async () => {
     mockedGetDeal.mockResolvedValue(DEAL);
     mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
     mockedListDealMessages.mockResolvedValue([]);
@@ -863,16 +908,16 @@ describe("DealDetailPage", () => {
 
     render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} />);
 
-    const inviteButtons = await screen.findAllByRole("button", { name: "Invite Counterparty" });
+    const inviteButtons = await screen.findAllByRole("button", { name: "Invite team member" });
     expect(inviteButtons.length).toBeGreaterThan(0);
 
     fireEvent.click(inviteButtons[0]);
 
-    expect(await screen.findByRole("heading", { name: "Invite Counterparty" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Invite team member" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate Shareable Link" })).toBeInTheDocument();
   });
 
-  it("generates a counterparty invitation link and copies to clipboard", async () => {
+  it("generates a team invitation link and copies to clipboard", async () => {
     mockedGetDeal.mockResolvedValue(DEAL);
     mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
     mockedListDealMessages.mockResolvedValue([]);
@@ -904,17 +949,18 @@ describe("DealDetailPage", () => {
 
     render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} />);
 
-    const inviteButtons = await screen.findAllByRole("button", { name: "Invite Counterparty" });
+    const inviteButtons = await screen.findAllByRole("button", { name: "Invite team member" });
     fireEvent.click(inviteButtons[0]);
 
     const generateBtn = await screen.findByRole("button", { name: "Generate Shareable Link" });
+    fireEvent.change(screen.getByLabelText("Team member email"), { target: { value: "teammate@example.com" } });
     fireEvent.click(generateBtn);
 
     expect(mockedApiRequest).toHaveBeenCalledWith(
       `/organizations/${DEAL.buyer_organization_id}/invitations`,
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ deal_id: "deal-1" }),
+        body: JSON.stringify({ recipient_email: "teammate@example.com" }),
       }),
     );
 
@@ -950,7 +996,7 @@ describe("DealDetailPage", () => {
 
     render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} />);
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "Invite Counterparty" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "Invite team member" }))[0]);
 
     const orgSelect = await screen.findByLabelText("Inviting Organization");
     expect(orgSelect).toHaveValue(DEAL.seller_organization_id);
@@ -971,7 +1017,7 @@ describe("DealDetailPage", () => {
 
     render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} />);
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "Invite Counterparty" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "Invite team member" }))[0]);
 
     const orgSelect = await screen.findByLabelText("Inviting Organization");
     expect(orgSelect).toHaveValue("");
@@ -1001,7 +1047,8 @@ describe("DealDetailPage", () => {
     try {
       render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} />);
 
-      fireEvent.click((await screen.findAllByRole("button", { name: "Invite Counterparty" }))[0]);
+      fireEvent.click((await screen.findAllByRole("button", { name: "Invite team member" }))[0]);
+      fireEvent.change(await screen.findByLabelText("Team member email"), { target: { value: "teammate@example.com" } });
       fireEvent.click(await screen.findByRole("button", { name: "Generate Shareable Link" }));
 
       const copyBtn = await screen.findByRole("button", { name: "Copy Link" });

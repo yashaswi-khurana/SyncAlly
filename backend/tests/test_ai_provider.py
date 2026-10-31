@@ -1,11 +1,18 @@
 """AI provider boundary: offline fake, bounded retries, parsing, and privacy."""
 
 import ast
+import asyncio
+import json
+import time
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import UUID, uuid4
+
+import httpx
 
 from syncally.api.conversations import (
     FactSuggestionResponse,
@@ -13,12 +20,14 @@ from syncally.api.conversations import (
     _missing_trade_fields,
 )
 from syncally.application.ai import (
+    AIConfigurationError,
     AIPermanentError,
     AIRetryPolicy,
     AISuggestionProvider,
     AITransientError,
     FactExtractionRequest,
     draft_proposal,
+    draft_proposal_from_context,
     extract_facts,
     extract_facts_from_context,
     parse_extracted_facts,
@@ -27,6 +36,7 @@ from syncally.application.ai import (
 )
 from syncally.application.conversations import AiContext, CommunicationNotFound
 from syncally.application.identity import ActorContext
+from syncally.config import Settings
 from syncally.domain.ai.contracts import (
     AI_SCHEMA_VERSION,
     ExtractedFact,
@@ -52,6 +62,8 @@ from syncally.domain.shared.identifiers import (
 )
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.fake import DeterministicFakeAIProvider
+from syncally.infrastructure.ai.openai import MAX_BYTES
+from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 
 _AI_MODULE_FILES = (
     Path(__file__).resolve().parents[1] / "src/syncally/application/ai.py",
@@ -164,6 +176,421 @@ def _fact_payload(**updates: object) -> dict[str, object]:
 
 
 class AISuggestionProviderTests(unittest.TestCase):
+    def _remote_config(self, **updates: object) -> Settings:
+        values = dict(
+            app_env="test", ai_provider="openai", ai_remote_egress_enabled=True,
+            openai_model="operator-test-model", openai_api_key="test-only-key",
+        )
+        values.update(updates)
+        return Settings(_env_file=None, **values)
+
+    def _completion(self, payload: object, **message_updates: object) -> httpx.Response:
+        message = {"role": "assistant", "content": json.dumps(payload), "refusal": None}
+        message.update(message_updates)
+        return httpx.Response(200, json={
+            "object": "chat.completion", "model": "operator-test-model", "choices": [
+                {"index": 0, "finish_reason": "stop", "message": message},
+            ],
+        })
+
+    def _remote_context(self) -> AiContext:
+        return AiContext(self.deal.id, self.buyer_id, (self.buyer_private_message,), tuple(self.constraints))
+
+    def _remote_facts(self) -> dict[str, object]:
+        return {"schema_version": 1, "facts": [_fact_payload(source={
+            "schema_version": 1, "message_id": str(self.buyer_private_message.id),
+            "quote": "We need 12 boxes.", "unknown_reason": None,
+        })]}
+
+    def test_remote_config_fail_closed_without_http(self) -> None:
+        requests = []
+        transport = httpx.MockTransport(lambda request: requests.append(request))
+        for updates in (
+            {"ai_remote_egress_enabled": False}, {"openai_model": ""},
+            {"openai_model": "  "}, {"openai_api_key": ""},
+            {"ai_provider": "openai_with_offline_fallback", "ai_remote_egress_enabled": False},
+        ):
+            with self.subTest(updates=updates), self.assertRaises(AIConfigurationError):
+                ConfiguredAIProvider(self._remote_config(**updates), transport=transport)
+        self.assertEqual(requests, [])
+        nonlocal_offline = self._remote_config(ai_provider="offline")
+        nonlocal_offline.app_env = "production"
+        with self.assertRaises(AIConfigurationError):
+            ConfiguredAIProvider(nonlocal_offline, transport=transport)
+        self.assertEqual(requests, [])
+
+    def test_explicit_offline_and_credential_fallback_have_accurate_provenance(self) -> None:
+        for mode, reason in (("offline", None), ("openai_with_offline_fallback", "missing_credentials")):
+            provider = ConfiguredAIProvider(self._remote_config(ai_provider=mode, openai_api_key=""))
+            result = extract_facts_from_context(self._remote_context(), provider)
+            self.assertEqual(len(result.candidates), 2)
+            self.assertEqual(result.provenance.provider, "offline")
+            self.assertEqual(result.provenance.mode, mode)
+            self.assertEqual(result.provenance.fallback_reason, reason)
+            self.assertIsNone(result.provenance.model)
+            self.assertEqual(result.provenance.context_scope, "authorized")
+
+    def test_private_messages_and_constraints_require_both_gates_for_selected_org(self) -> None:
+        self.constraints[0].field = "item_description"
+        cases = (
+            (False, frozenset(), False),
+            (True, frozenset(), False),
+            (False, frozenset({self.buyer_id}), False),
+            (True, frozenset({self.seller_id}), False),
+            (True, frozenset({self.buyer_id}), True),
+        )
+        for allow, ids, expected in cases:
+            requests: list[httpx.Request] = []
+            def respond(request: httpx.Request) -> httpx.Response:
+                requests.append(request)
+                return self._completion({"schema_version": 1, "facts": []})
+            provider = ConfiguredAIProvider(self._remote_config(
+                ai_remote_allow_private=allow, ai_remote_private_organization_ids=ids,
+            ), transport=httpx.MockTransport(respond))
+            result = extract_facts_from_context(self._remote_context(), provider)
+            request_text = requests[0].content.decode()
+            self.assertEqual("We need 12 boxes" in request_text, expected)
+            self.assertEqual("secret-9999-usd" in request_text, expected)
+            self.assertNotIn("seller secret", request_text)
+            self.assertEqual(result.provenance.context_scope, "authorized_private" if expected else "shareable_only")
+
+    def test_remote_request_contract_and_grounding_use_exact_transmitted_context(self) -> None:
+        requests: list[httpx.Request] = []
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return self._completion(self._remote_facts())
+        provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(respond))
+        excluded = extract_facts_from_context(self._remote_context(), provider)
+        self.assertIs(excluded.result.status, ValidationStatus.INVALID)
+        self.assertEqual(excluded.candidates, ())
+        public = replace(self.buyer_private_message, visibility=Visibility.SHAREABLE)
+        accepted = extract_facts_from_context(replace(self._remote_context(), messages=(public,)), provider)
+        self.assertIs(accepted.result.status, ValidationStatus.VALID)
+        self.assertEqual(accepted.provenance.provider, "openai")
+        self.assertEqual(accepted.provenance.model, "operator-test-model")
+        raw = json.loads(requests[-1].content)
+        self.assertEqual(str(requests[-1].url), "https://api.openai.com/v1/chat/completions")
+        self.assertFalse(raw["store"])
+        self.assertEqual(raw["max_completion_tokens"], 4096)
+        self.assertNotIn("tools", raw)
+        self.assertNotIn("test-only-key", requests[-1].content.decode())
+        self.assertNotIn(str(self.buyer_id), requests[-1].content.decode())
+        minimal = json.loads(raw["messages"][1]["content"])
+        self.assertEqual(set(minimal["messages"][0]), {"message_id", "text"})
+        def assert_schema(schema: dict) -> None:
+            if schema.get("type") == "object":
+                self.assertFalse(schema["additionalProperties"])
+                self.assertEqual(set(schema["required"]), set(schema["properties"]))
+                for child in schema["properties"].values():
+                    assert_schema(child)
+            if "items" in schema:
+                assert_schema(schema["items"])
+            for child in schema.get("anyOf", []):
+                assert_schema(child)
+        assert_schema(raw["response_format"]["json_schema"]["schema"])
+
+    def test_remote_permanent_responses_never_retry_or_fallback(self) -> None:
+        variants = [
+            httpx.Response(code, json={"error": {"message": "test-only-key private prompt"}})
+            for code in (301, 400, 401, 403, 404, 422)
+        ] + [
+            httpx.Response(429, json={"error": {"code": "insufficient_quota"}}),
+            httpx.Response(503, json={"error": {"type": "insufficient_quota"}}),
+            self._completion(self._remote_facts(), refusal="private refusal"),
+            self._completion(self._remote_facts(), tool_calls=[{"id": "tool"}]),
+            httpx.Response(200, content=b'{"choices":[],"choices":[]}'),
+            self._completion({"schema_version": 2, "facts": []}),
+            self._completion({"schema_version": 1, "facts": [], "extra": True}),
+            self._completion({"schema_version": 1, "facts": [_fact_payload(field="unsupported")]}),
+            self._completion({"schema_version": 1, "facts": [_fact_payload()] * 101}),
+            self._completion({}, content='{"schema_version":1,"facts":[],"facts":[]}'),
+            self._completion({}, content='{"schema_version":NaN,"facts":[]}'),
+            httpx.Response(200, content=b"not json"),
+            self._completion({}, content=None),
+            self._completion({}, role="user"),
+        ]
+        for response in variants:
+            requests = []
+            def respond(request: httpx.Request) -> httpx.Response:
+                requests.append(request)
+                return response
+            provider = ConfiguredAIProvider(self._remote_config(
+                ai_provider="openai_with_offline_fallback",
+            ), transport=httpx.MockTransport(respond))
+            result = extract_facts_from_context(self._remote_context(), provider, sleep=lambda _: None)
+            self.assertIs(result.result.status, ValidationStatus.INVALID)
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(result.provenance.provider, "openai")
+            self.assertIsNone(result.provenance.fallback_reason)
+            self.assertNotIn("test-only-key", str(result))
+            self.assertNotIn("private prompt", str(result))
+
+    def test_remote_transient_errors_retry_exactly_twice_then_explicit_fallback(self) -> None:
+        for status in (429, 500, 502, 503):
+            for mode in ("openai", "openai_with_offline_fallback"):
+                requests = []
+                sleeps = []
+                def respond(request: httpx.Request) -> httpx.Response:
+                    requests.append(request)
+                    return httpx.Response(status, json={"error": {"code": "rate_limit_exceeded"}})
+                provider = ConfiguredAIProvider(self._remote_config(ai_provider=mode), transport=httpx.MockTransport(respond))
+                if mode == "openai":
+                    with self.assertRaises(AITransientError):
+                        extract_facts_from_context(self._remote_context(), provider, sleep=sleeps.append)
+                else:
+                    result = extract_facts_from_context(self._remote_context(), provider, sleep=sleeps.append)
+                    self.assertEqual(result.provenance.provider, "offline")
+                    self.assertEqual(result.provenance.fallback_reason, "transient_exhausted")
+                    self.assertEqual(result.provenance.context_scope, "shareable_only")
+                    self.assertEqual(result.candidates, ())
+                self.assertEqual(len(requests), 2)
+                self.assertEqual(sleeps, [0.5])
+
+    def test_remote_oversized_request_never_sends_and_streamed_response_is_closed(self) -> None:
+        requests = []
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return self._completion({"schema_version": 1, "facts": []})
+        provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(respond))
+        huge = replace(self.buyer_private_message, visibility=Visibility.SHAREABLE, body="\U0001f600" * MAX_BYTES)
+        result = extract_facts_from_context(replace(self._remote_context(), messages=(huge,)), provider)
+        self.assertIs(result.result.status, ValidationStatus.INVALID)
+        self.assertEqual(requests, [])
+
+        class Chunks(httpx.AsyncByteStream):
+            closed = False
+            yielded = 0
+            async def __aiter__(self):
+                for _ in range(40):
+                    self.yielded += 1
+                    yield b"x" * 4096
+            async def aclose(self):
+                self.closed = True
+        stream = Chunks()
+        provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, stream=stream),
+        ))
+        result = extract_facts_from_context(self._remote_context(), provider)
+        self.assertIs(result.result.status, ValidationStatus.INVALID)
+        self.assertTrue(stream.closed)
+        self.assertLess(stream.yielded, 40)
+        for headers in ({"content-length": str(MAX_BYTES + 1)}, {"content-encoding": "gzip"}):
+            stream = Chunks()
+            provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, headers=headers, stream=stream),
+            ))
+            result = extract_facts_from_context(self._remote_context(), provider)
+            self.assertIs(result.result.status, ValidationStatus.INVALID)
+            self.assertEqual(stream.yielded, 0)
+            self.assertTrue(stream.closed)
+
+    def test_remote_elapsed_deadline_cancels_and_closes_each_attempt(self) -> None:
+        calls = []
+        cancellations = []
+        async def respond(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            try:
+                await asyncio.sleep(1)
+            finally:
+                cancellations.append(True)
+            return self._completion({"schema_version": 1, "facts": []})
+        provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(respond))
+        start = time.monotonic()
+        with self.assertRaises(AITransientError):
+            extract_facts_from_context(self._remote_context(), provider,
+                policy=AIRetryPolicy(timeout_seconds=0.1, backoff_seconds=0), sleep=lambda _: None)
+        self.assertLess(time.monotonic() - start, 0.75)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(cancellations), 2)
+
+    def test_remote_network_errors_safe_and_unsupported_transport_permanent(self) -> None:
+        for error_type, count in ((httpx.ConnectError, 2), (httpx.ReadTimeout, 2), (httpx.UnsupportedProtocol, 1)):
+            calls = []
+            def respond(request: httpx.Request) -> httpx.Response:
+                calls.append(request)
+                raise error_type("test-only-key private exception", request=request)
+            provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(respond))
+            if count == 2:
+                with self.assertRaises(AITransientError) as captured:
+                    extract_facts_from_context(self._remote_context(), provider, sleep=lambda _: None)
+                self.assertNotIn("private exception", str(captured.exception))
+                self.assertIsNone(captured.exception.__cause__)
+            else:
+                result = extract_facts_from_context(self._remote_context(), provider)
+                self.assertIs(result.result.status, ValidationStatus.INVALID)
+            self.assertEqual(len(calls), count)
+
+    def test_remote_proposal_requires_grounded_citations_for_every_populated_field(self) -> None:
+        context = self._demo_context("Item: Widget, 12 boxes at USD 2.50, deliver to Toronto by 2026-12-01.")
+        context = replace(context, messages=tuple(replace(message, visibility=Visibility.SHAREABLE) for message in context.messages))
+        facts = DemoAISuggestionProvider().extract_facts(FactExtractionRequest(context), timeout_seconds=1)
+        citations = [{
+            "schema_version": 1, "field": fact.field.value, "value": fact.value,
+            "currency_or_unit": fact.currency_or_unit,
+            "source": {"schema_version": 1, "message_id": str(fact.source.message_id), "quote": fact.source.quote, "unknown_reason": None},
+        } for fact in facts]
+        payload = {"schema_version": 1, "insufficient_context": False,
+                   "proposal": _proposal_payload(), "citations": citations}
+        responses = [payload,
+            {**payload, "citations": citations[:-1]},
+            {**payload, "proposal": _proposal_payload(quantity="13")},
+            {**payload, "proposal": _proposal_payload(currency="EUR")},
+            {**payload, "proposal": _proposal_payload(quantity="1e100")},
+            {**payload, "proposal": _proposal_payload(quantity="1.2e1")},
+            {**payload, "proposal": _proposal_payload(delivery_date="20261201")},
+            {**payload, "insufficient_context": True, "proposal": None, "citations": []},
+        ]
+        for index, output in enumerate(responses):
+            calls = []
+            def respond(request: httpx.Request) -> httpx.Response:
+                calls.append(request)
+                return self._completion(output)
+            provider = ConfiguredAIProvider(self._remote_config(ai_provider="openai_with_offline_fallback"), transport=httpx.MockTransport(respond))
+            result = draft_proposal_from_context(context, provider)
+            self.assertEqual(result.result.status is ValidationStatus.VALID, index == 0)
+            self.assertEqual(len(calls), 1)
+            self.assertIsNone(result.provenance.fallback_reason)
+            if index == 0:
+                self.assertEqual(result.proposal, self.proposal)
+
+    def test_remote_currency_requires_explicit_noncontradictory_cited_usd(self) -> None:
+        for price, valid in (
+            ("CAD $2.50", False), ("EUR $2.50", False),
+            ("AUD 2.50 dollars", False), ("$2.50", False),
+            ("2.50 dollars", False), ("USD 2.50", True),
+            ("USD $2.50", True), ("2.50 USD", True),
+            ("CAD USD 2.50", False),
+        ):
+            with self.subTest(price=price):
+                context = self._demo_context(f"Item: Widget, 12 boxes at {price}, deliver to Toronto by 2026-12-01.")
+                context = replace(context, messages=tuple(replace(message, visibility=Visibility.SHAREABLE) for message in context.messages))
+                baseline = self._demo_context("Item: Widget, 12 boxes at USD 2.50, deliver to Toronto by 2026-12-01.")
+                facts = DemoAISuggestionProvider().extract_facts(FactExtractionRequest(baseline), timeout_seconds=1)
+                citations = [{
+                    "schema_version": 1, "field": fact.field.value, "value": fact.value,
+                    "currency_or_unit": fact.currency_or_unit,
+                    "source": {"schema_version": 1, "message_id": str(context.messages[0].id),
+                               "quote": price if fact.field.value == "unit_price" else fact.source.quote,
+                               "unknown_reason": None},
+                } for fact in facts]
+                for operation in ("facts", "proposal"):
+                    calls = []
+                    output = {"schema_version": 1, "facts": citations} if operation == "facts" else {
+                        "schema_version": 1, "insufficient_context": False,
+                        "proposal": _proposal_payload(), "citations": citations,
+                    }
+                    def respond(request: httpx.Request) -> httpx.Response:
+                        calls.append(request)
+                        return self._completion(output)
+                    provider = ConfiguredAIProvider(self._remote_config(ai_provider="openai_with_offline_fallback"), transport=httpx.MockTransport(respond))
+                    result = extract_facts_from_context(context, provider) if operation == "facts" else draft_proposal_from_context(context, provider)
+                    self.assertEqual(result.result.status is ValidationStatus.VALID, valid)
+                    self.assertEqual(len(calls), 1)
+                    self.assertIsNone(result.provenance.fallback_reason)
+                    if not valid:
+                        if operation == "facts":
+                            self.assertEqual(result.candidates, ())
+                        else:
+                            self.assertIsNone(result.proposal)
+
+    def test_remote_currency_cannot_borrow_uncited_context_or_hide_qualifiers(self) -> None:
+        for body, quote in (
+            ("CAD $2.50", "$2.50"),
+            ("EUR $2.50", "$2.50"),
+            ("AUD 2.50 dollars", "2.50 dollars"),
+            ("USD budget, price $2.50", "$2.50"),
+            ("CAD price USD 2.50", "USD 2.50"),
+            ("Budget USD 2.50; actual unit price $2.50.", "Budget USD 2.50; actual unit price $2.50."),
+            ("Budget USD 2.50; actual unit price $2.50.", "USD 2.50"),
+            ("Budget USD 2.50; actual unit price $2.50.", "2.50"),
+            ("Budget USD 2.50; actual unit price USD 2.50.", "USD 2.50"),
+            ("Payment USD 2.50 per unit", "USD 2.50"),
+            ("Total USD 2.50 per unit", "USD 2.50"),
+        ):
+            with self.subTest(body=body, quote=quote):
+                context = self._demo_context(body)
+                context = replace(context, messages=tuple(replace(message, visibility=Visibility.SHAREABLE) for message in context.messages))
+                fact = _fact_payload(field="unit_price", value="2.50", currency_or_unit="USD", source={
+                    "schema_version": 1, "message_id": str(context.messages[0].id),
+                    "quote": quote, "unknown_reason": None,
+                })
+                calls = []
+                def respond(request: httpx.Request) -> httpx.Response:
+                    calls.append(request)
+                    return self._completion({"schema_version": 1, "facts": [fact]})
+                provider = ConfiguredAIProvider(self._remote_config(ai_provider="openai_with_offline_fallback"), transport=httpx.MockTransport(respond))
+                result = extract_facts_from_context(context, provider)
+                self.assertIs(result.result.status, ValidationStatus.INVALID)
+                self.assertEqual(result.candidates, ())
+                self.assertEqual(len(calls), 1)
+                self.assertIsNone(result.provenance.fallback_reason)
+
+    def test_retry_elapsed_budget_disallows_late_success(self) -> None:
+        from syncally.application.ai import call_with_bounded_retry
+        with patch("syncally.application.ai.monotonic", side_effect=[0, 0, 21, 21, 21]):
+            with self.assertRaises(AITransientError):
+                call_with_bounded_retry(lambda: "late", AIRetryPolicy(), sleep=lambda _: None)
+
+    def test_remote_envelope_finish_model_and_choices_are_strict(self) -> None:
+        for mutate in (
+            lambda body: body.update(model=None),
+            lambda body: body.update(choices=[None]),
+            lambda body: body["choices"][0].update(index=False),
+            lambda body: body["choices"][0].update(finish_reason="length"),
+            lambda body: body["choices"][0].update(finish_reason="content_filter"),
+        ):
+            envelope = self._completion({"schema_version": 1, "facts": []}).json()
+            mutate(envelope)
+            calls = []
+            def respond(request: httpx.Request) -> httpx.Response:
+                calls.append(request)
+                return httpx.Response(200, json=envelope)
+            provider = ConfiguredAIProvider(self._remote_config(ai_provider="openai_with_offline_fallback"), transport=httpx.MockTransport(respond))
+            result = extract_facts_from_context(self._remote_context(), provider)
+            self.assertIs(result.result.status, ValidationStatus.INVALID)
+            self.assertEqual(len(calls), 1)
+            self.assertIsNone(result.provenance.fallback_reason)
+
+    def test_remote_reports_resolved_completion_model(self) -> None:
+        envelope = self._completion({"schema_version": 1, "facts": []}).json()
+        envelope["model"] = "operator-test-resolved-snapshot"
+        provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json=envelope),
+        ))
+        result = extract_facts_from_context(self._remote_context(), provider)
+        self.assertEqual(result.provenance.model, "operator-test-resolved-snapshot")
+
+    def test_remote_stream_timeout_closes_open_responses(self) -> None:
+        streams = []
+        class SlowStream(httpx.AsyncByteStream):
+            closed = False
+            async def __aiter__(self):
+                yield b"{"
+                await asyncio.sleep(1)
+                yield b"}"
+            async def aclose(self):
+                self.closed = True
+        def respond(_: httpx.Request) -> httpx.Response:
+            stream = SlowStream()
+            streams.append(stream)
+            return httpx.Response(200, stream=stream)
+        provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(respond))
+        with self.assertRaises(AITransientError):
+            extract_facts_from_context(self._remote_context(), provider,
+                policy=AIRetryPolicy(timeout_seconds=0.1, backoff_seconds=0), sleep=lambda _: None)
+        self.assertEqual(len(streams), 2)
+        self.assertTrue(all(stream.closed for stream in streams))
+
+    def test_stray_secret_does_not_enable_remote_provider_or_egress(self) -> None:
+        from syncally.config import Settings
+
+        configured = Settings(_env_file=None, app_env="test", openai_api_key="test-only-key")
+        self.assertEqual(configured.ai_provider, "offline")
+        self.assertFalse(configured.ai_remote_egress_enabled)
+        self.assertFalse(configured.ai_remote_allow_private)
+        self.assertEqual(configured.ai_remote_private_organization_ids, frozenset())
+        self.assertNotIn("test-only-key", repr(configured))
+
     def setUp(self) -> None:
         self.buyer_id = OrganizationId(uuid4())
         self.seller_id = OrganizationId(uuid4())
@@ -586,7 +1013,7 @@ class AISuggestionProviderTests(unittest.TestCase):
         with self.assertRaises(AITransientError):
             self._extract(provider)
 
-        self.assertEqual(provider.call_count, 3)
+        self.assertEqual(provider.call_count, 2)
 
     def test_permanent_failure_is_not_retried_and_yields_an_invalid_result(self) -> None:
         provider = DeterministicFakeAIProvider(failures=[AIPermanentError])

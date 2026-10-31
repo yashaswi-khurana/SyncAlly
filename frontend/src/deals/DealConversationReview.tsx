@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect,useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -42,6 +42,8 @@ interface DealConversationReviewProps {
   selectedOrganizationId?: string;
   onOrganizationChange?: (organizationId: string) => void;
   revalidateIntervalMs?: number;
+  composerId?: string;
+  buttonLabel?: string;
 }
 
 type FactFilter = "all" | "needs-review" | "confirmed" | "private";
@@ -103,10 +105,12 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-function MessageComposer({ deal, organization, onSent }: {
+function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }: {
   deal: Deal;
   organization: Organization;
   onSent: (message: DealMessage) => void;
+  composerId?: string;
+  buttonLabel?: string;
 }) {
   const [body, setBody] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("SHAREABLE");
@@ -114,6 +118,8 @@ function MessageComposer({ deal, organization, onSent }: {
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const request = useRef<AbortController | null>(null);
+  const inputId = composerId ?? `deal-message-composer-${deal.id}`;
+  const sendButtonText = buttonLabel ?? "Send Message";
   useEffect(() => () => { request.current?.abort(); }, []);
 
   async function send() {
@@ -151,8 +157,9 @@ function MessageComposer({ deal, organization, onSent }: {
     <form className="message-composer" noValidate onSubmit={(event) => { event.preventDefault(); void send(); }}>
       <p className="hint">Sending as {organization.legal_name} ({organizationRole(deal, organization.id)})</p>
       <div className="field">
-        <label htmlFor={`deal-message-composer-${deal.id}`}>Message</label>
-        <textarea id={`deal-message-composer-${deal.id}`} rows={4} maxLength={8000}
+        <label htmlFor={inputId}>Message</label>
+        <textarea id={inputId} rows={4} maxLength={8000}
+          aria-label="Post a message"
           placeholder="Discuss trade terms (e.g. quantity, unit price, delivery port, timeline)..."
           value={body} disabled={submitting}
           aria-describedby={`message-help-${deal.id}${error ? ` message-error-${deal.id}` : ""}`}
@@ -176,18 +183,13 @@ function MessageComposer({ deal, organization, onSent }: {
         </label>
       </fieldset>
       <div className="message-composer__actions">
-        <button type="submit" className="button" disabled={submitting}>{submitting ? "Sending..." : "Send Message"}</button>
+        <button type="submit" className="button" disabled={submitting}>{submitting ? "Sending..." : sendButtonText}</button>
         <p id={`message-help-${deal.id}`} className="hint">Cmd/Ctrl + Enter to send</p>
       </div>
       {error ? <p id={`message-error-${deal.id}`} className="form-error" role="alert">{error} Your draft is saved here; you can try sending again.</p> : null}
       {sent ? <p role="status">Message sent.</p> : null}
     </form>
   );
-function generateIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 export default function DealConversationReview({
@@ -198,6 +200,8 @@ export default function DealConversationReview({
   selectedOrganizationId: controlledOrgId,
   onOrganizationChange,
   revalidateIntervalMs = 4000,
+  composerId,
+  buttonLabel,
 }: DealConversationReviewProps) {
   const [organizationState, setOrganizationState] = useState<OrganizationState>({
     status: "loading",
@@ -212,10 +216,6 @@ export default function DealConversationReview({
   const [actionError, setActionError] = useState<{ factId: string; message: string } | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
-  const [messageBody, setMessageBody] = useState("");
-  const [messageVisibility, setMessageVisibility] = useState<Visibility>("SHAREABLE");
-  const [submittingMessage, setSubmittingMessage] = useState(false);
-  const [messageError, setMessageError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -333,6 +333,7 @@ export default function DealConversationReview({
       current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
         ? { ...current, messages: [...current.messages.filter((item) => item.id !== message.id), message] }
         : current);
+    onMessageCreated?.();
   }
 
   useEffect(() => {
@@ -501,36 +502,6 @@ export default function DealConversationReview({
       : current);
   }
 
-  async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = messageBody.trim();
-    if (!trimmed || !activeOrganizationId) {
-      return;
-    }
-
-    setSubmittingMessage(true);
-    setMessageError(null);
-    try {
-      const createdMessage = await createDealMessage(deal.id, {
-        body: trimmed,
-        visibility: messageVisibility,
-        organization_id: activeOrganizationId,
-        idempotency_key: generateIdempotencyKey(),
-      });
-      setMessageBody("");
-      setConversationState((current) =>
-        current?.status === "ready" && current.organizationId === activeOrganizationId
-          ? { ...current, messages: [...current.messages, createdMessage] }
-          : current,
-      );
-      onMessageCreated?.();
-    } catch (caught) {
-      setMessageError(describeError(caught));
-    } finally {
-      setSubmittingMessage(false);
-    }
-  }
-
   return (
     <section className="communication-grid" aria-label="Deal conversation and fact review">
       <section className="card communication-card communication-card--transcript" aria-labelledby="conversation-heading">
@@ -591,60 +562,15 @@ export default function DealConversationReview({
                 </button>
               </div>
             ) : (
-              <>
-                <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
-                  {visibleMessages.length === 0 ? (
-                    <li className="empty-state">No messages yet.</li>
-                  ) : (
-                    visibleMessages.map((message) => (
-                      <li
-                        key={message.id}
-                        id={`deal-message-${message.id}`}
-                        className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
-                      >
-                        <div className="communication-meta">
-                          <span>
-                            {message.source_type === "AGENT"
-                              ? `SyncAlly agent${message.author_agent_id ? ` · ${message.author_agent_id}` : ""}`
-                              : `Deal participant${message.author_user_id ? ` · ${message.author_user_id.slice(0, 8)}` : ""}`}
-                          </span>
-                          <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
-                        </div>
-                        <p className="message-body">{message.body}</p>
-                        <div className="communication-badges">
-                          <span className={`badge badge--${message.visibility.toLowerCase()}`}>
-                            {readable(message.visibility)}
-                          </span>
-                        </div>
-                      </li>
-                    ))
-                  )}
-                </ol>
-
-                <form
-                  className="message-composer"
-                  aria-label="Post a deal message"
-                  onSubmit={(event) => void handleSendMessage(event)}
-                >
-                  <div className="field">
-                    <label htmlFor="deal-message-input">Post a message</label>
-                    <textarea
-                      id="deal-message-input"
-                      name="message"
-                      value={messageBody}
-                      onChange={(event) => setMessageBody(event.target.value)}
-                      placeholder="Introduce trade terms (e.g. 500 units at USD 45, deliver to Toronto)..."
-                      rows={3}
-                      maxLength={8000}
-                      disabled={submittingMessage}
-                      required
-                    />
-                  </div>
-                  <div className="message-composer__controls">
-                    <div
-                      className="message-composer__visibility"
-                      role="radiogroup"
-                      aria-label="Message visibility"
+              <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
+                {visibleMessages.length === 0 ? (
+                  <li className="empty-state">No messages yet.</li>
+                ) : (
+                  visibleMessages.map((message) => (
+                    <li
+                      key={message.id}
+                      id={`deal-message-${message.id}`}
+                      className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
                     >
                       <div className="communication-meta">
                         <span>
@@ -665,48 +591,11 @@ export default function DealConversationReview({
                   ))
                 )}
               </ol>
-                      <label className="radio-label">
-                        <input
-                          type="radio"
-                          name={`message-visibility-${deal.id}`}
-                          value="SHAREABLE"
-                          checked={messageVisibility === "SHAREABLE"}
-                          onChange={() => setMessageVisibility("SHAREABLE")}
-                          disabled={submittingMessage}
-                        />
-                        <span>Shareable</span>
-                      </label>
-                      <label className="radio-label">
-                        <input
-                          type="radio"
-                          name={`message-visibility-${deal.id}`}
-                          value="PRIVATE"
-                          checked={messageVisibility === "PRIVATE"}
-                          onChange={() => setMessageVisibility("PRIVATE")}
-                          disabled={submittingMessage}
-                        />
-                        <span>Private</span>
-                      </label>
-                    </div>
-                    <button
-                      type="submit"
-                      className="button button--compact"
-                      disabled={submittingMessage || !messageBody.trim()}
-                    >
-                      {submittingMessage ? "Sending…" : "Send message"}
-                    </button>
-                  </div>
-                  {messageError ? (
-                    <p className="form-error" role="alert">
-                      {messageError}
-                    </p>
-                  ) : null}
-                </form>
-              </>
             )}
             {currentConversation && selectedOrganization ? (
               <MessageComposer key={`${deal.id}:${activeOrganizationId}`}
-                deal={deal} organization={selectedOrganization} onSent={appendMessage} />
+                deal={deal} organization={selectedOrganization} onSent={appendMessage}
+                composerId={composerId} buttonLabel={buttonLabel} />
             ) : null}
           </>
         )}

@@ -924,10 +924,10 @@
     "semantic_hash": "5aee15c72979c42f9da0586676b12a69"
   },
   "frontend/src/api/client.ts": {
-    "mtime": 1793434087.401675,
-    "seen": 1793445158.1167977,
-    "ast_hash": "9423f69f593f1823538a5d4b0835da9b",
-    "semantic_hash": "9423f69f593f1823538a5d4b0835da9b"
+    "mtime": 1793445714.8136714,
+    "seen": 1793446801.010499,
+    "ast_hash": "a60f27bc7a285aab70ce9a7d9ff77ce2",
+    "semantic_hash": ""
   },
   "frontend/src/api/tokenStore.ts": {
     "mtime": 1793434087.401675,
@@ -972,9 +972,9 @@
     "semantic_hash": "b42d09dfca2b2be8470102f24d87a42b"
   },
   "frontend/src/deals/AISuggestionReview.tsx": {
-    "mtime": 1793445141.258329,
-    "seen": 1793445158.1168065,
-    "ast_hash": "198895867520144d95b20f62f029978a",
+    "mtime": 1793445902.7779667,
+    "seen": 1793446801.010514,
+    "ast_hash": "de18ec373d661f863de8870a81bd053e",
     "semantic_hash": ""
   },
   "frontend/src/deals/AgreementReview.test.tsx": {
@@ -1020,15 +1020,15 @@
     "semantic_hash": "814338f9d07725e7ae6762a7c58ada4a"
   },
   "frontend/src/deals/DealConversationReview.test.tsx": {
-    "mtime": 1793445141.2584984,
-    "seen": 1793445158.1168163,
-    "ast_hash": "798c10a6972c206f248522353d649272",
+    "mtime": 1793446649.3629277,
+    "seen": 1793446801.0105293,
+    "ast_hash": "5a7c0fb87ced339530755073619d3bc0",
     "semantic_hash": ""
   },
   "frontend/src/deals/DealConversationReview.tsx": {
-    "mtime": 1793445141.2587004,
-    "seen": 1793445158.1168175,
-    "ast_hash": "7a8ad670cc288f978ab0f1f1845856a0",
+    "mtime": 1793446606.7637432,
+    "seen": 1793446801.0105314,
+    "ast_hash": "d3389ab4bef2f5419c064a876e668f82",
     "semantic_hash": ""
   },
   "frontend/src/deals/DealDetailPage.test.tsx": {
@@ -1366,6 +1366,30 @@
     "seen": 1793433921.8353794,
     "ast_hash": "382f8bc8421e5fa7d6ce19a00bc4344d",
     "semantic_hash": "382f8bc8421e5fa7d6ce19a00bc4344d"
+  },
+  "docs/engineering/plan.md.lock.json": {
+    "mtime": 1793445688.341289,
+    "seen": 1793446801.0104797,
+    "ast_hash": "ed97c965b752c1aac4a51be392f23642",
+    "semantic_hash": ""
+  },
+  "docs/engineering/decision.md": {
+    "mtime": 1793445635.7691338,
+    "seen": 1793446801.0106304,
+    "ast_hash": "a1cb67f4ca47480bdb05078214d6be0f",
+    "semantic_hash": ""
+  },
+  "docs/engineering/log.md": {
+    "mtime": 1793446745.5973206,
+    "seen": 1793446801.0106325,
+    "ast_hash": "ede1d422f3e0ea35c6355497c1da50df",
+    "semantic_hash": ""
+  },
+  "docs/engineering/plan.md": {
+    "mtime": 1793445688.341144,
+    "seen": 1793446801.0106342,
+    "ast_hash": "fdac585d9241dfaac814d9a7f9801be7",
+    "semantic_hash": ""
   },
   "frontend/package-lock.json": {
     "mtime": 1792729557.637828,

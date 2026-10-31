@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, createDeal, listOrganizations } from "../api/client";
+import { ApiError, apiRequest, createDeal, listOrganizations } from "../api/client";
 import type { Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+type DirectoryItem = Pick<Organization, "id" | "legal_name" | "country_code">;
+type SearchState =
+  | { status: "idle" | "loading" }
+  | { status: "ready"; items: DirectoryItem[] }
+  | { status: "error"; message: string };
 
 type OrganizationsState =
   | { status: "loading" }
@@ -50,9 +54,12 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     status: "loading",
   });
   const [buyerOrganizationId, setBuyerOrganizationId] = useState("");
-  const [sellerOrganizationId, setSellerOrganizationId] = useState(
-    import.meta.env.VITE_DEMO_SELLER_ORGANIZATION_ID ?? "",
-  );
+  const [query, setQuery] = useState("");
+  const [seller, setSeller] = useState<DirectoryItem | null>(null);
+  const [searchState, setSearchState] = useState<SearchState>({ status: "idle" });
+  const [searchRetry, setSearchRetry] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -83,6 +90,42 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     };
   }, [reloadCount]);
 
+  useEffect(() => {
+    if (!query.trim() || seller) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void apiRequest<DirectoryItem[]>(
+        `/organizations/directory?q=${encodeURIComponent(query.trim())}`,
+        { signal: controller.signal },
+      ).then(
+        (items) => {
+          if (!cancelled) setSearchState({ status: "ready", items });
+        },
+        (caught: unknown) => {
+          if (!cancelled) setSearchState({ status: "error", message: describeError(caught) });
+        },
+      );
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, seller, searchRetry]);
+
+  const results = searchState.status === "ready" ? searchState.items : [];
+  const listOpen = searchOpen && results.length > 0;
+
+  function selectSeller(item: DirectoryItem) {
+    setSeller(item);
+    setQuery(item.legal_name);
+    setSearchState({ status: "idle" });
+    setSearchOpen(false);
+    setActiveIndex(-1);
+    setFieldErrors({});
+  }
+
   function retryOrganizations() {
     setOrganizationsState({ status: "loading" });
     setReloadCount((count) => count + 1);
@@ -91,21 +134,19 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (submitting) return;
     const nextErrors: FieldErrors = {};
-    const seller = sellerOrganizationId.trim();
     if (buyerOrganizationId === "") {
       nextErrors.buyer = "Choose the buyer organization.";
     }
-    if (seller === "") {
-      nextErrors.seller = "Enter the seller organization ID.";
-    } else if (!UUID_PATTERN.test(seller)) {
-      nextErrors.seller = "Enter a valid organization ID (UUID).";
-    } else if (seller.toLowerCase() === buyerOrganizationId.toLowerCase()) {
+    if (!seller) {
+      nextErrors.seller = "Choose a seller organization from the search results.";
+    } else if (seller.id === buyerOrganizationId) {
       nextErrors.seller = "Buyer and seller must be different organizations.";
     }
     setFieldErrors(nextErrors);
     setSubmitError(null);
-    if (Object.keys(nextErrors).length > 0) {
+    if (Object.keys(nextErrors).length > 0 || !seller) {
       return;
     }
 
@@ -113,7 +154,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     try {
       const deal = await createDeal({
         buyer_organization_id: buyerOrganizationId,
-        seller_organization_id: seller,
+        seller_organization_id: seller.id,
       });
       onCreated(deal.id);
     } catch (caught) {
@@ -202,7 +243,13 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 name="buyer-organization"
                 value={buyerOrganizationId}
                 aria-invalid={fieldErrors.buyer ? true : undefined}
-                onChange={(event) => setBuyerOrganizationId(event.target.value)}
+                disabled={submitting}
+                onChange={(event) => {
+                  setBuyerOrganizationId(event.target.value);
+                  setFieldErrors(seller?.id === event.target.value
+                    ? { seller: "Buyer and seller must be different organizations." }
+                    : {});
+                }}
               >
                 {organizationsState.organizations.map((organization) => (
                   <option key={organization.id} value={organization.id}>
@@ -217,22 +264,85 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
               ) : null}
             </div>
             <div className="field">
-              <label htmlFor="seller-organization">Seller organization ID</label>
+              <label htmlFor="seller-organization">Seller organization</label>
               <input
                 id="seller-organization"
                 name="seller-organization"
                 type="text"
-                placeholder="00000000-0000-0000-0000-000000000000"
-                value={sellerOrganizationId}
+                role="combobox"
+                autoComplete="off"
+                maxLength={100}
+                placeholder="Search by company name"
+                value={query}
+                disabled={submitting}
+                aria-autocomplete="list"
+                aria-expanded={listOpen}
+                aria-controls={listOpen ? "seller-results" : undefined}
+                aria-activedescendant={listOpen && activeIndex >= 0
+                  ? `seller-option-${activeIndex}` : undefined}
                 aria-invalid={fieldErrors.seller ? true : undefined}
-                aria-describedby="seller-organization-hint"
-                onChange={(event) => setSellerOrganizationId(event.target.value)}
+                aria-describedby={fieldErrors.seller ? "seller-error" : "seller-organization-hint"}
+                onFocus={() => setSearchOpen(true)}
+                onBlur={() => setSearchOpen(false)}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSeller(null);
+                  setSearchState({ status: event.target.value.trim() ? "loading" : "idle" });
+                  setSearchOpen(true);
+                  setActiveIndex(-1);
+                  setFieldErrors({});
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setSearchOpen(false);
+                    setActiveIndex(-1);
+                  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setSearchOpen(true);
+                    if (results.length) setActiveIndex((current) =>
+                      event.key === "ArrowDown"
+                        ? (current + 1) % results.length
+                        : (current <= 0 ? results.length - 1 : current - 1));
+                  } else if (event.key === "Enter" && listOpen) {
+                    event.preventDefault();
+                    if (activeIndex >= 0) selectSeller(results[activeIndex]);
+                  }
+                }}
               />
               <p id="seller-organization-hint" className="hint">
-                The seller shares this identifier from their own organization.
+                Search for a company, then select the seller from the results.
               </p>
+              {listOpen ? (
+                <ul id="seller-results" role="listbox" aria-label="Seller organizations"
+                  style={{ listStyle: "none", padding: 0 }}>
+                  {results.map((item, index) => (
+                    <li key={item.id} id={`seller-option-${index}`} role="option"
+                      aria-selected={activeIndex === index}
+                      style={{ padding: 10, cursor: "pointer",
+                        background: activeIndex === index ? "var(--accent-soft)" : undefined }}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectSeller(item)}>
+                      {item.legal_name} <span className="badge">{item.country_code}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {searchState.status === "loading" ? <p role="status">Searching organizations...</p> : null}
+              {searchState.status === "ready" && results.length === 0 ? (
+                <p role="status">No organizations found. Try another company name.</p>
+              ) : null}
+              {searchState.status === "error" ? (
+                <div role="alert">
+                  <p>{searchState.message}</p>
+                  <button type="button" className="button" disabled={submitting} onClick={() => {
+                    setSearchState({ status: "loading" });
+                    setSearchRetry((count) => count + 1);
+                    setSearchOpen(true);
+                  }}>Retry search</button>
+                </div>
+              ) : null}
               {fieldErrors.seller ? (
-                <p className="field-error" role="alert">
+                <p id="seller-error" className="field-error" role="alert">
                   {fieldErrors.seller}
                 </p>
               ) : null}

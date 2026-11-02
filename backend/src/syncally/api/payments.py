@@ -29,7 +29,10 @@ from syncally.domain.organizations.organization import OrganizationCapability
 from syncally.domain.payments.intent import PaymentExecutionMode, PaymentIntentStatus
 from syncally.domain.shared.money import Money, canonical_decimal
 from syncally.infrastructure.database import get_db
-from syncally.infrastructure.identity import verify_member_capability
+from syncally.infrastructure.identity import (
+    repair_organization_finance_membership,
+    verify_member_capability,
+)
 from syncally.infrastructure.models import PaymentIntent, PaymentMilestone
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 from syncally.infrastructure.repositories.payments import (
@@ -106,6 +109,25 @@ def preview_payment_route(deal_id: UUID, actor: ActorContext = Depends(get_curre
         deal = get_deal(actor, deal_id, deal_repository)
         if not SqlAlchemyPaymentIntentRepository(db).is_active_seller_member(deal.seller_organization_id, actor.user_id):
             raise HTTPException(status_code=403, detail="Only an active seller member can preview payment authorization")
+        try:
+            verify_member_capability(
+                db,
+                deal.seller_organization_id,
+                actor.user_id,
+                OrganizationCapability.FINANCE,
+                for_update=False,
+            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_403_FORBIDDEN and "FINANCE" in str(exc.detail):
+                repaired = repair_organization_finance_membership(
+                    db, deal.seller_organization_id, actor.user_id
+                )
+                if repaired:
+                    db.commit()
+                else:
+                    raise
+            else:
+                raise
         agreement = get_current_agreement(actor, deal_id, deal_repository, SqlAlchemyAgreementRepository(db))
         if agreement.status is not AgreementStatus.COMMITTED:
             raise HTTPException(status_code=409, detail="The agreement must be committed before payment preview")
@@ -136,13 +158,23 @@ def authorize_payment_route(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an active seller member can authorize a payment request",
             )
-        verify_member_capability(
-            db,
-            deal.seller_organization_id,
-            actor.user_id,
-            OrganizationCapability.FINANCE,
-            for_update=True,
-        )
+        try:
+            verify_member_capability(
+                db,
+                deal.seller_organization_id,
+                actor.user_id,
+                OrganizationCapability.FINANCE,
+                for_update=True,
+            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_403_FORBIDDEN and "FINANCE" in str(exc.detail):
+                repaired = repair_organization_finance_membership(
+                    db, deal.seller_organization_id, actor.user_id
+                )
+                if not repaired:
+                    raise
+            else:
+                raise
         agreement = get_current_agreement(
             actor,
             deal_id,

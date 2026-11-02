@@ -2,7 +2,7 @@
 
 import unittest
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select
@@ -10,9 +10,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from syncally.api.organizations import (
+    AddOrganizationMemberRequest,
+    CreateOrganizationRequest,
     UpdateMemberPermissionsRequest,
+    _compute_effective_capabilities,
+    add_organization_member,
+    create_organization,
     list_my_organizations,
     list_organization_members,
+    repair_organization_finance_route,
     revoke_organization_member,
     update_member_permissions,
 )
@@ -20,6 +26,7 @@ from syncally.application.identity import ActorContext
 from syncally.domain.organizations.organization import (
     OrganizationCapability,
     OrganizationMemberRole,
+    resolve_effective_capabilities,
 )
 from syncally.domain.organizations.organization import (
     OrganizationMember as DomainOrganizationMember,
@@ -139,6 +146,98 @@ class OrganizationPermissionsTests(unittest.TestCase):
                 created_at=now,
                 capabilities={"INVALID_CAP"},  # type: ignore[arg-type]
             )
+
+    def test_resolve_effective_capabilities_matrix_and_unrecognized_roles(self) -> None:
+        """Verify centralized capability resolution and strict role validation."""
+        # Valid ADMIN role defaults
+        admin_caps = resolve_effective_capabilities(OrganizationMemberRole.ADMIN)
+        self.assertEqual(
+            admin_caps,
+            frozenset({
+                OrganizationCapability.ADMINISTRATION,
+                OrganizationCapability.DRAFTING,
+                OrganizationCapability.AGREEMENT_APPROVAL,
+            }),
+        )
+
+        # Valid string "ADMIN" role with assigned capability
+        admin_str_caps = resolve_effective_capabilities("ADMIN", ["FINANCE"])
+        self.assertEqual(
+            admin_str_caps,
+            frozenset({
+                OrganizationCapability.ADMINISTRATION,
+                OrganizationCapability.DRAFTING,
+                OrganizationCapability.AGREEMENT_APPROVAL,
+                OrganizationCapability.FINANCE,
+            }),
+        )
+
+        # Valid MEMBER role defaults
+        member_caps = resolve_effective_capabilities(OrganizationMemberRole.MEMBER)
+        self.assertEqual(member_caps, frozenset({OrganizationCapability.DRAFTING}))
+
+        # Valid string "MEMBER" role with assigned capability and duplicate/invalid items
+        member_str_caps = resolve_effective_capabilities(
+            "MEMBER", ["FINANCE", "NOT_A_CAP", OrganizationCapability.FULFILLMENT]
+        )
+        self.assertEqual(
+            member_str_caps,
+            frozenset({
+                OrganizationCapability.DRAFTING,
+                OrganizationCapability.FINANCE,
+                OrganizationCapability.FULFILLMENT,
+            }),
+        )
+
+        # Unrecognized roles return empty frozenset without including assigned capabilities
+        for invalid_role in ("UNKNOWN", "OBSERVER", "AUDITOR", "", None, 12345):
+            res = resolve_effective_capabilities(
+                invalid_role,  # type: ignore[arg-type]
+                ["FINANCE", "ADMINISTRATION", OrganizationCapability.FULFILLMENT],
+            )
+            self.assertEqual(
+                res,
+                frozenset(),
+                f"Expected empty frozenset for invalid role {invalid_role!r}, got {res!r}",
+            )
+
+    def test_compute_effective_capabilities_helper(self) -> None:
+        """Verify _compute_effective_capabilities returns sorted string lists and rejects unknown roles."""
+        self.assertEqual(
+            _compute_effective_capabilities("ADMIN", None),
+            ["ADMINISTRATION", "AGREEMENT_APPROVAL", "DRAFTING"],
+        )
+        self.assertEqual(
+            _compute_effective_capabilities("MEMBER", ["FINANCE"]),
+            ["DRAFTING", "FINANCE"],
+        )
+        self.assertEqual(
+            _compute_effective_capabilities("INVALID_ROLE", ["FINANCE", "ADMINISTRATION"]),
+            [],
+        )
+
+    def test_resolve_actor_and_verify_member_capability_with_unrecognized_role(self) -> None:
+        """Verify unrecognized roles in DB are denied all capabilities and access."""
+        org = self._organization("Bogus Org")
+        user = self._user("bogus@example.com")
+        self._member(org, user, role="CORRUPTED_ROLE", capabilities=["FINANCE", "ADMINISTRATION"])
+
+        actor = resolve_actor(self.db, user.id)
+        self.assertIsNotNone(actor)
+        assert actor is not None
+        self.assertEqual(actor.capabilities_by_organization.get(org.id), frozenset())
+        self.assertNotIn(org.id, actor.roles_by_organization)
+        self.assertFalse(actor.has_capability(org.id, OrganizationCapability.FINANCE))
+        self.assertFalse(actor.has_capability(org.id, OrganizationCapability.DRAFTING))
+
+        # verify_member_capability rejects with 403
+        with self.assertRaises(HTTPException) as ctx:
+            verify_member_capability(self.db, org.id, user.id, OrganizationCapability.DRAFTING)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+        with self.assertRaises(HTTPException) as ctx:
+            verify_member_capability(self.db, org.id, user.id, OrganizationCapability.FINANCE)
+        self.assertEqual(ctx.exception.status_code, 403)
 
     def test_list_members_requires_membership(self) -> None:
         """Gate 2: Cross-tenant member read rejection."""
@@ -421,3 +520,140 @@ class OrganizationPermissionsTests(unittest.TestCase):
             OrganizationCapability.FINANCE.value,
         ])
         self.assertEqual(my_orgs[0]["capabilities"], expected)
+
+    def test_revocation_clears_capabilities_and_reactivation_resets_grants(self) -> None:
+        """Verify revoking a member clears capabilities and incrementing version; reactivation resets grants."""
+        org = self._organization("Reactivation Corp")
+        admin = self._user("admin@reactivation.com")
+        target = self._user("target@reactivation.com")
+
+        self._member(org, admin, role="ADMIN")
+        target_row = self._member(org, target, role="MEMBER", capabilities=["FINANCE", "AGREEMENT_APPROVAL"])
+        self.assertEqual(target_row.version, 1)
+        self.assertEqual(target_row.capabilities, ["FINANCE", "AGREEMENT_APPROVAL"])
+
+        admin_actor = self._actor(admin)
+
+        # 1. Revoke membership
+        revoke_organization_member(
+            organization_id=org.id,
+            user_id=target.id,
+            actor=admin_actor,
+            db=self.db,
+        )
+
+        self.db.refresh(target_row)
+        self.assertEqual(target_row.status, "REVOKED")
+        self.assertEqual(target_row.capabilities, [])
+        self.assertEqual(target_row.version, 2)
+
+        # 2. Reactivate membership via add_organization_member
+        add_result = add_organization_member(
+            organization_id=org.id,
+            payload=AddOrganizationMemberRequest(email=target.email),
+            actor=admin_actor,
+            db=self.db,
+        )
+        self.assertEqual(add_result["role"], "MEMBER")
+
+        self.db.refresh(target_row)
+        self.assertEqual(target_row.status, "ACTIVE")
+        self.assertEqual(target_row.role, "MEMBER")
+        self.assertEqual(target_row.capabilities, [])
+        self.assertEqual(target_row.version, 3)
+
+        # Target now has ONLY default MEMBER capabilities (DRAFTING) - prior grants are completely cleared!
+        resolved = resolve_actor(self.db, target.id)
+        self.assertEqual(
+            resolved.capabilities_by_organization[org.id],
+            frozenset({OrganizationCapability.DRAFTING}),
+        )
+
+    def test_repair_organization_finance_membership_supported_way(self) -> None:
+        """Provide a supported way for existing organizations to repair finance membership."""
+        org = self._organization("Repair Corp")
+        admin = self._user("admin@repair.com")
+        member = self._user("member@repair.com")
+
+        # Admin created with NO capabilities (legacy/existing state)
+        admin_row = self._member(org, admin, role="ADMIN", capabilities=[])
+        self._member(org, member, role="MEMBER", capabilities=[])
+        self.assertEqual(admin_row.capabilities, [])
+        self.assertEqual(admin_row.version, 1)
+
+        admin_actor = self._actor(admin)
+        member_actor = self._actor(member)
+
+        # 1. Non-admin cannot repair finance (403)
+        with self.assertRaises(HTTPException) as exc:
+            repair_organization_finance_route(
+                organization_id=org.id,
+                actor=member_actor,
+                db=self.db,
+            )
+        self.assertEqual(exc.exception.status_code, 403)
+
+        # 2. General self-modification via PATCH remains strictly forbidden (403)
+        with self.assertRaises(HTTPException) as exc:
+            update_member_permissions(
+                organization_id=org.id,
+                user_id=admin.id,
+                payload=UpdateMemberPermissionsRequest(expected_version=1, capabilities=["FINANCE"]),
+                actor=admin_actor,
+                db=self.db,
+            )
+        self.assertEqual(exc.exception.status_code, 403)
+        self.assertIn("Cannot modify your own", exc.exception.detail)
+
+        # 3. Admin repairs finance membership via supported route
+        repair_res = repair_organization_finance_route(
+            organization_id=org.id,
+            actor=admin_actor,
+            db=self.db,
+        )
+        self.assertEqual(repair_res["status"], "repaired")
+
+        self.db.refresh(admin_row)
+        self.assertEqual(admin_row.capabilities, ["FINANCE"])
+        self.assertEqual(admin_row.version, 2)
+
+        # Verify durable audit event was recorded
+        audit = self.db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_type == "member.finance_repaired",
+                AuditEvent.aggregate_id == admin_row.id,
+            )
+        )
+        self.assertIsNotNone(audit)
+
+        # 4. Attempting to repair again when organization ALREADY has finance member returns 409 Conflict
+        with self.assertRaises(HTTPException) as exc:
+            repair_organization_finance_route(
+                organization_id=org.id,
+                actor=admin_actor,
+                db=self.db,
+            )
+        self.assertEqual(exc.exception.status_code, 409)
+
+    def test_create_organization_provisions_finance_for_creator(self) -> None:
+        """Onboarding creates organization and provisions FINANCE for initial supported actor."""
+        creator = self._user("founder@startup.com")
+        actor = self._actor(creator)
+
+        result = create_organization(
+            payload=CreateOrganizationRequest(legal_name="Startup Inc", country_code="US"),
+            actor=actor,
+            db=self.db,
+        )
+        created_org_id = UUID(result["id"])
+
+        member = self.db.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == created_org_id,
+                OrganizationMember.user_id == creator.id,
+            )
+        )
+        self.assertIsNotNone(member)
+        assert member is not None
+        self.assertEqual(member.role, "ADMIN")
+        self.assertEqual(member.capabilities, ["FINANCE"])

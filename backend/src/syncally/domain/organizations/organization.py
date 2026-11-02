@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -39,6 +40,57 @@ class OrganizationMemberStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
     REVOKED = "REVOKED"
+
+
+def resolve_effective_capabilities(
+    role: OrganizationMemberRole | str | None,
+    assigned_capabilities: Iterable[OrganizationCapability | str] | None = None,
+) -> frozenset[OrganizationCapability]:
+    """Resolve effective capabilities from member role and explicit assignments.
+
+    Validates member role before combining capabilities: unrecognized roles return an
+    empty frozenset without including assigned capabilities.
+    Valid ADMIN role grants ADMINISTRATION, DRAFTING, AGREEMENT_APPROVAL defaults.
+    Valid MEMBER role grants DRAFTING default.
+    """
+    if role is None:
+        return frozenset()
+
+    member_role: OrganizationMemberRole
+    if isinstance(role, OrganizationMemberRole):
+        member_role = role
+    elif isinstance(role, str):
+        try:
+            member_role = OrganizationMemberRole(role)
+        except ValueError:
+            return frozenset()
+    else:
+        return frozenset()
+
+    defaults: frozenset[OrganizationCapability]
+    if member_role is OrganizationMemberRole.ADMIN:
+        defaults = frozenset({
+            OrganizationCapability.ADMINISTRATION,
+            OrganizationCapability.DRAFTING,
+            OrganizationCapability.AGREEMENT_APPROVAL,
+        })
+    elif member_role is OrganizationMemberRole.MEMBER:
+        defaults = frozenset({OrganizationCapability.DRAFTING})
+    else:
+        return frozenset()
+
+    valid_assigned: set[OrganizationCapability] = set()
+    if assigned_capabilities is not None:
+        for item in assigned_capabilities:
+            if isinstance(item, OrganizationCapability):
+                valid_assigned.add(item)
+            elif isinstance(item, str):
+                try:
+                    valid_assigned.add(OrganizationCapability(item))
+                except ValueError:
+                    pass
+
+    return defaults | frozenset(valid_assigned)
 
 
 class OrganizationVerificationStatus(StrEnum):
@@ -254,16 +306,7 @@ class OrganizationMember:
 
     @property
     def effective_capabilities(self) -> frozenset[OrganizationCapability]:
-        defaults: frozenset[OrganizationCapability]
-        if self.role == OrganizationMemberRole.ADMIN:
-            defaults = frozenset({
-                OrganizationCapability.ADMINISTRATION,
-                OrganizationCapability.DRAFTING,
-                OrganizationCapability.AGREEMENT_APPROVAL,
-            })
-        else:
-            defaults = frozenset({OrganizationCapability.DRAFTING})
-        return defaults | self.capabilities
+        return resolve_effective_capabilities(self.role, self.capabilities)
 
     def has_capability(self, capability: OrganizationCapability | str) -> bool:
         if isinstance(capability, str):

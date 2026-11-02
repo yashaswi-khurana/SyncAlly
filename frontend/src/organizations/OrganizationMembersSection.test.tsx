@@ -240,4 +240,59 @@ describe("OrganizationMembersSection", () => {
 
     expect(await screen.findByText("Revoked membership for colleague@test.com.")).toBeInTheDocument();
   });
+
+  it("decodes user ID from a base64url token payload containing '-' and '_' to disable self-modification", async () => {
+    // Payload json: {"sub":"user-base64url-9999","a":"x>","b":" ?"}
+    // Base64: eyJzdWIiOiJ1c2VyLWJhc2U2NHVybC05OTk5IiwiYSI6Ing+IiwiYiI6IiA/In0=
+    // Base64url contains both '-' and '_':
+    const b64urlPayload = "eyJzdWIiOiJ1c2VyLWJhc2U2NHVybC05OTk5IiwiYSI6Ing-IiwiYiI6IiA_In0";
+    expect(b64urlPayload).toContain("-");
+    expect(b64urlPayload).toContain("_");
+
+    const base64urlUserId = "user-base64url-9999";
+    setAccessToken(`header.${b64urlPayload}.sig`);
+
+    const members: OrganizationMember[] = [
+      {
+        user_id: base64urlUserId,
+        email: "base64url@test.com",
+        display_name: "Self User",
+        role: "ADMIN",
+        status: "ACTIVE",
+        capabilities: ["ADMINISTRATION", "DRAFTING", "AGREEMENT_APPROVAL"],
+        version: 1,
+      },
+    ];
+    mockedListMembers.mockResolvedValue(members);
+
+    render(<OrganizationMembersSection organization={testOrg()} />);
+
+    expect(await screen.findByText("Self User")).toBeInTheDocument();
+    expect(screen.getByText("You")).toBeInTheDocument();
+    expect(screen.getByText("Cannot self-modify")).toBeInTheDocument();
+    expect(screen.queryByText("Edit permissions")).not.toBeInTheDocument();
+  });
+
+  it("handles missing or malformed token payloads without crashing", async () => {
+    setAccessToken("header.malformed-base64-or-json@@@.sig");
+
+    const members: OrganizationMember[] = [
+      {
+        user_id: OTHER_USER_ID,
+        email: "other@test.com",
+        display_name: "Other User",
+        role: "MEMBER",
+        status: "ACTIVE",
+        capabilities: ["DRAFTING"],
+        version: 1,
+      },
+    ];
+    mockedListMembers.mockResolvedValue(members);
+
+    render(<OrganizationMembersSection organization={testOrg()} />);
+
+    expect(await screen.findByText("Other User")).toBeInTheDocument();
+    expect(screen.queryByText("You")).not.toBeInTheDocument();
+    expect(screen.getByText("Edit permissions")).toBeInTheDocument();
+  });
 });

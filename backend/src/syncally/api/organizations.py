@@ -27,6 +27,7 @@ from syncally.domain.organizations.organization import (
     ContactVisibility,
     OrganizationCapability,
     OrganizationVerificationStatus,
+    resolve_effective_capabilities,
 )
 from syncally.domain.organizations.organization import (
     OrganizationContact as DomainOrganizationContact,
@@ -39,6 +40,7 @@ from syncally.domain.shared.identifiers import DealId, OrganizationId, UserId
 from syncally.infrastructure.counterparty_onboarding import lock_deal
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
+from syncally.infrastructure.identity import repair_organization_finance_membership
 from syncally.infrastructure.models import (
     AgreementVersion,
     AuditEvent,
@@ -401,6 +403,7 @@ def create_organization(
             user_id=actor.user_id,
             role="ADMIN",
             status="ACTIVE",
+            capabilities=["FINANCE"],
         )
     )
     db.commit()
@@ -413,16 +416,7 @@ def create_organization(
 
 
 def _compute_effective_capabilities(role: str, assigned: list[str] | None) -> list[str]:
-    assigned_set = set(assigned or [])
-    if role == "ADMIN":
-        defaults = {
-            OrganizationCapability.ADMINISTRATION.value,
-            OrganizationCapability.DRAFTING.value,
-            OrganizationCapability.AGREEMENT_APPROVAL.value,
-        }
-    else:
-        defaults = {OrganizationCapability.DRAFTING.value}
-    return sorted(defaults | assigned_set)
+    return sorted(cap.value for cap in resolve_effective_capabilities(role, assigned))
 
 
 @org_router.get("")
@@ -804,6 +798,8 @@ def add_organization_member(
             raise HTTPException(status_code=409, detail="User already has an active membership")
         existing_membership.role = "MEMBER"
         existing_membership.status = "ACTIVE"
+        existing_membership.capabilities = []
+        existing_membership.version = existing_membership.version + 1
         db.commit()
         return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role}
 
@@ -1034,6 +1030,7 @@ def revoke_organization_member(
             )
 
     target.status = "REVOKED"
+    target.capabilities = []
     target.version = target.version + 1
 
     now = datetime.now(UTC)
@@ -1053,6 +1050,28 @@ def revoke_organization_member(
         )
     )
     db.commit()
+
+
+@org_router.post("/{organization_id}/repair-finance")
+def repair_organization_finance_route(
+    organization_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Provide a supported way for existing organizations to repair finance membership.
+
+    Preserves the self-modification restriction on general member editing and avoids blanket admin
+    grants by only provisioning FINANCE if the organization currently has zero members with FINANCE capability.
+    """
+    _active_admin_membership(db, organization_id, actor.user_id)
+    repaired = repair_organization_finance_membership(db, organization_id, actor.user_id)
+    if not repaired:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organization already has an active finance member or cannot be repaired",
+        )
+    db.commit()
+    return {"status": "repaired", "organization_id": str(organization_id)}
 
 
 def _create_invitation_token(
@@ -1479,6 +1498,7 @@ def _accept_invitation(
                 user_id=user.id,
                 role="ADMIN",
                 status="ACTIVE",
+                capabilities=["FINANCE"],
             )
         )
         effective_org = recipient_org
@@ -1499,6 +1519,8 @@ def _accept_invitation(
                 )
             existing.role = role
             existing.status = "ACTIVE"
+            existing.capabilities = []
+            existing.version = existing.version + 1
         else:
             db.add(
                 OrganizationMember(

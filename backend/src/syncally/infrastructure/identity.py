@@ -10,6 +10,7 @@ from syncally.application.identity import ActorContext
 from syncally.domain.organizations.organization import (
     OrganizationCapability,
     OrganizationMemberRole,
+    resolve_effective_capabilities,
 )
 from syncally.infrastructure.models import Organization, OrganizationMember, User
 
@@ -40,28 +41,13 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
     for org_id, role_str, caps_raw in memberships:
         try:
             role = OrganizationMemberRole(role_str)
+            roles_by_organization[org_id] = role
         except ValueError:
-            role = OrganizationMemberRole.MEMBER
-        roles_by_organization[org_id] = role
+            pass
 
-        assigned_caps: set[OrganizationCapability] = set()
-        for item in (caps_raw or []):
-            try:
-                assigned_caps.add(OrganizationCapability(item))
-            except ValueError:
-                pass
-
-        defaults: frozenset[OrganizationCapability]
-        if role == OrganizationMemberRole.ADMIN:
-            defaults = frozenset({
-                OrganizationCapability.ADMINISTRATION,
-                OrganizationCapability.DRAFTING,
-                OrganizationCapability.AGREEMENT_APPROVAL,
-            })
-        else:
-            defaults = frozenset({OrganizationCapability.DRAFTING})
-
-        capabilities_by_organization[org_id] = defaults | frozenset(assigned_caps)
+        capabilities_by_organization[org_id] = resolve_effective_capabilities(
+            role_str, caps_raw
+        )
 
     return ActorContext(
         user_id=user_id,
@@ -101,29 +87,7 @@ def verify_member_capability(
             detail="Active organization membership required",
         )
 
-    try:
-        role = OrganizationMemberRole(member.role)
-    except ValueError:
-        role = OrganizationMemberRole.MEMBER
-
-    assigned_caps: set[OrganizationCapability] = set()
-    for item in (member.capabilities or []):
-        try:
-            assigned_caps.add(OrganizationCapability(item))
-        except ValueError:
-            pass
-
-    defaults: frozenset[OrganizationCapability]
-    if role == OrganizationMemberRole.ADMIN:
-        defaults = frozenset({
-            OrganizationCapability.ADMINISTRATION,
-            OrganizationCapability.DRAFTING,
-            OrganizationCapability.AGREEMENT_APPROVAL,
-        })
-    else:
-        defaults = frozenset({OrganizationCapability.DRAFTING})
-
-    effective_capabilities = defaults | frozenset(assigned_caps)
+    effective_capabilities = resolve_effective_capabilities(member.role, member.capabilities)
     if required_capability not in effective_capabilities:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -131,3 +95,69 @@ def verify_member_capability(
         )
 
     return member
+
+
+def repair_organization_finance_membership(
+    db: Session,
+    organization_id: UUID,
+    user_id: UUID,
+) -> bool:
+    """Repair finance authority for an active administrator when an organization has no finance members.
+
+    Preserves the self-modification restriction on general member editing and avoids blanket admin
+    grants by only provisioning FINANCE if the organization currently has zero members with FINANCE capability.
+    """
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from syncally.infrastructure.models import AuditEvent
+
+    members = db.scalars(
+        select(OrganizationMember)
+        .where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.status == "ACTIVE",
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+
+    # Check if ANY active member already has FINANCE capability
+    has_any_finance = any(
+        OrganizationCapability.FINANCE in resolve_effective_capabilities(m.role, m.capabilities)
+        for m in members
+    )
+    if has_any_finance:
+        return False
+
+    # Find the target administrator
+    admin_member = next(
+        (m for m in members if m.user_id == user_id and m.role == OrganizationMemberRole.ADMIN.value),
+        None,
+    )
+    if admin_member is None:
+        return False
+
+    current_caps = list(admin_member.capabilities or [])
+    if OrganizationCapability.FINANCE.value not in current_caps:
+        current_caps.append(OrganizationCapability.FINANCE.value)
+    admin_member.capabilities = current_caps
+    admin_member.version = admin_member.version + 1
+
+    db.add(
+        AuditEvent(
+            id=uuid4(),
+            aggregate_type="organization_member",
+            aggregate_id=admin_member.id,
+            event_type="member.finance_repaired",
+            actor_type="USER",
+            actor_id=str(user_id),
+            occurred_at=datetime.now(UTC),
+            payload={
+                "organization_id": str(organization_id),
+                "reason": "initial_finance_authority_repair",
+            },
+        )
+    )
+    db.flush()
+    return True

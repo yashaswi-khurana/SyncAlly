@@ -140,11 +140,14 @@ def _seed_identities(
                     user_id=user.id,
                     role="ADMIN",
                     status="ACTIVE",
+                    capabilities=["FINANCE"],
                 )
             )
         else:
             membership.role = "ADMIN"
             membership.status = "ACTIVE"
+            if "FINANCE" not in (membership.capabilities or []):
+                membership.capabilities = list(set(membership.capabilities or []) | {"FINANCE"})
         users.append(user)
         organizations.append(organization)
     db.flush()

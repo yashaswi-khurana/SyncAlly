@@ -25,7 +25,9 @@ from syncally.config import settings
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.organizations.organization import (
     ContactVisibility,
+    OrganizationCapability,
     OrganizationVerificationStatus,
+    resolve_effective_capabilities,
 )
 from syncally.domain.organizations.organization import (
     OrganizationContact as DomainOrganizationContact,
@@ -38,6 +40,7 @@ from syncally.domain.shared.identifiers import DealId, OrganizationId, UserId
 from syncally.infrastructure.counterparty_onboarding import lock_deal
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
+from syncally.infrastructure.identity import repair_organization_finance_membership
 from syncally.infrastructure.models import (
     AgreementVersion,
     AuditEvent,
@@ -95,6 +98,23 @@ class CreateOrganizationRequest(BaseModel):
 
 class AddOrganizationMemberRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
+
+
+class OrganizationMemberResponse(BaseModel):
+    user_id: UUID
+    email: str
+    display_name: str | None = None
+    role: str
+    status: str
+    capabilities: list[str] = Field(default_factory=list)
+    assigned_capabilities: list[str] = Field(default_factory=list)
+    version: int
+
+
+class UpdateMemberPermissionsRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    role: str | None = Field(default=None, pattern=r"^(ADMIN|MEMBER)$")
+    capabilities: list[str] | None = None
 
 
 class CreateInvitationRequest(BaseModel):
@@ -383,6 +403,7 @@ def create_organization(
             user_id=actor.user_id,
             role="ADMIN",
             status="ACTIVE",
+            capabilities=["FINANCE"],
         )
     )
     db.commit()
@@ -394,11 +415,15 @@ def create_organization(
     }
 
 
+def _compute_effective_capabilities(role: str, assigned: list[str] | None) -> list[str]:
+    return sorted(cap.value for cap in resolve_effective_capabilities(role, assigned))
+
+
 @org_router.get("")
 def list_my_organizations(
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """List active organizations and roles resolved from database membership."""
     rows = db.execute(
         select(Organization, OrganizationMember.role)
@@ -419,6 +444,9 @@ def list_my_organizations(
             "legal_name": organization.legal_name,
             "country_code": organization.country_code,
             "role": role,
+            "capabilities": sorted([
+                c.value for c in actor.capabilities_by_organization.get(organization.id, frozenset())
+            ]),
         }
         for organization, role in rows
     ]
@@ -770,6 +798,8 @@ def add_organization_member(
             raise HTTPException(status_code=409, detail="User already has an active membership")
         existing_membership.role = "MEMBER"
         existing_membership.status = "ACTIVE"
+        existing_membership.capabilities = []
+        existing_membership.version = existing_membership.version + 1
         db.commit()
         return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role}
 
@@ -789,6 +819,259 @@ def add_organization_member(
         raise
 
     return {"user_id": str(user.id), "email": user.email, "role": membership.role}
+
+
+@org_router.get(
+    "/{organization_id}/members",
+    response_model=list[OrganizationMemberResponse],
+)
+def list_organization_members(
+    organization_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """List active members of an organization with effective capabilities."""
+    if organization_id not in actor.organization_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active organization membership required",
+        )
+
+    rows = db.execute(
+        select(OrganizationMember, User.email, User.display_name)
+        .join(User, User.id == OrganizationMember.user_id)
+        .where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.status == "ACTIVE",
+            User.status == "ACTIVE",
+        )
+        .order_by(OrganizationMember.created_at, OrganizationMember.user_id)
+    ).all()
+
+    return [
+        {
+            "user_id": member.user_id,
+            "email": email,
+            "display_name": display_name,
+            "role": member.role,
+            "status": member.status,
+            "capabilities": _compute_effective_capabilities(member.role, member.capabilities),
+            "assigned_capabilities": sorted(member.capabilities or []),
+            "version": member.version,
+        }
+        for member, email, display_name in rows
+    ]
+
+
+@org_router.patch(
+    "/{organization_id}/members/{user_id}",
+    response_model=OrganizationMemberResponse,
+)
+def update_member_permissions(
+    organization_id: UUID,
+    user_id: UUID,
+    payload: UpdateMemberPermissionsRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Update an organization member's role and capabilities with optimistic locking."""
+    _active_admin_membership(db, organization_id, actor.user_id)
+
+    if user_id == actor.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot modify your own membership role or capabilities",
+        )
+
+    target = db.scalar(
+        select(OrganizationMember)
+        .where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.user_id == user_id,
+            OrganizationMember.status == "ACTIVE",
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Member not found in organization",
+        )
+
+    user = db.scalar(
+        select(User).where(User.id == target.user_id, User.status == "ACTIVE")
+    )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active user not found",
+        )
+
+    if target.version != payload.expected_version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Member permissions conflict; please refresh",
+        )
+
+    if target.role == "ADMIN" and payload.role == "MEMBER":
+        admin_count = db.scalar(
+            select(func.count(OrganizationMember.id))
+            .where(
+                OrganizationMember.organization_id == organization_id,
+                OrganizationMember.role == "ADMIN",
+                OrganizationMember.status == "ACTIVE",
+            )
+        )
+        if (admin_count or 0) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot demote the last remaining admin of the organization",
+            )
+
+    if payload.capabilities is not None:
+        valid_caps = {c.value for c in OrganizationCapability}
+        cleaned_caps: list[str] = []
+        for cap in payload.capabilities:
+            if cap not in valid_caps:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Invalid capability '{cap}'; valid: {sorted(valid_caps)}",
+                )
+            cleaned_caps.append(cap)
+        target.capabilities = sorted(set(cleaned_caps))
+
+    if payload.role is not None:
+        target.role = payload.role
+
+    target.version = target.version + 1
+
+    now = datetime.now(UTC)
+    db.add(
+        AuditEvent(
+            id=uuid4(),
+            aggregate_type="organization_member",
+            aggregate_id=target.id,
+            event_type="member.permissions_updated",
+            actor_type="USER",
+            actor_id=str(actor.user_id),
+            occurred_at=now,
+            payload={
+                "organization_id": str(organization_id),
+                "target_user_id": str(user_id),
+                "role": target.role,
+                "capabilities": target.capabilities,
+                "version": target.version,
+            },
+        )
+    )
+    db.commit()
+
+    return {
+        "user_id": target.user_id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "role": target.role,
+        "status": target.status,
+        "capabilities": _compute_effective_capabilities(target.role, target.capabilities),
+        "assigned_capabilities": sorted(target.capabilities or []),
+        "version": target.version,
+    }
+
+
+@org_router.delete(
+    "/{organization_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def revoke_organization_member(
+    organization_id: UUID,
+    user_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> None:
+    """Revoke an active member from an organization."""
+    _active_admin_membership(db, organization_id, actor.user_id)
+
+    if user_id == actor.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot revoke your own membership",
+        )
+
+    target = db.scalar(
+        select(OrganizationMember)
+        .where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.user_id == user_id,
+            OrganizationMember.status == "ACTIVE",
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Member not found in organization",
+        )
+
+    if target.role == "ADMIN":
+        admin_count = db.scalar(
+            select(func.count(OrganizationMember.id))
+            .where(
+                OrganizationMember.organization_id == organization_id,
+                OrganizationMember.role == "ADMIN",
+                OrganizationMember.status == "ACTIVE",
+            )
+        )
+        if (admin_count or 0) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot revoke the last remaining admin of the organization",
+            )
+
+    target.status = "REVOKED"
+    target.capabilities = []
+    target.version = target.version + 1
+
+    now = datetime.now(UTC)
+    db.add(
+        AuditEvent(
+            id=uuid4(),
+            aggregate_type="organization_member",
+            aggregate_id=target.id,
+            event_type="member.revoked",
+            actor_type="USER",
+            actor_id=str(actor.user_id),
+            occurred_at=now,
+            payload={
+                "organization_id": str(organization_id),
+                "target_user_id": str(user_id),
+            },
+        )
+    )
+    db.commit()
+
+
+@org_router.post("/{organization_id}/repair-finance")
+def repair_organization_finance_route(
+    organization_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Provide a supported way for existing organizations to repair finance membership.
+
+    Preserves the self-modification restriction on general member editing and avoids blanket admin
+    grants by only provisioning FINANCE if the organization currently has zero members with FINANCE capability.
+    """
+    _active_admin_membership(db, organization_id, actor.user_id)
+    repaired = repair_organization_finance_membership(db, organization_id, actor.user_id)
+    if not repaired:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organization already has an active finance member or cannot be repaired",
+        )
+    db.commit()
+    return {"status": "repaired", "organization_id": str(organization_id)}
 
 
 def _create_invitation_token(
@@ -1215,6 +1498,7 @@ def _accept_invitation(
                 user_id=user.id,
                 role="ADMIN",
                 status="ACTIVE",
+                capabilities=["FINANCE"],
             )
         )
         effective_org = recipient_org
@@ -1235,6 +1519,8 @@ def _accept_invitation(
                 )
             existing.role = role
             existing.status = "ACTIVE"
+            existing.capabilities = []
+            existing.version = existing.version + 1
         else:
             db.add(
                 OrganizationMember(

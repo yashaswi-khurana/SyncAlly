@@ -71,6 +71,8 @@ class OrganizationMember(TimestampMixin, Base):
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="MEMBER")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    capabilities: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, server_default="[]", default=list)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
 
 
 class RefreshToken(Base):

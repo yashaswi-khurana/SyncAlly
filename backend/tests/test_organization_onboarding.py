@@ -139,6 +139,7 @@ class OrganizationOnboardingTests(unittest.TestCase):
                     "legal_name": organization.legal_name,
                     "country_code": organization.country_code,
                     "role": "MEMBER",
+                    "capabilities": ["DRAFTING"],
                 }
             ],
         )
@@ -225,6 +226,8 @@ class OrganizationOnboardingTests(unittest.TestCase):
             user_id=member.id,
             role="ADMIN",
             status="INACTIVE",
+            capabilities=["FINANCE"],
+            version=1,
         )
         self.db.add(old_membership)
         self.db.commit()
@@ -240,6 +243,8 @@ class OrganizationOnboardingTests(unittest.TestCase):
         self.assertEqual(result["role"], "MEMBER")
         self.assertEqual(old_membership.status, "ACTIVE")
         self.assertEqual(old_membership.role, "MEMBER")
+        self.assertEqual(old_membership.capabilities, [])
+        self.assertEqual(old_membership.version, 2)
         self.assertEqual(
             self.db.scalar(
                 select(OrganizationMember).where(

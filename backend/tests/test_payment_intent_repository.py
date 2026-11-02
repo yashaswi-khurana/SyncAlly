@@ -88,8 +88,14 @@ class PaymentIntentRepositoryTests(unittest.TestCase):
         self.session.flush()
         self.session.add_all(
             [
-                OrganizationMember(user_id=buyer_user.id, organization_id=buyer_org.id, status="ACTIVE"),
-                OrganizationMember(user_id=seller_user.id, organization_id=seller_org.id, status="ACTIVE"),
+                OrganizationMember(user_id=buyer_user.id, organization_id=buyer_org.id, status="ACTIVE", role="ADMIN"),
+                OrganizationMember(
+                    user_id=seller_user.id,
+                    organization_id=seller_org.id,
+                    status="ACTIVE",
+                    role="ADMIN",
+                    capabilities=["FINANCE"],
+                ),
             ]
         )
         self.deal = Deal(

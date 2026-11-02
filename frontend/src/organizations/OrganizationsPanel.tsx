@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import { addOrganizationMember, ApiError, createOrganization, listOrganizations } from "../api/client";
 import type { Organization } from "../api/types";
+import OrganizationMembersSection from "./OrganizationMembersSection";
 import OrganizationProfileSection from "./OrganizationProfileSection";
 import Reveal from "../ui/Reveal";
 
@@ -183,6 +184,7 @@ export default function OrganizationsPanel() {
                 {copiedId === organization.id ? "Copied" : "Copy ID"}
               </button>
               <OrganizationProfileSection organization={organization} />
+              <OrganizationMembersSection organization={organization} />
             </li>
           ))}
         </ul>

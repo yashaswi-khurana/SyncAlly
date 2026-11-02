@@ -3,6 +3,7 @@
 from syncally.domain.organizations.organization import (
     ContactVisibility,
     Organization,
+    OrganizationCapability,
     OrganizationContact,
     OrganizationMember,
     OrganizationMemberRole,
@@ -10,11 +11,13 @@ from syncally.domain.organizations.organization import (
     OrganizationProfile,
     OrganizationStatus,
     OrganizationVerificationStatus,
+    resolve_effective_capabilities,
 )
 
 __all__ = [
     "ContactVisibility",
     "Organization",
+    "OrganizationCapability",
     "OrganizationContact",
     "OrganizationMember",
     "OrganizationMemberRole",
@@ -22,4 +25,5 @@ __all__ = [
     "OrganizationProfile",
     "OrganizationStatus",
     "OrganizationVerificationStatus",
+    "resolve_effective_capabilities",
 ]

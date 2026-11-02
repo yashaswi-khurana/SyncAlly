@@ -34,6 +34,7 @@ import type {
   PaymentPreview,
   PaymentStatus,
   ProposalSuggestion,
+  UpdateMemberPermissionsInput,
   UpdateOrganizationProfileInput,
   ReviewedProposalTerms,
   TokenResponse,
@@ -211,6 +212,42 @@ export function addOrganizationMember(
     {
       method: "POST",
       body: JSON.stringify({ email }),
+    },
+  );
+}
+
+export function listOrganizationMembers(
+  organizationId: string,
+  options?: { signal?: AbortSignal },
+): Promise<OrganizationMember[]> {
+  return apiRequest<OrganizationMember[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/members`,
+    { signal: options?.signal },
+  );
+}
+
+export function updateMemberPermissions(
+  organizationId: string,
+  userId: string,
+  payload: UpdateMemberPermissionsInput,
+): Promise<OrganizationMember> {
+  return apiRequest<OrganizationMember>(
+    `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function revokeOrganizationMember(
+  organizationId: string,
+  userId: string,
+): Promise<void> {
+  return apiRequest<void>(
+    `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+    {
+      method: "DELETE",
     },
   );
 }

@@ -49,9 +49,11 @@ from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
 from syncally.domain.agreements.trade_terms import SUPPORTED_DEMO_PAYMENT_TRIGGER
 from syncally.domain.ai.contracts import AIContractError, ProposedTerms
+from syncally.domain.organizations.organization import OrganizationCapability
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.identity import verify_member_capability
 from syncally.infrastructure.repositories import (
     SqlAlchemyAgreementRepository,
     SqlAlchemyDealRepository,
@@ -289,6 +291,8 @@ def read_current_agreement_route(
 
 def _raise_agreement_error(error: Exception) -> NoReturn:
     """Translate agreement application outcomes into the stable HTTP contract."""
+    if isinstance(error, HTTPException):
+        raise error
     if isinstance(error, DealNotFound):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     if isinstance(error, (AgreementNotFound, ProposalNotFound)):
@@ -418,6 +422,14 @@ def _record_decision(
     try:
         deal = get_deal(actor, deal_id, deal_repository)
         organization_id = resolve_party_organization(actor, deal, payload.organization_id)
+        if decision == ApprovalDecision.APPROVE:
+            verify_member_capability(
+                db,
+                organization_id,
+                actor.user_id,
+                OrganizationCapability.AGREEMENT_APPROVAL,
+                for_update=True,
+            )
         approval = record_approval_in_transaction(
             db,
             RecordApprovalCommand(

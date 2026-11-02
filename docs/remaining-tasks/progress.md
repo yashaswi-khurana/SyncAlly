@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; Steps 02–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; Steps 03–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -15,7 +15,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | Step / Document | Hard Dependencies | Execution Status | PLANNER | DEVELOPER | REVIEWER | Repairs | Results / Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [01 Profiles](01-profiles.md) | Existing identity/onboarding | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 112/112 backend org tests pass (6 skip); 370/370 frontend tests pass (+6 F14 profile tests); ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. All 4 profile dimensions, UNVERIFIED immutability, optimistic locking (409), contact privacy isolation, and downgrade guard verified. |
-| [02 Permissions](02-permissions.md) | 01 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
+| [02 Permissions](02-permissions.md) | 01 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 48/48 backend tests pass; 83/83 focused frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Full server capability matrix, safe defaults, no blanket finance/fulfillment, self-escalation (403), last-admin (409), optimistic concurrency (409), commit-time row-lock verification, and migration 0019 downgrade safeguard verified. |
 | [03 Fulfillment](03-fulfillment.md) | 02 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [04 Collection Schema](04-collection-schema.md) | 03 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [05 Collections API UI Docs](05-collections-api-ui-docs.md) | 04 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
@@ -124,4 +124,62 @@ Optional election: elected / explicitly not elected / unknown:
   - N/A for Step 01.
 Completion report / next concrete operator actions:
   - Step 01 Profiles fully implemented, independently reviewed, and verified. Ready for Step 02 Permissions.
+```
+
+## Step 02 Execution Evidence
+
+```text
+UTC timestamp: 2026-11-02T17:01:00Z
+Step / dependency verification / current status: Step 02 Permissions (F15a) / Dependency 01 (Profiles) verified / ACCEPTED
+Role identity / coordination evidence (never pretend):
+  - PLANNER: Read-only Architecture Planner subagent (id: 71c9f016-cd57-42f3-a477-15283c7a0a2e) inspected code/dependencies, formulated capability matrix, hypotheses, and cheap checks.
+  - DEVELOPER: Full-Stack Feature Developer subagent (id: 020c995b-1d9a-4f2a-a23d-9e1482908cc8) implemented Tasks 1-6 across domain, persistence, migration 0019, fresh row-locking verification, and UI.
+  - REVIEWER: Independent Code Reviewer subagent (id: 7bb42e2e-9bfa-4313-88f0-1d308a7b7064) independently audited code, diff, and all gates, reporting zero findings and verdict ACCEPTED.
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch: 129-task-02-permissions---f15a
+  - Migration actual head: 0018_organization_profiles -> 0019_organization_permissions
+  - Inspected: backend/src/syncally/domain/organizations/organization.py:L26-L80, backend/src/syncally/infrastructure/identity.py:L40-L133, backend/src/syncally/api/organizations.py:L820-L1050, frontend/src/organizations/OrganizationMembersSection.tsx:L1-L450
+Hypothesis / cheapest discriminating check:
+  - Server capability matrix enforcement: ADMIN safe default grants {ADMINISTRATION, DRAFTING, AGREEMENT_APPROVAL} with strictly NO blanket FINANCE or FULFILLMENT. MEMBER safe default grants {DRAFTING}.
+  - Fresh commit-time row-lock verification: stale actor tokens / revoked memberships rejected with HTTP 403 Forbidden under active database transaction before aggregate modification.
+  - Self-escalation protection (403) and last-administrator protection (409) with optimistic concurrency control on expected_version (409).
+  - Cheapest checks: python -m unittest tests/test_organization_permissions.py && npm test -- src/organizations/OrganizationMembersSection.test.tsx
+Authorized scope / policy or private operator election (no secrets):
+  - F15a Permissions bounded capability matrix; no client role escalation, no blanket finance/fulfillment grants, approval continuity preserved.
+Files changed / preserved unrelated changes:
+  - Created: backend/alembic/versions/0019_organization_permissions.py, backend/tests/test_organization_permissions.py, frontend/src/organizations/OrganizationMembersSection.tsx, frontend/src/organizations/OrganizationMembersSection.test.tsx
+  - Modified: backend/src/syncally/domain/organizations/organization.py, backend/src/syncally/domain/organizations/__init__.py, backend/src/syncally/infrastructure/models/identity.py, backend/src/syncally/infrastructure/repositories/organizations.py, backend/src/syncally/infrastructure/identity.py, backend/src/syncally/application/identity.py, backend/src/syncally/api/organizations.py, backend/src/syncally/api/agreements.py, backend/src/syncally/api/payments.py, frontend/src/api/types.ts, frontend/src/api/client.ts, frontend/src/organizations/OrganizationsPanel.tsx, docs/engineering/plan.md, docs/engineering/decision.md, docs/engineering/log.md, docs/remaining-tasks/progress.md
+  - Preserved dirty work: untouched historical fixtures and configuration.
+Command exactly / cwd / immediate exit code:
+  - Backend runner: BaseSettings discovery test runner (test_identity_boundary.py, test_deal_authorization.py, test_organization_permissions.py) / backend / exit 0
+  - Backend ruff check: backend/.venv/bin/ruff check backend/ / repo root / exit 0
+  - Frontend focused test: npm test -- src/api/client.test.ts src/organizations/OrganizationsSettingsPage.test.tsx src/organizations/OrganizationMembersSection.test.tsx src/organizations/OrganizationsPanel.test.tsx / frontend / exit 0
+  - Frontend lint check: npm run lint:check / frontend / exit 0
+  - Frontend build: npm run build / frontend / exit 0
+  - Git diff check: git diff --check / repo root / exit 0
+Results: run / pass / fail / skip / reasons / warnings:
+  - Backend focused: Ran 48, passed 48, failed 0, skipped 0.
+  - Frontend focused suite: 4 test files, 83 passed, failed 0.
+  - Ruff: 0 errors.
+  - Frontend lint/typecheck: 0 errors, 3 pre-existing warnings in untouched PaymentStatusPanel.tsx.
+  - Frontend build: built in 685ms, 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Migration 0019_organization_permissions adds capabilities (JSON) and version (int) with server defaults and data-loss downgrade safeguard.
+  - OCC version mismatch returns 409 Conflict with atomic transaction rollback.
+  - Self-modification rejected with 403 Forbidden; sole admin demotion/revocation rejected with 409 Conflict.
+  - Commit-time with_for_update row-lock verification enforces freshness against TOCTOU race conditions.
+  - Durable AuditEvents emitted for member.permissions_updated and member.revoked.
+  - Living artifacts: docs/engineering/plan.md, decision.md (ADRs 006-009), log.md.
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - Severity: NONE. All 10 F15a contract gates, invariants, and failure modes verified.
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 0/3. Independent review verdict: ACCEPTED.
+Implementation acceptance versus live verification versus production approval:
+  - Step 02 implementation ACCEPTED. Live verification (Step 12/13) and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - No blockers for Step 02. Step 03 (Fulfillment) is now unblocked.
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 02.
+Completion report / next concrete operator actions:
+  - Step 02 Permissions fully implemented, independently reviewed, and verified. Ready for Step 03 Fulfillment.
 ```

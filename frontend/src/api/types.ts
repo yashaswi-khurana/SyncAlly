@@ -9,12 +9,54 @@ export interface Organization {
   legal_name: string;
   country_code: string;
   role: string;
+  capabilities?: string[];
+  products?: string[];
+  regions?: string[];
 }
 
 export interface OrganizationDirectoryItem {
   id: string;
   legal_name: string;
   country_code: string;
+  capabilities?: string[];
+  products?: string[];
+  regions?: string[];
+}
+
+export type ContactVisibility = "PRIVATE" | "PARTICIPANTS";
+
+export interface OrganizationContact {
+  id?: string;
+  name: string;
+  purpose: string;
+  consent_obtained?: boolean;
+  visibility: ContactVisibility;
+  role_title?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OrganizationProfile {
+  organization_id: string;
+  capabilities: string[];
+  products: string[];
+  regions: string[];
+  contacts: OrganizationContact[];
+  verification_status: "UNVERIFIED" | string;
+  version: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  updated_by_user_id?: string | null;
+}
+
+export interface UpdateOrganizationProfileInput {
+  expected_version: number;
+  capabilities: string[];
+  products: string[];
+  regions: string[];
+  contacts: OrganizationContact[];
 }
 
 export interface Deal {

@@ -17,6 +17,7 @@ from syncally.infrastructure.models.demo import DemoFixture
 from syncally.infrastructure.models.identity import (
     Organization,
     OrganizationMember,
+    OrganizationProfile,
     RefreshToken,
     User,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "Obligation",
     "Organization",
     "OrganizationMember",
+    "OrganizationProfile",
     "OutboxEvent",
     "PaymentIntent",
     "PaymentMilestone",

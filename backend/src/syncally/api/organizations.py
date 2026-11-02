@@ -1,6 +1,8 @@
 """Organization creation and initial membership setup endpoints."""
 
+import unicodedata
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 import jwt
@@ -21,7 +23,18 @@ from syncally.application.identity import ActorContext
 from syncally.application.passwords import hash_password, verify_password
 from syncally.config import settings
 from syncally.domain.deals.deal import Deal as DomainDeal
-from syncally.domain.shared.identifiers import DealId, OrganizationId
+from syncally.domain.organizations.organization import (
+    ContactVisibility,
+    OrganizationVerificationStatus,
+)
+from syncally.domain.organizations.organization import (
+    OrganizationContact as DomainOrganizationContact,
+)
+from syncally.domain.organizations.organization import (
+    OrganizationProfile as DomainOrganizationProfile,
+)
+from syncally.domain.shared.errors import InvariantViolation
+from syncally.domain.shared.identifiers import DealId, OrganizationId, UserId
 from syncally.infrastructure.counterparty_onboarding import lock_deal
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
@@ -35,11 +48,15 @@ from syncally.infrastructure.models import (
     NegotiationSession,
     Organization,
     OrganizationMember,
+    OrganizationProfile,
     Proposal,
     User,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
+from syncally.infrastructure.repositories.organizations import (
+    SqlAlchemyOrganizationRepository,
+)
 
 router = APIRouter(tags=["organizations"])
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
@@ -159,6 +176,140 @@ class OrganizationDirectoryItem(BaseModel):
     id: UUID
     legal_name: str
     country_code: str
+    capabilities: list[str] = Field(default_factory=list)
+    products: list[str] = Field(default_factory=list)
+    regions: list[str] = Field(default_factory=list)
+
+
+class ContactPayload(BaseModel):
+    id: UUID | None = None
+    name: str = Field(min_length=1, max_length=200)
+    purpose: str = Field(min_length=1, max_length=200)
+    consent_obtained: bool = Field(default=True)
+    visibility: str = Field(default="PRIVATE", pattern=r"^(PRIVATE|PARTICIPANTS)$")
+    role_title: str | None = Field(default=None, max_length=200)
+    email: str | None = Field(default=None, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    phone: str | None = Field(default=None, max_length=50)
+
+    @field_validator("name", "purpose", mode="before")
+    @classmethod
+    def normalize_req_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            clean = unicodedata.normalize("NFC", value.strip())
+            return clean
+        return value
+
+    @field_validator("role_title", "phone", mode="before")
+    @classmethod
+    def normalize_opt_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            clean = unicodedata.normalize("NFC", value.strip())
+            return clean if clean else None
+        return value
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> object:
+        if isinstance(value, str):
+            clean = unicodedata.normalize("NFC", value.strip().lower())
+            return clean if clean else None
+        return value
+
+    @field_validator("consent_obtained")
+    @classmethod
+    def check_consent(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("Consent must be obtained for contact")
+        return value
+
+
+class ContactResponse(BaseModel):
+    id: UUID
+    name: str
+    purpose: str
+    consent_obtained: bool = True
+    visibility: str
+    role_title: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class UpdateProfileRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    capabilities: list[str] = Field(default_factory=list, max_length=50)
+    products: list[str] = Field(default_factory=list, max_length=50)
+    regions: list[str] = Field(default_factory=list, max_length=50)
+    contacts: list[ContactPayload] = Field(default_factory=list, max_length=20)
+
+    @field_validator("capabilities", "products", mode="before")
+    @classmethod
+    def normalize_string_list(cls, value: object) -> object:
+        if isinstance(value, list):
+            cleaned: list[str] = []
+            seen: set[str] = set()
+            for item in value:
+                if isinstance(item, str):
+                    norm = unicodedata.normalize("NFC", item.strip())
+                    if not norm:
+                        continue
+                    key = norm.casefold()
+                    if key not in seen:
+                        seen.add(key)
+                        cleaned.append(norm)
+            return cleaned
+        return value
+
+    @field_validator("regions", mode="before")
+    @classmethod
+    def normalize_regions(cls, value: object) -> object:
+        if isinstance(value, list):
+            cleaned: list[str] = []
+            seen: set[str] = set()
+            for item in value:
+                if isinstance(item, str):
+                    code = unicodedata.normalize("NFC", item.strip().upper())
+                    if len(code) != 2 or not code.isascii() or not code.isalpha():
+                        raise ValueError(f"Invalid country code '{item}'; must be 2 ASCII letters")
+                    if code not in seen:
+                        seen.add(code)
+                        cleaned.append(code)
+            return cleaned
+        return value
+
+    @field_validator("contacts")
+    @classmethod
+    def validate_contacts(cls, contacts: list[ContactPayload]) -> list[ContactPayload]:
+        seen_emails: set[str] = set()
+        seen_phones: set[str] = set()
+        for c in contacts:
+            if not c.email and not c.phone:
+                raise ValueError("Contact requires at least one channel (email or phone)")
+            if c.email:
+                key = c.email.casefold()
+                if key in seen_emails:
+                    raise ValueError(f"Duplicate email across contacts: {c.email}")
+                seen_emails.add(key)
+            if c.phone:
+                phone_key = c.phone.strip()
+                if phone_key in seen_phones:
+                    raise ValueError(f"Duplicate phone across contacts: {c.phone}")
+                seen_phones.add(phone_key)
+        return contacts
+
+
+class ProfileResponse(BaseModel):
+    organization_id: UUID
+    capabilities: list[str] = Field(default_factory=list)
+    products: list[str] = Field(default_factory=list)
+    regions: list[str] = Field(default_factory=list)
+    contacts: list[ContactResponse] = Field(default_factory=list)
+    verification_status: str = "UNVERIFIED"
+    version: int
+    created_at: str | None = None
+    updated_at: str | None = None
+    updated_by_user_id: UUID | None = None
 
 
 def _active_admin_membership(
@@ -309,7 +460,7 @@ def list_organization_directory(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=10000),
     db: Session = Depends(get_db),
-) -> list[dict[str, UUID | str]]:
+) -> list[dict[str, Any]]:
     """List active organizations in the public directory with optional prefix search."""
     # PostgreSQL indexes lower(legal_name), so filter and order on the same
     # expression; a plain legal_name sort would not match the index.
@@ -318,7 +469,15 @@ def list_organization_directory(
         name_order = Organization.legal_name
 
     stmt = (
-        select(Organization.id, Organization.legal_name, Organization.country_code)
+        select(
+            Organization.id,
+            Organization.legal_name,
+            Organization.country_code,
+            OrganizationProfile.capabilities,
+            OrganizationProfile.products,
+            OrganizationProfile.regions,
+        )
+        .outerjoin(OrganizationProfile, OrganizationProfile.organization_id == Organization.id)
         .where(Organization.status == "ACTIVE")
         .order_by(name_order.asc(), Organization.id.asc())
         .limit(limit)
@@ -335,6 +494,9 @@ def list_organization_directory(
             "id": row.id,
             "legal_name": row.legal_name,
             "country_code": row.country_code,
+            "capabilities": row.capabilities or [],
+            "products": row.products or [],
+            "regions": row.regions or [],
         }
         for row in rows
     ]
@@ -348,8 +510,46 @@ def list_organization_directory(
 def get_organization_route(
     organization_id: UUID,
     db: Session = Depends(get_db),
-) -> dict[str, UUID | str]:
+) -> dict[str, Any]:
     """Get active organization public details by ID."""
+    row = db.execute(
+        select(
+            Organization.id,
+            Organization.legal_name,
+            Organization.country_code,
+            OrganizationProfile.capabilities,
+            OrganizationProfile.products,
+            OrganizationProfile.regions,
+        )
+        .outerjoin(OrganizationProfile, OrganizationProfile.organization_id == Organization.id)
+        .where(
+            Organization.id == organization_id,
+            Organization.status == "ACTIVE",
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
+        )
+    return {
+        "id": row.id,
+        "legal_name": row.legal_name,
+        "country_code": row.country_code,
+        "capabilities": row.capabilities or [],
+        "products": row.products or [],
+        "regions": row.regions or [],
+    }
+
+
+@org_router.get(
+    "/{organization_id}/profile",
+    response_model=ProfileResponse,
+)
+def get_organization_profile_route(
+    organization_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     org = db.scalar(
         select(Organization).where(
             Organization.id == organization_id,
@@ -360,10 +560,168 @@ def get_organization_route(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found"
         )
+
+    repo = SqlAlchemyOrganizationRepository(db)
+    profile = repo.get_profile(organization_id)
+    if profile is None:
+        return {
+            "organization_id": organization_id,
+            "capabilities": [],
+            "products": [],
+            "regions": [],
+            "contacts": [],
+            "verification_status": "UNVERIFIED",
+            "version": 0,
+            "created_at": None,
+            "updated_at": None,
+            "updated_by_user_id": None,
+        }
+
+    is_member = organization_id in actor.organization_ids
+    is_deal_participant = False
+    if not is_member and actor.organization_ids:
+        active_deal = db.scalar(
+            select(Deal.id).where(
+                (
+                    (Deal.buyer_organization_id == organization_id)
+                    & Deal.seller_organization_id.in_(actor.organization_ids)
+                )
+                | (
+                    (Deal.seller_organization_id == organization_id)
+                    & Deal.buyer_organization_id.in_(actor.organization_ids)
+                ),
+                Deal.status.not_in(["CANCELLED", "EXPIRED"]),
+            ).limit(1)
+        )
+        is_deal_participant = active_deal is not None
+
+    if is_member:
+        allowed_contacts = profile.contacts
+    elif is_deal_participant:
+        allowed_contacts = [
+            c
+            for c in profile.contacts
+            if (c.visibility == ContactVisibility.PARTICIPANTS or c.visibility == "PARTICIPANTS")
+        ]
+    else:
+        allowed_contacts = []
+
+    contact_responses = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "purpose": c.purpose,
+            "consent_obtained": c.consent_obtained,
+            "visibility": c.visibility.value if hasattr(c.visibility, "value") else str(c.visibility),
+            "role_title": c.role_title,
+            "email": c.email,
+            "phone": c.phone,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        }
+        for c in allowed_contacts
+    ]
+
     return {
-        "id": org.id,
-        "legal_name": org.legal_name,
-        "country_code": org.country_code,
+        "organization_id": profile.organization_id,
+        "capabilities": profile.capabilities,
+        "products": profile.products,
+        "regions": profile.regions,
+        "contacts": contact_responses,
+        "verification_status": profile.verification_status.value
+        if hasattr(profile.verification_status, "value")
+        else str(profile.verification_status),
+        "version": profile.version,
+        "created_at": profile.created_at.isoformat() if profile.created_at else None,
+        "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
+        "updated_by_user_id": profile.updated_by_user_id,
+    }
+
+
+@org_router.put(
+    "/{organization_id}/profile",
+    response_model=ProfileResponse,
+)
+def update_organization_profile_route(
+    organization_id: UUID,
+    payload: UpdateProfileRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _active_admin_membership(db, organization_id, actor.user_id)
+
+    domain_contacts = [
+        DomainOrganizationContact(
+            id=c.id or uuid4(),
+            name=c.name,
+            purpose=c.purpose,
+            consent_obtained=c.consent_obtained,
+            visibility=ContactVisibility(c.visibility),
+            role_title=c.role_title,
+            email=c.email,
+            phone=c.phone,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        for c in payload.contacts
+    ]
+
+    domain_profile = DomainOrganizationProfile(
+        organization_id=OrganizationId(organization_id),
+        capabilities=payload.capabilities,
+        products=payload.products,
+        regions=payload.regions,
+        contacts=domain_contacts,
+        verification_status=OrganizationVerificationStatus.UNVERIFIED,
+        version=max(1, payload.expected_version + 1),
+        updated_by_user_id=UserId(actor.user_id),
+    )
+
+    repo = SqlAlchemyOrganizationRepository(db)
+    try:
+        saved = repo.save_profile(domain_profile, expected_version=payload.expected_version)
+        db.commit()
+    except InvariantViolation as exc:
+        db.rollback()
+        if "version conflict" in str(exc).lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Profile version conflict; please refresh",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    contact_responses = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "purpose": c.purpose,
+            "consent_obtained": c.consent_obtained,
+            "visibility": c.visibility.value if hasattr(c.visibility, "value") else str(c.visibility),
+            "role_title": c.role_title,
+            "email": c.email,
+            "phone": c.phone,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        }
+        for c in saved.contacts
+    ]
+
+    return {
+        "organization_id": saved.organization_id,
+        "capabilities": saved.capabilities,
+        "products": saved.products,
+        "regions": saved.regions,
+        "contacts": contact_responses,
+        "verification_status": saved.verification_status.value
+        if hasattr(saved.verification_status, "value")
+        else str(saved.verification_status),
+        "version": saved.version,
+        "created_at": saved.created_at.isoformat() if saved.created_at else None,
+        "updated_at": saved.updated_at.isoformat() if saved.updated_at else None,
+        "updated_by_user_id": saved.updated_by_user_id,
     }
 
 

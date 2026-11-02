@@ -21,11 +21,15 @@ from syncally.domain.agreements.trade_terms import (
 )
 from syncally.domain.deals.deal import Deal, DealStatus
 from syncally.domain.organizations import (
+    ContactVisibility,
     Organization,
+    OrganizationContact,
     OrganizationMember,
     OrganizationMemberRole,
     OrganizationMemberStatus,
+    OrganizationProfile,
     OrganizationStatus,
+    OrganizationVerificationStatus,
 )
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import (
@@ -337,6 +341,150 @@ class DealDomainTests(unittest.TestCase):
 
                 self.assertEqual(deal.status, status)
                 self.assertEqual(deal.version, 3)
+
+
+class OrganizationContactDomainTests(unittest.TestCase):
+    def test_contact_normalizes_and_defaults(self) -> None:
+        contact_id = uuid4()
+        contact = OrganizationContact(
+            id=contact_id,
+            name="  Alice Smith  ",
+            purpose="  Commercial Operations  ",
+            email=" Alice@Example.COM ",
+            phone=" +1-555-0199 ",
+        )
+        self.assertEqual(contact.name, "Alice Smith")
+        self.assertEqual(contact.purpose, "Commercial Operations")
+        self.assertEqual(contact.email, "alice@example.com")
+        self.assertEqual(contact.phone, "+1-555-0199")
+        self.assertEqual(contact.visibility, ContactVisibility.PRIVATE)
+        self.assertTrue(contact.consent_obtained)
+
+    def test_contact_requires_consent(self) -> None:
+        with self.assertRaises(InvariantViolation):
+            OrganizationContact(
+                id=uuid4(),
+                name="Alice",
+                purpose="Sales",
+                consent_obtained=False,
+                email="alice@example.com",
+            )
+
+    def test_contact_requires_name_and_purpose(self) -> None:
+        with self.assertRaises(InvariantViolation):
+            OrganizationContact(
+                id=uuid4(),
+                name="   ",
+                purpose="Sales",
+                email="alice@example.com",
+            )
+        with self.assertRaises(InvariantViolation):
+            OrganizationContact(
+                id=uuid4(),
+                name="Alice",
+                purpose="",
+                email="alice@example.com",
+            )
+
+    def test_contact_requires_at_least_one_channel(self) -> None:
+        with self.assertRaises(InvariantViolation):
+            OrganizationContact(
+                id=uuid4(),
+                name="Alice",
+                purpose="Sales",
+            )
+
+    def test_contact_validates_email_format(self) -> None:
+        with self.assertRaises(InvariantViolation):
+            OrganizationContact(
+                id=uuid4(),
+                name="Alice",
+                purpose="Sales",
+                email="not-an-email",
+            )
+
+
+class OrganizationProfileDomainTests(unittest.TestCase):
+    def test_profile_defaults_and_normalizes(self) -> None:
+        org_id = OrganizationId(uuid4())
+        profile = OrganizationProfile(
+            organization_id=org_id,
+            capabilities=[" Freight Forwarding ", "freight forwarding", "Logistics"],
+            products=[" Bulk Grain ", "bulk grain"],
+            regions=["us", "GB", "us"],
+        )
+        self.assertEqual(profile.organization_id, org_id)
+        self.assertEqual(profile.capabilities, ["Freight Forwarding", "Logistics"])
+        self.assertEqual(profile.products, ["Bulk Grain"])
+        self.assertEqual(profile.regions, ["US", "GB"])
+        self.assertEqual(profile.verification_status, OrganizationVerificationStatus.UNVERIFIED)
+        self.assertEqual(profile.version, 1)
+
+    def test_profile_bounds_checks(self) -> None:
+        org_id = OrganizationId(uuid4())
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                capabilities=[f"cap-{i}" for i in range(51)],
+            )
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                products=[f"prod-{i}" for i in range(51)],
+            )
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                regions=[f"{chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(51)],
+            )
+
+    def test_profile_invalid_region_rejected(self) -> None:
+        org_id = OrganizationId(uuid4())
+        for invalid_region in ("USA", "1A", "U", "éU"):
+            with self.subTest(invalid_region=invalid_region):
+                with self.assertRaises(InvariantViolation):
+                    OrganizationProfile(
+                        organization_id=org_id,
+                        regions=[invalid_region],
+                    )
+
+    def test_profile_unique_contact_channels(self) -> None:
+        org_id = OrganizationId(uuid4())
+        c1 = OrganizationContact(id=uuid4(), name="Alice", purpose="Sales", email="shared@example.com")
+        c2 = OrganizationContact(id=uuid4(), name="Bob", purpose="Ops", email="SHARED@example.com")
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                contacts=[c1, c2],
+            )
+
+        c3 = OrganizationContact(id=uuid4(), name="Charlie", purpose="Support", phone="+1-555-0100")
+        c4 = OrganizationContact(id=uuid4(), name="Dave", purpose="Billing", phone="+1-555-0100")
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                contacts=[c3, c4],
+            )
+
+    def test_profile_contacts_bounds(self) -> None:
+        org_id = OrganizationId(uuid4())
+        contacts = [
+            OrganizationContact(id=uuid4(), name=f"User {i}", purpose="Test", email=f"user{i}@example.com")
+            for i in range(21)
+        ]
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                contacts=contacts,
+            )
+
+    def test_profile_immutable_unverified_and_version(self) -> None:
+        org_id = OrganizationId(uuid4())
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                version=0,
+            )
 
 
 class DomainDependencyTests(unittest.TestCase):

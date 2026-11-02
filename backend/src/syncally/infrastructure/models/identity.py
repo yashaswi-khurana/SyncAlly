@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -18,7 +21,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from syncally.infrastructure.models.base import UUID_TYPE, Base
+from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE, Base
 from syncally.infrastructure.models.mixins import TimestampMixin
 
 _ORGANIZATION_ACTIVE_WHERE = text("status = 'ACTIVE'")
@@ -86,4 +89,25 @@ class RefreshToken(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID_TYPE, ForeignKey("refresh_tokens.id"), nullable=True
+    )
+
+
+class OrganizationProfile(TimestampMixin, Base):
+    __tablename__ = "organization_profiles"
+    __table_args__ = (
+        CheckConstraint("verification_status = 'UNVERIFIED'", name="ck_org_profile_unverified"),
+        CheckConstraint("version > 0", name="ck_org_profile_version_positive"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    capabilities: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    products: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    regions: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    contacts: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="UNVERIFIED")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

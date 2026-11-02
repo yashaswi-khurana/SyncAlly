@@ -18,6 +18,7 @@ from syncally.application.identity import ActorContext
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     Base,
+    Deal,
     Organization,
     OrganizationMember,
     User,
@@ -63,6 +64,7 @@ class OrganizationDirectoryTests(unittest.TestCase):
         path: str,
         *,
         params: dict[str, Any] | None = None,
+        json: Any | None = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         async def send() -> httpx.Response:
@@ -71,7 +73,7 @@ class OrganizationDirectoryTests(unittest.TestCase):
                 base_url="http://test",
                 headers=headers,
             ) as client:
-                return await client.request(method, path, params=params)
+                return await client.request(method, path, params=params, json=json)
 
         return asyncio.run(send())
 
@@ -259,8 +261,12 @@ class OrganizationDirectoryTests(unittest.TestCase):
         self.assertEqual(len(data), 1)
         item = data[0]
 
-        # Ensure only the 3 permitted contract keys are exposed
-        self.assertEqual(set(item.keys()), {"id", "legal_name", "country_code"})
+        # Ensure only the permitted contract keys are exposed in public directory
+        self.assertEqual(
+            set(item.keys()),
+            {"id", "legal_name", "country_code", "capabilities", "products", "regions"},
+        )
+        self.assertNotIn("contacts", item)
         # String representation of json should not contain sensitive user data
         raw_text = response.text
         self.assertNotIn("sensitive_ceo@example.com", raw_text)
@@ -360,3 +366,356 @@ class OrganizationDirectoryTests(unittest.TestCase):
 
         response = self._request("GET", f"/organizations/{org.id}")
         self.assertEqual(response.status_code, 401)
+
+    def test_profile_unrecorded_defaults_to_version_zero(self) -> None:
+        org = self._create_org("New Org", "US")
+        self._authenticate(
+            ActorContext(user_id=self.user.id, organization_ids=frozenset({org.id}))
+        )
+
+        response = self._request("GET", f"/organizations/{org.id}/profile")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["organization_id"], str(org.id))
+        self.assertEqual(data["version"], 0)
+        self.assertEqual(data["verification_status"], "UNVERIFIED")
+        self.assertEqual(data["capabilities"], [])
+        self.assertEqual(data["products"], [])
+        self.assertEqual(data["regions"], [])
+        self.assertEqual(data["contacts"], [])
+
+    def test_profile_put_forbidden_for_non_admin(self) -> None:
+        org = self._create_org("Target Org", "US")
+        other_user = User(
+            email="regular@example.com",
+            display_name="Regular",
+            status="ACTIVE",
+        )
+        self.session.add(other_user)
+        self.session.add(
+            OrganizationMember(
+                organization_id=org.id,
+                user_id=other_user.id,
+                role="MEMBER",
+                status="ACTIVE",
+            )
+        )
+        self.session.commit()
+
+        # Regular member actor
+        self._authenticate(
+            ActorContext(user_id=other_user.id, organization_ids=frozenset({org.id}))
+        )
+
+        payload = {
+            "expected_version": 0,
+            "capabilities": ["Logistics"],
+            "products": ["Grain"],
+            "regions": ["US"],
+            "contacts": [
+                {
+                    "name": "Bob",
+                    "purpose": "Sales",
+                    "consent_obtained": True,
+                    "email": "bob@example.com",
+                }
+            ],
+        }
+        response = self._request("PUT", f"/organizations/{org.id}/profile", json=payload)
+        self.assertEqual(response.status_code, 403)
+
+    def test_profile_put_and_optimistic_locking_conflict(self) -> None:
+        org = self._create_org("Admin Org", "US")
+        self.session.add(
+            OrganizationMember(
+                organization_id=org.id,
+                user_id=self.user.id,
+                role="ADMIN",
+                status="ACTIVE",
+            )
+        )
+        self.session.commit()
+        self._authenticate(
+            ActorContext(user_id=self.user.id, organization_ids=frozenset({org.id}))
+        )
+
+        # 1. Initial write with expected_version=0 creates version 1
+        payload = {
+            "expected_version": 0,
+            "capabilities": ["Freight", "Logistics"],
+            "products": ["Grain"],
+            "regions": ["US", "GB"],
+            "contacts": [
+                {
+                    "name": "Alice Lead",
+                    "purpose": "Operations",
+                    "consent_obtained": True,
+                    "visibility": "PRIVATE",
+                    "email": "alice@adminorg.com",
+                }
+            ],
+        }
+        res1 = self._request("PUT", f"/organizations/{org.id}/profile", json=payload)
+        self.assertEqual(res1.status_code, 200)
+        data1 = res1.json()
+        self.assertEqual(data1["version"], 1)
+        self.assertEqual(data1["capabilities"], ["Freight", "Logistics"])
+        self.assertEqual(data1["regions"], ["US", "GB"])
+        self.assertEqual(data1["verification_status"], "UNVERIFIED")
+
+        # 2. Update with expected_version=1 succeeds and increments to version 2
+        payload["expected_version"] = 1
+        payload["capabilities"] = ["Freight", "Logistics", "Cold Storage"]
+        res2 = self._request("PUT", f"/organizations/{org.id}/profile", json=payload)
+        self.assertEqual(res2.status_code, 200)
+        data2 = res2.json()
+        self.assertEqual(data2["version"], 2)
+        self.assertIn("Cold Storage", data2["capabilities"])
+
+        # 3. Stale update with expected_version=1 fails with 409 Conflict
+        res_stale = self._request("PUT", f"/organizations/{org.id}/profile", json=payload)
+        self.assertEqual(res_stale.status_code, 409)
+        self.assertIn("Profile version conflict", res_stale.json()["detail"])
+
+    def test_profile_put_input_bounds_and_normalization(self) -> None:
+        org = self._create_org("Bounds Org", "US")
+        self.session.add(
+            OrganizationMember(
+                organization_id=org.id,
+                user_id=self.user.id,
+                role="ADMIN",
+                status="ACTIVE",
+            )
+        )
+        self.session.commit()
+        self._authenticate(
+            ActorContext(user_id=self.user.id, organization_ids=frozenset({org.id}))
+        )
+
+        # Oversized capabilities (>50) fails with 422
+        bad_caps_payload = {
+            "expected_version": 0,
+            "capabilities": [f"cap-{i}" for i in range(51)],
+            "products": [],
+            "regions": [],
+            "contacts": [],
+        }
+        res_caps = self._request("PUT", f"/organizations/{org.id}/profile", json=bad_caps_payload)
+        self.assertEqual(res_caps.status_code, 422)
+
+        # Individual capability > 200 chars fails with 422
+        bad_single_cap_payload = {
+            "expected_version": 0,
+            "capabilities": ["c" * 201],
+            "products": [],
+            "regions": [],
+            "contacts": [],
+        }
+        res_single_cap = self._request("PUT", f"/organizations/{org.id}/profile", json=bad_single_cap_payload)
+        self.assertEqual(res_single_cap.status_code, 422)
+
+        # Individual product > 200 chars fails with 422
+        bad_single_prod_payload = {
+            "expected_version": 0,
+            "capabilities": [],
+            "products": ["p" * 201],
+            "regions": [],
+            "contacts": [],
+        }
+        res_single_prod = self._request("PUT", f"/organizations/{org.id}/profile", json=bad_single_prod_payload)
+        self.assertEqual(res_single_prod.status_code, 422)
+
+        # Invalid country code fails with 422
+        bad_region_payload = {
+            "expected_version": 0,
+            "capabilities": [],
+            "products": [],
+            "regions": ["USA"],
+            "contacts": [],
+        }
+        res_region = self._request("PUT", f"/organizations/{org.id}/profile", json=bad_region_payload)
+        self.assertEqual(res_region.status_code, 422)
+
+        # Duplicate contact email across contacts fails with 422
+        dup_email_payload = {
+            "expected_version": 0,
+            "capabilities": [],
+            "products": [],
+            "regions": [],
+            "contacts": [
+                {"name": "Alice", "purpose": "Sales", "email": "shared@org.com"},
+                {"name": "Bob", "purpose": "Ops", "email": "SHARED@org.com"},
+            ],
+        }
+        res_dup = self._request("PUT", f"/organizations/{org.id}/profile", json=dup_email_payload)
+        self.assertEqual(res_dup.status_code, 422)
+
+        # Unicode NFC normalization & case deduplication
+        norm_payload = {
+            "expected_version": 0,
+            "capabilities": [" Caf\u0065\u0301 ", "caf\u00e9", "logistics"],
+            "products": [" Bulk Grain "],
+            "regions": ["us", "US"],
+            "contacts": [
+                {
+                    "name": " Fran\u00e7ois ",
+                    "purpose": " Support ",
+                    "consent_obtained": True,
+                    "email": " Francois@Org.COM ",
+                }
+            ],
+        }
+        res_norm = self._request("PUT", f"/organizations/{org.id}/profile", json=norm_payload)
+        self.assertEqual(res_norm.status_code, 200)
+        norm_data = res_norm.json()
+        self.assertEqual(norm_data["capabilities"], ["Caf\u00e9", "logistics"])
+        self.assertEqual(norm_data["regions"], ["US"])
+        self.assertEqual(norm_data["contacts"][0]["name"], "Fran\u00e7ois")
+        self.assertEqual(norm_data["contacts"][0]["email"], "francois@org.com")
+
+    def test_profile_contact_privacy_projections(self) -> None:
+        org = self._create_org("Privacy Org", "US")
+        counterparty_org = self._create_org("Counterparty Org", "CA")
+        unrelated_org = self._create_org("Unrelated Org", "MX")
+
+        # Admin creates profile with 1 PRIVATE contact and 1 PARTICIPANTS contact
+        self.session.add(
+            OrganizationMember(
+                organization_id=org.id,
+                user_id=self.user.id,
+                role="ADMIN",
+                status="ACTIVE",
+            )
+        )
+        self.session.commit()
+        self._authenticate(
+            ActorContext(user_id=self.user.id, organization_ids=frozenset({org.id}))
+        )
+
+        create_payload = {
+            "expected_version": 0,
+            "capabilities": ["Maritime Transport"],
+            "products": ["Vessels"],
+            "regions": ["US", "CA"],
+            "contacts": [
+                {
+                    "name": "Secret Admin",
+                    "purpose": "Executive Escalation",
+                    "visibility": "PRIVATE",
+                    "consent_obtained": True,
+                    "email": "exec@privacyorg.com",
+                },
+                {
+                    "name": "Public Deal Lead",
+                    "purpose": "Commercial Terms",
+                    "visibility": "PARTICIPANTS",
+                    "consent_obtained": True,
+                    "email": "deals@privacyorg.com",
+                },
+            ],
+        }
+        put_res = self._request("PUT", f"/organizations/{org.id}/profile", json=create_payload)
+        self.assertEqual(put_res.status_code, 200)
+
+        # Create deal between org and counterparty_org in DRAFT status
+        from uuid import uuid4
+        active_deal = Deal(
+            id=uuid4(),
+            buyer_organization_id=org.id,
+            seller_organization_id=counterparty_org.id,
+            status="DRAFT",
+        )
+        self.session.add(active_deal)
+        self.session.commit()
+
+        # 1. As active member of org: sees ALL contacts (2)
+        self._authenticate(
+            ActorContext(user_id=self.user.id, organization_ids=frozenset({org.id}))
+        )
+        res_member = self._request("GET", f"/organizations/{org.id}/profile")
+        self.assertEqual(res_member.status_code, 200)
+        member_contacts = res_member.json()["contacts"]
+        self.assertEqual(len(member_contacts), 2)
+        self.assertEqual(
+            {c["visibility"] for c in member_contacts},
+            {"PRIVATE", "PARTICIPANTS"},
+        )
+
+        # 2. Counterparty setup
+        counterparty_user = User(
+            email="counterparty@example.com",
+            display_name="Counterparty Lead",
+            status="ACTIVE",
+        )
+        self.session.add(counterparty_user)
+        self.session.commit()
+        self._authenticate(
+            ActorContext(
+                user_id=counterparty_user.id,
+                organization_ids=frozenset({counterparty_org.id}),
+            )
+        )
+
+        # 2a. Ineligible deal statuses (DRAFT, NEGOTIATING, PENDING_APPROVALS, CANCELLED, EXPIRED): 0 contacts
+        for ineligible_status in ("DRAFT", "NEGOTIATING", "PENDING_APPROVALS", "CANCELLED", "EXPIRED"):
+            active_deal.status = ineligible_status
+            self.session.commit()
+            res_ineligible = self._request("GET", f"/organizations/{org.id}/profile")
+            self.assertEqual(res_ineligible.status_code, 200)
+            self.assertEqual(
+                res_ineligible.json()["contacts"],
+                [],
+                f"Expected 0 contacts for deal status {ineligible_status}",
+            )
+
+        # 2b. Eligible deal statuses (AGREED, EXECUTING, COMPLETED, DISPUTED): sees ONLY PARTICIPANTS contact (1)
+        for eligible_status in ("AGREED", "EXECUTING", "COMPLETED", "DISPUTED"):
+            active_deal.status = eligible_status
+            self.session.commit()
+            res_eligible = self._request("GET", f"/organizations/{org.id}/profile")
+            self.assertEqual(res_eligible.status_code, 200)
+            counterparty_contacts = res_eligible.json()["contacts"]
+            self.assertEqual(
+                len(counterparty_contacts),
+                1,
+                f"Expected 1 contact for deal status {eligible_status}",
+            )
+            self.assertEqual(counterparty_contacts[0]["visibility"], "PARTICIPANTS")
+            self.assertEqual(counterparty_contacts[0]["name"], "Public Deal Lead")
+
+        # 3. As unrelated actor: sees 0 contacts
+        unrelated_user = User(
+            email="unrelated@example.com",
+            display_name="Unrelated Lead",
+            status="ACTIVE",
+        )
+        self.session.add(unrelated_user)
+        self.session.commit()
+        self._authenticate(
+            ActorContext(
+                user_id=unrelated_user.id,
+                organization_ids=frozenset({unrelated_org.id}),
+            )
+        )
+        res_unrelated = self._request("GET", f"/organizations/{org.id}/profile")
+        self.assertEqual(res_unrelated.status_code, 200)
+        self.assertEqual(res_unrelated.json()["contacts"], [])
+
+        # 4. Public directory and get org route include public projection (capabilities, products, regions)
+        # but NEVER include contacts
+        dir_res = self._request("GET", "/organizations/directory", params={"q": "Privacy"})
+        self.assertEqual(dir_res.status_code, 200)
+        dir_items = dir_res.json()
+        self.assertEqual(len(dir_items), 1)
+        self.assertEqual(dir_items[0]["capabilities"], ["Maritime Transport"])
+        self.assertEqual(dir_items[0]["products"], ["Vessels"])
+        self.assertEqual(dir_items[0]["regions"], ["US", "CA"])
+        self.assertNotIn("contacts", dir_items[0])
+
+        get_res = self._request("GET", f"/organizations/{org.id}")
+        self.assertEqual(get_res.status_code, 200)
+        get_item = get_res.json()
+        self.assertEqual(get_item["capabilities"], ["Maritime Transport"])
+        self.assertEqual(get_item["products"], ["Vessels"])
+        self.assertEqual(get_item["regions"], ["US", "CA"])
+        self.assertNotIn("contacts", get_item)

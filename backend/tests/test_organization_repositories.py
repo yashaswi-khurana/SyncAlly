@@ -8,19 +8,34 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.domain.organizations.organization import (
+    ContactVisibility,
+    OrganizationMemberRole,
+    OrganizationMemberStatus,
+    OrganizationStatus,
+    OrganizationVerificationStatus,
+)
+from syncally.domain.organizations.organization import (
     Organization as DomainOrganization,
+)
+from syncally.domain.organizations.organization import (
+    OrganizationContact as DomainContact,
 )
 from syncally.domain.organizations.organization import (
     OrganizationMember as DomainMembership,
 )
 from syncally.domain.organizations.organization import (
-    OrganizationMemberRole,
-    OrganizationMemberStatus,
-    OrganizationStatus,
+    OrganizationProfile as DomainProfile,
 )
+from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId, UserId
 from syncally.infrastructure.database import create_database_engine
-from syncally.infrastructure.models import Base, OrganizationMember, User
+from syncally.infrastructure.models import (
+    Base,
+    Organization,
+    OrganizationMember,
+    OrganizationProfile,
+    User,
+)
 from syncally.infrastructure.repositories import (
     SqlAlchemyOrganizationMemberRepository,
     SqlAlchemyOrganizationRepository,
@@ -138,6 +153,64 @@ class OrganizationRepositoryTests(unittest.TestCase):
             self.session.flush()
         self.session.rollback()
         self.assertEqual(self.session.query(OrganizationMember).count(), 0)
+
+    def test_organization_profile_lifecycle_and_optimistic_locking(self) -> None:
+        org, user = self._seed()
+        repo = SqlAlchemyOrganizationRepository(self.session)
+
+        # 1. Missing profile returns None
+        self.assertIsNone(repo.get_profile(org.id))
+
+        # 2. Save profile initially creates version 1
+        contact_id = uuid4()
+        contact = DomainContact(
+            id=contact_id,
+            name="Alice Lead",
+            purpose="Commercial",
+            consent_obtained=True,
+            visibility=ContactVisibility.PARTICIPANTS,
+            email="alice@buyer.com",
+            phone="+1-555-0199",
+        )
+        profile = DomainProfile(
+            organization_id=org.id,
+            capabilities=["Freight", "Inspection"],
+            products=["Wheat", "Barley"],
+            regions=["US", "CA"],
+            contacts=[contact],
+            updated_by_user_id=UserId(user.id),
+        )
+
+        created = repo.save_profile(profile, expected_version=None)
+        self.session.commit()
+
+        self.assertEqual(created.version, 1)
+        self.assertEqual(created.capabilities, ["Freight", "Inspection"])
+        self.assertEqual(created.products, ["Wheat", "Barley"])
+        self.assertEqual(created.regions, ["US", "CA"])
+        self.assertEqual(len(created.contacts), 1)
+        self.assertEqual(created.contacts[0].id, contact_id)
+        self.assertEqual(created.contacts[0].visibility, ContactVisibility.PARTICIPANTS)
+        self.assertEqual(created.verification_status, OrganizationVerificationStatus.UNVERIFIED)
+
+        # 3. Optimistic locking: update with matching expected_version increments version to 2
+        profile.capabilities = ["Freight", "Inspection", "Warehousing"]
+        updated = repo.save_profile(profile, expected_version=1)
+        self.session.commit()
+        self.assertEqual(updated.version, 2)
+        self.assertIn("Warehousing", updated.capabilities)
+
+        # 4. Optimistic locking: stale write with wrong expected_version raises InvariantViolation
+        with self.assertRaises(InvariantViolation):
+            repo.save_profile(profile, expected_version=1)
+
+        # 5. Profile is cascade deleted when organization is removed
+        org_row = self.session.get(Organization, org.id)
+        self.assertIsNotNone(org_row)
+        self.session.delete(org_row)
+        self.session.commit()
+        self.assertIsNone(self.session.get(OrganizationProfile, org.id))
+        self.assertIsNone(repo.get_profile(org.id))
 
 
 if __name__ == "__main__":

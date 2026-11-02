@@ -28,11 +28,13 @@ import type {
   Organization,
   OrganizationDirectoryItem,
   OrganizationMember,
+  OrganizationProfile,
   PaymentAuthorization,
   PaymentMode,
   PaymentPreview,
   PaymentStatus,
   ProposalSuggestion,
+  UpdateOrganizationProfileInput,
   ReviewedProposalTerms,
   TokenResponse,
   ThreadImportInput,
@@ -177,6 +179,20 @@ export function listOrganizations(): Promise<Organization[]> {
 
 export function getOrganization(organizationId: string): Promise<OrganizationDirectoryItem> {
   return apiRequest<OrganizationDirectoryItem>(`/organizations/${encodeURIComponent(organizationId)}`);
+}
+
+export function getOrganizationProfile(organizationId: string): Promise<OrganizationProfile> {
+  return apiRequest<OrganizationProfile>(`/organizations/${encodeURIComponent(organizationId)}/profile`);
+}
+
+export function updateOrganizationProfile(
+  organizationId: string,
+  input: UpdateOrganizationProfileInput,
+): Promise<OrganizationProfile> {
+  return apiRequest<OrganizationProfile>(`/organizations/${encodeURIComponent(organizationId)}/profile`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
 }
 
 export function createOrganization(input: CreateOrganizationInput): Promise<Organization> {

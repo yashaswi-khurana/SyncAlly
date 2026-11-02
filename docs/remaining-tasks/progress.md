@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only. Every execution step **01-16 is NOT_RUN**. No feature content, embedded runners, full gates, services, providers or specialized role agents have run in this authoring session. Authoring structure/syntax checks are not feature acceptance. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; Steps 02–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 

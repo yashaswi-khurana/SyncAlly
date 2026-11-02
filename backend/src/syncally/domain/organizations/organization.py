@@ -120,6 +120,8 @@ class OrganizationProfile:
             cleaned = _normalize_string(item)
             if not cleaned:
                 continue
+            if len(cleaned) > 200:
+                raise InvariantViolation(f"Capability exceeds maximum length of 200 characters: '{cleaned[:20]}...'")
             key = cleaned.casefold()
             if key not in seen_caps:
                 seen_caps.add(key)
@@ -134,6 +136,8 @@ class OrganizationProfile:
             cleaned = _normalize_string(item)
             if not cleaned:
                 continue
+            if len(cleaned) > 200:
+                raise InvariantViolation(f"Product exceeds maximum length of 200 characters: '{cleaned[:20]}...'")
             key = cleaned.casefold()
             if key not in seen_prods:
                 seen_prods.add(key)

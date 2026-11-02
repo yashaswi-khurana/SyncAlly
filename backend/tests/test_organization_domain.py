@@ -430,13 +430,32 @@ class OrganizationProfileDomainTests(unittest.TestCase):
         with self.assertRaises(InvariantViolation):
             OrganizationProfile(
                 organization_id=org_id,
+                capabilities=["x" * 201],
+            )
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
                 products=[f"prod-{i}" for i in range(51)],
+            )
+        with self.assertRaises(InvariantViolation):
+            OrganizationProfile(
+                organization_id=org_id,
+                products=["y" * 201],
             )
         with self.assertRaises(InvariantViolation):
             OrganizationProfile(
                 organization_id=org_id,
                 regions=[f"{chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(51)],
             )
+
+        # 200 characters is allowed
+        valid_profile = OrganizationProfile(
+            organization_id=org_id,
+            capabilities=["c" * 200],
+            products=["p" * 200],
+        )
+        self.assertEqual(len(valid_profile.capabilities[0]), 200)
+        self.assertEqual(len(valid_profile.products[0]), 200)
 
     def test_profile_invalid_region_rejected(self) -> None:
         org_id = OrganizationId(uuid4())

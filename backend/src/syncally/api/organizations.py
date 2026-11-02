@@ -2,7 +2,7 @@
 
 import unicodedata
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import jwt
@@ -238,8 +238,12 @@ class ContactResponse(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     expected_version: int = Field(ge=0)
-    capabilities: list[str] = Field(default_factory=list, max_length=50)
-    products: list[str] = Field(default_factory=list, max_length=50)
+    capabilities: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=50
+    )
+    products: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=50
+    )
     regions: list[str] = Field(default_factory=list, max_length=50)
     contacts: list[ContactPayload] = Field(default_factory=list, max_length=20)
 
@@ -254,6 +258,8 @@ class UpdateProfileRequest(BaseModel):
                     norm = unicodedata.normalize("NFC", item.strip())
                     if not norm:
                         continue
+                    if len(norm) > 200:
+                        raise ValueError("Capability and product items cannot exceed 200 characters")
                     key = norm.casefold()
                     if key not in seen:
                         seen.add(key)
@@ -541,6 +547,14 @@ def get_organization_route(
     }
 
 
+_PARTICIPANT_CONTACT_ELIGIBLE_DEAL_STATUSES = (
+    "AGREED",
+    "EXECUTING",
+    "COMPLETED",
+    "DISPUTED",
+)
+
+
 @org_router.get(
     "/{organization_id}/profile",
     response_model=ProfileResponse,
@@ -590,7 +604,7 @@ def get_organization_profile_route(
                     (Deal.seller_organization_id == organization_id)
                     & Deal.buyer_organization_id.in_(actor.organization_ids)
                 ),
-                Deal.status.not_in(["CANCELLED", "EXPIRED"]),
+                Deal.status.in_(_PARTICIPANT_CONTACT_ELIGIBLE_DEAL_STATUSES),
             ).limit(1)
         )
         is_deal_participant = active_deal is not None

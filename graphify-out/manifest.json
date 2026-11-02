@@ -138,9 +138,9 @@
     "semantic_hash": "bc6ba7d739d27f7343526847ac9bf831"
   },
   "backend/src/syncally/api/organizations.py": {
-    "mtime": 1793631813.922782,
-    "seen": 1793632232.3902981,
-    "ast_hash": "15bafa3226828cea2e13b72f60d75e8a",
+    "mtime": 1793634281.5121183,
+    "seen": 1793635904.7785811,
+    "ast_hash": "733f72367607cb33ce46dac56d926415",
     "semantic_hash": ""
   },
   "backend/src/syncally/api/payments.py": {
@@ -360,9 +360,9 @@
     "semantic_hash": ""
   },
   "backend/src/syncally/domain/organizations/organization.py": {
-    "mtime": 1793631316.2178879,
-    "seen": 1793632232.3904154,
-    "ast_hash": "b3543244ce3f581bea7fe71888627eed",
+    "mtime": 1793634292.6264837,
+    "seen": 1793635904.7789123,
+    "ast_hash": "07eb6ef666d8eb4ad9b363a0eaff4d99",
     "semantic_hash": ""
   },
   "backend/src/syncally/domain/payments/__init__.py": {
@@ -804,15 +804,15 @@
     "semantic_hash": "663bc2d618ef710035b8d79356c97dfe"
   },
   "backend/tests/test_organization_directory.py": {
-    "mtime": 1793631813.919782,
-    "seen": 1793632232.3906806,
-    "ast_hash": "93cbb256e77a462e5e5a949e7609199a",
+    "mtime": 1793634333.4547918,
+    "seen": 1793635904.7793612,
+    "ast_hash": "63a540a865463470603bc9a0b09c957a",
     "semantic_hash": ""
   },
   "backend/tests/test_organization_domain.py": {
-    "mtime": 1793631321.3882527,
-    "seen": 1793632232.3906834,
-    "ast_hash": "3fc67e1c9d57376f56d113cfa1304dce",
+    "mtime": 1793634322.00243,
+    "seen": 1793635904.7793648,
+    "ast_hash": "44ecfeb61bc21cb170c5de7a6de0450d",
     "semantic_hash": ""
   },
   "backend/tests/test_organization_invitations.py": {
@@ -1638,15 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1793632806.4233081,
-    "seen": 1793632883.3371596,
-    "ast_hash": "4b79b53e8b66b7340c91b792e6b8b8f1",
-    "semantic_hash": ""
-  },
-  ".antideploy.json": {
-    "mtime": 1793515621.8202841,
-    "seen": 1793516513.4273086,
-    "ast_hash": "856259bb604cc06aadf83694e2aeda95",
+    "mtime": 1793635573.193801,
+    "seen": 1793635904.779788,
+    "ast_hash": "048b78c61db32439226c5202648b30a2",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -1656,9 +1650,9 @@
     "semantic_hash": ""
   },
   "frontend/src/organizations/OrganizationProfileSection.tsx": {
-    "mtime": 1793632072.8212109,
-    "seen": 1793632232.390855,
-    "ast_hash": "7fa1300949dd6b1254dc3500c70dab26",
+    "mtime": 1793634309.8440416,
+    "seen": 1793635904.7795503,
+    "ast_hash": "8378ba53a7f16434e735d243180451f1",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

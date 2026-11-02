@@ -134,6 +134,19 @@ export default function OrganizationProfileSection({ organization }: Props) {
       .map((s) => s.trim().toUpperCase())
       .filter((s) => s.length > 0);
 
+    for (const cap of capabilities) {
+      if (cap.length > 200) {
+        setSaveError(`Capability "${cap.slice(0, 20)}..." exceeds 200 characters.`);
+        return;
+      }
+    }
+    for (const prod of products) {
+      if (prod.length > 200) {
+        setSaveError(`Product "${prod.slice(0, 20)}..." exceeds 200 characters.`);
+        return;
+      }
+    }
+
     for (let i = 0; i < contactsDraft.length; i++) {
       const c = contactsDraft[i];
       if (!c.name.trim()) {

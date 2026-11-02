@@ -503,6 +503,28 @@ class OrganizationDirectoryTests(unittest.TestCase):
         res_caps = self._request("PUT", f"/organizations/{org.id}/profile", json=bad_caps_payload)
         self.assertEqual(res_caps.status_code, 422)
 
+        # Individual capability > 200 chars fails with 422
+        bad_single_cap_payload = {
+            "expected_version": 0,
+            "capabilities": ["c" * 201],
+            "products": [],
+            "regions": [],
+            "contacts": [],
+        }
+        res_single_cap = self._request("PUT", f"/organizations/{org.id}/profile", json=bad_single_cap_payload)
+        self.assertEqual(res_single_cap.status_code, 422)
+
+        # Individual product > 200 chars fails with 422
+        bad_single_prod_payload = {
+            "expected_version": 0,
+            "capabilities": [],
+            "products": ["p" * 201],
+            "regions": [],
+            "contacts": [],
+        }
+        res_single_prod = self._request("PUT", f"/organizations/{org.id}/profile", json=bad_single_prod_payload)
+        self.assertEqual(res_single_prod.status_code, 422)
+
         # Invalid country code fails with 422
         bad_region_payload = {
             "expected_version": 0,
@@ -595,13 +617,13 @@ class OrganizationDirectoryTests(unittest.TestCase):
         put_res = self._request("PUT", f"/organizations/{org.id}/profile", json=create_payload)
         self.assertEqual(put_res.status_code, 200)
 
-        # Create active deal between org and counterparty_org
+        # Create deal between org and counterparty_org in DRAFT status
         from uuid import uuid4
         active_deal = Deal(
             id=uuid4(),
             buyer_organization_id=org.id,
             seller_organization_id=counterparty_org.id,
-            status="NEGOTIATING",
+            status="DRAFT",
         )
         self.session.add(active_deal)
         self.session.commit()
@@ -619,7 +641,7 @@ class OrganizationDirectoryTests(unittest.TestCase):
             {"PRIVATE", "PARTICIPANTS"},
         )
 
-        # 2. As counterparty in active deal: sees ONLY PARTICIPANTS contact (1)
+        # 2. Counterparty setup
         counterparty_user = User(
             email="counterparty@example.com",
             display_name="Counterparty Lead",
@@ -633,12 +655,33 @@ class OrganizationDirectoryTests(unittest.TestCase):
                 organization_ids=frozenset({counterparty_org.id}),
             )
         )
-        res_counterparty = self._request("GET", f"/organizations/{org.id}/profile")
-        self.assertEqual(res_counterparty.status_code, 200)
-        counterparty_contacts = res_counterparty.json()["contacts"]
-        self.assertEqual(len(counterparty_contacts), 1)
-        self.assertEqual(counterparty_contacts[0]["visibility"], "PARTICIPANTS")
-        self.assertEqual(counterparty_contacts[0]["name"], "Public Deal Lead")
+
+        # 2a. Ineligible deal statuses (DRAFT, NEGOTIATING, PENDING_APPROVALS, CANCELLED, EXPIRED): 0 contacts
+        for ineligible_status in ("DRAFT", "NEGOTIATING", "PENDING_APPROVALS", "CANCELLED", "EXPIRED"):
+            active_deal.status = ineligible_status
+            self.session.commit()
+            res_ineligible = self._request("GET", f"/organizations/{org.id}/profile")
+            self.assertEqual(res_ineligible.status_code, 200)
+            self.assertEqual(
+                res_ineligible.json()["contacts"],
+                [],
+                f"Expected 0 contacts for deal status {ineligible_status}",
+            )
+
+        # 2b. Eligible deal statuses (AGREED, EXECUTING, COMPLETED, DISPUTED): sees ONLY PARTICIPANTS contact (1)
+        for eligible_status in ("AGREED", "EXECUTING", "COMPLETED", "DISPUTED"):
+            active_deal.status = eligible_status
+            self.session.commit()
+            res_eligible = self._request("GET", f"/organizations/{org.id}/profile")
+            self.assertEqual(res_eligible.status_code, 200)
+            counterparty_contacts = res_eligible.json()["contacts"]
+            self.assertEqual(
+                len(counterparty_contacts),
+                1,
+                f"Expected 1 contact for deal status {eligible_status}",
+            )
+            self.assertEqual(counterparty_contacts[0]["visibility"], "PARTICIPANTS")
+            self.assertEqual(counterparty_contacts[0]["name"], "Public Deal Lead")
 
         # 3. As unrelated actor: sees 0 contacts
         unrelated_user = User(

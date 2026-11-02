@@ -27,6 +27,14 @@ class OrganizationMemberRole(StrEnum):
     MEMBER = "MEMBER"
 
 
+class OrganizationCapability(StrEnum):
+    ADMINISTRATION = "ADMINISTRATION"
+    DRAFTING = "DRAFTING"
+    AGREEMENT_APPROVAL = "AGREEMENT_APPROVAL"
+    FINANCE = "FINANCE"
+    FULFILLMENT = "FULFILLMENT"
+
+
 class OrganizationMemberStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
@@ -211,7 +219,58 @@ class OrganizationMember:
     created_at: datetime
     role: OrganizationMemberRole = OrganizationMemberRole.MEMBER
     status: OrganizationMemberStatus = OrganizationMemberStatus.ACTIVE
+    capabilities: frozenset[OrganizationCapability] = field(default_factory=frozenset)
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        if self.version < 1:
+            raise InvariantViolation("Organization member version must be at least 1")
+        if not isinstance(self.role, OrganizationMemberRole):
+            try:
+                object.__setattr__(self, "role", OrganizationMemberRole(self.role))
+            except ValueError as exc:
+                raise InvariantViolation(f"Invalid organization member role: {self.role}") from exc
+        if not isinstance(self.status, OrganizationMemberStatus):
+            try:
+                object.__setattr__(self, "status", OrganizationMemberStatus(self.status))
+            except ValueError as exc:
+                raise InvariantViolation(f"Invalid organization member status: {self.status}") from exc
+        normalized_caps: set[OrganizationCapability] = set()
+        for cap in self.capabilities:
+            if isinstance(cap, OrganizationCapability):
+                normalized_caps.add(cap)
+            elif isinstance(cap, str):
+                try:
+                    normalized_caps.add(OrganizationCapability(cap))
+                except ValueError as exc:
+                    raise InvariantViolation(f"Invalid organization capability: {cap}") from exc
+            else:
+                raise InvariantViolation(f"Invalid organization capability type: {type(cap)}")
+        object.__setattr__(self, "capabilities", frozenset(normalized_caps))
 
     @property
     def is_active(self) -> bool:
         return self.status is OrganizationMemberStatus.ACTIVE
+
+    @property
+    def effective_capabilities(self) -> frozenset[OrganizationCapability]:
+        defaults: frozenset[OrganizationCapability]
+        if self.role == OrganizationMemberRole.ADMIN:
+            defaults = frozenset({
+                OrganizationCapability.ADMINISTRATION,
+                OrganizationCapability.DRAFTING,
+                OrganizationCapability.AGREEMENT_APPROVAL,
+            })
+        else:
+            defaults = frozenset({OrganizationCapability.DRAFTING})
+        return defaults | self.capabilities
+
+    def has_capability(self, capability: OrganizationCapability | str) -> bool:
+        if isinstance(capability, str):
+            try:
+                cap = OrganizationCapability(capability)
+            except ValueError:
+                return False
+        else:
+            cap = capability
+        return cap in self.effective_capabilities

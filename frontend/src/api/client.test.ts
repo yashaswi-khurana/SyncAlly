@@ -8,6 +8,9 @@ import {
   previewDealThreadImport,
   getDealMessageExistence,
   getOrganization,
+  listOrganizationMembers,
+  updateMemberPermissions,
+  revokeOrganizationMember,
   listPaymentStatuses,
   suggestDealFacts,
   draftDealProposal,
@@ -644,5 +647,112 @@ describe("getOrganization", () => {
     );
 
     await expect(getOrganization(missingId)).rejects.toThrow("Organization not found");
+  });
+});
+
+describe("organization member permissions client", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    setAccessToken("access-token");
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    clearAccessToken();
+  });
+
+  const orgId = "44444444-4444-4444-4444-444444444444";
+  const userId = "55555555-5555-5555-5555-555555555555";
+
+  it("lists members of an organization with capabilities and version", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse([
+        {
+          user_id: userId,
+          email: "member@example.com",
+          display_name: "Member User",
+          role: "MEMBER",
+          status: "ACTIVE",
+          capabilities: ["DRAFTING", "FINANCE"],
+          assigned_capabilities: ["FINANCE"],
+          version: 2,
+        },
+      ]),
+    );
+
+    const members = await listOrganizationMembers(orgId);
+
+    expect(members).toHaveLength(1);
+    expect(members[0].email).toBe("member@example.com");
+    expect(members[0].capabilities).toEqual(["DRAFTING", "FINANCE"]);
+    expect(lastRequest().url).toBe(`/organizations/${orgId}/members`);
+    expect(new Headers(lastRequest().init.headers).get("Authorization")).toBe("Bearer access-token");
+  });
+
+  it("updates member role and capabilities with optimistic locking payload", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        user_id: userId,
+        email: "member@example.com",
+        display_name: "Member User",
+        role: "ADMIN",
+        status: "ACTIVE",
+        capabilities: ["ADMINISTRATION", "DRAFTING", "AGREEMENT_APPROVAL", "FINANCE"],
+        assigned_capabilities: ["FINANCE"],
+        version: 3,
+      }),
+    );
+
+    const updated = await updateMemberPermissions(orgId, userId, {
+      expected_version: 2,
+      role: "ADMIN",
+      capabilities: ["FINANCE"],
+    });
+
+    expect(updated.version).toBe(3);
+    expect(updated.role).toBe("ADMIN");
+    expect(lastRequest().url).toBe(`/organizations/${orgId}/members/${userId}`);
+    expect(lastRequest().init.method).toBe("PATCH");
+    expect(JSON.parse(lastRequest().init.body as string)).toEqual({
+      expected_version: 2,
+      role: "ADMIN",
+      capabilities: ["FINANCE"],
+    });
+  });
+
+  it("revokes an organization member via DELETE", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await revokeOrganizationMember(orgId, userId);
+
+    expect(lastRequest().url).toBe(`/organizations/${orgId}/members/${userId}`);
+    expect(lastRequest().init.method).toBe("DELETE");
+  });
+
+  it("propagates 403 Forbidden on self-escalation or unauthorized attempt", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ detail: "Cannot modify your own membership role or capabilities" }, 403),
+    );
+
+    await expect(
+      updateMemberPermissions(orgId, userId, {
+        expected_version: 1,
+        capabilities: ["FINANCE"],
+      }),
+    ).rejects.toThrow("Cannot modify your own membership role or capabilities");
+  });
+
+  it("propagates 409 Conflict on version conflict or last admin demotion", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ detail: "Cannot demote the last remaining admin of the organization" }, 409),
+    );
+
+    await expect(
+      updateMemberPermissions(orgId, userId, {
+        expected_version: 1,
+        role: "MEMBER",
+      }),
+    ).rejects.toThrow("Cannot demote the last remaining admin of the organization");
   });
 });

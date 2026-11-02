@@ -1,8 +1,9 @@
 """Create organization_profiles table for bounded profile collections."""
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0018_organization_profiles"
 down_revision = "0017_explicit_payment_modes"

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from syncally.domain.organizations.organization import (
     ContactVisibility,
+    OrganizationCapability,
     OrganizationMemberRole,
     OrganizationMemberStatus,
     OrganizationStatus,
@@ -95,12 +96,20 @@ def _organization_to_domain(row: Organization) -> DomainOrganization:
 
 
 def _membership_to_domain(row: OrganizationMember) -> DomainOrganizationMember:
+    caps: list[OrganizationCapability] = []
+    for item in (row.capabilities or []):
+        try:
+            caps.append(OrganizationCapability(item))
+        except ValueError:
+            pass
     return DomainOrganizationMember(
         organization_id=OrganizationId(row.organization_id),
         user_id=UserId(row.user_id),
         created_at=as_utc(row.created_at),
         role=OrganizationMemberRole(row.role),
         status=OrganizationMemberStatus(row.status),
+        capabilities=frozenset(caps),
+        version=row.version,
     )
 
 
@@ -185,6 +194,8 @@ class SqlAlchemyOrganizationMemberRepository:
             user_id=membership.user_id,
             role=membership.role.value,
             status=membership.status.value,
+            capabilities=sorted([c.value for c in membership.capabilities]),
+            version=membership.version,
             created_at=as_utc(membership.created_at),
         )
         self._db.add(row)
@@ -207,3 +218,34 @@ class SqlAlchemyOrganizationMemberRepository:
             .order_by(OrganizationMember.created_at, OrganizationMember.user_id)
         )
         return [_membership_to_domain(row) for row in rows]
+
+    def update_permissions(
+        self,
+        organization_id: UUID,
+        user_id: UUID,
+        role: OrganizationMemberRole | None = None,
+        capabilities: frozenset[OrganizationCapability] | None = None,
+        expected_version: int | None = None,
+    ) -> DomainOrganizationMember | None:
+        row = self._db.scalar(
+            select(OrganizationMember)
+            .where(
+                OrganizationMember.organization_id == organization_id,
+                OrganizationMember.user_id == user_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if row is None:
+            return None
+
+        if expected_version is not None and row.version != expected_version:
+            raise InvariantViolation("Member version conflict; stale write rejected")
+
+        if role is not None:
+            row.role = role.value
+        if capabilities is not None:
+            row.capabilities = sorted([c.value for c in capabilities])
+        row.version = row.version + 1
+        self._db.flush()
+        return _membership_to_domain(row)

@@ -4,12 +4,19 @@ export interface TokenResponse {
   token_type: string;
 }
 
+export type OrganizationCapability =
+  | "ADMINISTRATION"
+  | "DRAFTING"
+  | "AGREEMENT_APPROVAL"
+  | "FINANCE"
+  | "FULFILLMENT";
+
 export interface Organization {
   id: string;
   legal_name: string;
   country_code: string;
   role: string;
-  capabilities?: string[];
+  capabilities?: OrganizationCapability[] | string[];
   products?: string[];
   regions?: string[];
 }
@@ -538,5 +545,16 @@ export interface CreateOrganizationInput {
 export interface OrganizationMember {
   user_id: string;
   email: string;
-  role: string;
+  display_name?: string | null;
+  role: "ADMIN" | "MEMBER" | string;
+  status: "ACTIVE" | "INACTIVE" | "REVOKED" | string;
+  capabilities: OrganizationCapability[];
+  assigned_capabilities?: OrganizationCapability[];
+  version: number;
+}
+
+export interface UpdateMemberPermissionsInput {
+  expected_version: number;
+  role?: "ADMIN" | "MEMBER" | string;
+  capabilities?: OrganizationCapability[];
 }

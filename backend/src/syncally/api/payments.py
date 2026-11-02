@@ -25,9 +25,11 @@ from syncally.application.payments import (
 )
 from syncally.config import settings
 from syncally.domain.agreements.agreement import AgreementStatus
+from syncally.domain.organizations.organization import OrganizationCapability
 from syncally.domain.payments.intent import PaymentExecutionMode, PaymentIntentStatus
 from syncally.domain.shared.money import Money, canonical_decimal
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.identity import verify_member_capability
 from syncally.infrastructure.models import PaymentIntent, PaymentMilestone
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 from syncally.infrastructure.repositories.payments import (
@@ -134,6 +136,13 @@ def authorize_payment_route(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an active seller member can authorize a payment request",
             )
+        verify_member_capability(
+            db,
+            deal.seller_organization_id,
+            actor.user_id,
+            OrganizationCapability.FINANCE,
+            for_update=True,
+        )
         agreement = get_current_agreement(
             actor,
             deal_id,

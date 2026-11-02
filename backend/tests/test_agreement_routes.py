@@ -84,15 +84,16 @@ class AgreementRouteTests(unittest.TestCase):
         self.session.add_all(
             [
                 OrganizationMember(
-                    user_id=self.buyer_user.id, organization_id=self.buyer.id, status="ACTIVE"
+                    user_id=self.buyer_user.id, organization_id=self.buyer.id, status="ACTIVE", role="ADMIN"
                 ),
                 OrganizationMember(
-                    user_id=self.seller_user.id, organization_id=self.seller.id, status="ACTIVE"
+                    user_id=self.seller_user.id, organization_id=self.seller.id, status="ACTIVE", role="ADMIN"
                 ),
                 OrganizationMember(
                     user_id=self.outsider_user.id,
                     organization_id=self.outsider.id,
                     status="ACTIVE",
+                    role="ADMIN",
                 ),
             ]
         )
@@ -830,7 +831,7 @@ class AgreementRouteTests(unittest.TestCase):
     def test_ambiguous_actor_must_choose_a_party_and_cannot_choose_another_org(self) -> None:
         self.session.add(
             OrganizationMember(
-                user_id=self.buyer_user.id, organization_id=self.seller.id, status="ACTIVE"
+                user_id=self.buyer_user.id, organization_id=self.seller.id, status="ACTIVE", role="ADMIN"
             )
         )
         self.session.commit()

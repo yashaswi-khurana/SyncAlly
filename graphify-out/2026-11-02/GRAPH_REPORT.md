@@ -1,7 +1,7 @@
 # Graph Report - SyncAlly  (2026-11-02)
 
 ## Corpus Check
-- 279 files · ~236,617 words
+- 279 files · ~236,766 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 8 file(s) not represented in the graph (top: (none) 4, .example 1, .ini 1)
 

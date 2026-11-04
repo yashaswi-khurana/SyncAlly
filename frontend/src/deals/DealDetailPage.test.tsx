@@ -10,14 +10,17 @@ import {
   getAgreementVersion,
   getTradePack,
   getDeal,
+  getDealFulfillment,
   getNegotiation,
   getOrganization,
   listDealFacts,
   listDealMessages,
   listOrganizations,
   listPaymentStatuses,
+  recordDealFulfillment,
 } from "../api/client";
 import type { AgreementVersion, Deal } from "../api/types";
+import type { FulfillmentSnapshot } from "../api/types";
 import DealDetailPage from "./DealDetailPage";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -39,6 +42,8 @@ vi.mock("../api/client", async (importOriginal) => {
     listDealMessages: vi.fn(),
     listOrganizations: vi.fn(),
     listPaymentStatuses: vi.fn(),
+    getDealFulfillment: vi.fn(),
+    recordDealFulfillment: vi.fn(),
   };
 });
 
@@ -52,6 +57,8 @@ const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedListPaymentStatuses = vi.mocked(listPaymentStatuses);
+const mockedGetDealFulfillment = vi.mocked(getDealFulfillment);
+const mockedRecordDealFulfillment = vi.mocked(recordDealFulfillment);
 
 const DEAL: Deal = {
   id: "deal-1",
@@ -59,6 +66,26 @@ const DEAL: Deal = {
   seller_organization_id: "22222222-2222-2222-2222-222222222222",
   status: "DRAFT",
   version: 0,
+};
+
+const PENDING_FULFILLMENT: FulfillmentSnapshot = {
+  deal_id: DEAL.id,
+  state: "PENDING",
+  agreement_version_id: null,
+  agreement_version_number: null,
+  terms_hash: null,
+  obligation_id: null,
+  planned_quantity: null,
+  unit: null,
+  destination: null,
+  target_date: null,
+  shipped_quantity: "0",
+  observed_quantity: "0",
+  confirmed_quantity: "0",
+  fulfillment_version: 0,
+  payment_complete: false,
+  deal_completed: false,
+  events: [],
 };
 
 function setDocumentHidden(hidden: boolean) {
@@ -96,6 +123,22 @@ describe("DealDetailPage", () => {
       deal_revision: 0, latest: null, current_candidate: null, eligible_actions: ["submit"], round_count: 0, max_rounds: 5,
       escalated: false, history_ambiguous: false, proposals: [], history: [] }));
     mockedListPaymentStatuses.mockResolvedValue([]);
+    mockedGetDealFulfillment.mockResolvedValue(PENDING_FULFILLMENT);
+    mockedRecordDealFulfillment.mockResolvedValue({
+      id: "event-1",
+      deal_id: DEAL.id,
+      agreement_version_id: "agreement-1",
+      terms_hash: "a".repeat(64),
+      obligation_id: "obligation-1",
+      organization_id: DEAL.seller_organization_id,
+      user_id: "user-1",
+      event_type: "SHIPPED",
+      quantity: "1",
+      unit: "each",
+      source_type: "USER_ATTESTATION",
+      recorded_at: "2026-11-04T00:00:00Z",
+      version: 1,
+    });
     mockedGetCommercialDocumentDraft.mockRejectedValue(
       new ApiError(409, "Agreement not committed"),
     );

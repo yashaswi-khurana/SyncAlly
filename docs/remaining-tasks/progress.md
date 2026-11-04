@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; Steps 03–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; Step 03 is **BLOCKED**; Steps 04–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -16,7 +16,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [01 Profiles](01-profiles.md) | Existing identity/onboarding | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 112/112 backend org tests pass (6 skip); 370/370 frontend tests pass (+6 F14 profile tests); ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. All 4 profile dimensions, UNVERIFIED immutability, optimistic locking (409), contact privacy isolation, and downgrade guard verified. |
 | [02 Permissions](02-permissions.md) | 01 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 48/48 backend tests pass; 83/83 focused frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Full server capability matrix, safe defaults, no blanket finance/fulfillment, self-escalation (403), last-admin (409), optimistic concurrency (409), commit-time row-lock verification, and migration 0019 downgrade safeguard verified. |
-| [03 Fulfillment](03-fulfillment.md) | 02 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
+| [03 Fulfillment](03-fulfillment.md) | 02 | BLOCKED | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Local implementation and focused checks recorded 2026-11-03; required three-role coordination and independent review remain incomplete. See Step 03 Execution Evidence below. |
 | [04 Collection Schema](04-collection-schema.md) | 03 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [05 Collections API UI Docs](05-collections-api-ui-docs.md) | 04 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [06 Milestone Payments](06-milestone-payments.md) | 02, 03, 05 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
@@ -183,3 +183,80 @@ Optional election: elected / explicitly not elected / unknown:
 Completion report / next concrete operator actions:
   - Step 02 Permissions fully implemented, independently reviewed, and verified. Ready for Step 03 Fulfillment.
 ```
+
+## Step 03 Execution Evidence
+
+UTC timestamp: 2026-11-03T19:53:13Z
+
+Step / dependency verification / current status: Step 03 Fulfillment (F9) / Step 02 remains documented ACCEPTED and 0019 was the pre-step migration head / BLOCKED pending role coordination and independent review.
+
+Role identity / coordination evidence:
+
+- The operator replied “complete the blocker issues here”; the primary agent completed the bounded implementation locally.
+- PLANNER: NOT_RUN as a separate read-only role. DEVELOPER: no specialized role agent; code is present in this worktree. REVIEWER: NOT_RUN; no independent verdict is claimed.
+- The task contract requires three specialized roles. Runtime instructions did not permit spawning them in this turn; that coordination gate remains open.
+
+Current repo version / inspected evidence:
+
+- Branch main, HEAD 3e098a2; changes remain uncommitted. Alembic head is 0020_fulfillment_events.
+- Domain/application: backend/src/syncally/domain/agreements/fulfillment.py and backend/src/syncally/application/fulfillment.py.
+- API/repository: backend/src/syncally/api/fulfillment.py:156 and backend/src/syncally/infrastructure/repositories/fulfillment.py:90.
+- Completion/payment hook: backend/src/syncally/infrastructure/deal_completion.py:133 and backend/src/syncally/infrastructure/repositories/payment_processing.py:459.
+- UI: frontend/src/deals/FulfillmentPanel.tsx:26 and frontend/src/deals/DealDetailPage.tsx:702.
+
+Hypothesis / cheapest discriminating check:
+
+- Seller shipment plus buyer observation and confirmation can complete only the current committed quantity in the agreed unit, and only after every required payment milestone has trusted exact reconciliation.
+- A payment-reconciliation test exercises delivery-first arrival; a separate route test exercises payment-first arrival.
+- SQLite migration must preserve existing obligation and dependent milestone rows with foreign keys enabled.
+
+Authorized scope / policy:
+
+- Task 03 only. Existing FULFILLMENT capability is required; no grants or backfills were added. Events are explicit USER_ATTESTATION facts; AI/carrier data is not confirmation.
+
+Files changed / preserved:
+
+- Added migration 0020, fulfillment domain/application/API/repository/model/completion modules, focused backend tests, and FulfillmentPanel with tests.
+- Modified API registration, notification kinds, deal completion guard, agreement scope constraints, payment reconciliation, frontend API types/client/detail page/styles, and progress evidence.
+- Removed a now-unused ConstraintStatus import in the preexisting dirty conversations.py refactor so full Ruff passes. Other dirty LangGraph/docs/package changes were preserved.
+
+Commands and results:
+
+- BaseSettings discovery runner for test_fulfillment_routes.py, test_fulfillment_domain.py, test_fulfillment_migration.py, test_deal_use_cases.py, test_deal_workflow.py, test_organization_domain.py / backend / exit 0: 60 run, 52 passed, 8 skipped, 0 failed.
+- python -m ruff check src tests / backend / exit 0.
+- python -m unittest discover -s tests -p test_fulfillment_migration.py / backend / exit 0: 2 passed.
+- npm test -- src/deals/DealDetailPage.test.tsx src/deals/FulfillmentPanel.test.tsx / frontend / exit 0: 36 passed.
+- npm run lint:check / frontend / exit 0: 0 errors, 3 existing warnings in untouched PaymentStatusPanel.tsx.
+- npm run build / frontend / exit 0.
+- python -m alembic heads / backend / exit 0: 0020_fulfillment_events (head).
+- git diff --check / repository root / exit 0.
+- test_agreement_routes.py import attempt / backend / exit 1 because the mounted API imports LangGraph, which is absent from the current project virtual environment. No package installation or module masking was used; the fulfillment route functions were tested directly.
+
+Evidence / schema:
+
+- Migration 0020 uses additive SQLite changes and unique indexes rather than rebuilding referenced tables. The migration test proves old obligation and milestone rows survive with foreign keys enabled; PostgreSQL DDL is also generated offline.
+- Downgrade blocks if events or nonzero fulfillment versions exist.
+- Fresh explicit capability checks gate writes; event, audit, outbox, and any completion transition commit together.
+- Completion checks current agreement hash/version, exact shipped/observed/confirmed totals and units, required milestones, and exact trusted reconciliation.
+- UI exposes pending, empty, stale, error, revoked, history, and role-specific commands.
+
+Reviewer finding: severity / file:line / proof / impact / fix:
+
+- Independent review NOT_RUN; no reviewer findings or verdict are claimed.
+
+Repair number / independent review:
+
+- Independent-review repair cycles: 0/3. Local self-review fixed SQLite migration cascade deletion, a React effect lint error, and the payment test fixture; checks were rerun.
+
+Implementation acceptance / live verification / production approval:
+
+- Code and focused local checks are present. Step 03 is BLOCKED, not ACCEPTED, until role coordination and independent review are complete. Browser verification, PostgreSQL/Temporal live checks, and production approval remain unmet.
+
+Blockers / dependent steps:
+
+- Independent reviewer and role coordination remain required. Mounted API tests need the declared LangGraph package installed in the project virtual environment.
+- Step 04 remains blocked on Step 03 acceptance; no later step was started.
+
+Next operator action:
+
+- Complete the independent review, provision the declared LangGraph dependency in the project environment, rerun test_agreement_routes.py and Step 03 gates, then update status from that evidence.

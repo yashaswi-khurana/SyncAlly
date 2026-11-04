@@ -30,6 +30,7 @@ class AgreementVersion(Base):
     __table_args__ = (
         UniqueConstraint("deal_id", "version_number"),
         UniqueConstraint("id", "deal_id", name="uq_agreement_scope"),
+        UniqueConstraint("id", "deal_id", "terms_hash", name="uq_agreement_scope_hash"),
         ForeignKeyConstraint(["proposal_id", "deal_id"], ["proposals.id", "proposals.deal_id"], name="fk_agreement_proposal_scope"),
         CheckConstraint("version_number > 0", name="ck_agreement_version_positive"),
         Index("uq_agreement_pending_deal", "deal_id", unique=True,
@@ -66,7 +67,11 @@ class Approval(Base):
 
 class Obligation(TimestampMixin, Base):
     __tablename__ = "obligations"
-    __table_args__ = (CheckConstraint("owner_organization_id <> counterparty_organization_id", name="ck_obligation_distinct_parties"),)
+    __table_args__ = (
+        CheckConstraint("owner_organization_id <> counterparty_organization_id", name="ck_obligation_distinct_parties"),
+        CheckConstraint("fulfillment_version >= 0", name="ck_obligation_fulfillment_version_nonnegative"),
+        UniqueConstraint("id", "deal_id", "agreement_version_id", name="uq_obligation_fulfillment_scope"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
     deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id", ondelete="CASCADE"), nullable=False)
@@ -78,3 +83,4 @@ class Obligation(TimestampMixin, Base):
     due_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_terms_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fulfillment_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

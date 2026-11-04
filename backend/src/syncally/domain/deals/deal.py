@@ -83,12 +83,14 @@ class Deal:
     def begin_execution(self) -> None:
         self._transition(DealStatus.AGREED, DealStatus.EXECUTING)
 
-    def complete(self) -> None:
-        """Complete execution after delivery and payment obligations are reconciled.
-
-        Application code must verify the committed agreement's delivery and payment
-        obligations before calling this lifecycle transition.
-        """
+    def complete(
+        self, *, fulfillment_complete: bool, payments_reconciled: bool
+    ) -> None:
+        """Complete only after committed delivery and payment obligations are met."""
+        if not fulfillment_complete or not payments_reconciled:
+            raise InvalidTransition(
+                "Deal completion requires fulfilled delivery and reconciled payments"
+            )
         self._transition(DealStatus.EXECUTING, DealStatus.COMPLETED)
 
     def cancel(self) -> None:

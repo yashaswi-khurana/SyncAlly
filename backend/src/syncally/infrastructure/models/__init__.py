@@ -14,6 +14,7 @@ from syncally.infrastructure.models.deals import (
     Message,
 )
 from syncally.infrastructure.models.demo import DemoFixture
+from syncally.infrastructure.models.fulfillment import FulfillmentEvent
 from syncally.infrastructure.models.identity import (
     Organization,
     OrganizationMember,
@@ -39,6 +40,7 @@ __all__ = [
     "CounterpartyOnboarding",
     "Deal",
     "DemoFixture",
+    "FulfillmentEvent",
     "Message",
     "NegotiationAction",
     "NegotiationSession",

@@ -20,6 +20,8 @@ import type {
   FactCorrectionResult,
   FactSuggestionResult,
   FactReviewAction,
+  FulfillmentSnapshot,
+  FulfillmentEvent,
   MessageExistence,
   NegotiationAction,
   NegotiationInput,
@@ -33,6 +35,7 @@ import type {
   PaymentMode,
   PaymentPreview,
   PaymentStatus,
+  RecordFulfillmentInput,
   ProposalSuggestion,
   UpdateMemberPermissionsInput,
   UpdateOrganizationProfileInput,
@@ -321,6 +324,20 @@ export function authorizeDealPayment(
 
 export function previewDealPayment(dealId: string, signal?: AbortSignal): Promise<PaymentPreview> {
   return apiRequest<PaymentPreview>(`/deals/${encodeURIComponent(dealId)}/payments/preview`, { signal });
+}
+
+export function getDealFulfillment(dealId: string, signal?: AbortSignal): Promise<FulfillmentSnapshot> {
+  return apiRequest<FulfillmentSnapshot>(`/deals/${encodeURIComponent(dealId)}/fulfillment`, { signal });
+}
+
+export function recordDealFulfillment(
+  dealId: string,
+  input: RecordFulfillmentInput,
+): Promise<FulfillmentEvent> {
+  return apiRequest<FulfillmentEvent>(`/deals/${encodeURIComponent(dealId)}/fulfillment/events`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export function getCommercialDocumentDraft(dealId: string): Promise<CommercialDocumentDraft> {

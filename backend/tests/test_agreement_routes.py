@@ -33,6 +33,7 @@ from syncally.infrastructure.models import (
     Constraint,
     Conversation,
     Deal,
+    FulfillmentEvent,
     Message,
     NegotiationSession,
     Obligation,
@@ -1070,6 +1071,209 @@ class AgreementRouteTests(unittest.TestCase):
 
         self.assertEqual(payment_response.status_code, 404)
         self.assertEqual(document_response.status_code, 404)
+
+    def _grant_fulfillment(self, organization: Organization, user: User) -> None:
+        member = self.session.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == organization.id,
+                OrganizationMember.user_id == user.id,
+            )
+        )
+        assert member is not None
+        member.capabilities = ["FULFILLMENT"]
+        self.session.commit()
+
+    def _fulfillment_payload(
+        self, stage: str, quantity: str, version: int, key: str | None = None
+    ) -> dict[str, Any]:
+        agreement = self.session.scalar(
+            select(AgreementVersion).where(
+                AgreementVersion.id == self.deal.current_agreement_version_id
+            )
+        )
+        obligation = self.session.scalar(
+            select(Obligation).where(
+                Obligation.deal_id == self.deal.id,
+                Obligation.agreement_version_id == self.deal.current_agreement_version_id,
+                Obligation.obligation_type == "DELIVERY",
+            )
+        )
+        assert agreement is not None and obligation is not None
+        return {
+            "agreement_version_id": str(agreement.id),
+            "terms_hash": agreement.terms_hash,
+            "obligation_id": str(obligation.id),
+            "organization_id": str(self.seller.id if stage == "SHIPPED" else self.buyer.id),
+            "event_type": stage,
+            "quantity": quantity,
+            "expected_version": version,
+            "idempotency_key": key or str(uuid4()),
+        }
+
+    def _record_fulfillment(self, payload: dict[str, Any]) -> httpx.Response:
+        return self._request(
+            "POST", f"/deals/{self.deal.id}/fulfillment/events", json=payload
+        )
+
+    def _add_reconciled_payment(self) -> None:
+        milestone = self.session.scalar(
+            select(PaymentMilestone).where(
+                PaymentMilestone.deal_id == self.deal.id,
+                PaymentMilestone.agreement_version_id == self.deal.current_agreement_version_id,
+            )
+        )
+        assert milestone is not None
+        self.session.add(
+            PaymentIntent(
+                deal_id=self.deal.id,
+                agreement_version_id=milestone.agreement_version_id,
+                payment_milestone_id=milestone.id,
+                seller_organization_id=self.seller.id,
+                payer_organization_id=self.buyer.id,
+                authorized_by=self.seller_user.id,
+                amount=milestone.amount,
+                currency=milestone.currency,
+                status="PAID",
+                provider="OFFLINE_DEMO",
+                execution_mode="OFFLINE_DEMO",
+                reconciliation_source="OFFLINE_DEMO",
+                idempotency_key=str(uuid4()),
+                reconciled_amount=milestone.amount,
+                last_reconciled_at=datetime.now(UTC),
+            )
+        )
+        self.session.commit()
+
+    def test_fulfillment_is_versioned_idempotent_and_completes_only_after_payment(self) -> None:
+        self._commit_current_agreement()
+        self._grant_fulfillment(self.seller, self.seller_user)
+        self._grant_fulfillment(self.buyer, self.buyer_user)
+
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        snapshot = self._request("GET", f"/deals/{self.deal.id}/fulfillment")
+        self.assertEqual(snapshot.status_code, 200, snapshot.text)
+        self.assertEqual(snapshot.json()["state"], "EMPTY")
+        self.assertEqual(snapshot.json()["planned_quantity"], "1")
+
+        shipped = self._fulfillment_payload("SHIPPED", "1", 0, "ship-1")
+        first = self._record_fulfillment(shipped)
+        replay = self._record_fulfillment(shipped)
+        self.assertEqual(first.status_code, 201, first.text)
+        self.assertEqual(replay.status_code, 201, replay.text)
+        self.assertEqual(replay.json()["id"], first.json()["id"])
+        self.assertEqual(first.json()["source_type"], "USER_ATTESTATION")
+
+        conflict = self._record_fulfillment({**shipped, "quantity": "0.5"})
+        self.assertEqual(conflict.status_code, 409)
+        self._add_reconciled_payment()
+        self.assertEqual(self.deal.status, "AGREED")
+
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        observed = self._record_fulfillment(
+            self._fulfillment_payload("OBSERVED", "1", 1, "observe-1")
+        )
+        confirmed = self._record_fulfillment(
+            self._fulfillment_payload("CONFIRMED", "1", 2, "confirm-1")
+        )
+
+        self.assertEqual(observed.status_code, 201, observed.text)
+        self.assertEqual(confirmed.status_code, 201, confirmed.text)
+        self.assertEqual(self.deal.status, "COMPLETED")
+        self.assertEqual(
+            self.session.scalar(
+                select(AuditEvent).where(
+                    AuditEvent.aggregate_id == self.deal.id,
+                    AuditEvent.event_type == "DEAL_COMPLETED",
+                )
+            ).event_type,
+            "DEAL_COMPLETED",
+        )
+        notifications = list(
+            self.session.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.aggregate_id == self.deal.id,
+                    OutboxEvent.event_type == "DEAL_NOTIFICATION",
+                )
+            )
+        )
+        self.assertTrue(
+            any(notification.payload["kind"] == "DEAL_COMPLETED" for notification in notifications)
+        )
+        snapshot = self._request("GET", f"/deals/{self.deal.id}/fulfillment")
+        self.assertTrue(snapshot.json()["payment_complete"])
+        self.assertTrue(snapshot.json()["deal_completed"])
+
+    def test_fulfillment_rejects_wrong_party_bad_progress_overdelivery_and_stale_version(self) -> None:
+        self._commit_current_agreement()
+        self._grant_fulfillment(self.seller, self.seller_user)
+        self._grant_fulfillment(self.buyer, self.buyer_user)
+
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        wrong_party = self._record_fulfillment(
+            self._fulfillment_payload("SHIPPED", "0.5", 0)
+        )
+        self.assertEqual(wrong_party.status_code, 403)
+
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        shipped = self._record_fulfillment(
+            self._fulfillment_payload("SHIPPED", "0.5", 0, "ship-partial")
+        )
+        stale = self._record_fulfillment(
+            self._fulfillment_payload("SHIPPED", "0.1", 0, "ship-stale")
+        )
+        self.assertEqual(shipped.status_code, 201, shipped.text)
+        self.assertEqual(stale.status_code, 409)
+
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        confirmed_first = self._record_fulfillment(
+            self._fulfillment_payload("CONFIRMED", "0.5", 1)
+        )
+        over_observed = self._record_fulfillment(
+            self._fulfillment_payload("OBSERVED", "0.6", 1)
+        )
+        self.assertEqual(confirmed_first.status_code, 422)
+        self.assertEqual(over_observed.status_code, 422)
+
+        observed = self._record_fulfillment(
+            self._fulfillment_payload("OBSERVED", "0.5", 1, "observe-partial")
+        )
+        confirmed = self._record_fulfillment(
+            self._fulfillment_payload("CONFIRMED", "0.5", 2, "confirm-partial")
+        )
+        self.assertEqual(observed.status_code, 201, observed.text)
+        self.assertEqual(confirmed.status_code, 201, confirmed.text)
+        self.assertEqual(self.deal.status, "AGREED")
+
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        over_delivery = self._record_fulfillment(
+            self._fulfillment_payload("SHIPPED", "0.6", 3, "ship-over")
+        )
+        self.assertEqual(over_delivery.status_code, 422)
+
+    def test_fulfillment_requires_fresh_explicit_capability(self) -> None:
+        self._commit_current_agreement()
+        self._grant_fulfillment(self.seller, self.seller_user)
+        actor = self._actor(self.seller_user, self.seller)
+        self._authenticate(actor)
+        member = self.session.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == self.seller.id,
+                OrganizationMember.user_id == self.seller_user.id,
+            )
+        )
+        assert member is not None
+        member.capabilities = []
+        self.session.commit()
+
+        response = self._record_fulfillment(
+            self._fulfillment_payload("SHIPPED", "1", 0)
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            self.session.scalar(select(FulfillmentEvent).where(FulfillmentEvent.deal_id == self.deal.id)),
+            None,
+        )
 
 
 if __name__ == "__main__":

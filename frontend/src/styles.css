@@ -2973,6 +2973,49 @@ body::after {
   gap: 12px;
 }
 
+.fulfillment-panel__terms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.fulfillment-panel__terms > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+}
+
+.fulfillment-panel__terms dt,
+.fulfillment-panel__form label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.fulfillment-panel__terms dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.fulfillment-panel__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
+.fulfillment-panel__form label {
+  display: grid;
+  gap: 6px;
+}
+
+.fulfillment-panel__form input,
+.fulfillment-panel__form select {
+  min-width: 180px;
+  padding: 10px 12px;
+}
+
 .payment-status__item {
   display: grid;
   gap: 8px;

@@ -292,6 +292,55 @@ export interface PaymentStatus {
   version?: number;
 }
 
+export type FulfillmentStage = "SHIPPED" | "OBSERVED" | "CONFIRMED";
+
+export interface FulfillmentEvent {
+  id: string;
+  deal_id: string;
+  agreement_version_id: string;
+  terms_hash: string;
+  obligation_id: string;
+  organization_id: string;
+  user_id: string;
+  event_type: FulfillmentStage;
+  quantity: string;
+  unit: string;
+  source_type: "USER_ATTESTATION";
+  recorded_at: string;
+  version: number;
+}
+
+export interface FulfillmentSnapshot {
+  deal_id: string;
+  state: "PENDING" | "EMPTY" | "STALE" | "READY";
+  agreement_version_id: string | null;
+  agreement_version_number: number | null;
+  terms_hash: string | null;
+  obligation_id: string | null;
+  planned_quantity: string | null;
+  unit: string | null;
+  destination: string | null;
+  target_date: string | null;
+  shipped_quantity: string;
+  observed_quantity: string;
+  confirmed_quantity: string;
+  fulfillment_version: number;
+  payment_complete: boolean;
+  deal_completed: boolean;
+  events: FulfillmentEvent[];
+}
+
+export interface RecordFulfillmentInput {
+  agreement_version_id: string;
+  terms_hash: string;
+  obligation_id: string;
+  organization_id: string;
+  event_type: FulfillmentStage;
+  quantity: string;
+  expected_version: number;
+  idempotency_key: string;
+}
+
 export interface PaymentAuthorization {
   id: string;
   status: string;

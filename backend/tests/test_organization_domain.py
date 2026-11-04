@@ -317,7 +317,7 @@ class DealDomainTests(unittest.TestCase):
         deal.begin_execution()
         version_before_completion = deal.version
 
-        deal.complete()
+        deal.complete(fulfillment_complete=True, payments_reconciled=True)
 
         self.assertEqual(deal.status, DealStatus.COMPLETED)
         self.assertEqual(deal.version, version_before_completion + 1)
@@ -337,10 +337,37 @@ class DealDomainTests(unittest.TestCase):
                 )
 
                 with self.assertRaises(InvalidTransition):
-                    deal.complete()
+                    deal.complete(fulfillment_complete=True, payments_reconciled=True)
 
                 self.assertEqual(deal.status, status)
                 self.assertEqual(deal.version, 3)
+
+    def test_deal_completion_requires_fulfillment_and_reconciled_payments(self) -> None:
+        for fulfillment_complete, payments_reconciled in (
+            (False, False),
+            (False, True),
+            (True, False),
+        ):
+            with self.subTest(
+                fulfillment_complete=fulfillment_complete,
+                payments_reconciled=payments_reconciled,
+            ):
+                deal = make_deal()
+                deal.start_negotiation()
+                agreement_version_id = AgreementVersionId(uuid4())
+                deal.request_approval(agreement_version_id)
+                deal.mark_agreed(agreement_version_id)
+                deal.begin_execution()
+                version_before = deal.version
+
+                with self.assertRaises(InvalidTransition):
+                    deal.complete(
+                        fulfillment_complete=fulfillment_complete,
+                        payments_reconciled=payments_reconciled,
+                    )
+
+                self.assertEqual(deal.status, DealStatus.EXECUTING)
+                self.assertEqual(deal.version, version_before)
 
 
 class OrganizationContactDomainTests(unittest.TestCase):

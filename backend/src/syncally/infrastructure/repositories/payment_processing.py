@@ -380,6 +380,12 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                 retry_count=outbox.retry_count,
                 payment_status=intent.status.value,
             )
+            # Completion depends on both the delivery ledger and reconciled payment
+            # truth. Evaluate it in this transaction so the deal transition and its
+            # notification commit with the payment reconciliation.
+            from syncally.infrastructure.deal_completion import maybe_complete_deal
+
+            maybe_complete_deal(db, row.deal_id, payment_intent_id)
             db.commit()
             log_operation(logger, Operation.PAYMENT_OUTBOX_COMPLETED, **fields)
 

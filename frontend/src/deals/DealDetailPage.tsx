@@ -16,6 +16,7 @@ import DealConversationReview from "./DealConversationReview";
 import AgreementReview from "./AgreementReview";
 import PaymentStatusPanel from "./PaymentStatusPanel";
 import NegotiationReview from "./NegotiationReview";
+import FulfillmentPanel from "./FulfillmentPanel";
 
 type DealState =
   | { status: "loading" }
@@ -698,6 +699,14 @@ export default function DealDetailPage({
           onOrganizationChange={handleOrganizationChange}
           onCommitted={commercialChanged}
         /> : null}
+        <FulfillmentPanel
+          dealId={deal.id}
+          buyerOrganizationId={deal.buyer_organization_id}
+          sellerOrganizationId={deal.seller_organization_id}
+          selectedOrganizationId={selectedOrganizationId}
+          reloadToken={agreementReloadToken}
+          onChanged={commercialChanged}
+        />
         <PaymentStatusPanel
           dealId={deal.id}
           sellerOrganizationId={deal.seller_organization_id}

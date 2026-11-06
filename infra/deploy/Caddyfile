@@ -1,5 +1,5 @@
 {$APP_DOMAIN} {
-	@api path /auth* /dev* /organizations* /deals* /webhooks* /health* /openapi.json /docs* /redoc*
+	@api path /auth* /dev* /organizations* /invitations* /deals* /webhooks* /health* /openapi.json /docs* /redoc*
 	handle @api {
 		reverse_proxy api:8000
 	}

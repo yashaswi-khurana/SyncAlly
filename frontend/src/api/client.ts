@@ -33,6 +33,7 @@ import type {
   OrganizationProfile,
   PaymentAuthorization,
   PaymentMode,
+  PaymentMilestoneSummary,
   PaymentPreview,
   PaymentStatus,
   RecordFulfillmentInput,
@@ -311,14 +312,35 @@ export function listPaymentStatuses(
   });
 }
 
+export function listDealPaymentMilestones(
+  dealId: string,
+  options?: { signal?: AbortSignal },
+): Promise<PaymentMilestoneSummary[]> {
+  return apiRequest<PaymentMilestoneSummary[]>(
+    `/deals/${encodeURIComponent(dealId)}/payments/milestones`,
+    { signal: options?.signal },
+  );
+}
+
 export function authorizeDealPayment(
   dealId: string,
   idempotencyKey: string,
   expectedMode?: PaymentMode,
+  options?: {
+    paymentMilestoneId?: string;
+    milestoneId?: string;
+  },
 ): Promise<PaymentAuthorization> {
+  const body: Record<string, unknown> = {
+    idempotency_key: idempotencyKey,
+  };
+  if (expectedMode) body.expected_mode = expectedMode;
+  if (options?.paymentMilestoneId) body.payment_milestone_id = options.paymentMilestoneId;
+  if (options?.milestoneId) body.milestone_id = options.milestoneId;
+
   return apiRequest<PaymentAuthorization>(`/deals/${encodeURIComponent(dealId)}/payments`, {
     method: "POST",
-    body: JSON.stringify({ idempotency_key: idempotencyKey, expected_mode: expectedMode }),
+    body: JSON.stringify(body),
   });
 }
 

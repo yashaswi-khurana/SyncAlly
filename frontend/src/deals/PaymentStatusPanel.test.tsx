@@ -9,10 +9,12 @@ import {
   getOrganization,
   listOrganizations,
   listPaymentStatuses,
+  listDealPaymentMilestones,
   previewDealPayment,
 } from "../api/client";
 import type { AgreementVersion, Deal, OrganizationDirectoryItem, PaymentIntentStatus, PaymentStatus } from "../api/types";
-import PaymentStatusPanel, { formatCountdown } from "./PaymentStatusPanel";
+import PaymentStatusPanel from "./PaymentStatusPanel";
+import { formatCountdown } from "./paymentCountdown";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -24,6 +26,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getOrganization: vi.fn(),
     listOrganizations: vi.fn(),
     listPaymentStatuses: vi.fn(),
+    listDealPaymentMilestones: vi.fn(),
     previewDealPayment: vi.fn(),
   };
 });
@@ -34,6 +37,7 @@ const mockedGetDeal = vi.mocked(getDeal);
 const mockedGetOrganization = vi.mocked(getOrganization);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedListPaymentStatuses = vi.mocked(listPaymentStatuses);
+const mockedListDealPaymentMilestones = vi.mocked(listDealPaymentMilestones);
 const mockedPreviewDealPayment = vi.mocked(previewDealPayment);
 
 const PAYMENT: PaymentStatus = {
@@ -73,6 +77,7 @@ describe("PaymentStatusPanel", () => {
       country_code: "US",
     } as OrganizationDirectoryItem);
     mockedListOrganizations.mockResolvedValue([]);
+    mockedListDealPaymentMilestones.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1041,5 +1046,89 @@ describe("PaymentStatusPanel", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     vi.useRealTimers();
+  });
+
+  it("renders multiple milestones with distinct lifecycle states and allocations", async () => {
+    mockedGetCurrentAgreement.mockResolvedValue({
+      deal_id: "deal-1",
+      version_number: 1,
+      terms_hash: "hash-1",
+      status: "COMMITTED",
+      terms: {
+        schema_version: 2,
+        buyer_id: "buyer-org-1",
+        seller_id: "seller-org-1",
+        line_items: [],
+        shipments: [],
+        payment_terms: [],
+        delivery_location: "Dock A",
+        incoterm: "FOB",
+        cancellation_terms: "Standard",
+      },
+      created_at: "2026-10-31T10:00:00Z",
+      committed_at: "2026-10-31T10:00:00Z",
+      approvals: [],
+    } as AgreementVersion);
+    mockedListOrganizations.mockResolvedValue([
+      { id: "seller-org-1", legal_name: "Seller Co", country_code: "US", role: "SELLER" },
+    ]);
+    mockedListDealPaymentMilestones.mockResolvedValue([
+      {
+        id: "m1-uuid",
+        sequence_number: 1,
+        milestone_id: "deposit",
+        source_terms_reference: "deposit",
+        amount: "5000",
+        currency: "USD",
+        trigger_type: "UPON_COMMIT",
+        due_condition: "Immediate",
+        lifecycle_state: "eligible",
+        is_eligible: true,
+        allocations: [{ obligation_id: "ob-1", amount: "5000", currency: "USD" }],
+      },
+      {
+        id: "m2-uuid",
+        sequence_number: 2,
+        milestone_id: "final",
+        source_terms_reference: "final",
+        amount: "5000",
+        currency: "USD",
+        trigger_type: "UPON_DELIVERY",
+        due_condition: "Net 30",
+        lifecycle_state: "ineligible",
+        is_eligible: false,
+        ineligibility_reason: "Delivery confirmation required",
+        allocations: [{ obligation_id: "ob-2", amount: "5000", currency: "USD" }],
+      },
+    ]);
+    mockedListPaymentStatuses.mockResolvedValue([]);
+
+    render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
+
+    expect(await screen.findByRole("heading", { name: /Milestone 1/ })).toBeInTheDocument();
+    expect(screen.getByText("Eligible to request")).toBeInTheDocument();
+    expect(screen.getAllByText(/Obligation/)).toHaveLength(2);
+    expect(screen.getByText("Ineligible for payment")).toBeInTheDocument();
+    expect(screen.getByText("Delivery confirmation required")).toBeInTheDocument();
+
+    const requestButton = screen.getByRole("button", {
+      name: "Request Payment for Milestone 1",
+    });
+    fireEvent.click(requestButton);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Confirm Invoice Recipient")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
+
+    expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith(
+      "deal-1",
+      expect.any(String),
+      "PAYPAL_SANDBOX",
+      {
+        paymentMilestoneId: "m1-uuid",
+        milestoneId: "deposit",
+      },
+    );
   });
 });

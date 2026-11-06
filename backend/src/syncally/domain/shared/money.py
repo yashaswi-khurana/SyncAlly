@@ -125,3 +125,19 @@ def canonical_decimal(value: Decimal) -> str:
 
     return f"-{result}" if sign else result
 
+
+ZERO_DECIMAL_CURRENCIES: frozenset[str] = frozenset({"HUF", "JPY", "TWD"})
+
+
+def currency_precision(currency: str) -> int:
+    return 0 if currency.upper() in ZERO_DECIMAL_CURRENCIES else 2
+
+
+def has_excess_currency_precision(value: Decimal, currency: str) -> bool:
+    precision = currency_precision(currency)
+    _, digits, exponent = value.as_tuple()
+    while exponent < 0 and digits and digits[-1] == 0:
+        digits = digits[:-1]
+        exponent += 1
+    return exponent < -precision
+

@@ -290,6 +290,46 @@ export interface PaymentPreview {
   provider: "PAYPAL" | "OFFLINE_DEMO";
 }
 
+export type PaymentLifecycleState =
+  | "ineligible"
+  | "eligible"
+  | "authorized"
+  | "queued"
+  | "unknown"
+  | "sent"
+  | "reconciled"
+  | "failed"
+  | "cancelled";
+
+export interface PaymentMilestoneAllocation {
+  obligation_id: string;
+  amount: string;
+  currency: string;
+}
+
+export interface PaymentMilestoneSummary {
+  id: string;
+  sequence_number: number;
+  milestone_id?: string | null;
+  source_terms_reference?: string | null;
+  amount: string;
+  currency: string;
+  trigger_type: string;
+  due_condition: string;
+  lifecycle_state: PaymentLifecycleState;
+  is_eligible: boolean;
+  ineligibility_reason?: string | null;
+  allocations: PaymentMilestoneAllocation[];
+  active_intent_id?: string | null;
+  intent_status?: PaymentIntentStatus | null;
+  reconciled_amount?: string | null;
+  last_checked_at?: string | null;
+  last_reconciled_at?: string | null;
+  invoice_url?: string | null;
+  invoice_reference?: string | null;
+  failure_reason?: string | null;
+}
+
 export interface PaymentStatus {
   id: string;
   milestone_sequence: number;
@@ -314,6 +354,11 @@ export interface PaymentStatus {
   reconciliation_source?: "NONE" | "LEGACY_UNVERIFIED" | PaymentMode;
   invoice_reference?: string | null;
   version?: number;
+  payment_milestone_id?: string | null;
+  milestone_id?: string | null;
+  source_terms_reference?: string | null;
+  lifecycle_state?: PaymentLifecycleState | null;
+  is_eligible?: boolean | null;
 }
 
 export type FulfillmentStage = "SHIPPED" | "OBSERVED" | "CONFIRMED";
@@ -371,6 +416,8 @@ export interface PaymentAuthorization {
   already_existed: boolean;
   provider?: string;
   execution_mode?: PaymentMode | "LEGACY_UNRESOLVED";
+  payment_milestone_id?: string | null;
+  milestone_id?: string | null;
 }
 
 export interface CommercialDocumentDraft {

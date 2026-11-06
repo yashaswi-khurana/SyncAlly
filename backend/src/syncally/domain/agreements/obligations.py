@@ -45,7 +45,11 @@ def build_obligations(terms: TradeTerms) -> list[ObligationDraft]:
                 if shipment.target_date
                 else None
             ),
-            source_terms_reference=f"shipments[{index}]",
+            source_terms_reference=(
+                shipment.id
+                if terms.schema_version == 2 and shipment.id
+                else f"shipments[{index}]"
+            ),
         )
         for index, shipment in enumerate(terms.shipments)
     ]
@@ -56,7 +60,11 @@ def build_obligations(terms: TradeTerms) -> list[ObligationDraft]:
             counterparty_organization_id=terms.seller_id,
             due_condition=term.due_condition,
             due_date=None,
-            source_terms_reference=f"payment_terms[{index}]",
+            source_terms_reference=(
+                term.id
+                if terms.schema_version == 2 and term.id
+                else f"payment_terms[{index}]"
+            ),
         )
         for index, term in enumerate(terms.payment_terms)
     )
@@ -72,7 +80,11 @@ def build_payment_milestones(terms: TradeTerms) -> list[PaymentMilestoneDraft]:
             amount=term.amount,
             trigger_type=term.trigger,
             due_condition=term.due_condition,
-            source_terms_reference=f"payment_terms[{index}]",
+            source_terms_reference=(
+                term.id
+                if terms.schema_version == 2 and term.id
+                else f"payment_terms[{index}]"
+            ),
         )
         for index, term in enumerate(terms.payment_terms)
     ]

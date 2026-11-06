@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; Steps 04–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; Steps 05–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -17,7 +17,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | [01 Profiles](01-profiles.md) | Existing identity/onboarding | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 112/112 backend org tests pass (6 skip); 370/370 frontend tests pass (+6 F14 profile tests); ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. All 4 profile dimensions, UNVERIFIED immutability, optimistic locking (409), contact privacy isolation, and downgrade guard verified. |
 | [02 Permissions](02-permissions.md) | 01 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 48/48 backend tests pass; 83/83 focused frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Full server capability matrix, safe defaults, no blanket finance/fulfillment, self-escalation (403), last-admin (409), optimistic concurrency (409), commit-time row-lock verification, and migration 0019 downgrade safeguard verified. |
 | [03 Fulfillment](03-fulfillment.md) | 02 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 66/66 backend tests pass (8 skip); 36/36 frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Append-only fulfillment events (SHIPPED/OBSERVED/CONFIRMED), fresh FULFILLMENT capability verification, 10^18 scaled integer math, OCC (409), dual delivery+payment deal completion, and migration 0020 downgrade safety verified. |
-| [04 Collection Schema](04-collection-schema.md) | 03 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
+| [04 Collection Schema](04-collection-schema.md) | 03 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 1/3 | Verified: 78/78 focused backend tests pass (6 skip); 793/793 full discovery backend tests pass (32 skip); 385/385 frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Explicit collection IDs, schema discriminator (v1/v2), duplicate lines with distinct IDs, bounded decimal policy (40 digits), unit match, overallocation rejection, zero-residual payment balance, deterministic canonical sorting/hashing, and migration 0021 downgrade safety verified. |
 | [05 Collections API UI Docs](05-collections-api-ui-docs.md) | 04 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [06 Milestone Payments](06-milestone-payments.md) | 02, 03, 05 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [07 Amendments](07-amendments.md) | 05, 06 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
@@ -247,4 +247,65 @@ Optional election: elected / explicitly not elected / unknown:
   - N/A for Step 03.
 Completion report / next concrete operator actions:
   - Step 03 Fulfillment fully implemented, independently reviewed, and verified. Ready for Step 04 Collection Schema.
+```
+
+## Step 04 Execution Evidence
+
+```text
+UTC timestamp: 2026-11-06T05:25:00Z
+Step / dependency verification / current status: Step 04 Collection Schema (F10a) / Dependency 03 (Fulfillment) verified / ACCEPTED
+Role identity / coordination evidence (never pretend):
+  - PLANNER: Read-only Architecture Planner subagent (id: a89d034b-e8b5-459b-8ee4-25e7224acfb2) inspected code/dependencies, formulated bounded decimal policy, schema 2 collection design, 6 hypotheses, and cheap checks.
+  - DEVELOPER: Feature Developer subagent (id: c5246ec8-550b-4166-b316-897300a9b3a8) implemented Tasks 1-5 across domain, persistence, migration 0021, obligation derivation, export display compatibility, and test suites; executed Repair 1/3.
+  - REVIEWER: Independent Code Reviewer subagent (id: c4b2a6a8-7a41-407b-b9ca-55d950d083c0) independently audited code diff, identified 2 defects in initial pass (Finding 1: bounded_decimal digit bound, Finding 2: candidate agreement_version schema_version), re-verified all gates after repair, and rendered final verdict ACCEPTED (Repairs: 1/3).
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch: 131-task-04-collection-schema---f10a
+  - Migration actual head: 0020_fulfillment_events -> 0021_collection_schema
+  - Inspected: backend/src/syncally/domain/shared/money.py:L50-L130, backend/src/syncally/domain/agreements/trade_terms.py:L40-L506, backend/src/syncally/domain/agreements/obligations.py:L30-L90, backend/src/syncally/application/documents.py:L145-L235, backend/src/syncally/infrastructure/repositories/agreements.py:L355-L515, backend/alembic/versions/0021_collection_schema.py:L1-L125
+Hypothesis / cheapest discriminating check:
+  - Bounded finite Decimal policy: NaN/Infinity, giant exponents (>100), and integer places >40 rejected upfront in bounded_decimal before arithmetic or canonical serialization.
+  - Collection schema 2 invariants: stable explicit IDs, duplicate commercial lines permitted with distinct IDs, duplicate IDs rejected, foreign references rejected, cumulative shipment overallocations rejected, unit mismatch rejected, zero-residual payment summation enforced.
+  - Legacy schema 1 backward compatibility: historical canonical bytes, terms_hash, and F12 trade pack exports preserved with 100% byte fidelity without enrichment.
+  - Additive migration safety: migration 0021 adds schema_version with server_default=1 and check constraints; downgrade strictly refused if any schema_version > 1 records exist.
+  - Cheapest checks: python -m unittest tests/test_trade_terms_collection_schema.py tests/test_collection_schema_migration.py
+Authorized scope / policy or private operator election (no secrets):
+  - F10a Collection Schema bounded domain contracts; no client role escalation, no blanket finance/fulfillment grants, exact bilateral terms hash commitment preserved.
+Files changed / preserved unrelated changes:
+  - Created: backend/alembic/versions/0021_collection_schema.py, backend/tests/test_trade_terms_collection_schema.py, backend/tests/test_collection_schema_migration.py
+  - Modified: backend/src/syncally/domain/shared/money.py, backend/src/syncally/domain/agreements/trade_terms.py, backend/src/syncally/domain/agreements/obligations.py, backend/src/syncally/application/documents.py, backend/src/syncally/application/agreements.py, backend/src/syncally/infrastructure/models/agreements.py, backend/src/syncally/infrastructure/models/negotiation.py, backend/src/syncally/infrastructure/repositories/agreements.py, backend/src/syncally/infrastructure/repositories/negotiation.py, backend/tests/test_domain_fixes.py, docs/engineering/plan.md, docs/engineering/decision.md, docs/engineering/log.md, docs/remaining-tasks/progress.md
+  - Preserved dirty work: untouched historical fixtures and configuration.
+Command exactly / cwd / immediate exit code:
+  - Focused test runner: BaseSettings discovery test runner / backend / exit 0
+  - Full discovery backend runner: PYTHONPATH=tests .venv/bin/python -m unittest discover -s tests -p 'test_*.py' / backend / exit 0
+  - Backend ruff check: .venv/bin/python -m ruff check src tests / backend / exit 0
+  - Frontend Vitest: npm test / frontend / exit 0
+  - Frontend lint check: npm run lint:check / frontend / exit 0
+  - Frontend build: npm run build / frontend / exit 0
+  - Git diff check: git diff --check / repo root / exit 0
+Results: run / pass / fail / skip / reasons / warnings:
+  - Focused backend: Ran 78, passed 72, failed 0, skipped 6 (isolated Postgres race gates).
+  - Full discovery backend: Ran 793, passed 761, failed 0, skipped 32 (PostgreSQL and Temporal integration tests).
+  - Frontend tests: 19 test files, 385 passed, 0 failures.
+  - Ruff: 0 errors.
+  - Frontend lint/typecheck: 0 errors, 3 pre-existing warnings in untouched PaymentStatusPanel.tsx.
+  - Frontend build: built in 681ms, 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Migration 0021_collection_schema adds schema_version (int, server_default=1) to agreement_versions and proposals with downgrade safeguard against data loss.
+  - Check constraints ck_agreement_version_schema_version and ck_proposal_schema_version (values IN (1, 2)).
+  - Bounded Decimal (40, 18) with exponent bounded to [-100, 100] in bounded_decimal().
+  - Zero-residual balance enforced: sum(payment_terms) == terms.total and sum(payment_term.allocations) == payment_term.amount.
+  - Living artifacts: docs/engineering/plan.md, decision.md (ADRs 017-020), log.md.
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - Initial Finding 1: HIGH / backend/src/syncally/domain/shared/money.py:55 / bounded_decimal max_integer_places=20 broke test_ai_contracts.py on large product expansions / full discovery failed / fix: max_integer_places increased to 40, test_domain_fixes restored to 27 places. (RESOLVED in Repair 1/3)
+  - Initial Finding 2: MEDIUM / backend/src/syncally/infrastructure/repositories/negotiation.py:295 / schema_version omitted during candidate agreement version creation on accept action / downgrade guard bypassed / fix: passed schema_version=current.terms.schema_version. (RESOLVED in Repair 1/3)
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 1/3. Independent review verdict: ACCEPTED.
+Implementation acceptance versus live verification versus production approval:
+  - Step 04 implementation ACCEPTED. Live verification (Step 12/13) and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - No blockers for Step 04. Step 05 (Collections API UI Docs) is now unblocked.
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 04.
+Completion report / next concrete operator actions:
+  - Step 04 Collection Schema fully implemented, independently reviewed, and verified. Ready for Step 05 Collections API UI Docs.
 ```

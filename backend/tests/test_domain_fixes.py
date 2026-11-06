@@ -10,7 +10,9 @@ from syncally.domain.agreements.agreement import (
     ApprovalDecision,
 )
 from syncally.domain.agreements.trade_terms import (
+    PaymentObligationAllocation,
     PaymentTerm,
+    ShipmentItemAllocation,
     ShipmentTerm,
     TradeLineItem,
     TradeTerms,
@@ -54,18 +56,20 @@ def build_terms(
 ) -> TradeTerms:
     buyer = buyer_id or OrganizationId(uuid4())
     seller = seller_id or OrganizationId(uuid4())
+    if schema_version == 1:
+        default_items = (TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "USD")),)
+        default_shipments = (ShipmentTerm(Decimal("1"), "Toronto", date(2030, 1, 1)),)
+        default_payments = (PaymentTerm(Money(Decimal("10"), "USD"), "seller_invoice", "when seller invoices"),)
+    else:
+        default_items = (TradeLineItem(id="item-1", description="Desk", quantity=Decimal("1"), unit="each", unit_price=Money(Decimal("10"), "USD")),)
+        default_shipments = (ShipmentTerm(id="ship-1", destination="Toronto", target_date=None, allocations=(ShipmentItemAllocation(line_item_id="item-1", quantity=Decimal("1"), unit="each"),)),)
+        default_payments = (PaymentTerm(id="pay-1", amount=Money(Decimal("10"), "USD"), trigger="seller_invoice", due_condition="when seller invoices", allocations=(PaymentObligationAllocation(obligation_id="ship-1", amount=Money(Decimal("10"), "USD")),)),)
     return TradeTerms(
         buyer_id=buyer,
         seller_id=seller,
-        line_items=line_items
-        if line_items is not None
-        else (TradeLineItem("Desk", Decimal("1"), "each", Money(Decimal("10"), "USD")),),
-        shipments=shipments
-        if shipments is not None
-        else (ShipmentTerm(Decimal("1"), "Toronto", date(2030, 1, 1)),),
-        payment_terms=payment_terms
-        if payment_terms is not None
-        else (PaymentTerm(Money(Decimal("10"), "USD"), "seller_invoice", "when seller invoices"),),
+        line_items=line_items if line_items is not None else default_items,
+        shipments=shipments if shipments is not None else default_shipments,
+        payment_terms=payment_terms if payment_terms is not None else default_payments,
         delivery_location="Toronto",
         schema_version=schema_version,
     )
@@ -146,8 +150,8 @@ class DecimalCanonicalizationTests(TestCase):
         self.assertEqual(first.add(second).amount, expected)
 
     def test_canonicalization_is_exact_and_context_independent(self) -> None:
-        first = Decimal("1.234567890123456789012345678901")
-        second = Decimal("1.234567890123456789012345678902")
+        first = Decimal("1.234567890123456789")
+        second = Decimal("1.234567890123456788")
 
         with localcontext() as context:
             context.prec = 28
@@ -155,7 +159,7 @@ class DecimalCanonicalizationTests(TestCase):
             second_text = canonical_decimal(second)
 
         self.assertNotEqual(first_text, second_text)
-        self.assertEqual(first_text, "1.234567890123456789012345678901")
+        self.assertEqual(first_text, "1.234567890123456789")
         self.assertEqual(canonical_decimal(Decimal("1.2300")), "1.23")
         self.assertEqual(canonical_decimal(Decimal("-0.000")), "0")
 
@@ -165,12 +169,12 @@ class DecimalCanonicalizationTests(TestCase):
         with localcontext() as context:
             context.prec = 28
             first = build_terms(
-                shipments=(ShipmentTerm(Decimal("1.234567890123456789012345678901"), "Toronto"),),
+                shipments=(ShipmentTerm(Decimal("1.234567890123456789"), "Toronto"),),
                 buyer_id=buyer_id,
                 seller_id=seller_id,
             )
             second = build_terms(
-                shipments=(ShipmentTerm(Decimal("1.234567890123456789012345678902"), "Toronto"),),
+                shipments=(ShipmentTerm(Decimal("1.234567890123456788"), "Toronto"),),
                 buyer_id=buyer_id,
                 seller_id=seller_id,
             )

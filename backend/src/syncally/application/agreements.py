@@ -43,6 +43,16 @@ def compare_agreement_terms(before: dict[str, Any], after: dict[str, Any]) -> di
         modified = []
         if len(removed) == len(added) == 1:
             modified = [{"before": removed.pop(), "after": added.pop()}]
+        else:
+            before_by_id = {item["id"]: item for item in removed if isinstance(item, dict) and "id" in item}
+            after_by_id = {item["id"]: item for item in added if isinstance(item, dict) and "id" in item}
+            common_ids = sorted(set(before_by_id) & set(after_by_id))
+            for item_id in common_ids:
+                b_entry = before_by_id[item_id]
+                a_entry = after_by_id[item_id]
+                modified.append({"before": b_entry, "after": a_entry})
+                removed.remove(b_entry)
+                added.remove(a_entry)
         collections[name] = {"added": added, "removed": removed, "modified": modified}
     fields = [
         {"field": name, "before": before_copy[name], "after": after_copy[name]}

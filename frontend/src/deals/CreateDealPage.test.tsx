@@ -100,6 +100,8 @@ describe("CreateDealPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy Link" }));
     expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("lets a seller invite a buyer without swapping the initiating organization", async () => {
     mockedListOrganizations.mockResolvedValue([organization()]);
     vi.mocked(createCounterpartyInvitation).mockResolvedValue({ token: "t", invite_url: "https://app.example/invite", organization_id: BUYER_ID, organization_legal_name: "Seller Co", deal_id: "pending", role: "ADMIN", expires_at: "2027-01-01T00:00:00Z", kind: "COUNTERPARTY", pending_counterparty: true });

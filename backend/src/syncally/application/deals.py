@@ -53,6 +53,7 @@ class CreateDealCommand:
 
     buyer_organization_id: UUID
     seller_organization_id: UUID
+    initiator_party: str = "BUYER"
 
 
 def create_deal(
@@ -61,9 +62,12 @@ def create_deal(
     repository: DealRepository,
     now: datetime | None = None,
 ) -> Deal:
-    """Create a draft deal for an actor acting on behalf of the buyer organization."""
-    if command.buyer_organization_id not in actor.organization_ids:
-        raise DealAccessDenied("Actor cannot create a deal for this buyer organization")
+    """Create a draft deal for an actor acting on behalf of its selected party."""
+    if command.initiator_party not in {"BUYER", "SELLER"}:
+        raise DealAccessDenied("Invalid initiating party")
+    initiator = command.buyer_organization_id if command.initiator_party == "BUYER" else command.seller_organization_id
+    if initiator not in actor.organization_ids:
+        raise DealAccessDenied("Actor cannot create a deal for this organization")
     if not _both_organizations_active(repository, command):
         raise DealNotFound("Buyer or seller organization is not available")
 

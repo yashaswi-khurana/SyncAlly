@@ -44,12 +44,14 @@ class CounterpartyOnboarding(Base):
     __table_args__ = (
         UniqueConstraint("deal_id", name="uq_counterparty_onboarding_deal"),
         UniqueConstraint("shell_organization_id", name="uq_counterparty_onboarding_shell"),
-        CheckConstraint("buyer_organization_id <> shell_organization_id", name="ck_onboarding_distinct_parties"),
+        CheckConstraint("inviting_organization_id <> shell_organization_id", name="ck_onboarding_distinct_parties"),
+        CheckConstraint("inviter_party IN ('BUYER', 'SELLER')", name="ck_onboarding_inviter_party"),
     )
 
     invitation_jti: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True)
     deal_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("deals.id"), nullable=False)
-    buyer_organization_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id"), nullable=False)
+    inviting_organization_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id"), nullable=False)
+    inviter_party: Mapped[str] = mapped_column(String(6), nullable=False, server_default="BUYER")
     shell_organization_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id"), nullable=False)
     inviter_user_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("users.id"), nullable=False)
     recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)

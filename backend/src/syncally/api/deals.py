@@ -5,6 +5,7 @@ application use cases, and translate their outcomes into a stable error contract
 No deal policy or persistence happens here.
 """
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,10 +33,11 @@ router = APIRouter(prefix="/deals", tags=["deals"])
 
 
 class CreateDealRequest(BaseModel):
-    """Fields required to start a draft deal between a buyer and a seller."""
+    """Fields required to start a draft deal and identify the initiating party."""
 
     buyer_organization_id: UUID
     seller_organization_id: UUID
+    initiator_party: Literal["BUYER", "SELLER"] = "BUYER"
 
 
 class DealResponse(BaseModel):
@@ -102,7 +104,7 @@ def create_deal_route(
     repository: DealRepository = Depends(get_deal_repository),
     db: Session = Depends(get_db),
 ) -> DealResponse:
-    """Create a draft deal for the buyer organization the actor belongs to."""
+    """Create a draft deal when the actor belongs to the selected initiating party."""
     try:
         lock_demo_deal_creation(
             db, payload.buyer_organization_id, payload.seller_organization_id
@@ -112,6 +114,7 @@ def create_deal_route(
             CreateDealCommand(
                 buyer_organization_id=payload.buyer_organization_id,
                 seller_organization_id=payload.seller_organization_id,
+                initiator_party=payload.initiator_party,
             ),
             repository,
         )

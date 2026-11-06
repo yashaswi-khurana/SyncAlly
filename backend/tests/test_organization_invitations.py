@@ -234,6 +234,122 @@ class OrganizationInvitationTests(unittest.TestCase):
             self.assertEqual(caught.exception.status_code, 403)
             self.assertEqual(before, [self.db.scalar(select(func.count()).select_from(table)) for table in Base.metadata.sorted_tables])
 
+    def test_seller_invitation_binds_recipient_and_links_buyer_once(self) -> None:
+        admin = self._user("seller-init@example.com")
+        seller = self._organization(admin)
+        invitation = create_counterparty_invitation(
+            CreateCounterpartyInvitationRequest(inviting_organization_id=seller.id, inviter_party="SELLER",
+                recipient_email="buyer@example.com", legal_name="Buyer Co", country_code="US"),
+            ActorContext(admin.id, frozenset({seller.id})), self.db,
+        )
+        claims = _decode_invitation_token(invitation["token"])
+        self.assertEqual((claims["version"], claims["inviter_party"]), (2, "SELLER"))
+        deal = self.db.get(Deal, UUID(invitation["deal_id"]))
+        shell_id = deal.buyer_organization_id
+        self.assertEqual(deal.seller_organization_id, seller.id)
+        self.assertEqual(self.db.get(Organization, shell_id).status, "INACTIVE")
+        wrong = AcceptInvitationRequest(token=invitation["token"], email="wrong@example.com", password="long-enough-password", organization_legal_name="Buyer", country_code="US")
+        with self.assertRaises(HTTPException) as error:
+            accept_invitation(wrong, None, self.db)
+        self.assertEqual(error.exception.status_code, 403)
+        valid = wrong.model_copy(update={"email": "buyer@example.com"})
+        accepted = accept_invitation(valid, None, self.db)
+        self.db.refresh(deal)
+        self.assertNotEqual(deal.buyer_organization_id, shell_id)
+        self.assertEqual(str(deal.buyer_organization_id), accepted["organization_id"])
+        self.assertEqual(deal.seller_organization_id, seller.id)
+        with self.assertRaises(HTTPException) as replay:
+            accept_invitation(valid, None, self.db)
+        self.assertEqual(replay.exception.status_code, 409)
+
+    def test_seller_counterparty_invitation_route_accepts_the_buyer(self) -> None:
+        admin = self._user("seller-route@example.com")
+        seller = self._organization(admin)
+        original_overrides = app.dependency_overrides.copy()
+        app.dependency_overrides[get_db] = lambda: self.db
+        app.dependency_overrides[get_current_actor] = lambda: ActorContext(admin.id, frozenset({seller.id}))
+        app.dependency_overrides[get_optional_actor] = lambda: None
+        try:
+            with TestClient(app) as client:
+                response = client.post("/deals/counterparty-invitations", json={
+                    "inviting_organization_id": str(seller.id),
+                    "inviter_party": "SELLER",
+                    "recipient_email": "buyer-route@example.com",
+                    "legal_name": "Buyer Route Co",
+                    "country_code": "US",
+                })
+                self.assertEqual(response.status_code, 201, response.text)
+                body = response.json()
+                self.assertEqual(_decode_invitation_token(body["token"])["version"], 2)
+                deal = self.db.get(Deal, UUID(body["deal_id"]))
+                buyer_shell_id = deal.buyer_organization_id
+                self.assertEqual(deal.seller_organization_id, seller.id)
+                accepted_response = client.post("/invitations/accept", json={
+                    "token": body["token"],
+                    "email": "buyer-route@example.com",
+                    "password": "SecurePassword123!",
+                    "organization_legal_name": "Buyer Route Co",
+                    "country_code": "US",
+                })
+                self.assertEqual(accepted_response.status_code, 200, accepted_response.text)
+                self.db.refresh(deal)
+                self.assertNotEqual(deal.buyer_organization_id, buyer_shell_id)
+                self.assertEqual(deal.seller_organization_id, seller.id)
+                self.assertEqual(accepted_response.json()["organization_id"], str(deal.buyer_organization_id))
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(original_overrides)
+
+    def test_seller_invitation_rejects_changed_parties_and_inactive_inviter(self) -> None:
+        admin = self._user("seller-inactive@example.com")
+        seller = self._organization(admin)
+        replacement = self._organization(self._user("replacement@example.com"))
+        invitation = create_counterparty_invitation(
+            CreateCounterpartyInvitationRequest(inviting_organization_id=seller.id, inviter_party="SELLER",
+                recipient_email="buyer2@example.com", legal_name="Buyer Co", country_code="US"),
+            ActorContext(admin.id, frozenset({seller.id})), self.db,
+        )
+        payload = AcceptInvitationRequest(token=invitation["token"], email="buyer2@example.com", password="long-enough-password", organization_legal_name="Buyer", country_code="US")
+        deal = self.db.get(Deal, UUID(invitation["deal_id"]))
+        shell_id = deal.buyer_organization_id
+        deal.buyer_organization_id = replacement.id
+        self.db.commit()
+        with self.assertRaises(HTTPException) as changed:
+            accept_invitation(payload, None, self.db)
+        self.assertEqual(changed.exception.status_code, 409)
+        deal = self.db.get(Deal, UUID(invitation["deal_id"]))
+        deal.buyer_organization_id = shell_id
+        member = self.db.scalar(select(OrganizationMember).where(OrganizationMember.user_id == admin.id, OrganizationMember.organization_id == seller.id))
+        member.status = "INACTIVE"
+        self.db.commit()
+        with self.assertRaises(HTTPException) as inactive:
+            accept_invitation(payload, None, self.db)
+        self.assertEqual(inactive.exception.status_code, 403)
+        self.assertEqual(self.db.get(Deal, deal.id).buyer_organization_id, shell_id)
+
+    def test_seller_invitation_expiration_and_token_role_tampering_reject(self) -> None:
+        admin = self._user("seller-expiry@example.com")
+        seller = self._organization(admin)
+        invitation = create_counterparty_invitation(
+            CreateCounterpartyInvitationRequest(inviting_organization_id=seller.id, inviter_party="SELLER",
+                recipient_email="buyer3@example.com", legal_name="Buyer Co", country_code="US"),
+            ActorContext(admin.id, frozenset({seller.id})), self.db,
+        )
+        claims = jwt.decode(invitation["token"], settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        for changes in ({"inviter_party": "BUYER"}, {"version": 1}, {"buyer_id": str(seller.id)},
+                        {"inviting_org_id": str(uuid4())}):
+            with self.subTest(changes=changes), self.assertRaises(HTTPException):
+                _decode_invitation_token(jwt.encode({**claims, **changes}, settings.jwt_secret, algorithm=settings.jwt_algorithm))
+        onboarding = self.db.scalar(select(CounterpartyOnboarding).where(CounterpartyOnboarding.deal_id == UUID(invitation["deal_id"])))
+        onboarding.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        self.db.commit()
+        before_users = self.db.scalar(select(func.count(User.id)))
+        payload = AcceptInvitationRequest(token=invitation["token"], email="buyer3@example.com", password="long-enough-password", organization_legal_name="Buyer Co", country_code="US")
+        with self.assertRaises(HTTPException) as expired:
+            accept_invitation(payload, None, self.db)
+        self.assertEqual(expired.exception.status_code, 400)
+        self.assertEqual(self.db.scalar(select(func.count(User.id))), before_users)
+
     def test_initiation_signing_failure_rolls_back_shell_deal_and_notification(self) -> None:
         admin = self._user("buyer@example.com")
         buyer = self._organization(admin)
@@ -1260,6 +1376,44 @@ class OnboardingConcurrencyCases:
             results = [pool.submit(self.accept, gate) for _ in range(2)]
             self.assertEqual(sorted(result.result(timeout=30) for result in results), ["accepted", "conflict"])
         self.assert_single_recipient()
+
+    def test_simultaneous_seller_invitation_acceptance_has_one_winner(self) -> None:
+        with Session(self.scoped_engine) as db:
+            before_users = db.scalar(select(func.count(User.id)))
+            before_organizations = db.scalar(select(func.count(Organization.id)))
+            before_members = db.scalar(select(func.count(OrganizationMember.id)))
+            before_refresh_tokens = db.scalar(select(func.count(RefreshToken.id)))
+            seller_user = User(email="seller@example.com", display_name="Seller", status="ACTIVE")
+            seller = Organization(legal_name="Seller", country_code="US")
+            db.add_all([seller_user, seller])
+            db.flush()
+            db.add(OrganizationMember(organization_id=seller.id, user_id=seller_user.id, role="ADMIN", status="ACTIVE"))
+            db.commit()
+            self.buyer_actor = ActorContext(seller_user.id, frozenset({seller.id}))
+            self.invitation = create_counterparty_invitation(
+                CreateCounterpartyInvitationRequest(inviting_organization_id=seller.id, inviter_party="SELLER",
+                    recipient_email="recipient@example.com", legal_name="Pending", country_code="JP"), self.buyer_actor, db,
+            )
+            self.deal_id = UUID(self.invitation["deal_id"])
+            self.shell_id = db.get(Deal, self.deal_id).buyer_organization_id
+
+        gate = threading.Barrier(2, timeout=15)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [pool.submit(self.accept, gate) for _ in range(2)]
+            self.assertEqual(sorted(result.result(timeout=30) for result in results), ["accepted", "conflict"])
+        with Session(self.scoped_engine) as db:
+            deal = db.get(Deal, self.deal_id)
+            onboarding = db.scalar(select(CounterpartyOnboarding).where(CounterpartyOnboarding.deal_id == self.deal_id))
+            self.assertEqual(db.scalar(select(func.count(User.id))), before_users + 2)
+            self.assertEqual(db.scalar(select(func.count(Organization.id))), before_organizations + 3)
+            self.assertEqual(db.scalar(select(func.count(OrganizationMember.id))), before_members + 2)
+            self.assertEqual(db.scalar(select(func.count(RefreshToken.id))), before_refresh_tokens + 1)
+            self.assertEqual(deal.version, 2)
+            self.assertNotEqual(deal.buyer_organization_id, self.shell_id)
+            self.assertEqual(onboarding.inviter_party, "SELLER")
+            self.assertEqual(onboarding.inviting_organization_id, deal.seller_organization_id)
+            self.assertIsNotNone(onboarding.consumed_at)
+            self.assertEqual(db.scalar(select(func.count(AuditEvent.id)).where(AuditEvent.event_type == "invitation.accepted")), 1)
 
     def test_acceptance_vs_pending_message_writer(self) -> None:
         gate = threading.Barrier(2, timeout=15)

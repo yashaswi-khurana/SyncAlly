@@ -289,7 +289,7 @@ class NegotiationTests(unittest.TestCase):
     def test_f4_pending_rejects_all_actions_even_replay(self) -> None:
         self.submit()
         self.db.add(CounterpartyOnboarding(invitation_jti=uuid4(), deal_id=self.deal.id,
-            buyer_organization_id=self.buyer.id, shell_organization_id=self.seller.id,
+            inviting_organization_id=self.buyer.id, shell_organization_id=self.seller.id,
             inviter_user_id=self.buyer_user.id, recipient_email="seller@f5.test", expires_at=datetime.now(UTC) + timedelta(days=1)))
         self.db.commit()
         for action in ("submit", "counter", "accept", "reject", "supersede", "expire"):

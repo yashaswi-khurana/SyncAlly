@@ -126,6 +126,14 @@ class DealRouteTests(unittest.TestCase):
         self.assertEqual(invalid_id.status_code, 422)
         self.assertIn("detail", missing_field.json())
 
+    def test_seller_can_initiate_only_for_own_organization(self) -> None:
+        user, buyer, seller = self._seed_participants()
+        payload = {"buyer_organization_id": str(buyer.id), "seller_organization_id": str(seller.id), "initiator_party": "SELLER"}
+        self._authenticate(ActorContext(user_id=user.id, organization_ids=frozenset({seller.id})))
+        self.assertEqual(self._request("POST", "/deals", json=payload).status_code, 201)
+        self._authenticate(ActorContext(user_id=user.id, organization_ids=frozenset({buyer.id})))
+        self.assertEqual(self._request("POST", "/deals", json=payload).status_code, 403)
+
     def test_create_deal_requires_authentication(self) -> None:
         app.dependency_overrides[get_db] = lambda: self.session
         _, buyer, seller = self._seed_participants()

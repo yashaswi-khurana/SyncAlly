@@ -100,6 +100,37 @@ describe("CreateDealPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy Link" }));
     expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  it("lets a seller invite a buyer without swapping the initiating organization", async () => {
+    mockedListOrganizations.mockResolvedValue([organization()]);
+    vi.mocked(createCounterpartyInvitation).mockResolvedValue({ token: "t", invite_url: "https://app.example/invite", organization_id: BUYER_ID, organization_legal_name: "Seller Co", deal_id: "pending", role: "ADMIN", expires_at: "2027-01-01T00:00:00Z", kind: "COUNTERPARTY", pending_counterparty: true });
+    render(<CreateDealPage onCreated={vi.fn()} />);
+    await screen.findByLabelText("Buyer organization");
+    fireEvent.click(screen.getByRole("radio", { name: "Seller" }));
+    expect(screen.getByLabelText("Seller organization")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Invite counterparty" }));
+    fireEvent.change(screen.getByLabelText("Counterparty email"), { target: { value: "buyer@example.com" } });
+    fireEvent.change(screen.getByLabelText("Counterparty company legal name"), { target: { value: "Buyer Co" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+    await screen.findByRole("heading", { name: "Awaiting counterparty" });
+    expect(createCounterpartyInvitation).toHaveBeenCalledWith({ inviting_organization_id: BUYER_ID, inviter_party: "SELLER", recipient_email: "buyer@example.com", legal_name: "Buyer Co", country_code: "US" });
+  });
+
+  it("describes a seller authorization failure using the selected party", async () => {
+    mockedListOrganizations.mockResolvedValue([organization()]);
+    mockedSearch.mockResolvedValue([organization({ id: SELLER_ID, legal_name: "Andean Coffee Exporters" })]);
+    mockedCreateDeal.mockRejectedValue(new ApiError(403, "Forbidden"));
+    render(<CreateDealPage onCreated={vi.fn()} />);
+    await screen.findByLabelText("Buyer organization");
+    fireEvent.click(screen.getByRole("radio", { name: "Seller" }));
+    fireEvent.change(screen.getByLabelText("Buyer organization"), { target: { value: "Andean" } });
+    fireEvent.click(await screen.findByRole("option", { name: "Andean Coffee Exporters US" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+    expect(await screen.findByText("You cannot create a deal for that seller organization.")).toBeInTheDocument();
+    expect(mockedCreateDeal).toHaveBeenCalledWith({
+      buyer_organization_id: SELLER_ID,
+      seller_organization_id: BUYER_ID,
+      initiator_party: "SELLER",
+    });
   });
 
   it("shows an empty state when the account has no organizations", async () => {

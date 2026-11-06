@@ -1,0 +1,21 @@
+{$APP_DOMAIN} {
+	@api path /auth* /dev* /organizations* /deals* /webhooks* /health* /openapi.json /docs* /redoc*
+	handle @api {
+		reverse_proxy api:8000
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+{$TEMPORAL_DOMAIN} {
+	@compose_network remote_ip private_ranges
+	handle @compose_network {
+		reverse_proxy h2c://temporal:7233
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

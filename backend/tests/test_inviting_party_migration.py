@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, text
 
 class InvitingPartyMigrationTests(unittest.TestCase):
     def test_preserves_legacy_rows_and_refuses_lossy_downgrade(self):
-        path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0021_inviting_party.py"
+        path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0023_inviting_party.py"
         spec = importlib.util.spec_from_file_location("migration_0021", path)
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)

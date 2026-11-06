@@ -49,7 +49,7 @@ class CounterpartyOnboardingMigrationTests(unittest.TestCase):
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
         self.assertEqual(migration.down_revision, "0014_outbox_dispatch_started_at")
-        party_path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0021_inviting_party.py"
+        party_path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0023_inviting_party.py"
         party_spec = importlib.util.spec_from_file_location("inviting_party_migration", party_path)
         party_migration = importlib.util.module_from_spec(party_spec)
         party_spec.loader.exec_module(party_migration)

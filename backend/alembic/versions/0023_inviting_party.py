@@ -4,8 +4,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0021_inviting_party"
-down_revision = "0020_fulfillment_events"
+revision = "0023_inviting_party"
+down_revision = "0022_milestone_payments"
 branch_labels = None
 depends_on = None
 

@@ -45,6 +45,26 @@ function partyName(organizations: Organization[], id: string): string {
   return organizations.find((organization) => organization.id === id)?.legal_name ?? id;
 }
 
+function agreementStatusLabel(status: string): string {
+  switch (status) {
+    case "PENDING_APPROVAL": return "Awaiting party decisions";
+    case "COMMITTED": return "Agreed and committed";
+    case "SUPERSEDED": return "Replaced by a newer version";
+    case "VOIDED": return "Withdrawn";
+    default: return status.replaceAll("_", " ").toLowerCase();
+  }
+}
+
+function decisionLabel(decision?: AgreementApproval["decision"]): string {
+  if (decision === "APPROVE") return "Approved";
+  if (decision === "REJECT") return "Rejected";
+  return "Awaiting decision";
+}
+
+function approvalMatchesVersion(approval: AgreementApproval | undefined, agreement: AgreementVersion): boolean {
+  return Boolean(approval && approval.version_number === agreement.version_number && approval.terms_hash === agreement.terms_hash);
+}
+
 function approvalFor(
   approvals: AgreementApproval[],
   organizationId: string,
@@ -314,6 +334,11 @@ export default function AgreementReview({
         <div>
           <span className="eyebrow">Saved terms</span>
           <h2 id="agreement-review-heading">Agreement review</h2>
+          <p className="muted">
+            Review this saved version, then each organization records its own decision. AI suggestions,
+            extracted facts, and accepted proposals do not approve it. Both organizations must approve
+            this same version before an authorized member can commit it as the agreed deal.
+          </p>
         </div>
         {state.status === "ready" ? (
           <span className="badge badge--kind">VERSION {viewedVersion || state.agreement.version_number}</span>
@@ -361,7 +386,7 @@ export default function AgreementReview({
             onChange={(event) => setViewedVersion(Number(event.target.value))}>
             <option value={0}>Current version</option>
             {currentHistory.versions.map((version) => <option key={version.id ?? version.version_number} value={version.version_number}>
-              Version {version.version_number} · {version.status.replaceAll("_", " ")}
+              Version {version.version_number} · {agreementStatusLabel(version.status)}
             </option>)}
           </select>
           <label htmlFor={`agreement-compare-${dealId}`}>Compare before</label>
@@ -425,11 +450,7 @@ export default function AgreementReview({
             <div className="agreement-review__summary">
               <div>
                 <span className="fact-source__label">VERSION STATUS</span>
-                <strong>{agreement.status.replaceAll("_", " ")}</strong>
-              </div>
-              <div>
-                <span className="fact-source__label">EXACT TERMS HASH</span>
-                <code className="agreement-review__hash">{agreement.terms_hash}</code>
+                <strong>{agreementStatusLabel(agreement.status)}</strong>
               </div>
               <div>
                 <span className="fact-source__label">SAVED</span>
@@ -438,6 +459,18 @@ export default function AgreementReview({
                 </time>
               </div>
             </div>
+
+            <details className="agreement-review__technical-details">
+              <summary>Technical verification details</summary>
+              <p>These values identify the exact saved terms and recorded decisions.</p>
+              <p>Version {agreement.version_number} terms hash</p>
+              <code className="agreement-review__hash">{agreement.terms_hash}</code>
+              {agreement.approvals.length > 0 ? <ul>
+                {agreement.approvals.map((approval) => <li key={`${approval.organization_id}:${approval.user_id}`}>
+                  {partyName(state.organizations, approval.organization_id)} · version {approval.version_number} · actor {approval.user_id} · {approval.decision} · {approval.terms_hash}
+                </li>)}
+              </ul> : <p>No party decisions have been recorded for this version.</p>}
+            </details>
 
             {agreement.status === "COMMITTED" ? (
               <p className="agreement-review__notice" role="status">
@@ -472,8 +505,7 @@ export default function AgreementReview({
                   </dl>
                 ))}
                 <p className="hint">
-                  Both parties review these exact terms before signing. The terms hash above
-                  covers them.
+                  Both organizations review and decide on these saved terms before the agreement can be committed.
                 </p>
               </div>
             ) : null}
@@ -513,13 +545,15 @@ export default function AgreementReview({
               <h3>Decisions for version {agreement.version_number}</h3>
               {[buyerOrganizationId, sellerOrganizationId].map((organizationId) => {
                 const approval = organizationId === buyerOrganizationId ? buyerApproval : sellerApproval;
+                const matchesVersion = approvalMatchesVersion(approval, agreement);
+                const displayedDecision = matchesVersion ? approval?.decision : undefined;
                 return (
                   <div className="agreement-review__approval" key={organizationId}>
                     <span>{partyName(state.organizations, organizationId)}</span>
-                    <span className={`badge ${approval?.decision === "APPROVE" ? "badge--status-confirmed" : approval?.decision === "REJECT" ? "badge--status-rejected" : "badge--status-extracted"}`}>
-                      {approval?.decision ?? "AWAITING DECISION"}
+                    <span className={`badge ${displayedDecision === "APPROVE" ? "badge--status-confirmed" : displayedDecision === "REJECT" ? "badge--status-rejected" : "badge--status-extracted"}`}>
+                      {approval && !matchesVersion ? "Needs review" : decisionLabel(displayedDecision)}
                     </span>
-                    {approval ? <div><span>Actor {approval.user_id}</span> <time dateTime={approval.created_at}>{new Date(approval.created_at).toLocaleString()}</time><code className="agreement-review__hash">{approval.terms_hash}</code></div> : null}
+                    {approval ? <div><span>{matchesVersion ? "Decision recorded " : "Recorded decision is for different terms "}</span><time dateTime={approval.created_at}>{new Date(approval.created_at).toLocaleString()}</time></div> : null}
                   </div>
                 );
               })}
@@ -528,9 +562,11 @@ export default function AgreementReview({
             {canDecide ? (
               <>
                 {myApproval ? (
-                  <p className="hint">Your organization recorded {myApproval.decision.toLowerCase()} for this exact version.</p>
+                  <p className="hint">{approvalMatchesVersion(myApproval, agreement)
+                    ? `Your organization recorded a decision for version ${agreement.version_number}: ${decisionLabel(myApproval.decision).toLowerCase()}.`
+                    : "Your organization's recorded decision is for different terms. Reload this agreement to review the current version."}</p>
                 ) : null}
-                <p className="hint">Your decision will include version {agreement.version_number} and the hash shown above.</p>
+                <p className="hint">Your decision applies to agreement version {agreement.version_number}.</p>
                 <div className="fact-actions">
                   <button
                     type="button"

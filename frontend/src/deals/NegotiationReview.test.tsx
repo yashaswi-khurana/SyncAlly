@@ -25,7 +25,7 @@ describe("NegotiationReview", () => {
     const changed = vi.fn();
     vi.mocked(negotiateDeal).mockResolvedValue({ outcome: "APPLIED", deal_revision: 2, proposal_id: "proposal", candidate_id: "candidate" });
     render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={changed} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Accept as candidate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Accept proposal for agreement review" }));
     await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(negotiateDeal).toHaveBeenCalledWith("deal", "accept", expect.objectContaining({
       command_id: expect.any(String), expected_deal_revision: 1, organization_id: "seller",
@@ -37,7 +37,7 @@ describe("NegotiationReview", () => {
   it("disables actions until reload after conflict", async () => {
     vi.mocked(negotiateDeal).mockRejectedValue(new ApiError(409, "stale"));
     render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Accept as candidate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Accept proposal for agreement review" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Reload and review");
     expect(screen.getByRole("button", { name: "Reject proposal" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Reload rounds" }));
@@ -49,15 +49,33 @@ describe("NegotiationReview", () => {
     vi.mocked(getNegotiation).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
     const { rerender } = render(<NegotiationReview deal={deal} organizationId="buyer" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
     rerender(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
-    expect(await screen.findByText("Latest proposal: round 1")).toBeInTheDocument();
+    expect(await screen.findByText("Latest human proposal · round 1")).toBeInTheDocument();
     await act(async () => resolve({ ...view, organization_id: "buyer", latest: { ...view.latest!, terms_hash: "PRIVATE-ONLY-HASH" } }));
     expect(screen.queryByText("PRIVATE-ONLY-HASH")).not.toBeInTheDocument();
   });
 
   it("blocks pending-counterparty commands and renders only projected history", async () => {
     render(<NegotiationReview deal={{ ...deal, pending_counterparty: true }} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
-    expect(await screen.findByRole("button", { name: "Accept as candidate" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Accept proposal for agreement review" })).toBeDisabled();
     expect(screen.queryByText(/Evidence/)).not.toBeInTheDocument();
     expect(negotiateDeal).not.toHaveBeenCalled();
+  });
+
+  it("separates a human proposal from the candidate agreement and hides technical hashes by default", async () => {
+    const candidate = { id: "candidate", version_number: 3, terms_hash: "b".repeat(64), proposal_id: "proposal" };
+    vi.mocked(getNegotiation).mockResolvedValue({ ...view, current_candidate: candidate });
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+
+    expect(await screen.findByText("Your response is needed")).toBeInTheDocument();
+    expect(screen.getByText(/accepting one moves its terms to agreement review as a candidate/i)).toBeInTheDocument();
+    expect(screen.getByText(/each organization must review that version and record its own decision/i)).toBeInTheDocument();
+    expect(screen.getByText("Replace agreement version 3. Its existing decisions will no longer apply.")).toBeInTheDocument();
+    const hash = screen.getByText("a".repeat(64));
+    expect(hash).not.toBeVisible();
+    fireEvent.click(screen.getByText("Proposal verification details"));
+    expect(hash).toBeVisible();
+    expect(screen.getByRole("button", { name: "Accept proposal for agreement review" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /replace agreement version 3/i }));
+    expect(screen.getByRole("button", { name: "Accept proposal for agreement review" })).toBeEnabled();
   });
 });

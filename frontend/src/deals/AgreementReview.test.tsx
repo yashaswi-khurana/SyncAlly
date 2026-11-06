@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -227,7 +227,15 @@ describe("AgreementReview", () => {
     expect(await screen.findByText("VERSION 3")).toBeInTheDocument();
     expect(screen.getByText("Desk")).toBeInTheDocument();
     expect(screen.getAllByText("Toronto")).toHaveLength(2);
-    expect(screen.getByText(AGREEMENT.terms_hash)).toBeInTheDocument();
+    const hash = screen.getByText(AGREEMENT.terms_hash);
+    expect(hash).not.toBeVisible();
+    expect(screen.getByText("Awaiting party decisions")).toBeInTheDocument();
+    expect(screen.getByText("Buyer Co")).toBeInTheDocument();
+    const technicalDetails = screen.getByText("Technical verification details");
+    expect(technicalDetails).toBeInTheDocument();
+    expect(hash).not.toBeVisible();
+    fireEvent.click(screen.getByText("Technical verification details"));
+    expect(hash).toBeVisible();
     // Reviewers must read the exact condition the agreement stores and hashes,
     // never a stronger paraphrase of it.
     const paymentTiming = screen.getByLabelText("Payment timing summary");
@@ -246,8 +254,36 @@ describe("AgreementReview", () => {
         BUYER_ID,
       ),
     );
-    expect(await screen.findByText("APPROVE")).toBeInTheDocument();
+    expect(await screen.findByText("Approved")).toBeInTheDocument();
+    expect(screen.getByText(/actor buyer-user/i)).not.toBeVisible();
+    fireEvent.click(screen.getByText("Technical verification details"));
+    expect(screen.getByText(/actor buyer-user/i)).toBeVisible();
     expect(mockedGetCurrent).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not present a decision for different terms as approval of this version", async () => {
+    mockedGetCurrent.mockResolvedValueOnce({
+      ...AGREEMENT,
+      approvals: [BUYER_ID, SELLER_ID].map((organizationId) => ({
+        deal_id: DEAL_ID,
+        version_number: AGREEMENT.version_number,
+        organization_id: organizationId,
+        user_id: `${organizationId}-user`,
+        decision: "APPROVE" as const,
+        terms_hash: organizationId === BUYER_ID ? AGREEMENT.terms_hash : "b".repeat(64),
+        created_at: "2026-10-19T10:01:00Z",
+      })),
+    });
+    mockedListOrganizations.mockResolvedValue([BUYER, SELLER]);
+
+    renderReview();
+
+    expect(await screen.findByText("VERSION 3")).toBeInTheDocument();
+    const approvals = screen.getByLabelText("Approval status by organization");
+    expect(within(approvals).getByText("Buyer Co").parentElement).toHaveTextContent("Approved");
+    expect(within(approvals).getByText("Seller Co").parentElement).toHaveTextContent("Needs review");
+    expect(screen.getByText(/recorded decision is for different terms/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Commit approved agreement" })).not.toBeInTheDocument();
   });
 
   it("asks the user to reload after a stale decision and then shows the new version", async () => {
@@ -338,6 +374,7 @@ describe("AgreementReview", () => {
       ),
     );
     expect(await screen.findByText(/committed\. its terms are read-only/i)).toBeInTheDocument();
+    expect(screen.getByText("Agreed and committed")).toBeInTheDocument();
     expect(onCommitted).toHaveBeenCalledTimes(1);
   });
 

@@ -316,13 +316,16 @@ describe("DealConversationReview", () => {
     expect(await screen.findByText("We need delivery by November 1.")).toBeInTheDocument();
     expect(mockedListDealMessages).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
     expect(mockedListDealFacts).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
+    const messages = screen.getByRole("list", { name: "Conversation messages" });
+    expect(within(messages).getByText("Deal participant")).toBeInTheDocument();
+    expect(within(messages).queryByText("user-12345678")).not.toBeInTheDocument();
 
     const deliveryFact = screen.getByRole("article", { name: "Delivery date: 2026-11-01" });
     expect(within(deliveryFact).getByText("🔒 Private to your org")).toBeInTheDocument();
     expect(within(deliveryFact).getByRole("button", { name: "Make Shareable" })).toBeInTheDocument();
     expect(within(deliveryFact).getByText(/extracted · unconfirmed/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/confirming one records your review; it does not approve the deal/i),
+      screen.getByText(/confirming one records your review; it does not create a human proposal/i),
     ).toBeInTheDocument();
 
     const minQtyFact = screen.getByRole("article", { name: "Minimum quantity: 2026-11-01" });
@@ -347,6 +350,23 @@ describe("DealConversationReview", () => {
     fireEvent.click(screen.getByRole("button", { name: /private here/i }));
     expect(screen.getByRole("article", { name: "Delivery date: 2026-11-01" })).toBeInTheDocument();
     expect(screen.queryByRole("article", { name: "Preferred port: 2026-11-01" })).not.toBeInTheDocument();
+  });
+
+  it("shows assistant messages without exposing internal agent identifiers", async () => {
+    mockedListDealMessages.mockResolvedValue([message({
+      id: "assistant-message",
+      author_user_id: null,
+      author_agent_id: "private-agent-identifier",
+      source_type: "AGENT",
+      body: "Suggested delivery terms",
+    })]);
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+
+    const messages = await screen.findByRole("list", { name: "Conversation messages" });
+    expect(within(messages).getByText("SyncAlly assistant")).toBeInTheDocument();
+    expect(within(messages).queryByText("private-agent-identifier")).not.toBeInTheDocument();
+    expect(screen.getByText(/AI-generated terms are draft suggestions/i)).toBeInTheDocument();
+    expect(screen.getByText(/AI never approves or commits an agreement/i)).toBeInTheDocument();
   });
 
   it("requires a party choice for dual members and scopes reads so other private facts stay hidden", async () => {

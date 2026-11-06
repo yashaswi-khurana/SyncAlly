@@ -49,7 +49,7 @@ describe("NegotiationReview", () => {
     vi.mocked(getNegotiation).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
     const { rerender } = render(<NegotiationReview deal={deal} organizationId="buyer" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
     rerender(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
-    expect(await screen.findByText("Latest human proposal · round 1")).toBeInTheDocument();
+    expect(await screen.findByText("Latest proposal: round 1")).toBeInTheDocument();
     await act(async () => resolve({ ...view, organization_id: "buyer", latest: { ...view.latest!, terms_hash: "PRIVATE-ONLY-HASH" } }));
     expect(screen.queryByText("PRIVATE-ONLY-HASH")).not.toBeInTheDocument();
   });
@@ -77,5 +77,268 @@ describe("NegotiationReview", () => {
     expect(screen.getByRole("button", { name: "Accept proposal for agreement review" })).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox", { name: /replace agreement version 3/i }));
     expect(screen.getByRole("button", { name: "Accept proposal for agreement review" })).toBeEnabled();
+  });
+
+  it("renders schema 2 proposal terms with stable IDs and allocations", async () => {
+    const schema2View: NegotiationView = {
+      deal_id: "deal",
+      organization_id: "seller",
+      deal_revision: 1,
+      round_count: 1,
+      max_rounds: 5,
+      escalated: false,
+      history_ambiguous: false,
+      eligible_actions: ["counter", "reject"],
+      current_candidate: null,
+      proposals: [],
+      history: [],
+      latest: {
+        id: "proposal-2",
+        status: "SUBMITTED",
+        terms_hash: "c".repeat(64),
+        proposal_number: 1,
+        author_organization_id: "buyer",
+        based_on_proposal_id: null,
+        lifecycle_origin: "HUMAN_ROUNDS",
+        created_at: "2026-10-31T12:00:00Z",
+        expires_at: null,
+        evidence_refs: [],
+        metadata_schema_version: 1,
+        terms: {
+          schema_version: 2,
+          buyer_id: "buyer",
+          seller_id: "seller",
+          line_items: [
+            {
+              id: "item-10",
+              description: "Solar Inverters",
+              sku: "INV-500",
+              quantity: "20",
+              unit: "units",
+              unit_price: { amount: "500.00", currency: "USD" },
+            },
+          ],
+          shipments: [
+            {
+              id: "ship-20",
+              quantity: "20",
+              destination: "Antwerp Port",
+              target_date: "2026-12-15",
+              allocations: [
+                { line_item_id: "item-10", quantity: "20", unit: "units" },
+              ],
+            },
+          ],
+          payment_terms: [
+            {
+              id: "pay-30",
+              amount: { amount: "10000.00", currency: "USD" },
+              trigger: "bill_of_lading",
+              due_condition: "Within 10 days of B/L",
+              allocations: [
+                { obligation_id: "ship-20", amount: { amount: "10000.00", currency: "USD" } },
+              ],
+            },
+          ],
+          delivery_location: "Antwerp Port",
+          incoterm: "CIF",
+          cancellation_terms: "30-day notice",
+        },
+      },
+    };
+
+    vi.mocked(getNegotiation).mockResolvedValue(schema2View);
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+
+    expect(await screen.findByText("item-10")).toBeInTheDocument();
+    expect(screen.getByText("INV-500")).toBeInTheDocument();
+    expect(screen.getByText("ship-20")).toBeInTheDocument();
+    expect(screen.getByText("20 units of item item-10")).toBeInTheDocument();
+    expect(screen.getByText("pay-30")).toBeInTheDocument();
+    expect(screen.getByText("10000.00 USD for obligation ship-20")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Create a trade proposal" })).toBeInTheDocument();
+  });
+
+  it("submits a schema 2 counter-proposal with collections", async () => {
+    const schema2View: NegotiationView = {
+      deal_id: "deal",
+      organization_id: "seller",
+      deal_revision: 1,
+      round_count: 1,
+      max_rounds: 5,
+      escalated: false,
+      history_ambiguous: false,
+      eligible_actions: ["counter"],
+      current_candidate: null,
+      proposals: [],
+      history: [],
+      latest: {
+        id: "proposal-base",
+        status: "SUBMITTED",
+        terms_hash: "d".repeat(64),
+        proposal_number: 1,
+        author_organization_id: "buyer",
+        based_on_proposal_id: null,
+        lifecycle_origin: "HUMAN_ROUNDS",
+        created_at: "2026-10-31T12:00:00Z",
+        expires_at: null,
+        evidence_refs: [],
+        metadata_schema_version: 1,
+        terms: {
+          schema_version: 2,
+          buyer_id: "buyer",
+          seller_id: "seller",
+          line_items: [
+            {
+              id: "item-1",
+              description: "Valves",
+              sku: "V-1",
+              quantity: "10",
+              unit: "pieces",
+              unit_price: { amount: "100.00", currency: "USD" },
+            },
+          ],
+          shipments: [
+            {
+              id: "ship-1",
+              quantity: "10",
+              destination: "Rotterdam",
+              target_date: "2026-12-01",
+              allocations: [
+                { line_item_id: "item-1", quantity: "10", unit: "pieces" },
+              ],
+            },
+          ],
+          payment_terms: [
+            {
+              id: "pay-1",
+              amount: { amount: "1000.00", currency: "USD" },
+              trigger: "delivery",
+              due_condition: "immediate",
+              allocations: [
+                { obligation_id: "ship-1", amount: { amount: "1000.00", currency: "USD" } },
+              ],
+            },
+          ],
+          delivery_location: "Rotterdam",
+          incoterm: "DAP",
+          cancellation_terms: "None",
+        },
+      },
+    };
+
+    vi.mocked(getNegotiation).mockResolvedValue(schema2View);
+    vi.mocked(negotiateDeal).mockResolvedValue({
+      outcome: "APPLIED",
+      deal_revision: 2,
+      proposal_id: "proposal-new",
+      candidate_id: null,
+    });
+
+    const onChanged = vi.fn();
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={onChanged} />);
+
+    expect(await screen.findByRole("button", { name: "Submit counter-proposal" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Submit counter-proposal" }));
+
+    await waitFor(() => expect(negotiateDeal).toHaveBeenCalledOnce());
+    expect(negotiateDeal).toHaveBeenCalledWith("deal", "counter", expect.objectContaining({
+      command_id: expect.any(String),
+      expected_deal_revision: 1,
+      organization_id: "seller",
+      base: { id: "proposal-base", terms_hash: "d".repeat(64), status: "SUBMITTED" },
+      terms: expect.objectContaining({
+        schema_version: 2,
+        line_items: [
+          expect.objectContaining({ id: "item-1", description: "Valves", quantity: "10" }),
+        ],
+        shipments: [
+          expect.objectContaining({ id: "ship-1", destination: "Rotterdam" }),
+        ],
+        payment_terms: [
+          expect.objectContaining({ id: "pay-1" }),
+        ],
+      }),
+    }), expect.any(Object));
+  });
+
+  it("rejects invalid authoring draft with validation alert and does not submit", async () => {
+    const schema2View: NegotiationView = {
+      deal_id: "deal",
+      organization_id: "seller",
+      deal_revision: 1,
+      round_count: 1,
+      max_rounds: 5,
+      escalated: false,
+      history_ambiguous: false,
+      eligible_actions: ["counter"],
+      current_candidate: null,
+      proposals: [],
+      history: [],
+      latest: {
+        id: "proposal-base",
+        status: "SUBMITTED",
+        terms_hash: "e".repeat(64),
+        proposal_number: 1,
+        author_organization_id: "buyer",
+        based_on_proposal_id: null,
+        lifecycle_origin: "HUMAN_ROUNDS",
+        created_at: "2026-10-31T12:00:00Z",
+        expires_at: null,
+        evidence_refs: [],
+        metadata_schema_version: 1,
+        terms: {
+          schema_version: 2,
+          buyer_id: "buyer",
+          seller_id: "seller",
+          line_items: [
+            {
+              id: "item-1",
+              description: "Valves",
+              sku: "V-1",
+              quantity: "10",
+              unit: "pieces",
+              unit_price: { amount: "100.00", currency: "USD" },
+            },
+          ],
+          shipments: [
+            {
+              id: "ship-1",
+              quantity: "10",
+              destination: "Rotterdam",
+              target_date: "2026-12-01",
+              allocations: [
+                { line_item_id: "item-1", quantity: "10", unit: "pieces" },
+              ],
+            },
+          ],
+          payment_terms: [
+            {
+              id: "pay-1",
+              amount: { amount: "1000.00", currency: "USD" },
+              trigger: "delivery",
+              due_condition: "immediate",
+              allocations: [
+                { obligation_id: "ship-1", amount: { amount: "1000.00", currency: "USD" } },
+              ],
+            },
+          ],
+          delivery_location: "Rotterdam",
+          incoterm: "DAP",
+          cancellation_terms: "None",
+        },
+      },
+    };
+
+    vi.mocked(getNegotiation).mockResolvedValue(schema2View);
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+
+    expect(await screen.findByLabelText("Delivery location")).toBeInTheDocument();
+    // Clear delivery location to make it invalid
+    fireEvent.change(screen.getByLabelText("Delivery location"), { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit counter-proposal" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Delivery location is required.");
+    expect(negotiateDeal).not.toHaveBeenCalled();
   });
 });

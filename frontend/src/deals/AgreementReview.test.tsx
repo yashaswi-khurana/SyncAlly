@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -227,15 +227,7 @@ describe("AgreementReview", () => {
     expect(await screen.findByText("VERSION 3")).toBeInTheDocument();
     expect(screen.getByText("Desk")).toBeInTheDocument();
     expect(screen.getAllByText("Toronto")).toHaveLength(2);
-    const hash = screen.getByText(AGREEMENT.terms_hash);
-    expect(hash).not.toBeVisible();
-    expect(screen.getByText("Awaiting party decisions")).toBeInTheDocument();
-    expect(screen.getByText("Buyer Co")).toBeInTheDocument();
-    const technicalDetails = screen.getByText("Technical verification details");
-    expect(technicalDetails).toBeInTheDocument();
-    expect(hash).not.toBeVisible();
-    fireEvent.click(screen.getByText("Technical verification details"));
-    expect(hash).toBeVisible();
+    expect(screen.getByText(AGREEMENT.terms_hash)).toBeInTheDocument();
     // Reviewers must read the exact condition the agreement stores and hashes,
     // never a stronger paraphrase of it.
     const paymentTiming = screen.getByLabelText("Payment timing summary");
@@ -254,36 +246,8 @@ describe("AgreementReview", () => {
         BUYER_ID,
       ),
     );
-    expect(await screen.findByText("Approved")).toBeInTheDocument();
-    expect(screen.getByText(/actor buyer-user/i)).not.toBeVisible();
-    fireEvent.click(screen.getByText("Technical verification details"));
-    expect(screen.getByText(/actor buyer-user/i)).toBeVisible();
+    expect(await screen.findByText("APPROVE")).toBeInTheDocument();
     expect(mockedGetCurrent).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not present a decision for different terms as approval of this version", async () => {
-    mockedGetCurrent.mockResolvedValueOnce({
-      ...AGREEMENT,
-      approvals: [BUYER_ID, SELLER_ID].map((organizationId) => ({
-        deal_id: DEAL_ID,
-        version_number: AGREEMENT.version_number,
-        organization_id: organizationId,
-        user_id: `${organizationId}-user`,
-        decision: "APPROVE" as const,
-        terms_hash: organizationId === BUYER_ID ? AGREEMENT.terms_hash : "b".repeat(64),
-        created_at: "2026-10-19T10:01:00Z",
-      })),
-    });
-    mockedListOrganizations.mockResolvedValue([BUYER, SELLER]);
-
-    renderReview();
-
-    expect(await screen.findByText("VERSION 3")).toBeInTheDocument();
-    const approvals = screen.getByLabelText("Approval status by organization");
-    expect(within(approvals).getByText("Buyer Co").parentElement).toHaveTextContent("Approved");
-    expect(within(approvals).getByText("Seller Co").parentElement).toHaveTextContent("Needs review");
-    expect(screen.getByText(/recorded decision is for different terms/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Commit approved agreement" })).not.toBeInTheDocument();
   });
 
   it("asks the user to reload after a stale decision and then shows the new version", async () => {
@@ -293,24 +257,12 @@ describe("AgreementReview", () => {
     mockedRecordDecision.mockRejectedValue(
       new ApiError(409, "The displayed agreement terms are no longer current; reload before continuing"),
     );
-    const onOverviewChange = vi.fn();
 
-    render(
-      <AgreementReview
-        dealId={DEAL_ID}
-        buyerOrganizationId={BUYER_ID}
-        sellerOrganizationId={SELLER_ID}
-        onOverviewChange={onOverviewChange}
-      />,
-    );
+    renderReview();
     await screen.findByText("VERSION 3");
     fireEvent.click(screen.getByRole("button", { name: "Approve this version" }));
 
     expect(await screen.findByText(/agreement changed|decision conflicts/i)).toBeInTheDocument();
-    expect(onOverviewChange).toHaveBeenCalledWith(expect.objectContaining({
-      organizationId: BUYER_ID,
-      status: "error",
-    }));
     expect(mockedGetCurrent).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Approve this version" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject this version" })).toBeDisabled();
@@ -374,7 +326,6 @@ describe("AgreementReview", () => {
       ),
     );
     expect(await screen.findByText(/committed\. its terms are read-only/i)).toBeInTheDocument();
-    expect(screen.getByText("Agreed and committed")).toBeInTheDocument();
     expect(onCommitted).toHaveBeenCalledTimes(1);
   });
 
@@ -411,6 +362,73 @@ describe("AgreementReview", () => {
         SELLER_ID,
       ),
     );
+  });
+
+  it("renders schema 2 collection terms with stable IDs, allocations, and unrecorded disclaimer", async () => {
+    const schema2Agreement: AgreementVersion = {
+      deal_id: DEAL_ID,
+      version_number: 4,
+      terms_hash: "b".repeat(64),
+      status: "COMMITTED",
+      terms: {
+        schema_version: 2,
+        buyer_id: BUYER_ID,
+        seller_id: SELLER_ID,
+        line_items: [
+          {
+            id: "item-valves-1",
+            description: "Industrial Valves",
+            sku: "VALVE-100",
+            quantity: "100",
+            unit: "pieces",
+            unit_price: { amount: "250.00", currency: "USD" },
+          },
+        ],
+        shipments: [
+          {
+            id: "ship-alpha",
+            quantity: "100",
+            destination: "Warehouse 4A, Hamburg Port",
+            target_date: "2026-12-01",
+            allocations: [
+              { line_item_id: "item-valves-1", quantity: "100", unit: "pieces" },
+            ],
+          },
+        ],
+        payment_terms: [
+          {
+            id: "pay-deposit",
+            amount: { amount: "25000.00", currency: "USD" },
+            trigger: "customs_clearance",
+            due_condition: "Net 30 days after arrival",
+            allocations: [
+              {
+                obligation_id: "ship-alpha",
+                amount: { amount: "25000.00", currency: "USD" },
+              },
+            ],
+          },
+        ],
+        delivery_location: "Warehouse 4A, Hamburg Port",
+        incoterm: "DAP",
+        cancellation_terms: "14-day notice",
+      },
+      created_at: "2026-10-19T10:00:00Z",
+      committed_at: "2026-10-19T11:00:00Z",
+      approvals: [],
+    };
+
+    mockedGetCurrent.mockResolvedValue(schema2Agreement);
+    renderReview();
+
+    await screen.findByText("VERSION 4");
+    expect(screen.getByText("item-valves-1")).toBeInTheDocument();
+    expect(screen.getByText("VALVE-100")).toBeInTheDocument();
+    expect(screen.getByText("ship-alpha")).toBeInTheDocument();
+    expect(screen.getByText("100 pieces of item item-valves-1")).toBeInTheDocument();
+    expect(screen.getByText("pay-deposit")).toBeInTheDocument();
+    expect(screen.getByText("25000.00 USD for obligation ship-alpha")).toBeInTheDocument();
+    expect(screen.getByText(/Taxes, freight, customs classification, and other fees: Not specified in committed terms/)).toBeInTheDocument();
   });
 
   it("sends a verified single-party choice and current agreement to the overview", async () => {

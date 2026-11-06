@@ -48,6 +48,7 @@ class PaymentMilestone(TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     trigger_type: Mapped[str] = mapped_column(String(64), nullable=False)
     due_condition: Mapped[str] = mapped_column(Text, nullable=False)
+    source_terms_reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
 
 
@@ -116,6 +117,7 @@ class PaymentIntent(TimestampMixin, Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_terms_reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 

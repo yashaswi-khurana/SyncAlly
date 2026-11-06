@@ -5,11 +5,18 @@ import {
   authorizeDealPayment,
   getCurrentAgreement,
   getOrganization,
+  listDealPaymentMilestones,
   listOrganizations,
   listPaymentStatuses,
   previewDealPayment,
 } from "../api/client";
-import type { OrganizationDirectoryItem, PaymentPreview, PaymentStatus } from "../api/types";
+import type {
+  OrganizationDirectoryItem,
+  PaymentMilestoneSummary,
+  PaymentPreview,
+  PaymentStatus,
+} from "../api/types";
+import { formatCountdown, parseTimestamp } from "./paymentCountdown";
 
 type PaymentState =
   | { status: "loading" }
@@ -17,6 +24,7 @@ type PaymentState =
   | {
       status: "ready";
       payments: PaymentStatus[];
+      milestones: PaymentMilestoneSummary[];
       agreementCommitted: boolean;
       sellerMember: boolean;
       buyerMember: boolean;
@@ -64,7 +72,7 @@ function textOrFallback(value: string | null | undefined, fallback: string): str
   return trimmed ? trimmed : fallback;
 }
 
-export function extractInvoiceNumber(payment: PaymentStatus): string {
+function extractInvoiceNumber(payment: PaymentStatus): string {
   if (payment.invoice_reference) return payment.invoice_reference;
   if (payment.invoice_url) {
     const hashMatch = payment.invoice_url.match(/#([A-Za-z0-9._-]+)/);
@@ -77,17 +85,6 @@ export function extractInvoiceNumber(payment: PaymentStatus): string {
     }
   }
   return `INV-${payment.id.slice(0, 8).toUpperCase()}`;
-}
-
-function parseTimestamp(timestamp: string | null | undefined): number | null {
-  if (!timestamp || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(timestamp)) return null;
-  const targetMs = Date.parse(timestamp);
-  return Number.isFinite(targetMs) ? targetMs : null;
-}
-
-export function formatCountdown(timestamp: string | null | undefined, nowMs: number): number | null {
-  const targetMs = parseTimestamp(timestamp);
-  return targetMs === null ? null : Math.max(0, Math.round((targetMs - nowMs) / 1000));
 }
 
 function requiresPolling(payment: PaymentStatus): boolean {
@@ -161,6 +158,11 @@ export default function PaymentStatusPanel({
   const [authorizationNotice, setAuthorizationNotice] = useState("");
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [paymentPreview, setPaymentPreview] = useState<PaymentPreview | null>(null);
+  const [targetMilestone, setTargetMilestone] = useState<{
+    paymentMilestoneId?: string;
+    milestoneId?: string;
+    amount?: { amount: string; currency: string };
+  } | null>(null);
   const previewSequenceRef = useRef(0);
   const [now, setNow] = useState(() => Date.now());
   const idempotencyKey = useRef<string | null>(null);
@@ -170,25 +172,37 @@ export default function PaymentStatusPanel({
   const requestGenerationRef = useRef(0);
   const committedGenerationRef = useRef(0);
 
+  const targetPayment = targetMilestone && state.status === "ready"
+    ? state.payments.find(
+        (p) =>
+          (targetMilestone.paymentMilestoneId &&
+            p.payment_milestone_id === targetMilestone.paymentMilestoneId) ||
+          (targetMilestone.milestoneId &&
+            p.source_terms_reference === targetMilestone.milestoneId),
+      )
+    : null;
+
   const recipientPreview: RecipientPreview | null =
     state.status === "ready"
       ? {
           legalName: textOrFallback(
+            targetPayment?.recipient_name ??
               state.payments[0]?.recipient_name ??
               state.buyerOrganization?.legal_name,
             "Not available",
           ),
           countryCode: textOrFallback(
-              state.buyerOrganization?.country_code,
+            state.buyerOrganization?.country_code,
             "Not available",
           ),
           billingEmail: textOrFallback(
-            state.payments[0]?.recipient_email ??
+            targetPayment?.recipient_email ??
+              state.payments[0]?.recipient_email ??
               (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.billing_email ??
               (state.buyerOrganization as { billing_email?: string; email?: string } | null)?.email,
             "Resolved by the backend at issuance",
           ),
-          amount: state.milestone,
+          amount: targetMilestone?.amount ?? state.milestone,
         }
       : null;
 
@@ -203,8 +217,9 @@ export default function PaymentStatusPanel({
         throw caught;
       }),
       listOrganizations(),
+      listDealPaymentMilestones(dealId, { signal: controller.signal }).catch(() => []),
     ]).then(
-      ([payments, agreement, organizations]) => {
+      ([payments, agreement, organizations, milestones]) => {
         if (cancelled || currentGeneration !== requestGenerationRef.current) return;
 
         const buyerOrgId = buyerOrganizationId ?? agreement?.terms?.buyer_id;
@@ -215,6 +230,7 @@ export default function PaymentStatusPanel({
         setState({
           status: "ready",
           payments,
+          milestones: milestones ?? [],
           agreementCommitted: agreement?.status === "COMMITTED",
           sellerMember: isSellerMember,
           buyerMember: isBuyerMember,
@@ -267,10 +283,21 @@ export default function PaymentStatusPanel({
       inFlight = true;
       const pollGeneration = requestGenerationRef.current;
 
-      void listPaymentStatuses(dealId, { signal: controller.signal })
-        .then((payments) => {
+      void Promise.all([
+        listPaymentStatuses(dealId, { signal: controller.signal }),
+        listDealPaymentMilestones(dealId, { signal: controller.signal }).catch(() => []),
+      ])
+        .then(([payments, milestones]) => {
           if (cancelled || pollGeneration !== requestGenerationRef.current) return;
-          setState((prev) => (prev.status === "ready" ? { ...prev, payments } : prev));
+          setState((prev) =>
+            prev.status === "ready"
+              ? {
+                  ...prev,
+                  payments,
+                  milestones: milestones && milestones.length > 0 ? milestones : prev.milestones,
+                }
+              : prev,
+          );
         })
         .catch(() => undefined)
         .finally(() => {
@@ -306,6 +333,7 @@ export default function PaymentStatusPanel({
     if (!confirmationOpen) return;
 
     const focusReturnTarget = requestButtonRef.current;
+    const refreshReturnTarget = refreshButtonRef.current;
     confirmationDialogRef.current?.focus();
 
     function handleDialogKeyDown(event: KeyboardEvent) {
@@ -337,8 +365,8 @@ export default function PaymentStatusPanel({
       document.removeEventListener("keydown", handleDialogKeyDown);
       if (focusReturnTarget?.isConnected && !focusReturnTarget.disabled) {
         focusReturnTarget.focus();
-      } else if (refreshButtonRef.current?.isConnected && !refreshButtonRef.current.disabled) {
-        refreshButtonRef.current.focus();
+      } else if (refreshReturnTarget?.isConnected && !refreshReturnTarget.disabled) {
+        refreshReturnTarget.focus();
       }
     };
   }, [confirmationOpen]);
@@ -351,8 +379,13 @@ export default function PaymentStatusPanel({
     setReloadCount((count) => count + 1);
   }
 
-  async function openRecipientConfirmation() {
+  async function openRecipientConfirmation(milestoneTarget?: {
+    paymentMilestoneId?: string;
+    milestoneId?: string;
+    amount?: { amount: string; currency: string };
+  }) {
     if (state.status !== "ready") return;
+    setTargetMilestone(milestoneTarget ?? null);
     const generation = requestGenerationRef.current;
     const sequence = ++previewSequenceRef.current;
     setPaymentPreview(null);
@@ -371,25 +404,52 @@ export default function PaymentStatusPanel({
   }
 
   function cancelRecipientConfirmation() {
+    setTargetMilestone(null);
     setConfirmationOpen(false);
   }
 
   function confirmRecipientAndSend() {
     if (!paymentPreview) return;
+    const chosen = targetMilestone;
     setConfirmationOpen(false);
-    void authorizePayment();
+    void authorizePayment(chosen);
   }
 
-  async function authorizePayment() {
+  async function authorizePayment(chosenMilestone?: {
+    paymentMilestoneId?: string;
+    milestoneId?: string;
+    amount?: { amount: string; currency: string };
+  } | null) {
     if (!canRequestPayment) return;
     setAuthorizing(true);
     setAuthorizationError("");
     setAuthorizationNotice("");
     idempotencyKey.current ??= crypto.randomUUID();
+    const milestoneOptions =
+      chosenMilestone?.paymentMilestoneId || chosenMilestone?.milestoneId
+        ? {
+            paymentMilestoneId: chosenMilestone.paymentMilestoneId,
+            milestoneId: chosenMilestone.milestoneId,
+          }
+        : undefined;
     try {
-      const result = await authorizeDealPayment(dealId, idempotencyKey.current, paymentPreview?.execution_mode);
+      const result = await (milestoneOptions
+        ? authorizeDealPayment(
+            dealId,
+            idempotencyKey.current,
+            paymentPreview?.execution_mode,
+            milestoneOptions,
+          )
+        : authorizeDealPayment(
+            dealId,
+            idempotencyKey.current,
+            paymentPreview?.execution_mode,
+          ));
       idempotencyKey.current = null;
-      setAuthorizationNotice(`The payment request is queued for the backend worker. Mode: ${result.execution_mode ?? "Unknown"}.`);
+      setTargetMilestone(null);
+      setAuthorizationNotice(
+        `The payment request is queued for the backend worker. Mode: ${result.execution_mode ?? "Unknown"}.`,
+      );
       setState({ status: "loading" });
       setReloadCount((count) => count + 1);
     } catch (caught) {
@@ -442,7 +502,7 @@ export default function PaymentStatusPanel({
       {state.status === "ready" && !isBuyer && !isSeller && (state.buyerMember || state.sellerMember) ? (
         <p className="payment-status__footnote">Choose the buyer or seller organization above to see payment actions for that party.</p>
       ) : null}
-      {state.status === "ready" && state.payments.length === 0 ? (
+      {state.status === "ready" && state.milestones.length === 0 && state.payments.length === 0 ? (
         <>
           {canRequestPayment ? (
             <div className="payment-status__message">
@@ -453,7 +513,7 @@ export default function PaymentStatusPanel({
                 className="button"
                 disabled={authorizing}
                 aria-haspopup="dialog"
-                onClick={openRecipientConfirmation}
+                onClick={() => openRecipientConfirmation()}
               >
                 {authorizing ? "Queuing payment request…" : "Request Payment"}
               </button>
@@ -468,7 +528,283 @@ export default function PaymentStatusPanel({
       ) : null}
       {authorizationNotice ? <p className="payment-status__message" role="status">{authorizationNotice}</p> : null}
       {authorizationError ? <p className="payment-status__message" role="alert">{authorizationError}</p> : null}
-      {state.status === "ready" && state.payments.length > 0 ? (
+      {state.status === "ready" && state.milestones.length > 0 ? (
+        <div className="payment-status__list" data-testid="milestone-payment-list">
+          {state.milestones.map((milestone) => {
+            const matchingPayment = state.payments.find(
+              (p) =>
+                (p.payment_milestone_id && p.payment_milestone_id === milestone.id) ||
+                (milestone.source_terms_reference &&
+                  (p.source_terms_reference === milestone.source_terms_reference ||
+                    p.milestone_id === milestone.source_terms_reference)) ||
+                p.milestone_sequence === milestone.sequence_number,
+            );
+            const effectivePayment = matchingPayment;
+            const effectiveStatus =
+              effectivePayment?.status ?? milestone.intent_status ?? milestone.lifecycle_state;
+            const presentation = describeStatus(effectiveStatus);
+            if (!effectivePayment && milestone.lifecycle_state === "ineligible") {
+              presentation.label = "Ineligible for payment";
+              presentation.detail =
+                milestone.ineligibility_reason || "Payment trigger condition not met yet.";
+            } else if (!effectivePayment && milestone.lifecycle_state === "eligible") {
+              presentation.label = "Eligible to request";
+              presentation.detail =
+                "Payment trigger conditions are met. The seller can authorize payment.";
+            }
+
+            const offline = effectivePayment
+              ? effectivePayment.provider === "OFFLINE_DEMO" &&
+                effectivePayment.execution_mode === "OFFLINE_DEMO"
+              : false;
+            const sandbox = effectivePayment
+              ? effectivePayment.provider === "PAYPAL" &&
+                effectivePayment.execution_mode === "PAYPAL_SANDBOX"
+              : false;
+            const trustedSource = effectivePayment
+              ? (offline && effectivePayment.reconciliation_source === "OFFLINE_DEMO") ||
+                (sandbox && effectivePayment.reconciliation_source === "PAYPAL_SANDBOX")
+              : false;
+            const paymentProgress =
+              effectivePayment?.status === "PAID" ||
+              effectivePayment?.status === "PARTIALLY_PAID";
+            if (paymentProgress && !trustedSource) {
+              presentation.label = "Recorded payment: evidence unknown";
+              presentation.detail =
+                "Legacy or missing provenance is not verified payment evidence.";
+            } else if (offline && paymentProgress) {
+              presentation.label =
+                effectivePayment?.status === "PAID"
+                  ? "Simulated paid"
+                  : "Simulated partial payment";
+              presentation.detail =
+                "Offline demo observation only. No money was transferred.";
+            }
+
+            const paidAmount =
+              effectivePayment?.reconciled_amount ?? milestone.reconciled_amount;
+            const invoiceNum = effectivePayment
+              ? extractInvoiceNumber(effectivePayment)
+              : milestone.invoice_reference ||
+                `INV-${milestone.id.slice(0, 8).toUpperCase()}`;
+            const isFailed =
+              effectivePayment?.status === "FAILED" ||
+              effectivePayment?.status === "CANCELLED" ||
+              milestone.lifecycle_state === "failed";
+            const isRetrying = effectivePayment ? hasScheduledRetry(effectivePayment) : false;
+            const countdown = effectivePayment
+              ? formatCountdown(effectivePayment.retry_scheduled_at, now)
+              : null;
+            const backendCheckedAt = parseTimestamp(
+              effectivePayment?.last_checked_at ?? milestone.last_checked_at,
+            );
+            const invoiceUrl = effectivePayment?.invoice_url ?? milestone.invoice_url;
+            const failureReason = effectivePayment?.failure_reason ?? milestone.failure_reason;
+
+            return (
+              <article
+                className="payment-status__item"
+                key={milestone.id}
+                data-testid={`milestone-item-${milestone.sequence_number}`}
+              >
+                <div className="payment-status__summary">
+                  <div>
+                    <h3>{`Milestone ${milestone.sequence_number}${milestone.source_terms_reference ? ` (${milestone.source_terms_reference})` : ""}`}</h3>
+                    <p>{displayAmount(milestone.amount, milestone.currency)}</p>
+                  </div>
+                  <span
+                    className={`badge ${
+                      milestone.lifecycle_state === "ineligible"
+                        ? "badge--warning"
+                        : isRetrying
+                        ? "badge--retrying"
+                        : isFailed
+                        ? "badge--danger"
+                        : ""
+                    }`}
+                  >
+                    {presentation.label}
+                  </span>
+                </div>
+                <p className="muted">{presentation.detail}</p>
+                <p>
+                  Trigger: {milestone.trigger_type} | Due: {milestone.due_condition}
+                </p>
+
+                {milestone.allocations && milestone.allocations.length > 0 ? (
+                  <div className="payment-status__allocations">
+                    <span className="eyebrow">Allocations:</span>
+                    <ul>
+                      {milestone.allocations.map((alloc) => (
+                        <li key={alloc.obligation_id}>
+                          Obligation <code>{alloc.obligation_id}</code>:{" "}
+                          {displayAmount(alloc.amount, alloc.currency)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {!effectivePayment && milestone.lifecycle_state === "eligible" && canRequestPayment ? (
+                  <div className="payment-status__action">
+                    <button
+                      type="button"
+                      className="button button--compact"
+                      disabled={authorizing}
+                      onClick={() =>
+                        openRecipientConfirmation({
+                          paymentMilestoneId: milestone.id,
+                          milestoneId: milestone.source_terms_reference ?? undefined,
+                          amount: { amount: milestone.amount, currency: milestone.currency },
+                        })
+                      }
+                    >
+                      {authorizing
+                        ? "Queuing payment request…"
+                        : `Request Payment for Milestone ${milestone.sequence_number}`}
+                    </button>
+                  </div>
+                ) : null}
+
+                {effectivePayment ? (
+                  <>
+                    <p>
+                      {offline
+                        ? "Offline demo"
+                        : sandbox
+                        ? "PayPal Sandbox: not production"
+                        : "Payment mode unknown"}
+                    </p>
+                    <p>
+                      Evidence:{" "}
+                      {trustedSource
+                        ? offline
+                          ? "Simulation / OFFLINE_DEMO"
+                          : "Provider / PAYPAL_SANDBOX"
+                        : effectivePayment.reconciliation_source === "NONE"
+                        ? "Not reconciled"
+                        : "Legacy or unknown, unverified"}
+                    </p>
+                    {offline && effectivePayment.invoice_reference ? (
+                      <p>Invoice reference: {effectivePayment.invoice_reference}</p>
+                    ) : null}
+                    {effectivePayment.status === "PARTIALLY_PAID" && paidAmount != null ? (
+                      <p className="payment-status__amount">
+                        {offline
+                          ? "Simulated so far"
+                          : trustedSource
+                          ? "Confirmed so far"
+                          : "Recorded so far"}
+                        : {displayAmount(paidAmount, effectivePayment.currency)} of{" "}
+                        {displayAmount(effectivePayment.amount, effectivePayment.currency)}
+                      </p>
+                    ) : null}
+                    <p className="payment-status__checked">
+                      Last checked by backend:{" "}
+                      {backendCheckedAt !== null
+                        ? new Date(backendCheckedAt).toLocaleString()
+                        : "Unavailable"}
+                    </p>
+
+                    {isRetrying ? (
+                      <div className="payment-status__retry-card" role="status">
+                        <div className="payment-status__retry-header">
+                          <span className="badge badge--retrying">Retrying</span>
+                          <h4>Automatic Retry Scheduled</h4>
+                        </div>
+                        <p className="payment-status__retry-meta">
+                          Payment request retry #{effectivePayment.retry_count ?? 0}
+                          {countdown === null
+                            ? ": Retry time unavailable."
+                            : ` in ~${countdown} seconds.`}{" "}
+                          Cause: {failureReason || "Cause unavailable"}.
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {isFailed ? (
+                      <div className="payment-status__failure-card" role="alert">
+                        <div className="payment-status__failure-header">
+                          <span className="badge badge--danger">Failed</span>
+                          <h4>Payment Request Failed</h4>
+                        </div>
+                        <p className="payment-status__failure-cause">
+                          <strong>Cause:</strong>{" "}
+                          {failureReason || "Payment processing encountered an error."}
+                        </p>
+                        {canRequestPayment ? (
+                          <button
+                            type="button"
+                            className="button button--compact payment-status__retry-button"
+                            disabled={authorizing}
+                            onClick={() =>
+                              openRecipientConfirmation({
+                                paymentMilestoneId: milestone.id,
+                                milestoneId: milestone.source_terms_reference ?? undefined,
+                                amount: {
+                                  amount: milestone.amount,
+                                  currency: milestone.currency,
+                                },
+                              })
+                            }
+                          >
+                            {authorizing ? "Retrying…" : "Retry Request"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {sandbox && invoiceUrl && isBuyer ? (
+                      <div className="payment-status__invoice-card">
+                        <div className="payment-status__invoice-card-header">
+                          <span className="eyebrow">PayPal Sandbox invoice ready</span>
+                          <p className="payment-status__invoice-number">
+                            Invoice #: <strong>{invoiceNum}</strong>
+                          </p>
+                        </div>
+                        <a
+                          href={invoiceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="button payment-status__pay-button"
+                        >
+                          💳 View &amp; Pay PayPal Invoice
+                        </a>
+                        <div className="payment-status__instructions">
+                          <h4>Payment Instructions</h4>
+                          <p>
+                            Review your order details and milestone amount on PayPal. Click the
+                            button above to authorize your payment in PayPal Sandbox. SyncAlly
+                            will automatically detect the payment confirmation and mark this
+                            milestone as paid.
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {sandbox && invoiceUrl && isSeller && !isBuyer ? (
+                      <div className="payment-status__seller-invoice">
+                        <p>
+                          Invoice #: <strong>{invoiceNum}</strong> issued to buyer.
+                        </p>
+                        <a
+                          href={invoiceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="button secondary button--compact"
+                        >
+                          View PayPal Invoice
+                        </a>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+      {state.status === "ready" && state.milestones.length === 0 && state.payments.length > 0 ? (
         <div className="payment-status__list">
           {state.payments.map((payment) => {
             const presentation = describeStatus(payment.status);
@@ -549,7 +885,7 @@ export default function PaymentStatusPanel({
                         type="button"
                         className="button button--compact payment-status__retry-button"
                         disabled={authorizing}
-                        onClick={openRecipientConfirmation}
+                        onClick={() => { void openRecipientConfirmation(); }}
                       >
                         {authorizing ? "Retrying…" : "Retry Request"}
                       </button>

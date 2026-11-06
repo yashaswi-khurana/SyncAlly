@@ -160,11 +160,39 @@ export function paymentTimingLabel(trigger: string): string {
 }
 
 export interface AgreementLineItem {
+  id?: string;
   description: string;
   sku: string | null;
   quantity: string;
   unit: string;
   unit_price: { amount: string; currency: string };
+}
+
+export interface ShipmentItemAllocation {
+  line_item_id: string;
+  quantity: string;
+  unit: string;
+}
+
+export interface AgreementShipment {
+  id?: string;
+  quantity: string | null;
+  destination: string;
+  target_date: string | null;
+  allocations?: ShipmentItemAllocation[];
+}
+
+export interface PaymentObligationAllocation {
+  obligation_id: string;
+  amount: { amount: string; currency: string };
+}
+
+export interface AgreementPaymentTerm {
+  id?: string;
+  amount: { amount: string; currency: string };
+  trigger: string;
+  due_condition: string;
+  allocations?: PaymentObligationAllocation[];
 }
 
 export interface AgreementVersion {
@@ -189,12 +217,8 @@ export interface AgreementVersion {
     buyer_id: string;
     seller_id: string;
     line_items: AgreementLineItem[];
-    shipments: Array<{ quantity: string; destination: string; target_date: string | null }>;
-    payment_terms: Array<{
-      amount: { amount: string; currency: string };
-      trigger: string;
-      due_condition: string;
-    }>;
+    shipments: AgreementShipment[];
+    payment_terms: AgreementPaymentTerm[];
     delivery_location: string;
     incoterm: string | null;
     cancellation_terms: string;
@@ -268,6 +292,46 @@ export interface PaymentPreview {
   provider: "PAYPAL" | "OFFLINE_DEMO";
 }
 
+export type PaymentLifecycleState =
+  | "ineligible"
+  | "eligible"
+  | "authorized"
+  | "queued"
+  | "unknown"
+  | "sent"
+  | "reconciled"
+  | "failed"
+  | "cancelled";
+
+export interface PaymentMilestoneAllocation {
+  obligation_id: string;
+  amount: string;
+  currency: string;
+}
+
+export interface PaymentMilestoneSummary {
+  id: string;
+  sequence_number: number;
+  milestone_id?: string | null;
+  source_terms_reference?: string | null;
+  amount: string;
+  currency: string;
+  trigger_type: string;
+  due_condition: string;
+  lifecycle_state: PaymentLifecycleState;
+  is_eligible: boolean;
+  ineligibility_reason?: string | null;
+  allocations: PaymentMilestoneAllocation[];
+  active_intent_id?: string | null;
+  intent_status?: PaymentIntentStatus | null;
+  reconciled_amount?: string | null;
+  last_checked_at?: string | null;
+  last_reconciled_at?: string | null;
+  invoice_url?: string | null;
+  invoice_reference?: string | null;
+  failure_reason?: string | null;
+}
+
 export interface PaymentStatus {
   id: string;
   milestone_sequence: number;
@@ -292,6 +356,11 @@ export interface PaymentStatus {
   reconciliation_source?: "NONE" | "LEGACY_UNVERIFIED" | PaymentMode;
   invoice_reference?: string | null;
   version?: number;
+  payment_milestone_id?: string | null;
+  milestone_id?: string | null;
+  source_terms_reference?: string | null;
+  lifecycle_state?: PaymentLifecycleState | null;
+  is_eligible?: boolean | null;
 }
 
 export type FulfillmentStage = "SHIPPED" | "OBSERVED" | "CONFIRMED";
@@ -349,6 +418,8 @@ export interface PaymentAuthorization {
   already_existed: boolean;
   provider?: string;
   execution_mode?: PaymentMode | "LEGACY_UNRESOLVED";
+  payment_milestone_id?: string | null;
+  milestone_id?: string | null;
 }
 
 export interface CommercialDocumentDraft {
@@ -476,8 +547,23 @@ export interface ProposalSuggestion {
  * timing is unambiguous. The due condition is derived from the trigger by the
  * domain contract.
  */
-export interface ReviewedProposalTerms extends Omit<ProposalSuggestion, "status" | "provenance"> {
-  payment_trigger: PaymentTrigger;
+export interface ReviewedProposalTerms {
+  schema_version: number;
+  description?: string;
+  quantity?: string;
+  unit?: string;
+  unit_price?: string;
+  currency?: "USD" | string;
+  delivery_destination?: string;
+  delivery_date?: string | null;
+  payment_trigger?: PaymentTrigger;
+  organization_id?: string;
+  line_items?: AgreementLineItem[];
+  shipments?: AgreementShipment[];
+  payment_terms?: AgreementPaymentTerm[];
+  delivery_location?: string;
+  incoterm?: string | null;
+  cancellation_terms?: string;
 }
 
 export interface FactCorrectionResult {

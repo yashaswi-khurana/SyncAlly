@@ -73,10 +73,30 @@ function approvalFor(
 }
 
 function ComparedValue({ value }: { value: unknown }) {
-  if (value !== null && typeof value === "object") return <dl className="agreement-terms__item">
-    {Object.entries(value).map(([field, entry]) => <div key={field}><dt>{field.replaceAll("_", " ")}</dt><dd><ComparedValue value={entry} /></dd></div>)}
-  </dl>;
-  return <>{value === null ? "Not specified" : String(value)}</>;
+  if (value === null || value === undefined) return <>Not specified</>;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <>None</>;
+    return (
+      <ul className="compared-list" style={{ listStyleType: "none", paddingLeft: 0 }}>
+        {value.map((item, index) => (
+          <li key={index}><ComparedValue value={item} /></li>
+        ))}
+      </ul>
+    );
+  }
+  if (typeof value === "object") {
+    return (
+      <dl className="agreement-terms__item">
+        {Object.entries(value).map(([field, entry]) => (
+          <div key={field}>
+            <dt>{field.replaceAll("_", " ")}</dt>
+            <dd><ComparedValue value={entry} /></dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  return <>{String(value)}</>;
 }
 
 export default function AgreementReview({
@@ -513,7 +533,8 @@ export default function AgreementReview({
             <div className="agreement-terms" aria-label={`Agreement version ${agreement.version_number} terms`}>
               <h3>Trade terms</h3>
               {agreement.terms.line_items.map((item, index) => (
-                <dl className="agreement-terms__item" key={`${item.description}-${index}`}>
+                <dl className="agreement-terms__item" key={item.id ?? `${item.description}-${index}`}>
+                  {item.id ? <div><dt>Item ID</dt><dd>{item.id}</dd></div> : null}
                   <div><dt>Item</dt><dd>{item.description}</dd></div>
                   <div><dt>Quantity</dt><dd>{item.quantity} {item.unit}</dd></div>
                   {item.sku ? <div><dt>SKU</dt><dd>{item.sku}</dd></div> : null}
@@ -521,23 +542,50 @@ export default function AgreementReview({
                 </dl>
               ))}
               {agreement.terms.shipments.map((shipment, index) => (
-                <dl className="agreement-terms__item" key={`${shipment.destination}-${index}`}>
+                <dl className="agreement-terms__item" key={shipment.id ?? `${shipment.destination}-${index}`}>
+                  {shipment.id ? <div><dt>Shipment ID</dt><dd>{shipment.id}</dd></div> : null}
                   <div><dt>Delivery location</dt><dd>{shipment.destination}</dd></div>
-                  <div><dt>Delivery quantity</dt><dd>{shipment.quantity}</dd></div>
+                  <div><dt>Delivery quantity</dt><dd>{shipment.quantity ?? "Not specified"}</dd></div>
                   <div><dt>Target date</dt><dd>{shipment.target_date ?? "Not specified"}</dd></div>
+                  {shipment.allocations && shipment.allocations.length > 0 ? (
+                    <div>
+                      <dt>Allocations</dt>
+                      <dd>
+                        {shipment.allocations.map((alloc, aIdx) => (
+                          <span key={`${alloc.line_item_id}-${aIdx}`} className="allocation-tag" style={{ display: "block" }}>
+                            {alloc.quantity} {alloc.unit} of item {alloc.line_item_id}
+                          </span>
+                        ))}
+                      </dd>
+                    </div>
+                  ) : null}
                 </dl>
               ))}
               {agreement.terms.payment_terms.map((term, index) => (
-                <dl className="agreement-terms__item" key={`${term.trigger}-${index}`}>
+                <dl className="agreement-terms__item" key={term.id ?? `${term.trigger}-${index}`}>
+                  {term.id ? <div><dt>Payment Term ID</dt><dd>{term.id}</dd></div> : null}
                   <div><dt>Payment amount</dt><dd>{term.amount.amount} {term.amount.currency}</dd></div>
                   <div><dt>Payment Timing (contract text)</dt><dd>{term.trigger.replaceAll("_", " ")}</dd></div>
                   <div><dt>Due Condition (contract text)</dt><dd>{term.due_condition}</dd></div>
+                  {term.allocations && term.allocations.length > 0 ? (
+                    <div>
+                      <dt>Allocations</dt>
+                      <dd>
+                        {term.allocations.map((alloc, aIdx) => (
+                          <span key={`${alloc.obligation_id}-${aIdx}`} className="allocation-tag" style={{ display: "block" }}>
+                            {alloc.amount.amount} {alloc.amount.currency} for obligation {alloc.obligation_id}
+                          </span>
+                        ))}
+                      </dd>
+                    </div>
+                  ) : null}
                 </dl>
               ))}
               <dl className="agreement-terms__item">
                 <div><dt>Delivery location</dt><dd>{agreement.terms.delivery_location}</dd></div>
                 {agreement.terms.incoterm ? <div><dt>Incoterm</dt><dd>{agreement.terms.incoterm}</dd></div> : null}
                 {agreement.terms.cancellation_terms ? <div><dt>Cancellation terms</dt><dd>{agreement.terms.cancellation_terms}</dd></div> : null}
+                <div><dt>Unrecorded fields</dt><dd>Taxes, freight, customs classification, and other fees: Not specified in committed terms</dd></div>
               </dl>
             </div>
 

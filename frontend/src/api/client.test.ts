@@ -19,6 +19,7 @@ import {
   compareAgreementVersions,
   previewDealPayment,
   authorizeDealPayment,
+  listDealPaymentMilestones,
   getTradePack,
 } from "./client";
 import { clearAccessToken, setAccessToken } from "./tokenStore";
@@ -95,6 +96,47 @@ describe("payment mode contracts", () => {
     const replay = await authorizeDealPayment("deal/1", "stable-key", "OFFLINE_DEMO");
     expect(replay.execution_mode).toBe("PAYPAL_SANDBOX");
     expect(sentBody()).toEqual({ idempotency_key: "stable-key", expected_mode: "OFFLINE_DEMO" });
+  });
+
+  it("forwards milestone ID options in authorization body", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ id: "intent-1", execution_mode: "OFFLINE_DEMO", already_existed: false, payment_milestone_id: "milestone-uuid", milestone_id: "m-1" }, 202)
+    );
+    const result = await authorizeDealPayment("deal/1", "key-1", "OFFLINE_DEMO", {
+      paymentMilestoneId: "milestone-uuid",
+      milestoneId: "m-1",
+    });
+    expect(result.id).toBe("intent-1");
+    expect(sentBody()).toEqual({
+      idempotency_key: "key-1",
+      expected_mode: "OFFLINE_DEMO",
+      payment_milestone_id: "milestone-uuid",
+      milestone_id: "m-1",
+    });
+  });
+
+  it("lists deal payment milestones with lifecycle state", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        {
+          id: "milestone-uuid",
+          sequence_number: 1,
+          milestone_id: "m-1",
+          source_terms_reference: "m-1",
+          amount: "50.00",
+          currency: "USD",
+          trigger_type: "UPON_COMMIT",
+          due_condition: "Within 3 days",
+          lifecycle_state: "eligible",
+          is_eligible: true,
+          allocations: [],
+        },
+      ])
+    );
+    const milestones = await listDealPaymentMilestones("deal/1");
+    expect(milestones).toHaveLength(1);
+    expect(milestones[0].lifecycle_state).toBe("eligible");
+    expect(lastRequest().url).toBe("/deals/deal%2F1/payments/milestones");
   });
 });
 

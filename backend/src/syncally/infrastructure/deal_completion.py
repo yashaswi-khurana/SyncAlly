@@ -49,34 +49,74 @@ def _event_total(events: list[FulfillmentEvent], stage: FulfillmentStage) -> int
 def delivery_obligation_fulfilled(
     db: Session, deal_id: UUID, agreement: AgreementVersion, terms: TradeTerms
 ) -> bool:
-    if len(terms.line_items) != 1 or len(terms.shipments) != 1:
+    if not terms.shipments or not terms.line_items:
         return False
-    obligations = list(
-        db.scalars(
+
+    if terms.schema_version == 1:
+        if len(terms.line_items) != 1 or len(terms.shipments) != 1:
+            return False
+        obligations = list(
+            db.scalars(
+                select(Obligation).where(
+                    Obligation.deal_id == deal_id,
+                    Obligation.agreement_version_id == agreement.id,
+                    Obligation.obligation_type == "DELIVERY",
+                    Obligation.source_terms_reference == "shipments[0]",
+                )
+            )
+        )
+        if len(obligations) != 1:
+            return False
+        obligation = obligations[0]
+        events = list(
+            db.scalars(
+                select(FulfillmentEvent).where(
+                    FulfillmentEvent.deal_id == deal_id,
+                    FulfillmentEvent.agreement_version_id == agreement.id,
+                    FulfillmentEvent.obligation_id == obligation.id,
+                )
+            )
+        )
+        if any(event.unit != terms.line_items[0].unit for event in events):
+            return False
+        expected = _scaled(terms.shipments[0].quantity)
+        return all(_event_total(events, stage) == expected for stage in FulfillmentStage)
+
+    # Schema 2: verify every shipment's delivery obligation has reached 100% confirmation
+    for index, shipment in enumerate(terms.shipments):
+        ref = shipment.id if shipment.id else f"shipments[{index}]"
+        obligation = db.scalar(
             select(Obligation).where(
                 Obligation.deal_id == deal_id,
                 Obligation.agreement_version_id == agreement.id,
                 Obligation.obligation_type == "DELIVERY",
-                Obligation.source_terms_reference == "shipments[0]",
+                Obligation.source_terms_reference == ref,
             )
         )
-    )
-    if len(obligations) != 1:
-        return False
-    obligation = obligations[0]
-    events = list(
-        db.scalars(
-            select(FulfillmentEvent).where(
-                FulfillmentEvent.deal_id == deal_id,
-                FulfillmentEvent.agreement_version_id == agreement.id,
-                FulfillmentEvent.obligation_id == obligation.id,
+        if obligation is None:
+            return False
+        events = list(
+            db.scalars(
+                select(FulfillmentEvent).where(
+                    FulfillmentEvent.deal_id == deal_id,
+                    FulfillmentEvent.agreement_version_id == agreement.id,
+                    FulfillmentEvent.obligation_id == obligation.id,
+                )
             )
         )
-    )
-    if any(event.unit != terms.line_items[0].unit for event in events):
-        return False
-    expected = _scaled(terms.shipments[0].quantity)
-    return all(_event_total(events, stage) == expected for stage in FulfillmentStage)
+        if shipment.allocations:
+            allowed_units = {a.unit for a in shipment.allocations}
+            if any(event.unit not in allowed_units for event in events):
+                return False
+        if shipment.quantity is not None:
+            expected = _scaled(shipment.quantity)
+        elif shipment.allocations:
+            expected = sum(_scaled(a.quantity) for a in shipment.allocations)
+        else:
+            return False
+        if not all(_event_total(events, stage) == expected for stage in FulfillmentStage):
+            return False
+    return True
 
 
 def payments_reconciled(
@@ -107,6 +147,7 @@ def payments_reconciled(
             or milestone.amount != term.amount.amount
             or milestone.currency != term.amount.currency
             or milestone.payer_organization_id != terms.buyer_id
+            or (term.id and milestone.source_terms_reference and milestone.source_terms_reference != term.id)
         ):
             return False
         paid = db.scalar(

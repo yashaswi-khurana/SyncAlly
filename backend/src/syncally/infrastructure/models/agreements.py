@@ -33,6 +33,7 @@ class AgreementVersion(Base):
         UniqueConstraint("id", "deal_id", "terms_hash", name="uq_agreement_scope_hash"),
         ForeignKeyConstraint(["proposal_id", "deal_id"], ["proposals.id", "proposals.deal_id"], name="fk_agreement_proposal_scope"),
         CheckConstraint("version_number > 0", name="ck_agreement_version_positive"),
+        CheckConstraint("schema_version IN (1, 2)", name="ck_agreement_version_schema_version"),
         Index("uq_agreement_pending_deal", "deal_id", unique=True,
               sqlite_where=text("status = 'PENDING_APPROVAL'"),
               postgresql_where=text("status = 'PENDING_APPROVAL'")),
@@ -44,6 +45,7 @@ class AgreementVersion(Base):
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     canonical_terms_json: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False)
     terms_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING_APPROVAL")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

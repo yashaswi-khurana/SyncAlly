@@ -18,7 +18,10 @@ from syncally.application.agreements import AgreementRepository, get_current_agr
 from syncally.application.deals import DealRepository
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, AgreementStatus
-from syncally.domain.agreements.trade_terms import TradeTerms
+from syncally.domain.agreements.trade_terms import (
+    TRADE_TERMS_SCHEMA_VERSION_LEGACY,
+    TradeTerms,
+)
 from syncally.domain.shared.errors import DomainError
 from syncally.domain.shared.money import Money, canonical_decimal
 
@@ -58,10 +61,48 @@ def generate_commercial_document_draft(
 
 def _render(agreement: Agreement) -> str:
     terms = agreement.terms
-    item = terms.line_items[0]
-    shipment = terms.shipments[0]
-    payment = terms.payment_terms[0]
     missing = "Not specified in committed terms"
+
+    if terms.schema_version == TRADE_TERMS_SCHEMA_VERSION_LEGACY:
+        item = terms.line_items[0]
+        shipment = terms.shipments[0]
+        payment = terms.payment_terms[0]
+
+        lines = [
+            "SYNCALLY - COMMERCIAL TRADE SUMMARY",
+            "DRAFT - FOR REVIEW ONLY",
+            "This is not an invoice or signed agreement. It does not certify legal, tax, or customs compliance.",
+            "",
+            "Source",
+            f"Deal ID: {agreement.deal_id}",
+            f"Agreement version: {agreement.version_number} ({agreement.version_id})",
+            f"Terms hash: {agreement.terms_hash}",
+            f"Committed at: {_display(agreement.committed_at.isoformat() if agreement.committed_at else None, missing)}",
+            "",
+            "Parties",
+            f"Buyer legal/business name: {missing}",
+            f"Buyer organization ID: {terms.buyer_id}",
+            f"Seller legal/business name: {missing}",
+            f"Seller organization ID: {terms.seller_id}",
+            "",
+            "Trade terms",
+            f"Item: {_display(item.description, missing)}",
+            f"SKU: {_display(item.sku, missing)}",
+            f"Quantity: {canonical_decimal(item.quantity)} {_display(item.unit, missing)}",
+            f"Unit price: {canonical_decimal(item.unit_price.amount)} {item.unit_price.currency}",
+            f"Line total: {canonical_decimal(item.total.amount)} {item.total.currency}",
+            f"Delivery destination: {_display(shipment.destination, missing)}",
+            f"Target delivery date: {_display(shipment.target_date.isoformat() if shipment.target_date else None, missing)}",
+            f"Incoterm: {_display(terms.incoterm, missing)}",
+            f"Payment amount: {canonical_decimal(payment.amount.amount)} {payment.amount.currency}",
+            f"Payment trigger: {_display(payment.trigger, missing)}",
+            f"Payment due condition: {_display(payment.due_condition, missing)}",
+            f"Cancellation terms: {_display(terms.cancellation_terms, missing)}",
+            f"Taxes, freight, customs classification, and other fees: {missing}",
+            "",
+            "This draft contains only values recorded in the committed agreement; no missing terms were inferred.",
+        ]
+        return "\n".join(lines)
 
     lines = [
         "SYNCALLY - COMMERCIAL TRADE SUMMARY",
@@ -80,23 +121,56 @@ def _render(agreement: Agreement) -> str:
         f"Seller legal/business name: {missing}",
         f"Seller organization ID: {terms.seller_id}",
         "",
-        "Trade terms",
-        f"Item: {_display(item.description, missing)}",
-        f"SKU: {_display(item.sku, missing)}",
-        f"Quantity: {canonical_decimal(item.quantity)} {_display(item.unit, missing)}",
-        f"Unit price: {canonical_decimal(item.unit_price.amount)} {item.unit_price.currency}",
-        f"Line total: {canonical_decimal(item.total.amount)} {item.total.currency}",
-        f"Delivery destination: {_display(shipment.destination, missing)}",
-        f"Target delivery date: {_display(shipment.target_date.isoformat() if shipment.target_date else None, missing)}",
+        "Line items",
+    ]
+    for idx, item in enumerate(terms.line_items, 1):
+        lines.extend([
+            f"Item {idx} (ID: {item.id}):",
+            f"  Description: {_display(item.description, missing)}",
+            f"  SKU: {_display(item.sku, missing)}",
+            f"  Quantity: {canonical_decimal(item.quantity)} {_display(item.unit, missing)}",
+            f"  Unit price: {canonical_decimal(item.unit_price.amount)} {item.unit_price.currency}",
+            f"  Line total: {canonical_decimal(item.total.amount)} {item.total.currency}",
+        ])
+    lines.extend(["", "Shipments"])
+    for idx, shipment in enumerate(terms.shipments, 1):
+        alloc_strs = [
+            f"{canonical_decimal(a.quantity)} {a.unit} of item {a.line_item_id}"
+            for a in shipment.allocations
+        ]
+        allocations_desc = "; ".join(alloc_strs) if alloc_strs else missing
+        lines.extend([
+            f"Shipment {idx} (ID: {shipment.id}):",
+            f"  Destination: {_display(shipment.destination, missing)}",
+            f"  Target delivery date: {_display(shipment.target_date.isoformat() if shipment.target_date else None, missing)}",
+            f"  Quantity: {canonical_decimal(shipment.quantity) if shipment.quantity is not None else missing}",
+            f"  Allocations: {allocations_desc}",
+        ])
+    lines.extend(["", "Payment terms"])
+    for idx, payment in enumerate(terms.payment_terms, 1):
+        alloc_strs = [
+            f"{canonical_decimal(a.amount.amount)} {a.amount.currency} for obligation {a.obligation_id}"
+            for a in payment.allocations
+        ]
+        allocations_desc = "; ".join(alloc_strs) if alloc_strs else missing
+        lines.extend([
+            f"Payment term {idx} (ID: {payment.id}):",
+            f"  Amount: {canonical_decimal(payment.amount.amount)} {payment.amount.currency}",
+            f"  Trigger: {_display(payment.trigger, missing)}",
+            f"  Due condition: {_display(payment.due_condition, missing)}",
+            f"  Allocations: {allocations_desc}",
+        ])
+    lines.extend([
+        "",
+        "Trade conditions",
+        f"Delivery location: {_display(terms.delivery_location, missing)}",
         f"Incoterm: {_display(terms.incoterm, missing)}",
-        f"Payment amount: {canonical_decimal(payment.amount.amount)} {payment.amount.currency}",
-        f"Payment trigger: {_display(payment.trigger, missing)}",
-        f"Payment due condition: {_display(payment.due_condition, missing)}",
         f"Cancellation terms: {_display(terms.cancellation_terms, missing)}",
+        f"Trade total: {canonical_decimal(terms.total.amount)} {terms.total.currency}",
         f"Taxes, freight, customs classification, and other fees: {missing}",
         "",
         "This draft contains only values recorded in the committed agreement; no missing terms were inferred.",
-    ]
+    ])
     return "\n".join(lines)
 
 
@@ -150,34 +224,109 @@ def export_display_terms(stored: dict[str, Any]) -> dict[str, Any]:
     public = {key: value for key, value in stored.items() if key != "_f6_evidence"}
     _shape(public, {"schema_version", "buyer_id", "seller_id", "line_items", "shipments",
                     "payment_terms", "delivery_location", "incoterm", "cancellation_terms"})
-    if type(public["schema_version"]) is not int or public["schema_version"] != 1:
+    if type(public["schema_version"]) is not int or public["schema_version"] not in (1, 2):
         raise InvalidTradePack("Unsupported commitment schema")
+    schema_version = public["schema_version"]
     decimal_values = []
-    for collection, fields in (
-        ("line_items", {"description", "sku", "quantity", "unit", "unit_price"}),
-        ("shipments", {"quantity", "destination", "target_date"}),
-        ("payment_terms", {"amount", "trigger", "due_condition"}),
-    ):
-        if not isinstance(public[collection], list) or not public[collection]:
-            raise InvalidTradePack("Missing commitment entries")
-        for entry in public[collection]:
-            _shape(entry, fields)
-            for key in fields - {"quantity", "unit_price", "amount"}:
-                value = entry[key]
-                if not isinstance(value, str) and not (key in {"sku", "target_date"} and value is None):
+    if schema_version == 1:
+        for collection, fields in (
+            ("line_items", {"description", "sku", "quantity", "unit", "unit_price"}),
+            ("shipments", {"quantity", "destination", "target_date"}),
+            ("payment_terms", {"amount", "trigger", "due_condition"}),
+        ):
+            if not isinstance(public[collection], list) or not public[collection]:
+                raise InvalidTradePack("Missing commitment entries")
+            for entry in public[collection]:
+                _shape(entry, fields)
+                for key in fields - {"quantity", "unit_price", "amount"}:
+                    value = entry[key]
+                    if not isinstance(value, str) and not (key in {"sku", "target_date"} and value is None):
+                        raise InvalidTradePack("Invalid commitment text")
+                if "quantity" in entry:
+                    if not isinstance(entry["quantity"], str):
+                        raise InvalidTradePack("Decimal values must be strings")
+                    decimal_values.append(entry["quantity"])
+                for key in ("unit_price", "amount"):
+                    if key in entry:
+                        _shape(entry[key], {"amount", "currency"})
+                        if not isinstance(entry[key]["currency"], str):
+                            raise InvalidTradePack("Invalid commitment currency")
+                        if not isinstance(entry[key]["amount"], str):
+                            raise InvalidTradePack("Decimal values must be strings")
+                        decimal_values.append(entry[key]["amount"])
+    else:
+        for collection in ("line_items", "shipments", "payment_terms"):
+            if not isinstance(public[collection], list) or not public[collection]:
+                raise InvalidTradePack("Missing commitment entries")
+
+        for entry in public["line_items"]:
+            _shape(entry, {"id", "description", "sku", "quantity", "unit", "unit_price"})
+            if not isinstance(entry["id"], str) or not entry["id"].strip():
+                raise InvalidTradePack("Invalid commitment id")
+            for key in ("description", "unit"):
+                if not isinstance(entry[key], str) or not entry[key].strip():
                     raise InvalidTradePack("Invalid commitment text")
-            if "quantity" in entry:
+            if not isinstance(entry["sku"], str) and entry["sku"] is not None:
+                raise InvalidTradePack("Invalid commitment text")
+            if not isinstance(entry["quantity"], str):
+                raise InvalidTradePack("Decimal values must be strings")
+            decimal_values.append(entry["quantity"])
+            _shape(entry["unit_price"], {"amount", "currency"})
+            if not isinstance(entry["unit_price"]["currency"], str):
+                raise InvalidTradePack("Invalid commitment currency")
+            if not isinstance(entry["unit_price"]["amount"], str):
+                raise InvalidTradePack("Decimal values must be strings")
+            decimal_values.append(entry["unit_price"]["amount"])
+
+        for entry in public["shipments"]:
+            _shape(entry, {"id", "quantity", "destination", "target_date", "allocations"})
+            if not isinstance(entry["id"], str) or not entry["id"].strip():
+                raise InvalidTradePack("Invalid commitment id")
+            if not isinstance(entry["destination"], str):
+                raise InvalidTradePack("Invalid commitment text")
+            if not isinstance(entry["target_date"], str) and entry["target_date"] is not None:
+                raise InvalidTradePack("Invalid commitment text")
+            if entry["quantity"] is not None:
                 if not isinstance(entry["quantity"], str):
                     raise InvalidTradePack("Decimal values must be strings")
                 decimal_values.append(entry["quantity"])
-            for key in ("unit_price", "amount"):
-                if key in entry:
-                    _shape(entry[key], {"amount", "currency"})
-                    if not isinstance(entry[key]["currency"], str):
-                        raise InvalidTradePack("Invalid commitment currency")
-                    if not isinstance(entry[key]["amount"], str):
-                        raise InvalidTradePack("Decimal values must be strings")
-                    decimal_values.append(entry[key]["amount"])
+            if not isinstance(entry["allocations"], list) or not entry["allocations"]:
+                raise InvalidTradePack("Shipment allocations cannot be empty")
+            for alloc in entry["allocations"]:
+                _shape(alloc, {"line_item_id", "quantity", "unit"})
+                if not isinstance(alloc["line_item_id"], str) or not alloc["line_item_id"].strip():
+                    raise InvalidTradePack("Invalid allocation line item id")
+                if not isinstance(alloc["unit"], str) or not alloc["unit"].strip():
+                    raise InvalidTradePack("Invalid allocation unit")
+                if not isinstance(alloc["quantity"], str):
+                    raise InvalidTradePack("Decimal values must be strings")
+                decimal_values.append(alloc["quantity"])
+
+        for entry in public["payment_terms"]:
+            _shape(entry, {"id", "amount", "trigger", "due_condition", "allocations"})
+            if not isinstance(entry["id"], str) or not entry["id"].strip():
+                raise InvalidTradePack("Invalid commitment id")
+            for key in ("trigger", "due_condition"):
+                if not isinstance(entry[key], str):
+                    raise InvalidTradePack("Invalid commitment text")
+            _shape(entry["amount"], {"amount", "currency"})
+            if not isinstance(entry["amount"]["currency"], str):
+                raise InvalidTradePack("Invalid commitment currency")
+            if not isinstance(entry["amount"]["amount"], str):
+                raise InvalidTradePack("Decimal values must be strings")
+            decimal_values.append(entry["amount"]["amount"])
+            if not isinstance(entry["allocations"], list) or not entry["allocations"]:
+                raise InvalidTradePack("Payment term allocations cannot be empty")
+            for alloc in entry["allocations"]:
+                _shape(alloc, {"obligation_id", "amount"})
+                if not isinstance(alloc["obligation_id"], str) or not alloc["obligation_id"].strip():
+                    raise InvalidTradePack("Invalid allocation obligation id")
+                _shape(alloc["amount"], {"amount", "currency"})
+                if not isinstance(alloc["amount"]["currency"], str):
+                    raise InvalidTradePack("Invalid commitment currency")
+                if not isinstance(alloc["amount"]["amount"], str):
+                    raise InvalidTradePack("Decimal values must be strings")
+                decimal_values.append(alloc["amount"]["amount"])
     for key in ("buyer_id", "seller_id", "delivery_location", "cancellation_terms", "incoterm"):
         if not isinstance(public[key], str) and not (key == "incoterm" and public[key] is None):
             raise InvalidTradePack("Invalid commitment text")
@@ -297,27 +446,81 @@ def _trade_pack_html(manifest: dict[str, Any], terms: TradeTerms, budget: int) -
                         ("Seller organization ID (not a legal name)", display["seller_id"]),
                         ("Buyer legal name", None), ("Seller legal name", None),
                         ("Buyer address", None), ("Seller address", None)])
-    for index, item in enumerate(display["line_items"], 1):
-        price = item["unit_price"]
-        total = Decimal(price["amount"])
-        line_total = Money(total, price["currency"]).multiply(Decimal(item["quantity"]))
-        section(f"Item {index}", [("Description", item["description"]), ("SKU", item["sku"]),
-            ("Quantity", item["quantity"]), ("Unit", item["unit"]),
-            ("Unit price", f"{price['amount']} {price['currency']}"),
-            ("Line total", f"{canonical_decimal(line_total.amount)} {line_total.currency}"),
-            ("Weight", None), ("Packaging", None)])
-    for index, shipment in enumerate(display["shipments"], 1):
-        section(f"Shipment {index}", [("Quantity", shipment["quantity"]),
-            ("Destination", shipment["destination"]), ("Target delivery date", shipment["target_date"]),
-            ("Item allocation / quantity unit", None), ("Shipping address", None)])
-    for index, payment in enumerate(display["payment_terms"], 1):
-        section(f"Payment term {index}", [("Amount", f"{payment['amount']['amount']} {payment['amount']['currency']}"),
-            ("Trigger", payment["trigger"]), ("Due condition", payment["due_condition"]),
-            ("Banking details", None)])
-    section("Trade conditions", [("Delivery location", display["delivery_location"]),
-        ("Incoterm", display["incoterm"]), ("Cancellation terms", display["cancellation_terms"]),
-        ("Trade total", f"{canonical_decimal(terms.total.amount)} {terms.currency}"),
-        ("Tax", None), ("Freight and other fees", None), ("Customs classification", None)])
+    if manifest.get("trade_terms_schema_version", 1) == 1:
+        for index, item in enumerate(display["line_items"], 1):
+            price = item["unit_price"]
+            total = Decimal(price["amount"])
+            line_total = Money(total, price["currency"]).multiply(Decimal(item["quantity"]))
+            section(f"Item {index}", [("Description", item["description"]), ("SKU", item["sku"]),
+                ("Quantity", item["quantity"]), ("Unit", item["unit"]),
+                ("Unit price", f"{price['amount']} {price['currency']}"),
+                ("Line total", f"{canonical_decimal(line_total.amount)} {line_total.currency}"),
+                ("Weight", None), ("Packaging", None)])
+        for index, shipment in enumerate(display["shipments"], 1):
+            section(f"Shipment {index}", [("Quantity", shipment["quantity"]),
+                ("Destination", shipment["destination"]), ("Target delivery date", shipment["target_date"]),
+                ("Item allocation / quantity unit", None), ("Shipping address", None)])
+        for index, payment in enumerate(display["payment_terms"], 1):
+            section(f"Payment term {index}", [("Amount", f"{payment['amount']['amount']} {payment['amount']['currency']}"),
+                ("Trigger", payment["trigger"]), ("Due condition", payment["due_condition"]),
+                ("Banking details", None)])
+        section("Trade conditions", [("Delivery location", display["delivery_location"]),
+            ("Incoterm", display["incoterm"]), ("Cancellation terms", display["cancellation_terms"]),
+            ("Trade total", f"{canonical_decimal(terms.total.amount)} {terms.currency}"),
+            ("Tax", None), ("Freight and other fees", None), ("Customs classification", None)])
+    else:
+        for index, item in enumerate(display["line_items"], 1):
+            price = item["unit_price"]
+            total = Decimal(price["amount"])
+            line_total = Money(total, price["currency"]).multiply(Decimal(item["quantity"]))
+            section(f"Item {index}", [
+                ("Item ID", item.get("id")),
+                ("Description", item["description"]),
+                ("SKU", item["sku"]),
+                ("Quantity", item["quantity"]),
+                ("Unit", item["unit"]),
+                ("Unit price", f"{price['amount']} {price['currency']}"),
+                ("Line total", f"{canonical_decimal(line_total.amount)} {line_total.currency}"),
+                ("Weight", None),
+                ("Packaging", None),
+            ])
+        for index, shipment in enumerate(display["shipments"], 1):
+            allocs = shipment.get("allocations") or []
+            alloc_str = ", ".join(f"{a['quantity']} {a['unit']} of item {a['line_item_id']}" for a in allocs)
+            section(f"Shipment {index}", [
+                ("Shipment ID", shipment.get("id")),
+                ("Quantity", shipment["quantity"]),
+                ("Destination", shipment["destination"]),
+                ("Target delivery date", shipment["target_date"]),
+                ("Allocations", alloc_str if alloc_str else None),
+                ("Shipping address", None),
+            ])
+        for index, payment in enumerate(display["payment_terms"], 1):
+            allocs = payment.get("allocations") or []
+            alloc_str = ", ".join(f"{a['amount']['amount']} {a['amount']['currency']} for obligation {a['obligation_id']}" for a in allocs)
+            section(f"Payment term {index}", [
+                ("Payment term ID", payment.get("id")),
+                ("Amount", f"{payment['amount']['amount']} {payment['amount']['currency']}"),
+                ("Trigger", payment["trigger"]),
+                ("Due condition", payment["due_condition"]),
+                ("Allocations", alloc_str if alloc_str else None),
+                ("Banking details", None),
+            ])
+        section("Trade conditions", [
+            ("Delivery location", display["delivery_location"]),
+            ("Incoterm", display["incoterm"]),
+            ("Cancellation terms", display["cancellation_terms"]),
+            ("Trade total", f"{canonical_decimal(terms.total.amount)} {terms.currency}"),
+            ("Tax", None),
+            ("Freight and other fees", None),
+            ("Customs classification", None),
+        ])
+        section("Commitment provenance", [
+            ("Terms hash (SHA-256)", manifest["terms_hash"]),
+            ("Agreement version", f"v{manifest['agreement_version_number']} ({manifest['agreement_version_id']})"),
+            ("Committed at", manifest["committed_at"]),
+            ("Fulfillment provenance", "Allocations link shipments to line items and payment terms to obligations"),
+        ])
     section("Review limitations", [("Document scope", "Not an invoice, signed proof, or payment proof. "
         "Does not certify legal, tax, or customs compliance. No missing values or allocations were inferred.")])
     return ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"

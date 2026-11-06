@@ -255,7 +255,8 @@ class SqlAlchemyNegotiationRepository:
             new = Proposal(id=proposal.id, deal_id=deal.id, negotiation_session_id=session.id,
                            proposal_number=number + 1, author_organization_id=organization_id, created_by=command.user_id,
                            based_on_proposal_id=latest.id if latest else None, terms_json=command.terms.to_storage_dict(),
-                           terms_hash=command.terms.terms_hash, status="SUBMITTED", lifecycle_origin="HUMAN_ROUNDS",
+                           terms_hash=command.terms.terms_hash, schema_version=command.terms.schema_version,
+                           status="SUBMITTED", lifecycle_origin="HUMAN_ROUNDS",
                            evidence_refs=evidence, expires_at=command.expires_at, created_at=now)
             self._db.add(new)
             session.round_count = domain_session.round_count
@@ -291,7 +292,8 @@ class SqlAlchemyNegotiationRepository:
             number = self._db.scalar(select(func.max(AgreementVersion.version_number)).where(AgreementVersion.deal_id == deal.id)) or 0
             candidate = AgreementVersion(id=candidate_id, deal_id=deal.id, proposal_id=latest.id,
                                          version_number=number + 1, canonical_terms_json=current.terms.to_storage_dict(),
-                                         terms_hash=current.terms_hash, status="PENDING_APPROVAL", created_by=command.user_id, created_at=now)
+                                         terms_hash=current.terms_hash, schema_version=current.terms.schema_version,
+                                         status="PENDING_APPROVAL", created_by=command.user_id, created_at=now)
             from copy import deepcopy
             candidate.canonical_terms_json = {**candidate.canonical_terms_json,
                                               "_f6_evidence": deepcopy(latest.evidence_refs or [])}

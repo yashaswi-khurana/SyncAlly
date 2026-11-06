@@ -150,34 +150,109 @@ def export_display_terms(stored: dict[str, Any]) -> dict[str, Any]:
     public = {key: value for key, value in stored.items() if key != "_f6_evidence"}
     _shape(public, {"schema_version", "buyer_id", "seller_id", "line_items", "shipments",
                     "payment_terms", "delivery_location", "incoterm", "cancellation_terms"})
-    if type(public["schema_version"]) is not int or public["schema_version"] != 1:
+    if type(public["schema_version"]) is not int or public["schema_version"] not in (1, 2):
         raise InvalidTradePack("Unsupported commitment schema")
+    schema_version = public["schema_version"]
     decimal_values = []
-    for collection, fields in (
-        ("line_items", {"description", "sku", "quantity", "unit", "unit_price"}),
-        ("shipments", {"quantity", "destination", "target_date"}),
-        ("payment_terms", {"amount", "trigger", "due_condition"}),
-    ):
-        if not isinstance(public[collection], list) or not public[collection]:
-            raise InvalidTradePack("Missing commitment entries")
-        for entry in public[collection]:
-            _shape(entry, fields)
-            for key in fields - {"quantity", "unit_price", "amount"}:
-                value = entry[key]
-                if not isinstance(value, str) and not (key in {"sku", "target_date"} and value is None):
+    if schema_version == 1:
+        for collection, fields in (
+            ("line_items", {"description", "sku", "quantity", "unit", "unit_price"}),
+            ("shipments", {"quantity", "destination", "target_date"}),
+            ("payment_terms", {"amount", "trigger", "due_condition"}),
+        ):
+            if not isinstance(public[collection], list) or not public[collection]:
+                raise InvalidTradePack("Missing commitment entries")
+            for entry in public[collection]:
+                _shape(entry, fields)
+                for key in fields - {"quantity", "unit_price", "amount"}:
+                    value = entry[key]
+                    if not isinstance(value, str) and not (key in {"sku", "target_date"} and value is None):
+                        raise InvalidTradePack("Invalid commitment text")
+                if "quantity" in entry:
+                    if not isinstance(entry["quantity"], str):
+                        raise InvalidTradePack("Decimal values must be strings")
+                    decimal_values.append(entry["quantity"])
+                for key in ("unit_price", "amount"):
+                    if key in entry:
+                        _shape(entry[key], {"amount", "currency"})
+                        if not isinstance(entry[key]["currency"], str):
+                            raise InvalidTradePack("Invalid commitment currency")
+                        if not isinstance(entry[key]["amount"], str):
+                            raise InvalidTradePack("Decimal values must be strings")
+                        decimal_values.append(entry[key]["amount"])
+    else:
+        for collection in ("line_items", "shipments", "payment_terms"):
+            if not isinstance(public[collection], list) or not public[collection]:
+                raise InvalidTradePack("Missing commitment entries")
+
+        for entry in public["line_items"]:
+            _shape(entry, {"id", "description", "sku", "quantity", "unit", "unit_price"})
+            if not isinstance(entry["id"], str) or not entry["id"].strip():
+                raise InvalidTradePack("Invalid commitment id")
+            for key in ("description", "unit"):
+                if not isinstance(entry[key], str) or not entry[key].strip():
                     raise InvalidTradePack("Invalid commitment text")
-            if "quantity" in entry:
+            if not isinstance(entry["sku"], str) and entry["sku"] is not None:
+                raise InvalidTradePack("Invalid commitment text")
+            if not isinstance(entry["quantity"], str):
+                raise InvalidTradePack("Decimal values must be strings")
+            decimal_values.append(entry["quantity"])
+            _shape(entry["unit_price"], {"amount", "currency"})
+            if not isinstance(entry["unit_price"]["currency"], str):
+                raise InvalidTradePack("Invalid commitment currency")
+            if not isinstance(entry["unit_price"]["amount"], str):
+                raise InvalidTradePack("Decimal values must be strings")
+            decimal_values.append(entry["unit_price"]["amount"])
+
+        for entry in public["shipments"]:
+            _shape(entry, {"id", "quantity", "destination", "target_date", "allocations"})
+            if not isinstance(entry["id"], str) or not entry["id"].strip():
+                raise InvalidTradePack("Invalid commitment id")
+            if not isinstance(entry["destination"], str):
+                raise InvalidTradePack("Invalid commitment text")
+            if not isinstance(entry["target_date"], str) and entry["target_date"] is not None:
+                raise InvalidTradePack("Invalid commitment text")
+            if entry["quantity"] is not None:
                 if not isinstance(entry["quantity"], str):
                     raise InvalidTradePack("Decimal values must be strings")
                 decimal_values.append(entry["quantity"])
-            for key in ("unit_price", "amount"):
-                if key in entry:
-                    _shape(entry[key], {"amount", "currency"})
-                    if not isinstance(entry[key]["currency"], str):
-                        raise InvalidTradePack("Invalid commitment currency")
-                    if not isinstance(entry[key]["amount"], str):
-                        raise InvalidTradePack("Decimal values must be strings")
-                    decimal_values.append(entry[key]["amount"])
+            if not isinstance(entry["allocations"], list) or not entry["allocations"]:
+                raise InvalidTradePack("Shipment allocations cannot be empty")
+            for alloc in entry["allocations"]:
+                _shape(alloc, {"line_item_id", "quantity", "unit"})
+                if not isinstance(alloc["line_item_id"], str) or not alloc["line_item_id"].strip():
+                    raise InvalidTradePack("Invalid allocation line item id")
+                if not isinstance(alloc["unit"], str) or not alloc["unit"].strip():
+                    raise InvalidTradePack("Invalid allocation unit")
+                if not isinstance(alloc["quantity"], str):
+                    raise InvalidTradePack("Decimal values must be strings")
+                decimal_values.append(alloc["quantity"])
+
+        for entry in public["payment_terms"]:
+            _shape(entry, {"id", "amount", "trigger", "due_condition", "allocations"})
+            if not isinstance(entry["id"], str) or not entry["id"].strip():
+                raise InvalidTradePack("Invalid commitment id")
+            for key in ("trigger", "due_condition"):
+                if not isinstance(entry[key], str):
+                    raise InvalidTradePack("Invalid commitment text")
+            _shape(entry["amount"], {"amount", "currency"})
+            if not isinstance(entry["amount"]["currency"], str):
+                raise InvalidTradePack("Invalid commitment currency")
+            if not isinstance(entry["amount"]["amount"], str):
+                raise InvalidTradePack("Decimal values must be strings")
+            decimal_values.append(entry["amount"]["amount"])
+            if not isinstance(entry["allocations"], list) or not entry["allocations"]:
+                raise InvalidTradePack("Payment term allocations cannot be empty")
+            for alloc in entry["allocations"]:
+                _shape(alloc, {"obligation_id", "amount"})
+                if not isinstance(alloc["obligation_id"], str) or not alloc["obligation_id"].strip():
+                    raise InvalidTradePack("Invalid allocation obligation id")
+                _shape(alloc["amount"], {"amount", "currency"})
+                if not isinstance(alloc["amount"]["currency"], str):
+                    raise InvalidTradePack("Invalid commitment currency")
+                if not isinstance(alloc["amount"]["amount"], str):
+                    raise InvalidTradePack("Decimal values must be strings")
+                decimal_values.append(alloc["amount"]["amount"])
     for key in ("buyer_id", "seller_id", "delivery_location", "cancellation_terms", "incoterm"):
         if not isinstance(public[key], str) and not (key == "incoterm" and public[key] is None):
             raise InvalidTradePack("Invalid commitment text")

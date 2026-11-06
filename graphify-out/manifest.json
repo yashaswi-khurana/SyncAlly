@@ -162,10 +162,10 @@
     "semantic_hash": "5cbae6f871ecd6f5acab02b2398a8a04"
   },
   "backend/src/syncally/application/agreements.py": {
-    "mtime": 1793505734.1743386,
-    "seen": 1793506638.5262237,
-    "ast_hash": "09a207e291078353ad5de527d0aa4f7b",
-    "semantic_hash": "09a207e291078353ad5de527d0aa4f7b"
+    "mtime": 1793940455.4972208,
+    "seen": 1793941117.989102,
+    "ast_hash": "833714221da91ef1cb010a0e3a12d4a2",
+    "semantic_hash": ""
   },
   "backend/src/syncally/application/ai.py": {
     "mtime": 1793505734.1743386,
@@ -186,10 +186,10 @@
     "semantic_hash": "b3f47bb0093f0c21b5978933726e3ba4"
   },
   "backend/src/syncally/application/documents.py": {
-    "mtime": 1793505734.1743386,
-    "seen": 1793506638.5262291,
-    "ast_hash": "fd17704ef82f1639c91f886f199f4b1a",
-    "semantic_hash": "fd17704ef82f1639c91f886f199f4b1a"
+    "mtime": 1793940440.6223047,
+    "seen": 1793941117.9891138,
+    "ast_hash": "afa5c6e3c5d3c8b6162ce4a88c10634b",
+    "semantic_hash": ""
   },
   "backend/src/syncally/application/identity.py": {
     "mtime": 1793637416.7311194,
@@ -294,16 +294,16 @@
     "semantic_hash": "bbee09a2356143632ae7fc6f9abf4f76"
   },
   "backend/src/syncally/domain/agreements/obligations.py": {
-    "mtime": 1792729557.6278274,
-    "seen": 1793433921.8350666,
-    "ast_hash": "ae945327253d3ebec70385e4e30777f4",
-    "semantic_hash": "ae945327253d3ebec70385e4e30777f4"
+    "mtime": 1793940415.3117,
+    "seen": 1793941117.9891806,
+    "ast_hash": "bc11a5c9e4de06b1195584c9e2c08c1f",
+    "semantic_hash": ""
   },
   "backend/src/syncally/domain/agreements/trade_terms.py": {
-    "mtime": 1792729557.6288276,
-    "seen": 1793433921.8350685,
-    "ast_hash": "1ce65020a5baabde0e33bb538709894a",
-    "semantic_hash": "1ce65020a5baabde0e33bb538709894a"
+    "mtime": 1793940384.2838595,
+    "seen": 1793941117.9891832,
+    "ast_hash": "d921f35987c19c1de617b4b47f61f71f",
+    "semantic_hash": ""
   },
   "backend/src/syncally/domain/ai/__init__.py": {
     "mtime": 1792729557.6288276,
@@ -396,10 +396,10 @@
     "semantic_hash": "cd7fc1a2c725332f55536979c7b2809b"
   },
   "backend/src/syncally/domain/shared/money.py": {
-    "mtime": 1792729557.6300137,
-    "seen": 1793433921.8350954,
-    "ast_hash": "ef6bec1d058ee46240978b80bf4c3d98",
-    "semantic_hash": "ef6bec1d058ee46240978b80bf4c3d98"
+    "mtime": 1793941710.6787305,
+    "seen": 1793941948.4764247,
+    "ast_hash": "b13a337ae5cfe567db6b8e8fe58b8466",
+    "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/__init__.py": {
     "mtime": 1792164542.987526,
@@ -462,9 +462,9 @@
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/models/agreements.py": {
-    "mtime": 1793798981.6687686,
-    "seen": 1793799041.433996,
-    "ast_hash": "756175337cd4674776274fd02ba803d1",
+    "mtime": 1793940473.3350003,
+    "seen": 1793941117.9892726,
+    "ast_hash": "d03f0a2f5aba01ef69009c9bedee4565",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/models/base.py": {
@@ -492,10 +492,10 @@
     "semantic_hash": "468b2f4c8a70fc87c3ec4676a97f3efa"
   },
   "backend/src/syncally/infrastructure/models/negotiation.py": {
-    "mtime": 1793505734.1751807,
-    "seen": 1793506638.5263155,
-    "ast_hash": "0e2efe540a971952d12b003a98167aa4",
-    "semantic_hash": "0e2efe540a971952d12b003a98167aa4"
+    "mtime": 1793940487.590894,
+    "seen": 1793941117.9892921,
+    "ast_hash": "5f4e7100196ec16d7850ae6ea44e7f7c",
+    "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/models/operations.py": {
     "mtime": 1793505734.1761806,
@@ -540,10 +540,10 @@
     "semantic_hash": "1a97cd56b4362676a2be2377fdead524"
   },
   "backend/src/syncally/infrastructure/repositories/agreements.py": {
-    "mtime": 1793505734.1775784,
-    "seen": 1793506638.5263298,
-    "ast_hash": "8d5cc8c4c7e9e8dadf5e6ca72888cf8f",
-    "semantic_hash": "8d5cc8c4c7e9e8dadf5e6ca72888cf8f"
+    "mtime": 1793940499.3929722,
+    "seen": 1793941117.9893196,
+    "ast_hash": "3cc25ae3e383097d4683f0e20322d5a1",
+    "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/communications.py": {
     "mtime": 1793505734.1775784,
@@ -762,10 +762,10 @@
     "semantic_hash": "aaacbc23df5dce6cf4c5a011004be4da"
   },
   "backend/tests/test_domain_fixes.py": {
-    "mtime": 1793505734.1791806,
-    "seen": 1793506638.526391,
-    "ast_hash": "bde6046d56f114c04d675101bc8b0de9",
-    "semantic_hash": "bde6046d56f114c04d675101bc8b0de9"
+    "mtime": 1793941728.3481102,
+    "seen": 1793941948.476741,
+    "ast_hash": "509602d5f59122b30fd95793e7344a19",
+    "semantic_hash": ""
   },
   "backend/tests/test_gmail.py": {
     "mtime": 1792729557.6348279,
@@ -1470,10 +1470,10 @@
     "semantic_hash": "60cb68f31e0d87d2cbce72d4fcc18922"
   },
   "backend/src/syncally/infrastructure/repositories/negotiation.py": {
-    "mtime": 1793505734.1775784,
-    "seen": 1793506638.5263343,
-    "ast_hash": "ad30b4c861c58d8cc0807fc1bbf03789",
-    "semantic_hash": "ad30b4c861c58d8cc0807fc1bbf03789"
+    "mtime": 1793941735.2842562,
+    "seen": 1793941948.4765499,
+    "ast_hash": "f2d30a138ca53c8553bd23629b495ff3",
+    "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/offline_payments.py": {
     "mtime": 1793505734.1775784,
@@ -1638,9 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1793800760.3725216,
-    "seen": 1793800845.3827543,
-    "ast_hash": "45586edde727b5f8872f1f3f5e8361eb",
+    "mtime": 1793941159.9031243,
+    "seen": 1793941948.4775379,
+    "ast_hash": "5387da9145903ccf768710329d40f533",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -1749,6 +1749,24 @@
     "mtime": 1793798981.6742833,
     "seen": 1793799041.4343696,
     "ast_hash": "06f047ed0d620c08b2f58d09fbf61543",
+    "semantic_hash": ""
+  },
+  "backend/alembic/versions/0021_collection_schema.py": {
+    "mtime": 1793940542.291961,
+    "seen": 1793941117.9890425,
+    "ast_hash": "ecf974eb0e0e8eab86145e42f659d486",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_collection_schema_migration.py": {
+    "mtime": 1793940615.6088583,
+    "seen": 1793941117.989383,
+    "ast_hash": "477270aff04faa298169896baf8eeaa9",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_trade_terms_collection_schema.py": {
+    "mtime": 1793941719.5019214,
+    "seen": 1793941948.4769177,
+    "ast_hash": "8aed76fb30d755a3ed753c298f0ff63d",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

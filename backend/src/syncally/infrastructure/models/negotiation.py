@@ -53,6 +53,7 @@ class Proposal(Base):
         ForeignKeyConstraint(["negotiation_session_id", "deal_id"], ["negotiation_sessions.id", "negotiation_sessions.deal_id"], name="fk_proposal_session_scope"),
         ForeignKeyConstraint(["based_on_proposal_id", "deal_id"], ["proposals.id", "proposals.deal_id"], name="fk_proposal_predecessor_scope"),
         CheckConstraint("proposal_number > 0", name="ck_proposal_number_positive"),
+        CheckConstraint("schema_version IN (1, 2)", name="ck_proposal_schema_version"),
         CheckConstraint("lifecycle_origin IN ('LEGACY', 'HUMAN_ROUNDS')", name="ck_proposal_origin"),
         CheckConstraint("lifecycle_origin = 'LEGACY' OR (created_by IS NOT NULL AND status IN ('SUBMITTED', 'ACCEPTED_AS_CANDIDATE', 'REJECTED', 'SUPERSEDED', 'EXPIRED'))", name="ck_human_proposal_state"),
         CheckConstraint("lifecycle_origin = 'LEGACY' OR expires_at IS NULL OR expires_at > created_at", name="ck_human_proposal_expiry"),
@@ -66,6 +67,7 @@ class Proposal(Base):
     based_on_proposal_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("proposals.id"), nullable=True)
     terms_json: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False)
     terms_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     lifecycle_origin: Mapped[str] = mapped_column(String(16), nullable=False, default="LEGACY", server_default="LEGACY")
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("users.id"))
     evidence_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON_TYPE)

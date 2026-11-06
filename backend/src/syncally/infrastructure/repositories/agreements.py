@@ -355,6 +355,7 @@ class SqlAlchemyAgreementRepository:
             version_number=version_number,
             canonical_terms_json=terms.to_storage_dict(),
             terms_hash=terms.terms_hash,
+            schema_version=terms.schema_version,
             status=AgreementStatus.PENDING_APPROVAL.value,
             created_by=command.user_id,
             created_at=now,
@@ -508,6 +509,7 @@ class SqlAlchemyAgreementRepository:
                 ),
                 terms_json=command.terms.to_storage_dict(),
                 terms_hash=command.terms.terms_hash,
+                schema_version=command.terms.schema_version,
                 status=proposal.status.value,
                 created_at=now,
             )

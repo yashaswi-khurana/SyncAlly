@@ -258,15 +258,19 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
           {invitation ? (
             <div className="form" style={{ marginTop: 22 }}>
               <h3>Awaiting counterparty</h3>
+              <p role="status">Your deal is ready, but the invitation has not been sent. Copy the link and send it securely to {recipientEmail.trim().toLowerCase()}.</p>
+              <p className="hint">Only share this single-use link with the intended recipient. Copy it before leaving this page.</p>
               <label htmlFor="counterparty-link">Counterparty invitation link</label>
               <input id="counterparty-link" readOnly value={invitation.invite_url} />
               <p className="muted">Expires {new Date(invitation.expires_at).toLocaleString()}</p>
               <div className="actions">
                 <button type="button" className="button" onClick={() => {
-                  if (!navigator.clipboard?.writeText) { setSubmitError("Clipboard unavailable. The link is available above."); return; }
-                  void navigator.clipboard.writeText(invitation.invite_url).then(() => setCopied(true), () => setSubmitError("Clipboard unavailable. The link is available above."));
+                  setCopied(false);
+                  setSubmitError(null);
+                  if (!navigator.clipboard?.writeText) { setSubmitError("Could not copy the link. Select it above and copy it manually."); return; }
+                  void navigator.clipboard.writeText(invitation.invite_url).then(() => setCopied(true), () => setSubmitError("Could not copy the link. Select it above and copy it manually."));
                 }}>{copied ? "Copied!" : "Copy Link"}</button>
-                <button type="button" className="button secondary" onClick={() => invitation.deal_id && onCreated(invitation.deal_id)}>Open pending deal</button>
+                <button type="button" className="button secondary" disabled={!invitation.deal_id} onClick={() => invitation.deal_id && onCreated(invitation.deal_id)}>Open pending deal</button>
               </div>
               {submitError ? <p role="alert">{submitError}</p> : null}
             </div>

@@ -70,6 +70,10 @@ describe("CreateDealPage", () => {
     fireEvent.change(screen.getByLabelText("Country code"), { target: { value: "JP" } });
     fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
     expect(await screen.findByRole("heading", { name: "Awaiting counterparty" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("invitation has not been sent");
+    expect(screen.getByRole("status")).toHaveTextContent("seller@example.com");
+    expect(screen.getByText(/single-use link/)).toHaveTextContent("Copy it before leaving this page");
+    expect(screen.getByText(/Expires/)).toBeInTheDocument();
     expect(createCounterpartyInvitation).toHaveBeenCalledWith({ buyer_organization_id: BUYER_ID, recipient_email: "seller@example.com", legal_name: "Seller Ltd", country_code: "JP" });
     expect(onCreated).not.toHaveBeenCalled();
     expect(mockedCreateDeal).not.toHaveBeenCalled();
@@ -77,6 +81,25 @@ describe("CreateDealPage", () => {
     expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open pending deal" }));
     expect(onCreated).toHaveBeenCalledWith("pending-deal");
+  });
+
+  it("keeps the invitation link available when copying fails", async () => {
+    mockedListOrganizations.mockResolvedValue([organization()]);
+    vi.mocked(createCounterpartyInvitation).mockResolvedValue({ token: "bound-token", invite_url: "https://app.example/invite", organization_id: BUYER_ID, organization_legal_name: "Buyer Co", deal_id: "pending-deal", role: "ADMIN", expires_at: "2026-11-07T12:00:00Z" });
+    const writeText = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<CreateDealPage onCreated={vi.fn()} />);
+    await screen.findByLabelText("Buyer organization");
+    fireEvent.click(screen.getByRole("radio", { name: "Invite counterparty" }));
+    fireEvent.change(screen.getByLabelText("Counterparty email"), { target: { value: "seller@example.com" } });
+    fireEvent.change(screen.getByLabelText("Counterparty company legal name"), { target: { value: "Seller Ltd" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy Link" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("copy it manually");
+    expect(screen.getByLabelText("Counterparty invitation link")).toHaveValue("https://app.example/invite");
+    fireEvent.click(screen.getByRole("button", { name: "Copy Link" }));
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows an empty state when the account has no organizations", async () => {

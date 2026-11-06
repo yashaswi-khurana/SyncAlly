@@ -363,4 +363,71 @@ describe("AgreementReview", () => {
       ),
     );
   });
+
+  it("renders schema 2 collection terms with stable IDs, allocations, and unrecorded disclaimer", async () => {
+    const schema2Agreement: AgreementVersion = {
+      deal_id: DEAL_ID,
+      version_number: 4,
+      terms_hash: "b".repeat(64),
+      status: "COMMITTED",
+      terms: {
+        schema_version: 2,
+        buyer_id: BUYER_ID,
+        seller_id: SELLER_ID,
+        line_items: [
+          {
+            id: "item-valves-1",
+            description: "Industrial Valves",
+            sku: "VALVE-100",
+            quantity: "100",
+            unit: "pieces",
+            unit_price: { amount: "250.00", currency: "USD" },
+          },
+        ],
+        shipments: [
+          {
+            id: "ship-alpha",
+            quantity: "100",
+            destination: "Warehouse 4A, Hamburg Port",
+            target_date: "2026-12-01",
+            allocations: [
+              { line_item_id: "item-valves-1", quantity: "100", unit: "pieces" },
+            ],
+          },
+        ],
+        payment_terms: [
+          {
+            id: "pay-deposit",
+            amount: { amount: "25000.00", currency: "USD" },
+            trigger: "customs_clearance",
+            due_condition: "Net 30 days after arrival",
+            allocations: [
+              {
+                obligation_id: "ship-alpha",
+                amount: { amount: "25000.00", currency: "USD" },
+              },
+            ],
+          },
+        ],
+        delivery_location: "Warehouse 4A, Hamburg Port",
+        incoterm: "DAP",
+        cancellation_terms: "14-day notice",
+      },
+      created_at: "2026-10-19T10:00:00Z",
+      committed_at: "2026-10-19T11:00:00Z",
+      approvals: [],
+    };
+
+    mockedGetCurrent.mockResolvedValue(schema2Agreement);
+    renderReview();
+
+    await screen.findByText("VERSION 4");
+    expect(screen.getByText("item-valves-1")).toBeInTheDocument();
+    expect(screen.getByText("VALVE-100")).toBeInTheDocument();
+    expect(screen.getByText("ship-alpha")).toBeInTheDocument();
+    expect(screen.getByText("100 pieces of item item-valves-1")).toBeInTheDocument();
+    expect(screen.getByText("pay-deposit")).toBeInTheDocument();
+    expect(screen.getByText("25000.00 USD for obligation ship-alpha")).toBeInTheDocument();
+    expect(screen.getByText(/Taxes, freight, customs classification, and other fees: Not specified in committed terms/)).toBeInTheDocument();
+  });
 });

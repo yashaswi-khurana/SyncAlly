@@ -29,3 +29,9 @@ Enable a buyer and seller to start a trade, agree on the same terms, follow paym
 ## Evidence and limits
 
 The deployed static frontend was reachable during the November 6 review, but its backend was not connected. A separate local SQLite demo allowed navigation as each party; it did not establish production, PostgreSQL/Temporal or real PayPal behavior. Existing roadmap issue #78 is broader than this task graph, and closed issue #77 is historical evidence, not proof of this specification. Do not invent RICE reach, impact, confidence, effort or retention results in the absence of customer data.
+
+## Implementation constraints discovered during task mapping
+
+The current counterparty onboarding model and version-one invitation token bind the inviter as buyer. Seller-led invitations need an additive, data-preserving migration and a versioned token contract, not just a different label. Existing buyer invitations must remain redeemable with their original binding; a new seller-side invitation must bind inviter role, shell, deal and recipient and reject stale or mismatched parties atomically. Downgrade must refuse if seller-side history cannot be preserved. A mixed-version rollout must prevent an older server from consuming a new token. Test authorization, inactive parties, expiration, replay, rollback and concurrency against the actual migration head.
+
+The current APIs do not provide one authoritative next-action value. An overview must first resolve the active party and show a neutral choice for dual membership. For a current agreement, show the actual version and decisions; a separate commit remains necessary after matching bilateral approval. Stale, rejected, unauthorized and failed reads are not success or an empty state. After commitment, payment and fulfillment are parallel tracks. Link to the existing panels rather than asserting permission from stale client data, and preserve simulation and provider-verification distinctions.

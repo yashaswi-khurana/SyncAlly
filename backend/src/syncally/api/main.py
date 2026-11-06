@@ -2,6 +2,7 @@
 
 from fastapi import Depends, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse
@@ -19,6 +20,7 @@ from syncally.api.operations import OperationalFastAPI
 from syncally.api.organizations import router as organizations_router
 from syncally.api.payments import router as payments_router
 from syncally.api.paypal_webhooks import router as paypal_webhooks_router
+from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.operations import configure_logging
 
@@ -103,6 +105,13 @@ async def validation_exception_handler(
 
 
 app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=MAX_REQUEST_BODY_BYTES)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.public_frontend_url],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(auth_router)
 app.include_router(dev_router)
 app.include_router(organizations_router)

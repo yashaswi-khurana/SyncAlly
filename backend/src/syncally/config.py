@@ -56,6 +56,29 @@ def _is_weak_jwt_secret(secret: str) -> bool:
     return re.fullmatch(r"(.{1,64})\1+", normalized) is not None
 
 
+def _is_loopback_temporal_address(address: str) -> bool:
+    """Allow plaintext Temporal only when the endpoint cannot leave this host."""
+    try:
+        parsed = urlsplit(f"//{address}")
+        hostname = parsed.hostname
+        parsed.port  # Validate the optional port instead of accepting malformed values.
+    except ValueError:
+        return False
+    if (
+        not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return hostname.lower() == "localhost"
+
+
 class Settings(BaseSettings):
     # Fail closed when a deployment forgets to set APP_ENV. Local .env files
     # should opt into development explicitly.
@@ -123,8 +146,15 @@ class Settings(BaseSettings):
             raise ValueError("OUTBOX_BATCH_SIZE must be positive")
         if self.outbox_poll_interval_seconds <= 0:
             raise ValueError("OUTBOX_POLL_INTERVAL_SECONDS must be positive")
-        if not local_environment and not self.temporal_tls:
-            raise ValueError("TEMPORAL_TLS must be enabled outside development/test")
+        if (
+            not local_environment
+            and not self.temporal_tls
+            and not _is_loopback_temporal_address(self.temporal_address)
+        ):
+            raise ValueError(
+                "TEMPORAL_TLS must be enabled outside development/test unless "
+                "TEMPORAL_ADDRESS is loopback"
+            )
         return self
 
     @model_validator(mode="after")

@@ -101,6 +101,26 @@ def _build_invoice_url(
     return None
 
 
+def _derive_lifecycle_state(status: str) -> str:
+    match status:
+        case "AUTHORIZED":
+            return "authorized"
+        case "CREATE_PENDING":
+            return "queued"
+        case "CREATE_UNKNOWN":
+            return "unknown"
+        case "PROVIDER_CREATED" | "SENT" | "PENDING":
+            return "sent"
+        case "PARTIALLY_PAID" | "PAID":
+            return "reconciled"
+        case "FAILED":
+            return "failed"
+        case "CANCELLED":
+            return "cancelled"
+        case _:
+            return "unknown"
+
+
 def _violated_constraint_name(error: IntegrityError) -> str | None:
     """Postgres names the violated constraint; SQLite (used in tests) doesn't."""
     diag = getattr(error.orig, "diag", None)
@@ -152,12 +172,14 @@ class SqlAlchemyPaymentIntentRepository:
                 amount=Money(milestone.amount, milestone.currency),
                 trigger=milestone.trigger_type,
                 due_condition=milestone.due_condition,
+                source_terms_reference=milestone.source_terms_reference or command.source_terms_reference,
             ),
             seller_organization_id=OrganizationId(command.seller_organization_id),
             payer_organization_id=OrganizationId(command.payer_organization_id),
             authorized_by=UserId(command.authorized_by),
             idempotency_key=command.idempotency_key,
             created_at=now,
+            source_terms_reference=milestone.source_terms_reference or command.source_terms_reference,
         )
 
         # Checked up front, not just on the index violation below: a retry
@@ -169,6 +191,15 @@ class SqlAlchemyPaymentIntentRepository:
         )
         if existing is not None:
             return self._matching_outcome_or_raise(existing, command)
+
+        existing_paid = self._db.scalar(
+            select(PaymentIntent).where(
+                PaymentIntent.payment_milestone_id == command.payment_milestone_id,
+                PaymentIntent.status == "PAID",
+            ).limit(1)
+        )
+        if existing_paid is not None:
+            raise DuplicateActivePaymentIntent("Payment milestone has already been paid")
 
         mode = PaymentExecutionMode(command.execution_mode)
         if command.expected_mode is not None and command.expected_mode != mode:
@@ -191,6 +222,7 @@ class SqlAlchemyPaymentIntentRepository:
                     execution_mode=mode.value,
                     reconciliation_source="NONE",
                     idempotency_key=command.idempotency_key,
+                    source_terms_reference=milestone.source_terms_reference or command.source_terms_reference,
                     version=0,
                     created_at=now,
                 )
@@ -345,6 +377,11 @@ class SqlAlchemyPaymentIntentRepository:
                         else None
                     ),
                     failure_reason=failure_reason,
+                    payment_milestone_id=milestone.id,
+                    source_terms_reference=milestone.source_terms_reference or intent.source_terms_reference,
+                    lifecycle_state=_derive_lifecycle_state(intent.status),
+                    is_eligible=True,
+                    ineligibility_reason=None,
                 )
             )
         return records
@@ -366,6 +403,10 @@ class SqlAlchemyPaymentIntentRepository:
             and existing.authorized_by == command.authorized_by
             and existing.amount == command.amount.amount
             and existing.currency == command.amount.currency
+            and (
+                command.source_terms_reference is None
+                or existing.source_terms_reference == command.source_terms_reference
+            )
         ):
             return PaymentIntentAuthorizationOutcome(
                 intent_id=existing.id, already_existed=True,

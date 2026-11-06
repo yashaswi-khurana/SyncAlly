@@ -50,6 +50,14 @@ class PaymentModeChanged(DomainError):
     """The preview mode differs from the mode for a new authorization."""
 
 
+class PaymentMilestoneIneligible(DomainError):
+    """The payment milestone trigger condition is not satisfied."""
+
+
+class PaymentTriggerPolicyUnapproved(DomainError):
+    """The milestone trigger policy is unapproved or ambiguous."""
+
+
 @dataclass(frozen=True, slots=True)
 class PaymentStatusRecord:
     """Safe persisted payment fields needed by a deal status screen."""
@@ -66,6 +74,11 @@ class PaymentStatusRecord:
     reconciliation_source: str = "LEGACY_UNVERIFIED"
     invoice_reference: str | None = None
     version: int = 0
+    payment_milestone_id: UUID | None = None
+    source_terms_reference: str | None = None
+    lifecycle_state: str | None = None
+    is_eligible: bool = True
+    ineligibility_reason: str | None = None
 
 
 class PaymentStatusRepository(Protocol):
@@ -95,6 +108,7 @@ class AuthorizePaymentIntentCommand:
     idempotency_key: str
     execution_mode: PaymentExecutionMode = PaymentExecutionMode.PAYPAL_SANDBOX
     expected_mode: PaymentExecutionMode | None = None
+    source_terms_reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

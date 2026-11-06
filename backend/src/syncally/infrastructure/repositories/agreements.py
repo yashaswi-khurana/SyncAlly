@@ -854,6 +854,7 @@ class SqlAlchemyPaymentMilestoneRepository:
                     currency=draft.amount.currency,
                     trigger_type=draft.trigger_type,
                     due_condition=draft.due_condition,
+                    source_terms_reference=draft.source_terms_reference,
                 )
             )
         self._db.flush()

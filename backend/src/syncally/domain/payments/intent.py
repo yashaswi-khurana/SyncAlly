@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 
+from syncally.domain.agreements.trade_terms import PaymentObligationAllocation
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import (
     AgreementVersionId,
@@ -15,7 +17,55 @@ from syncally.domain.shared.identifiers import (
     PaymentMilestoneId,
     UserId,
 )
-from syncally.domain.shared.money import Money
+from syncally.domain.shared.money import Money, bounded_decimal, has_excess_currency_precision
+
+INVOICE_TRIGGERS: frozenset[str] = frozenset({
+    "seller_invoice",
+    "manual",
+    "immediate",
+    "on_invoice",
+    "invoicing",
+})
+COMMIT_TRIGGERS: frozenset[str] = frozenset({
+    "on_commit",
+    "upon_commit",
+    "commit",
+    "agreement_commit",
+    "signing",
+    "on_signing",
+    "approval",
+    "on_approval",
+})
+DELIVERY_TRIGGERS: frozenset[str] = frozenset({
+    "delivery",
+    "upon_delivery",
+    "fulfillment",
+    "shipment",
+    "on_delivery",
+    "delivery_confirmed",
+    "confirmed_delivery",
+    "on_fulfillment",
+})
+APPROVED_PAYMENT_TRIGGERS: frozenset[str] = (
+    INVOICE_TRIGGERS | COMMIT_TRIGGERS | DELIVERY_TRIGGERS
+)
+
+
+def check_milestone_trigger_eligibility(
+    trigger: str,
+    *,
+    agreement_committed: bool,
+    delivery_confirmed: bool = False,
+) -> tuple[bool, str | None]:
+    """Evaluate whether an explicit milestone's trigger conditions are approved and met."""
+    normalized = trigger.strip().casefold()
+    if normalized not in APPROVED_PAYMENT_TRIGGERS:
+        return False, f"Milestone trigger '{trigger}' is unapproved or ambiguous"
+    if not agreement_committed:
+        return False, "Agreement must be committed before milestone can be eligible"
+    if normalized in DELIVERY_TRIGGERS and not delivery_confirmed:
+        return False, "Delivery has not been confirmed for this milestone"
+    return True, None
 
 
 class PaymentExecutionMode(StrEnum):
@@ -71,12 +121,49 @@ class PaymentMilestone:
     amount: Money
     trigger: str
     due_condition: str
+    source_terms_reference: str | None = None
+    allocations: tuple[PaymentObligationAllocation, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.sequence_number < 1 or self.amount.amount <= 0:
-            raise InvariantViolation("Payment milestone must have a positive sequence and amount")
+        if self.sequence_number < 1:
+            raise InvariantViolation("Payment milestone sequence must be positive")
+        bounded_decimal(
+            self.amount.amount,
+            allow_negative=False,
+            allow_zero=False,
+            field_name="Payment milestone amount",
+        )
+        if has_excess_currency_precision(self.amount.amount, self.amount.currency):
+            raise InvariantViolation(
+                f"Payment milestone amount {self.amount.amount} exceeds currency '{self.amount.currency}' precision"
+            )
         if not self.trigger.strip() or not self.due_condition.strip():
             raise InvariantViolation("Payment milestone needs a trigger and due condition")
+        if self.allocations:
+            alloc_ids = [a.obligation_id for a in self.allocations]
+            if len(alloc_ids) != len(set(alloc_ids)):
+                raise InvariantViolation("Duplicate obligation allocation within payment milestone")
+            alloc_sum = Decimal("0")
+            for alloc in self.allocations:
+                if alloc.amount.currency != self.amount.currency:
+                    raise InvariantViolation(
+                        f"Allocation currency '{alloc.amount.currency}' differs from milestone '{self.amount.currency}'"
+                    )
+                bounded_decimal(
+                    alloc.amount.amount,
+                    allow_negative=False,
+                    allow_zero=False,
+                    field_name="Allocation amount",
+                )
+                if has_excess_currency_precision(alloc.amount.amount, alloc.amount.currency):
+                    raise InvariantViolation(
+                        f"Allocation amount {alloc.amount.amount} exceeds currency '{alloc.amount.currency}' precision"
+                    )
+                alloc_sum += alloc.amount.amount
+            if alloc_sum != self.amount.amount:
+                raise InvariantViolation(
+                    f"Milestone allocations sum {alloc_sum} does not equal milestone amount {self.amount.amount}"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +202,7 @@ class PaymentIntent:
     created_at: datetime
     provider_reference: str | None = None
     reconciled_amount: Money | None = None
+    source_terms_reference: str | None = None
     _status: PaymentIntentStatus = field(
         default=PaymentIntentStatus.AUTHORIZED, init=False, repr=False
     )
@@ -131,6 +219,12 @@ class PaymentIntent:
             raise InvariantViolation("Payment intent payer differs from the milestone payer")
         if self.seller_organization_id == self.payer_organization_id:
             raise InvariantViolation("Payment intent seller and payer must differ")
+        if (
+            self.source_terms_reference is not None
+            and self.milestone.source_terms_reference is not None
+            and self.source_terms_reference != self.milestone.source_terms_reference
+        ):
+            raise InvariantViolation("Payment intent source terms reference disagrees with milestone")
 
     @classmethod
     def restore(
@@ -146,6 +240,7 @@ class PaymentIntent:
         status: PaymentIntentStatus,
         provider_reference: str | None = None,
         reconciled_amount: Money | None = None,
+        source_terms_reference: str | None = None,
     ) -> PaymentIntent:
         """Rehydrate a persisted intent before applying a state transition."""
         intent = cls(
@@ -158,6 +253,7 @@ class PaymentIntent:
             created_at=created_at,
             provider_reference=provider_reference,
             reconciled_amount=reconciled_amount,
+            source_terms_reference=source_terms_reference or milestone.source_terms_reference,
         )
         intent._status = PaymentIntentStatus(status)
         return intent

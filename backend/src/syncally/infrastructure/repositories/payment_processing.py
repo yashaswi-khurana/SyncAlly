@@ -509,12 +509,47 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
             or milestone.payer_organization_id != intent.payer_organization_id
             or milestone.amount != intent.amount
             or milestone.currency != intent.currency
-            or terms.total != amount
         ):
             raise PaymentNeedsAction(
                 "PAYMENT_AGREEMENT_MISMATCH",
                 "The saved payment intent does not match its committed agreement.",
             )
+
+        matching_term = None
+        if milestone.source_terms_reference:
+            matching_term = next(
+                (term for term in terms.payment_terms if term.id == milestone.source_terms_reference),
+                None,
+            )
+        if matching_term is None and 0 <= milestone.sequence_number - 1 < len(terms.payment_terms):
+            matching_term = terms.payment_terms[milestone.sequence_number - 1]
+
+        if matching_term is None or matching_term.amount != amount:
+            raise PaymentNeedsAction(
+                "PAYMENT_AGREEMENT_MISMATCH",
+                "The saved payment milestone amount does not match its committed payment term.",
+            )
+
+        if terms.schema_version == 1:
+            if terms.total != amount:
+                raise PaymentNeedsAction(
+                    "PAYMENT_AGREEMENT_MISMATCH",
+                    "Schema 1 payment requires the payment milestone to equal the full trade total.",
+                )
+        else:
+            milestone_total = sum((p.amount.amount for p in terms.payment_terms), Decimal("0"))
+            if milestone_total != terms.total.amount:
+                raise PaymentNeedsAction(
+                    "PAYMENT_AGREEMENT_MISMATCH",
+                    "The sum of payment milestone amounts does not equal the committed terms total.",
+                )
+            if matching_term.allocations:
+                alloc_total = sum((a.amount.amount for a in matching_term.allocations), Decimal("0"))
+                if alloc_total != matching_term.amount.amount:
+                    raise PaymentNeedsAction(
+                        "PAYMENT_AGREEMENT_MISMATCH",
+                        "The payment milestone allocations do not sum to the milestone amount.",
+                    )
 
         buyer = db.get(Organization, deal.buyer_organization_id)
         seller = db.get(Organization, deal.seller_organization_id)
@@ -548,16 +583,38 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
             )
             raise PaymentNeedsAction(code, detail)
         contact = admin_users[0]
-        line_items = tuple(
-            PaymentInvoiceLineItem(
-                name=item.description,
-                description=item.sku,
-                quantity=item.quantity,
-                unit=item.unit,
-                unit_price=item.unit_price,
+        if matching_term.allocations:
+            line_items = tuple(
+                PaymentInvoiceLineItem(
+                    name=f"Milestone {milestone.sequence_number} - {alloc.obligation_id}",
+                    description=f"Obligation: {alloc.obligation_id}; Condition: {matching_term.due_condition}",
+                    quantity=Decimal("1"),
+                    unit="milestone",
+                    unit_price=alloc.amount,
+                )
+                for alloc in matching_term.allocations
             )
-            for item in terms.line_items
-        )
+        elif terms.schema_version == 1 or terms.total == amount:
+            line_items = tuple(
+                PaymentInvoiceLineItem(
+                    name=item.description,
+                    description=item.sku,
+                    quantity=item.quantity,
+                    unit=item.unit,
+                    unit_price=item.unit_price,
+                )
+                for item in terms.line_items
+            )
+        else:
+            line_items = (
+                PaymentInvoiceLineItem(
+                    name=f"Milestone {milestone.sequence_number} Payment",
+                    description=f"Condition: {matching_term.due_condition}",
+                    quantity=Decimal("1"),
+                    unit="milestone",
+                    unit_price=matching_term.amount,
+                ),
+            )
         return PaymentInvoiceRequest(
             payment_intent_id=intent.id,
             deal_id=deal.id,
@@ -647,6 +704,7 @@ def _restore_domain_intent(db: Session, row: PaymentIntent) -> DomainPaymentInte
             amount=Money(milestone_row.amount, milestone_row.currency),
             trigger=milestone_row.trigger_type,
             due_condition=milestone_row.due_condition,
+            source_terms_reference=milestone_row.source_terms_reference,
         ),
         seller_organization_id=OrganizationId(row.seller_organization_id),
         payer_organization_id=OrganizationId(row.payer_organization_id),
@@ -654,6 +712,7 @@ def _restore_domain_intent(db: Session, row: PaymentIntent) -> DomainPaymentInte
         idempotency_key=row.idempotency_key,
         created_at=row.created_at,
         provider_reference=row.provider_invoice_id,
+        source_terms_reference=row.source_terms_reference or milestone_row.source_terms_reference,
         reconciled_amount=(
             Money(row.reconciled_amount, row.currency)
             if row.reconciled_amount is not None

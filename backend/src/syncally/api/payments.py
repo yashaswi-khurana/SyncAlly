@@ -1,6 +1,7 @@
 """Read the latest persisted payment state for a deal."""
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID, uuid4
 
@@ -25,18 +26,38 @@ from syncally.application.payments import (
 )
 from syncally.config import settings
 from syncally.domain.agreements.agreement import AgreementStatus
+from syncally.domain.agreements.fulfillment import FulfillmentStage
+from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.organizations.organization import OrganizationCapability
-from syncally.domain.payments.intent import PaymentExecutionMode, PaymentIntentStatus
-from syncally.domain.shared.money import Money, canonical_decimal
+from syncally.domain.payments.intent import (
+    DELIVERY_TRIGGERS,
+    PaymentExecutionMode,
+    PaymentIntentStatus,
+    check_milestone_trigger_eligibility,
+)
+from syncally.domain.shared.money import (
+    Money,
+    bounded_decimal,
+    canonical_decimal,
+    has_excess_currency_precision,
+)
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.deal_completion import _event_total, _scaled
 from syncally.infrastructure.identity import (
     repair_organization_finance_membership,
     verify_member_capability,
 )
-from syncally.infrastructure.models import PaymentIntent, PaymentMilestone
+from syncally.infrastructure.models import (
+    FulfillmentEvent,
+    Obligation,
+    PaymentIntent,
+    PaymentMilestone,
+)
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 from syncally.infrastructure.repositories.payments import (
     SqlAlchemyPaymentIntentRepository,
+    _build_invoice_url,
+    _derive_lifecycle_state,
     authorize_payment_intent_in_transaction,
 )
 
@@ -78,6 +99,11 @@ class PaymentStatusResponse(BaseModel):
     reconciliation_source: str = "LEGACY_UNVERIFIED"
     invoice_reference: str | None = None
     version: int = 0
+    payment_milestone_id: UUID | None = None
+    milestone_id: str | None = None
+    source_terms_reference: str | None = None
+    lifecycle_state: str | None = None
+    is_eligible: bool | None = None
 
 
 class AuthorizePaymentRequest(BaseModel):
@@ -87,6 +113,8 @@ class AuthorizePaymentRequest(BaseModel):
 
     idempotency_key: str = Field(min_length=1, max_length=256)
     expected_mode: PaymentExecutionMode | None = None
+    payment_milestone_id: UUID | None = None
+    milestone_id: str | None = None
 
 
 class AuthorizePaymentResponse(BaseModel):
@@ -95,11 +123,151 @@ class AuthorizePaymentResponse(BaseModel):
     already_existed: bool
     provider: str
     execution_mode: str
+    payment_milestone_id: UUID | None = None
+    milestone_id: str | None = None
 
 
 class PaymentPreviewResponse(BaseModel):
     execution_mode: PaymentExecutionMode
     provider: str
+
+
+class MilestoneAllocationResponse(BaseModel):
+    obligation_id: str
+    amount: str
+    currency: str
+
+
+class MilestonePaymentSummaryResponse(BaseModel):
+    id: UUID
+    sequence_number: int
+    milestone_id: str | None = None
+    source_terms_reference: str | None = None
+    amount: str
+    currency: str
+    trigger_type: str
+    due_condition: str
+    lifecycle_state: str
+    is_eligible: bool
+    ineligibility_reason: str | None = None
+    allocations: list[MilestoneAllocationResponse] = Field(default_factory=list)
+    active_intent_id: UUID | None = None
+    intent_status: PaymentIntentStatus | None = None
+    reconciled_amount: str | None = None
+    last_checked_at: datetime | None = None
+    last_reconciled_at: datetime | None = None
+    invoice_url: str | None = None
+    invoice_reference: str | None = None
+    failure_reason: str | None = None
+
+
+def _check_milestone_delivery_confirmed(
+    db: Session,
+    deal_id: UUID,
+    agreement_version_id: UUID,
+    milestone: PaymentMilestone,
+    term: object | None,
+    terms: TradeTerms,
+) -> bool:
+    allocations = getattr(term, "allocations", ())
+    if allocations:
+        for alloc in allocations:
+            obligation = db.scalar(
+                select(Obligation).where(
+                    Obligation.deal_id == deal_id,
+                    Obligation.agreement_version_id == agreement_version_id,
+                    Obligation.obligation_type == "DELIVERY",
+                    Obligation.source_terms_reference == alloc.obligation_id,
+                )
+            )
+            if obligation is None:
+                return False
+            events = list(
+                db.scalars(
+                    select(FulfillmentEvent).where(
+                        FulfillmentEvent.deal_id == deal_id,
+                        FulfillmentEvent.agreement_version_id == agreement_version_id,
+                        FulfillmentEvent.obligation_id == obligation.id,
+                    )
+                )
+            )
+            shipment = next((s for s in terms.shipments if s.id == alloc.obligation_id), None)
+            if shipment is None:
+                return False
+            if shipment.quantity is not None:
+                expected = _scaled(shipment.quantity)
+            elif shipment.allocations:
+                expected = sum(_scaled(a.quantity) for a in shipment.allocations)
+            else:
+                return False
+            confirmed = _event_total(events, FulfillmentStage.CONFIRMED)
+            if confirmed < expected:
+                return False
+        return True
+
+    if milestone.obligation_id:
+        events = list(
+            db.scalars(
+                select(FulfillmentEvent).where(
+                    FulfillmentEvent.deal_id == deal_id,
+                    FulfillmentEvent.agreement_version_id == agreement_version_id,
+                    FulfillmentEvent.obligation_id == milestone.obligation_id,
+                )
+            )
+        )
+        confirmed = _event_total(events, FulfillmentStage.CONFIRMED)
+        if terms.shipments:
+            s0 = terms.shipments[0]
+            if s0.quantity is not None:
+                expected = _scaled(s0.quantity)
+            elif s0.allocations:
+                expected = sum(_scaled(a.quantity) for a in s0.allocations)
+            else:
+                expected = 0
+            return confirmed >= expected if expected > 0 else False
+        return confirmed > 0
+
+    delivery_obs = list(
+        db.scalars(
+            select(Obligation).where(
+                Obligation.deal_id == deal_id,
+                Obligation.agreement_version_id == agreement_version_id,
+                Obligation.obligation_type == "DELIVERY",
+            )
+        )
+    )
+    if not delivery_obs:
+        return False
+    for index, ob in enumerate(delivery_obs):
+        events = list(
+            db.scalars(
+                select(FulfillmentEvent).where(
+                    FulfillmentEvent.deal_id == deal_id,
+                    FulfillmentEvent.agreement_version_id == agreement_version_id,
+                    FulfillmentEvent.obligation_id == ob.id,
+                )
+            )
+        )
+        matching_shipment = next(
+            (
+                s
+                for s in terms.shipments
+                if (s.id and s.id == ob.source_terms_reference)
+                or ob.source_terms_reference == f"shipments[{terms.shipments.index(s)}]"
+            ),
+            terms.shipments[index] if index < len(terms.shipments) else None,
+        )
+        if matching_shipment is None:
+            return False
+        if matching_shipment.quantity is not None:
+            expected = _scaled(matching_shipment.quantity)
+        elif matching_shipment.allocations:
+            expected = sum(_scaled(a.quantity) for a in matching_shipment.allocations)
+        else:
+            return False
+        if _event_total(events, FulfillmentStage.CONFIRMED) < expected:
+            return False
+    return True
 
 
 @router.get("/preview", response_model=PaymentPreviewResponse)
@@ -186,17 +354,167 @@ def authorize_payment_route(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The agreement must be committed before payment can be requested",
             )
-        milestone = db.scalar(
-            select(PaymentMilestone)
-            .where(PaymentMilestone.agreement_version_id == agreement.version_id)
-            .order_by(PaymentMilestone.sequence_number)
-            .limit(1)
+
+        try:
+            if hasattr(agreement, "terms") and isinstance(agreement.terms, TradeTerms):
+                terms = agreement.terms
+            elif hasattr(agreement, "canonical_terms_json"):
+                terms = TradeTerms.from_canonical_json(agreement.canonical_terms_json)
+            else:
+                raise ValueError("Agreement has no terms")
+        except Exception as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Committed agreement terms could not be parsed",
+            ) from error
+
+        # Validate milestone sums, finite Decimal bounds, and zero-residual policy
+        for p in terms.payment_terms:
+            try:
+                bounded_decimal(
+                    p.amount.amount,
+                    allow_negative=False,
+                    allow_zero=False,
+                    field_name="Payment milestone amount",
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Invalid payment milestone amount: {exc}",
+                ) from exc
+            if has_excess_currency_precision(p.amount.amount, p.amount.currency):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Payment milestone amount {p.amount.amount} exceeds currency '{p.amount.currency}' precision",
+                )
+            if p.amount.currency != terms.total.currency:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Currency mismatch in payment terms: {p.amount.currency} != {terms.total.currency}",
+                )
+            if p.allocations:
+                alloc_sum = sum((a.amount.amount for a in p.allocations), Decimal("0"))
+                if alloc_sum != p.amount.amount:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Allocations for payment term do not sum to milestone amount ({alloc_sum} != {p.amount.amount})",
+                    )
+                for a in p.allocations:
+                    if a.amount.currency != p.amount.currency:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="Allocation currency does not match milestone currency",
+                        )
+                    try:
+                        bounded_decimal(
+                            a.amount.amount,
+                            allow_negative=False,
+                            allow_zero=False,
+                            field_name="Allocation amount",
+                        )
+                    except Exception as exc:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Invalid allocation amount: {exc}",
+                        ) from exc
+                    if has_excess_currency_precision(a.amount.amount, a.amount.currency):
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Allocation amount {a.amount.amount} exceeds currency '{a.amount.currency}' precision",
+                        )
+
+        milestone_sum = sum((p.amount.amount for p in terms.payment_terms), Decimal("0"))
+        if milestone_sum != terms.total.amount:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Payment milestone amounts ({milestone_sum}) do not equal terms total ({terms.total.amount})",
+            )
+
+        all_milestones = list(
+            db.scalars(
+                select(PaymentMilestone)
+                .where(PaymentMilestone.agreement_version_id == agreement.version_id)
+                .order_by(PaymentMilestone.sequence_number)
+            )
         )
-        if milestone is None:
+        if not all_milestones:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The committed agreement has no payment milestone",
             )
+
+        milestone = None
+        if payload.payment_milestone_id:
+            milestone = next((m for m in all_milestones if m.id == payload.payment_milestone_id), None)
+            if milestone is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Payment milestone not found",
+                )
+        elif payload.milestone_id:
+            milestone = next((m for m in all_milestones if m.source_terms_reference == payload.milestone_id), None)
+            if milestone is None:
+                match_idx = next((i for i, t in enumerate(terms.payment_terms) if t.id == payload.milestone_id), None)
+                if match_idx is not None and match_idx < len(all_milestones):
+                    milestone = all_milestones[match_idx]
+            if milestone is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Payment milestone '{payload.milestone_id}' not found",
+                )
+        else:
+            if len(all_milestones) == 1:
+                milestone = all_milestones[0]
+            else:
+                active_milestone_ids = set(
+                    db.scalars(
+                        select(PaymentIntent.payment_milestone_id).where(
+                            PaymentIntent.agreement_version_id == agreement.version_id,
+                            PaymentIntent.status.notin_(("FAILED", "CANCELLED")),
+                        )
+                    )
+                )
+                available = [m for m in all_milestones if m.id not in active_milestone_ids]
+                milestone = available[0] if available else all_milestones[0]
+
+        matching_term = next(
+            (t for t in terms.payment_terms if (milestone.source_terms_reference and t.id == milestone.source_terms_reference)),
+            None,
+        )
+        if matching_term is None and 0 <= milestone.sequence_number - 1 < len(terms.payment_terms):
+            matching_term = terms.payment_terms[milestone.sequence_number - 1]
+
+        existing_paid = db.scalar(
+            select(PaymentIntent).where(
+                PaymentIntent.payment_milestone_id == milestone.id,
+                PaymentIntent.status == "PAID",
+            ).limit(1)
+        )
+        if existing_paid is not None and existing_paid.idempotency_key != payload.idempotency_key:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Payment milestone {milestone.sequence_number} has already been paid",
+            )
+
+        # Trigger condition & eligibility evaluation
+        delivery_confirmed = False
+        trigger_norm = milestone.trigger_type.strip().casefold()
+        if trigger_norm in DELIVERY_TRIGGERS:
+            delivery_confirmed = _check_milestone_delivery_confirmed(
+                db, deal_id, agreement.version_id, milestone, matching_term, terms
+            )
+
+        eligible, reason = check_milestone_trigger_eligibility(
+            milestone.trigger_type,
+            agreement_committed=True,
+            delivery_confirmed=delivery_confirmed,
+        )
+        if not eligible:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Payment milestone {milestone.sequence_number} is not eligible: {reason}",
+            )
+
         outcome = authorize_payment_intent_in_transaction(
             db,
             AuthorizePaymentIntentCommand(
@@ -211,6 +529,7 @@ def authorize_payment_route(
                 idempotency_key=payload.idempotency_key,
                 execution_mode=PaymentExecutionMode(settings.payment_mode),
                 expected_mode=payload.expected_mode,
+                source_terms_reference=milestone.source_terms_reference,
             ),
         )
         intent = db.get(PaymentIntent, outcome.intent_id)
@@ -222,6 +541,8 @@ def authorize_payment_route(
             already_existed=outcome.already_existed,
             provider=intent.provider,
             execution_mode=intent.execution_mode,
+            payment_milestone_id=milestone.id,
+            milestone_id=milestone.source_terms_reference,
         )
     except HTTPException:
         db.rollback()
@@ -288,6 +609,152 @@ def list_payment_statuses_route(
             retry_scheduled_at=getattr(payment, "retry_scheduled_at", None),
             lease_expires_at=getattr(payment, "lease_expires_at", None),
             failure_reason=getattr(payment, "failure_reason", None),
+            payment_milestone_id=getattr(payment, "payment_milestone_id", None),
+            milestone_id=getattr(payment, "source_terms_reference", None),
+            source_terms_reference=getattr(payment, "source_terms_reference", None),
+            lifecycle_state=getattr(payment, "lifecycle_state", None),
+            is_eligible=getattr(payment, "is_eligible", None),
         )
         for payment in payments
     ]
+
+
+@router.get("/milestones", response_model=list[MilestonePaymentSummaryResponse])
+def list_payment_milestones_route(
+    deal_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+    db: Session = Depends(get_db),
+) -> list[MilestonePaymentSummaryResponse]:
+    """Return all payment milestones and their current lifecycle states for the committed agreement."""
+    try:
+        get_deal(actor, deal_id, deal_repository)
+        agreement = get_current_agreement(
+            actor,
+            deal_id,
+            deal_repository,
+            SqlAlchemyAgreementRepository(db),
+        )
+    except DealNotFound as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found") from error
+    except AgreementNotFound:
+        return []
+
+    if agreement.status is not AgreementStatus.COMMITTED:
+        return []
+
+    try:
+        if hasattr(agreement, "terms") and isinstance(agreement.terms, TradeTerms):
+            terms = agreement.terms
+        elif hasattr(agreement, "canonical_terms_json"):
+            terms = TradeTerms.from_canonical_json(agreement.canonical_terms_json)
+        else:
+            return []
+    except Exception:
+        return []
+
+    milestone_rows = list(
+        db.scalars(
+            select(PaymentMilestone)
+            .where(PaymentMilestone.agreement_version_id == agreement.version_id)
+            .order_by(PaymentMilestone.sequence_number)
+        )
+    )
+    if not milestone_rows:
+        return []
+
+    intent_rows = list(
+        db.scalars(
+            select(PaymentIntent)
+            .where(PaymentIntent.agreement_version_id == agreement.version_id)
+            .order_by(PaymentIntent.created_at.desc(), PaymentIntent.id.desc())
+        )
+    )
+
+    intents_by_milestone: dict[UUID, PaymentIntent] = {}
+    for intent in intent_rows:
+        if intent.payment_milestone_id not in intents_by_milestone:
+            intents_by_milestone[intent.payment_milestone_id] = intent
+
+    results: list[MilestonePaymentSummaryResponse] = []
+    for milestone in milestone_rows:
+        matching_term = next(
+            (
+                t
+                for t in terms.payment_terms
+                if (milestone.source_terms_reference and t.id == milestone.source_terms_reference)
+            ),
+            None,
+        )
+        if matching_term is None and 0 <= milestone.sequence_number - 1 < len(terms.payment_terms):
+            matching_term = terms.payment_terms[milestone.sequence_number - 1]
+
+        intent = intents_by_milestone.get(milestone.id)
+
+        delivery_confirmed = False
+        trigger_norm = milestone.trigger_type.strip().casefold()
+        if trigger_norm in DELIVERY_TRIGGERS:
+            delivery_confirmed = _check_milestone_delivery_confirmed(
+                db, deal_id, agreement.version_id, milestone, matching_term, terms
+            )
+
+        is_eligible, ineligibility_reason = check_milestone_trigger_eligibility(
+            milestone.trigger_type,
+            agreement_committed=True,
+            delivery_confirmed=delivery_confirmed,
+        )
+
+        if intent is not None and intent.status == "PAID":
+            is_eligible = False
+            ineligibility_reason = "Payment already reconciled"
+
+        lifecycle_state = (
+            _derive_lifecycle_state(intent.status)
+            if intent is not None
+            else ("eligible" if is_eligible else "ineligible")
+        )
+
+        alloc_responses = [
+            MilestoneAllocationResponse(
+                obligation_id=a.obligation_id,
+                amount=canonical_decimal(a.amount.amount),
+                currency=a.amount.currency,
+            )
+            for a in getattr(matching_term, "allocations", ())
+        ]
+
+        invoice_url = None
+        if intent is not None and intent.execution_mode == "PAYPAL_SANDBOX":
+            invoice_url = _build_invoice_url(
+                intent.provider, intent.provider_invoice_id, intent.status
+            )
+
+        results.append(
+            MilestonePaymentSummaryResponse(
+                id=milestone.id,
+                sequence_number=milestone.sequence_number,
+                milestone_id=milestone.source_terms_reference,
+                source_terms_reference=milestone.source_terms_reference,
+                amount=canonical_decimal(milestone.amount),
+                currency=milestone.currency,
+                trigger_type=milestone.trigger_type,
+                due_condition=milestone.due_condition,
+                lifecycle_state=lifecycle_state,
+                is_eligible=is_eligible,
+                ineligibility_reason=ineligibility_reason if not is_eligible else None,
+                allocations=alloc_responses,
+                active_intent_id=intent.id if intent else None,
+                intent_status=PaymentIntentStatus(intent.status) if intent else None,
+                reconciled_amount=(
+                    canonical_decimal(intent.reconciled_amount)
+                    if intent and intent.reconciled_amount is not None
+                    else None
+                ),
+                last_checked_at=intent.last_checked_at if intent else None,
+                last_reconciled_at=intent.last_reconciled_at if intent else None,
+                invoice_url=invoice_url,
+                invoice_reference=intent.provider_invoice_id if intent else None,
+                failure_reason=intent.failure_reason if intent else None,
+            )
+        )
+    return results

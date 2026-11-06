@@ -144,9 +144,9 @@
     "semantic_hash": ""
   },
   "backend/src/syncally/api/payments.py": {
-    "mtime": 1793641444.18275,
-    "seen": 1793641872.3603823,
-    "ast_hash": "1eeb78522370dd6dea6ee0bfb5fe27ef",
+    "mtime": 1793952756.39782,
+    "seen": 1793953979.543618,
+    "ast_hash": "2e8005ccf087651d5f8097ca2bf8825f",
     "semantic_hash": ""
   },
   "backend/src/syncally/api/paypal_webhooks.py": {
@@ -216,10 +216,10 @@
     "semantic_hash": "63fcfecac11adcb7cf57684c2f3a7c09"
   },
   "backend/src/syncally/application/payments.py": {
-    "mtime": 1793505734.1743386,
-    "seen": 1793506638.526238,
-    "ast_hash": "5fd804a66b0df8311b8e7f7d5c246366",
-    "semantic_hash": "5fd804a66b0df8311b8e7f7d5c246366"
+    "mtime": 1793949362.244686,
+    "seen": 1793953979.5437164,
+    "ast_hash": "ebc97015005e39ee88ead8fd0fa70057",
+    "semantic_hash": ""
   },
   "backend/src/syncally/application/workflow_notifications.py": {
     "mtime": 1793798981.6677687,
@@ -372,10 +372,10 @@
     "semantic_hash": "56243042a724db01bf5906698506436c"
   },
   "backend/src/syncally/domain/payments/intent.py": {
-    "mtime": 1793505734.1751807,
-    "seen": 1793506638.5262764,
-    "ast_hash": "76a04341dff42cfd46278ce2deadd167",
-    "semantic_hash": "76a04341dff42cfd46278ce2deadd167"
+    "mtime": 1793952554.0346932,
+    "seen": 1793953979.543888,
+    "ast_hash": "1baace2dd835a72f46ee488d6c36fc33",
+    "semantic_hash": ""
   },
   "backend/src/syncally/domain/shared/__init__.py": {
     "mtime": 1792729515.3392177,
@@ -396,9 +396,9 @@
     "semantic_hash": "cd7fc1a2c725332f55536979c7b2809b"
   },
   "backend/src/syncally/domain/shared/money.py": {
-    "mtime": 1793941710.6787305,
-    "seen": 1793941948.4764247,
-    "ast_hash": "b13a337ae5cfe567db6b8e8fe58b8466",
+    "mtime": 1793952523.9415145,
+    "seen": 1793953979.5439126,
+    "ast_hash": "cd8ad018ef044d74c1fe271868c06d69",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/__init__.py": {
@@ -504,10 +504,10 @@
     "semantic_hash": "c0eee70fa35d37e2e81d27db1d4c4ea1"
   },
   "backend/src/syncally/infrastructure/models/payments.py": {
-    "mtime": 1793505734.1761806,
-    "seen": 1793506638.5263183,
-    "ast_hash": "210a4a49b320019983e7073b2efcf82f",
-    "semantic_hash": "210a4a49b320019983e7073b2efcf82f"
+    "mtime": 1793949284.8054063,
+    "seen": 1793953979.5440576,
+    "ast_hash": "b32ec8f59b4fb9b43f5926214f764c86",
+    "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/outbox.py": {
     "mtime": 1793505734.1761806,
@@ -540,9 +540,9 @@
     "semantic_hash": "1a97cd56b4362676a2be2377fdead524"
   },
   "backend/src/syncally/infrastructure/repositories/agreements.py": {
-    "mtime": 1793940499.3929722,
-    "seen": 1793941117.9893196,
-    "ast_hash": "3cc25ae3e383097d4683f0e20322d5a1",
+    "mtime": 1793949297.1454513,
+    "seen": 1793953979.5441084,
+    "ast_hash": "1fabd2af21cc35648b81898cca95883c",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/communications.py": {
@@ -564,16 +564,16 @@
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/payment_processing.py": {
-    "mtime": 1793798981.6697688,
-    "seen": 1793799041.4340703,
-    "ast_hash": "893de556984bfed755e7bcaac15bf5ed",
+    "mtime": 1793952621.8070843,
+    "seen": 1793953979.5441751,
+    "ast_hash": "0ebfdae45139d67f4f582e0e48c414d7",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/payments.py": {
-    "mtime": 1793505734.1775784,
-    "seen": 1793506638.52634,
-    "ast_hash": "0abf92619c6d88ab498bf6c4051c0217",
-    "semantic_hash": "0abf92619c6d88ab498bf6c4051c0217"
+    "mtime": 1793952574.9608157,
+    "seen": 1793953979.544181,
+    "ast_hash": "ce07fa60c460afb46ebee6c900121af2",
+    "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/paypal_webhooks.py": {
     "mtime": 1793505734.1775784,
@@ -918,15 +918,15 @@
     "semantic_hash": "487d387c8fc1efff8f07229e324748c0"
   },
   "frontend/src/api/client.test.ts": {
-    "mtime": 1793638198.5560913,
-    "seen": 1793638388.8467033,
-    "ast_hash": "8bd068fde0b33300c9ec1ba22c0b6d49",
+    "mtime": 1793949926.7706254,
+    "seen": 1793953979.544666,
+    "ast_hash": "9280014fc8b17895d70adae9b488a7fa",
     "semantic_hash": ""
   },
   "frontend/src/api/client.ts": {
-    "mtime": 1793798981.6731203,
-    "seen": 1793799041.4342983,
-    "ast_hash": "c0b459dedc404d89d091b570695db513",
+    "mtime": 1793949874.9356353,
+    "seen": 1793953979.5446725,
+    "ast_hash": "ec132531652429611542d5fac952865e",
     "semantic_hash": ""
   },
   "frontend/src/api/tokenStore.ts": {
@@ -936,9 +936,9 @@
     "semantic_hash": "1cce6ab7110d0e744e181f984cd8b8c1"
   },
   "frontend/src/api/types.ts": {
-    "mtime": 1793945919.6226392,
-    "seen": 1793946995.2729592,
-    "ast_hash": "13c1983c584247185ef974cdfe21381f",
+    "mtime": 1793949846.3786469,
+    "seen": 1793953979.5446858,
+    "ast_hash": "b46118efebe48075b888bac2f6b44a5a",
     "semantic_hash": ""
   },
   "frontend/src/app/useHashRoute.ts": {
@@ -1056,16 +1056,16 @@
     "semantic_hash": "95243117404b964b4c73041ccc40e771"
   },
   "frontend/src/deals/PaymentStatusPanel.test.tsx": {
-    "mtime": 1793505734.1952279,
-    "seen": 1793506638.5264773,
-    "ast_hash": "4904ac64731f2e33a7e8cb064d0ff57a",
-    "semantic_hash": "4904ac64731f2e33a7e8cb064d0ff57a"
+    "mtime": 1793952894.3075287,
+    "seen": 1793953979.5448608,
+    "ast_hash": "c0aa91441f37e185f1d255ca1313cebb",
+    "semantic_hash": ""
   },
   "frontend/src/deals/PaymentStatusPanel.tsx": {
-    "mtime": 1793505734.1958275,
-    "seen": 1793506638.5264785,
-    "ast_hash": "3651f1bc92af11cf1a4fc424af278afa",
-    "semantic_hash": "3651f1bc92af11cf1a4fc424af278afa"
+    "mtime": 1793952885.188483,
+    "seen": 1793953979.5448673,
+    "ast_hash": "06bbb25ea50a0252bd67ea5fe1379538",
+    "semantic_hash": ""
   },
   "frontend/src/deals/TradeFlowScene.tsx": {
     "mtime": 1792729557.639237,
@@ -1638,9 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1793946851.812429,
-    "seen": 1793946995.2741709,
-    "ast_hash": "386677fd6202e1d76a79df50dfca0dba",
+    "mtime": 1793953846.0549624,
+    "seen": 1793953979.5453632,
+    "ast_hash": "32eaff4211ce3b5ff54908eef3aeb23c",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -1704,9 +1704,9 @@
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/deal_completion.py": {
-    "mtime": 1793798981.6687686,
-    "seen": 1793799041.433974,
-    "ast_hash": "f76d41ddbeecc3941a4115aa93069be0",
+    "mtime": 1793952636.4681668,
+    "seen": 1793953979.5439649,
+    "ast_hash": "cd27afb83c1b3694eff209ce86fb5d56",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/models/fulfillment.py": {
@@ -1769,88 +1769,22 @@
     "ast_hash": "8aed76fb30d755a3ed753c298f0ff63d",
     "semantic_hash": ""
   },
-  ".agents/teamwork/ORIGINAL_REQUEST.md": {
-    "mtime": 1793943831.9011352,
-    "seen": 1793946995.2733228,
-    "ast_hash": "640968b9ebbc4ab9088b5085ddca32ee",
+  "backend/alembic/versions/0022_milestone_payments.py": {
+    "mtime": 1793949258.2603083,
+    "seen": 1793953979.543528,
+    "ast_hash": "8f91a20d1d8db324f04761eebfa6287e",
     "semantic_hash": ""
   },
-  ".agents/teamwork/developer_1/BRIEFING.md": {
-    "mtime": 1793944732.3209925,
-    "seen": 1793946995.273331,
-    "ast_hash": "b9f8b88d3f4ddc6715974b5060ca80bd",
+  "backend/tests/test_milestone_payments.py": {
+    "mtime": 1793953332.584586,
+    "seen": 1793953979.5444741,
+    "ast_hash": "0c2b6e91290998807aee5f016a7ab354",
     "semantic_hash": ""
   },
-  ".agents/teamwork/developer_1/DISPATCH.md": {
-    "mtime": 1793945629.1498594,
-    "seen": 1793946995.273337,
-    "ast_hash": "147ba6b9442c1593f0f11f9eed56d1de",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/developer_1/progress.md": {
-    "mtime": 1793945640.8612645,
-    "seen": 1793946995.2733424,
-    "ast_hash": "fa6ca47092ce8e804e132f60218e2649",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/interviewer/prompt_draft.md": {
-    "mtime": 1793943593.1295857,
-    "seen": 1793946995.2733493,
-    "ast_hash": "e8e63ab16143d4df8879a669e094ace1",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/orchestrator_1/BRIEFING.md": {
-    "mtime": 1793946200.356988,
-    "seen": 1793946995.2733548,
-    "ast_hash": "73a6787142572c97f0c9871fc447161d",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/orchestrator_1/DISPATCH.md": {
-    "mtime": 1793943890.7085288,
-    "seen": 1793946995.2733593,
-    "ast_hash": "6a17cdfb6a11ce39397921e4dca56d20",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/orchestrator_1/PROJECT.md": {
-    "mtime": 1793944622.2799706,
-    "seen": 1793946995.2733662,
-    "ast_hash": "e42c3330b7973f4074a36f707fb13487",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/orchestrator_1/progress.md": {
-    "mtime": 1793946425.790145,
-    "seen": 1793946995.2733707,
-    "ast_hash": "7b116556eb06830b5ee6db5c93efbb90",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/planner_1/BRIEFING.md": {
-    "mtime": 1793944475.8334696,
-    "seen": 1793946995.2733755,
-    "ast_hash": "cb1d24a46e6325f4c393a4359b0bc084",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/planner_1/DISPATCH.md": {
-    "mtime": 1793943949.2780755,
-    "seen": 1793946995.2733805,
-    "ast_hash": "d052a4933b4c8a2767dd9751432e4696",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/planner_1/handoff.md": {
-    "mtime": 1793944558.5975916,
-    "seen": 1793946995.273386,
-    "ast_hash": "97368391e08d2264df752a1a2bbf7295",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/planner_1/progress.md": {
-    "mtime": 1793944564.5905313,
-    "seen": 1793946995.273391,
-    "ast_hash": "36f2b1065f3b48733f57632624bfd30e",
-    "semantic_hash": ""
-  },
-  ".agents/teamwork/sentinel/BRIEFING.md": {
-    "mtime": 1793943869.473091,
-    "seen": 1793946995.273397,
-    "ast_hash": "a70fc192c53a2e345b8f0069736a6a61",
+  "frontend/src/deals/paymentCountdown.ts": {
+    "mtime": 1793952771.9939022,
+    "seen": 1793953979.5448813,
+    "ast_hash": "693d74506d6e19be45db9e5239d3e168",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

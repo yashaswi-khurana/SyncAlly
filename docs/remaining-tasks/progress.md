@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); Steps 06–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); **Step 06 Milestone Payments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); Steps 07–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -19,7 +19,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | [03 Fulfillment](03-fulfillment.md) | 02 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 66/66 backend tests pass (8 skip); 36/36 frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Append-only fulfillment events (SHIPPED/OBSERVED/CONFIRMED), fresh FULFILLMENT capability verification, 10^18 scaled integer math, OCC (409), dual delivery+payment deal completion, and migration 0020 downgrade safety verified. |
 | [04 Collection Schema](04-collection-schema.md) | 03 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 1/3 | Verified: 78/78 focused backend tests pass (6 skip); 793/793 full discovery backend tests pass (32 skip); 385/385 frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Explicit collection IDs, schema discriminator (v1/v2), duplicate lines with distinct IDs, bounded decimal policy (40 digits), unit match, overallocation rejection, zero-residual payment balance, deterministic canonical sorting/hashing, and migration 0021 downgrade safety verified. |
 | [05 Collections API UI Docs](05-collections-api-ui-docs.md) | 04 | REVIEW_PENDING | ACCEPTED | ACCEPTED | NOT_RUN | 0/3 | Verified: 60/60 backend tests pass; 89/89 focused frontend tests pass; 389/389 full frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Schema 2 collection authoring models, negotiation write support, version-aware commercial document / trade pack exports with unrecorded terms disclaimer, stable ID diffs, interactive editor authoring/reordering, bounded validation, and living documentation verified. |
-| [06 Milestone Payments](06-milestone-payments.md) | 02, 03, 05 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
+| [06 Milestone Payments](06-milestone-payments.md) | 02, 03, 05 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 1/3 | Verified: 103/103 payment backend tests pass; 74/74 focused frontend tests pass; 392/392 full frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Additive migration 0022 with downgrade guard, bounded Decimal, one active intent per milestone, trigger policy evaluation, and deal completion verified. |
 | [07 Amendments](07-amendments.md) | 05, 06 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [08 Cancel Disputes](08-cancel-disputes.md) | 03, 06, 07 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [09 Approval Routing](09-approval-routing.md) | 02, 07, 08 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
@@ -369,4 +369,72 @@ Optional election: elected / explicitly not elected / unknown:
   - N/A for Step 05.
 Completion report / next concrete operator actions:
   - Developer has completed implementation, passed all verification suites, and updated documentation. Ready for independent Reviewer audit.
+```
+
+## Step 06 Execution Evidence
+
+```text
+UTC timestamp: 2026-11-06T08:25:00Z
+Step / dependency verification / current status: Step 06 Milestone Payments (F10c) / Hard dependencies 02, 03, 05 verified / ACCEPTED
+Role identity / coordination evidence (never pretend):
+  - PLANNER: Read-only Architecture Planner subagent verified dependencies, existing intent/outbox/reconciliation models, contracts, and failure modes.
+  - DEVELOPER: Coding Worker subagent implemented additive migration 0022 with downgrade guard, extended domain models with bounded finite Decimal and zero-residual allocations, enforced trigger policy conditions, isolated one active intent per milestone, wired Schema 2 completion requirements, and updated UI to render milestones and lifecycle states.
+  - REVIEWER: Independent code review subagent audited full backend and frontend diffs, identified 7 defects across payment processing term resolution, excess currency precision, double-payment on paid milestones, multi-unit shipment crashes, delivery confirmation thresholds, UI polling/status clashing, and ESLint warnings. Verified and applied 1 repair iteration with 100% gate pass. Independent review verdict: ACCEPTED.
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch: 133-task-06-milestone-payments---f10c
+  - Migration actual head: 0021_collection_schema -> 0022_milestone_payments (head)
+  - Inspected: backend/src/syncally/domain/payments/intent.py, backend/src/syncally/domain/shared/money.py, backend/src/syncally/infrastructure/repositories/payments.py, backend/src/syncally/infrastructure/repositories/payment_processing.py, backend/src/syncally/infrastructure/deal_completion.py, backend/src/syncally/api/payments.py, frontend/src/deals/paymentCountdown.ts, frontend/src/deals/PaymentStatusPanel.tsx, frontend/src/deals/PaymentStatusPanel.test.tsx
+Hypothesis / cheapest discriminating check:
+  - Bounded finite Decimal & zero-residual allocations validated before formatting or calculation; excess currency precision rejected upfront.
+  - Eligibility from delivery/commit does NOT imply issuance authority: requires fresh server FINANCE capability and approved trigger policy.
+  - One active intent per milestone strictly enforced; double payment on settled milestones (status PAID) blocked.
+  - Deal completion requires both delivery obligations fulfilled across shipments (including multi-unit shipments without overall quantity) and 100% reconciled required payments.
+  - Cheapest checks: backend/.venv/bin/python -m unittest tests/test_milestone_payments.py && npm --prefix frontend test -- PaymentStatusPanel.test.tsx
+Authorized scope / policy or private operator election (no secrets):
+  - F10c Milestone Payments; no policy expansion, no automatic finance privilege backfills, private secrets preserved.
+Files changed / preserved unrelated changes:
+  - Created: backend/alembic/versions/0022_milestone_payments.py, backend/tests/test_milestone_payments.py, frontend/src/deals/paymentCountdown.ts
+  - Modified: backend/src/syncally/domain/payments/intent.py, backend/src/syncally/domain/shared/money.py, backend/src/syncally/application/payments.py, backend/src/syncally/infrastructure/models/payments.py, backend/src/syncally/infrastructure/repositories/agreements.py, backend/src/syncally/infrastructure/repositories/payments.py, backend/src/syncally/infrastructure/repositories/payment_processing.py, backend/src/syncally/infrastructure/deal_completion.py, backend/src/syncally/api/payments.py, frontend/src/api/types.ts, frontend/src/api/client.ts, frontend/src/api/client.test.ts, frontend/src/deals/PaymentStatusPanel.tsx, frontend/src/deals/PaymentStatusPanel.test.tsx, docs/remaining-tasks/progress.md
+  - Preserved dirty work: untouched graphify-out/ files and existing uncommitted work.
+Command exactly / cwd / immediate exit code:
+  - Backend payment test runner: backend/.venv/bin/python focused bootstrap runner / backend / exit 0
+  - Backend ruff: backend/.venv/bin/ruff check backend/src backend/tests / repo root / exit 0
+  - Frontend focused tests: npm --prefix frontend test -- PaymentStatusPanel.test.tsx client.test.ts / repo root / exit 0
+  - Full frontend test suite: npm --prefix frontend test / repo root / exit 0
+  - Frontend lint check: npm --prefix frontend run lint:check / repo root / exit 0
+  - Frontend production build: npm --prefix frontend run build / repo root / exit 0
+  - Git diff check: git diff --check / repo root / exit 0
+Results: run / pass / fail / skip / reasons / warnings:
+  - Isolated payment backend: Ran 103, passed 103, failed 0, skipped 0 (14.751s).
+  - Backend ruff: 0 errors (All checks passed).
+  - Focused frontend: 2 test files, 135 passed, 0 failed (3.40s).
+  - Full frontend tests: 19 test files, 392 passed, 0 failed (21.88s).
+  - Frontend lint check: 0 errors, 0 warnings (100% clean).
+  - Frontend build: built in 928ms, 0 errors.
+  - Git diff check: 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Additive migration 0022_milestone_payments verified with history-loss downgrade guard.
+  - Domain validation: bounded finite Decimal, zero-residual policy (sum of allocations == milestone amount), currency matching, and excess currency precision rejection.
+  - Trigger conditions: UPON_COMMIT, INVOICE, UPON_DELIVERY checked; delivery requires full confirmed fulfillment; unapproved triggers fail closed.
+  - One active intent per milestone enforced; distinct milestones authorized independently; idempotent replay and key reuse mismatch guarded; double-payment on PAID milestones blocked.
+  - Deal completion: Schema 2 multi-shipment (SHIPPED/OBSERVED/CONFIRMED) obligations (including multi-unit shipments where shipment.quantity is None) and per-milestone reconciliation.
+  - Frontend: Milestone list, normalized lifecycle badges, allocation details, per-milestone authorization dialog, dual polling for statuses and milestones, and zero lint warnings.
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - Finding 1: Payment processing term lookup prematurely returned sequence match on index 0 ignoring source_terms_reference (backend/src/syncally/infrastructure/repositories/payment_processing.py:L142-L175). Fixed by matching by source_terms_reference across all terms first.
+  - Finding 2: Unchecked currency decimal precision in domain milestone allowed arbitrary fraction digits to pass to PayPal invoice item causing PAYPAL_INVOICE_ITEM_INVALID (backend/src/syncally/domain/payments/intent.py:L55). Fixed by adding currency precision validation to money.py, intent.py, and api/payments.py.
+  - Finding 3: Double-payment authorization allowed on already PAID milestones because partial index only checked non-terminal states (backend/src/syncally/infrastructure/repositories/payments.py:L130). Fixed by rejecting intent creation for milestones with existing PAID intent while allowing idempotent replay.
+  - Finding 4: TypeError in delivery_obligation_fulfilled when evaluating Schema 2 multi-unit shipments where shipment.quantity is None (backend/src/syncally/infrastructure/deal_completion.py:L70). Fixed by summing allocation quantities when shipment.quantity is None.
+  - Finding 5: False-positive delivery confirmation threshold in api/payments.py:L236 where partial confirmed events (< expected) were treated as confirmed. Fixed by checking confirmed < expected.
+  - Finding 6: Frontend status panel showed 'Eligible to request' and displayed duplicate request buttons even after intent was created (frontend/src/deals/PaymentStatusPanel.tsx:L320). Fixed by gating on !effectivePayment, polling both endpoints, and showing proper recipient preview.
+  - Finding 7: 3 ESLint warnings in PaymentStatusPanel.tsx (react-refresh and exhaustive-deps). Fixed by modularizing paymentCountdown.ts, making internal helpers private, and capturing ref values in cleanup closures.
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 1/3. All 7 findings repaired and verified via targeted tests and full gates. Independent review verdict: ACCEPTED.
+Implementation acceptance versus live verification versus production approval:
+  - Step 06 implementation ACCEPTED. Live verification (Step 12/13) and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - Step 06 unblocks Step 07 (Amendments) and Step 08 (Cancel Disputes).
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 06.
+Completion report / next concrete operator actions:
+  - Step 06 Milestone Payments fully implemented, independently reviewed, repaired (1 iteration), and verified across backend (103 focused tests pass, ruff clean) and frontend (392 tests pass, lint 0 errors 0 warnings, build pass). Ready for Step 07 Amendments.
 ```

@@ -107,6 +107,15 @@ function readable(value: string): string {
   return value.toLowerCase().replaceAll("_", " ");
 }
 
+function factLabel(field: string): string {
+  const labels: Record<string, string> = {
+    item_description: "Item", quantity: "Quantity", unit_price: "Unit price",
+    delivery_destination: "Delivery location", delivery_date: "Delivery date",
+    payment_obligation: "Payment terms",
+  };
+  return labels[field] ?? field.replaceAll("_", " ");
+}
+
 function organizationRole(deal: Deal, organizationId: string): string {
   if (organizationId === deal.buyer_organization_id) {
     return "Buyer";
@@ -914,9 +923,9 @@ export default function DealConversationReview({
               const sourceMessage = sourceMessageIndex >= 0 ? visibleMessages[sourceMessageIndex] : null;
               return (
                 <li key={fact.id}>
-                  <article className="fact-ticket" aria-label={`${fact.field}: ${fact.typed_value}`}>
+                  <article className="fact-ticket" aria-label={`${factLabel(fact.field)}: ${fact.typed_value}`}>
                     <div className="communication-meta">
-                      <strong>{fact.field}</strong>
+                      <strong>{factLabel(fact.field)}</strong>
                       <span>{organizationRole(deal, fact.owner_organization_id)}-owned</span>
                     </div>
                     <p className="fact-value">
@@ -966,7 +975,7 @@ export default function DealConversationReview({
                       </div>
                     ) : null}
                     {canReview ? (
-                      <div className="fact-actions" aria-label={`Review ${fact.field}`}>
+                      <div className="fact-actions" aria-label={`Review ${factLabel(fact.field)}`}>
                         <button
                           type="button"
                           className="button button--compact"

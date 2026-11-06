@@ -578,7 +578,7 @@ export default function DealDetailPage({
                     Step 2 · Review facts
                   </strong>
                   <p className="deal-onboarding-step__text">
-                    Review AI-extracted terms and toggle them to Shareable.
+                    Review suggested details and share only those you want the other party to see.
                   </p>
                 </div>
               </li>
@@ -592,7 +592,7 @@ export default function DealDetailPage({
                     Step 3 · Bilateral agreement
                   </strong>
                   <p className="deal-onboarding-step__text">
-                    Approve the bilateral agreement to generate your invoice.
+                    Both parties review and approve the same agreement. After it is committed, the seller can request payment.
                   </p>
                 </div>
               </li>
@@ -636,8 +636,8 @@ export default function DealDetailPage({
                 <span>Two perspectives.</span>
               </h1>
               <p className="deal-room__lede">
-                Read the conversation and review source-linked facts here. A fact review records a
-                decision; it does not approve or commit an agreement.
+                Discuss the deal, review the details and agree on the terms together. Reviewing a
+                detail does not approve the agreement.
               </p>
               <div className="deal-room__state">
                 <span className="deal-room__state-dot" aria-hidden="true" />
@@ -685,6 +685,19 @@ export default function DealDetailPage({
           </dl>
         </section>
 
+        <DealConversationReview
+          negotiation={negotiation?.organization_id === selectedOrganizationId && negotiation.deal_id === deal.id ? negotiation : null}
+          deal={deal}
+          composerId="deal-message-input"
+          buttonLabel="Send message"
+          selectedOrganizationId={selectedOrganizationId}
+          onOrganizationChange={handleOrganizationChange}
+          onAgreementCreated={commercialChanged}
+          onMessageCreated={() => {
+            setFreshness("not-fresh");
+            setFreshnessError(null);
+          }}
+        />
         {selectedOrganizationId ? <NegotiationReview
           deal={deal} organizationId={selectedOrganizationId} reloadToken={agreementReloadToken}
           onLoaded={setNegotiation} onChanged={commercialChanged}
@@ -711,19 +724,6 @@ export default function DealDetailPage({
           dealId={deal.id}
           sellerOrganizationId={deal.seller_organization_id}
           reloadToken={agreementReloadToken}
-        />
-        <DealConversationReview
-          negotiation={negotiation?.organization_id === selectedOrganizationId && negotiation.deal_id === deal.id ? negotiation : null}
-          deal={deal}
-          composerId="deal-message-input"
-          buttonLabel="Send message"
-          selectedOrganizationId={selectedOrganizationId}
-          onOrganizationChange={handleOrganizationChange}
-          onAgreementCreated={commercialChanged}
-          onMessageCreated={() => {
-            setFreshness("not-fresh");
-            setFreshnessError(null);
-          }}
         />
 
         {showInviteModal ? (

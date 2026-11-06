@@ -274,10 +274,10 @@ describe("DealDetailPage", () => {
       screen.getByText("Introduce trade terms in the conversation below (e.g. quantity, price, delivery port)."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Review AI-extracted terms and toggle them to Shareable."),
+      screen.getByText("Review suggested details and share only those you want the other party to see."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Approve the bilateral agreement to generate your invoice."),
+      screen.getByText("Both parties review and approve the same agreement. After it is committed, the seller can request payment."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start conversation/i })).toBeInTheDocument();
   });

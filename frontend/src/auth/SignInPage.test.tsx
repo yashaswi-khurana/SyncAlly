@@ -92,9 +92,9 @@ describe("SignInPage", () => {
   it("explains the trade flow and hides demo quick-fill unless enabled", () => {
     render(<SignInPage onSignIn={vi.fn()} />);
 
-    expect(screen.getByRole("heading", { name: "Cross-Border Trade on Autopilot." })).toBeInTheDocument();
-    expect(screen.getByText("Cryptographic Bilateral Approval")).toBeInTheDocument();
-    expect(screen.getByText("Automated PayPal Invoicing")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Bring your trade agreements together." })).toBeInTheDocument();
+    expect(screen.getByText("Review and approve together")).toBeInTheDocument();
+    expect(screen.getByText("Request an invoice")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Why SyncAlly" })).toBeInTheDocument();
 
     expect(screen.queryByRole("button", { name: "Demo Buyer" })).not.toBeInTheDocument();
@@ -162,6 +162,15 @@ describe("SignInPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
 
     expect(await screen.findByText("Invalid email or password.")).toBeInTheDocument();
+  });
+
+  it("explains when sign in is unavailable", async () => {
+    mockedLogin.mockRejectedValueOnce(new ApiError(405, null));
+    render(<SignInPage onSignIn={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "buyer@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "example-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
+    expect(await screen.findByText("Sign in is temporarily unavailable. Please try again later.")).toBeInTheDocument();
   });
 
   it("renders counterparty onboarding card when invite token is present in hash", async () => {

@@ -591,8 +591,8 @@ export default function PaymentStatusPanel({
         </div>
       ) : null}
       <p className="payment-status__footnote">
-        This view uses saved backend status. PayPal return pages and browser redirects are not
-        payment evidence.
+        Payment status updates after the payment provider confirms it. Returning from PayPal
+        does not by itself confirm payment.
       </p>
 
       {confirmationOpen && recipientPreview ? (

@@ -107,6 +107,15 @@ function readable(value: string): string {
   return value.toLowerCase().replaceAll("_", " ");
 }
 
+function factLabel(field: string): string {
+  const labels: Record<string, string> = {
+    item_description: "Item", quantity: "Quantity", unit_price: "Unit price",
+    delivery_destination: "Delivery location", delivery_date: "Delivery date",
+    payment_obligation: "Payment terms",
+  };
+  return labels[field] ?? field.replaceAll("_", " ");
+}
+
 function organizationRole(deal: Deal, organizationId: string): string {
   if (organizationId === deal.buyer_organization_id) {
     return "Buyer";
@@ -804,8 +813,8 @@ export default function DealConversationReview({
                       <div className="communication-meta">
                         <span>
                           {message.source_type === "AGENT"
-                            ? `SyncAlly agent${message.author_agent_id ? ` · ${message.author_agent_id}` : ""}`
-                            : `Deal participant${message.author_user_id ? ` · ${message.author_user_id.slice(0, 8)}` : ""}`}
+                            ? "SyncAlly assistant"
+                            : "Deal participant"}
                         </span>
                         <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
                       </div>
@@ -843,7 +852,8 @@ export default function DealConversationReview({
           <span className="communication-index" aria-hidden="true">02 / LEDGER</span>
         </div>
         <p className="muted">
-          Extracted facts are suggestions. Confirming one records your review; it does not approve the deal.
+          Extracted facts are suggestions. Confirming one records your review; it does not create a human proposal,
+          approve an agreement, or finalize the deal.
         </p>
         {currentConversation ? (
           <div className="review-metrics" role="group" aria-label="Filter facts for this organization">
@@ -914,9 +924,9 @@ export default function DealConversationReview({
               const sourceMessage = sourceMessageIndex >= 0 ? visibleMessages[sourceMessageIndex] : null;
               return (
                 <li key={fact.id}>
-                  <article className="fact-ticket" aria-label={`${fact.field}: ${fact.typed_value}`}>
+                  <article className="fact-ticket" aria-label={`${factLabel(fact.field)}: ${fact.typed_value}`}>
                     <div className="communication-meta">
-                      <strong>{fact.field}</strong>
+                      <strong>{factLabel(fact.field)}</strong>
                       <span>{organizationRole(deal, fact.owner_organization_id)}-owned</span>
                     </div>
                     <p className="fact-value">
@@ -966,7 +976,7 @@ export default function DealConversationReview({
                       </div>
                     ) : null}
                     {canReview ? (
-                      <div className="fact-actions" aria-label={`Review ${fact.field}`}>
+                      <div className="fact-actions" aria-label={`Review ${factLabel(fact.field)}`}>
                         <button
                           type="button"
                           className="button button--compact"
@@ -1006,19 +1016,25 @@ export default function DealConversationReview({
         )}
       </section>
       {currentConversation ? (
-        <AISuggestionReview
-          negotiation={negotiation}
-          pendingCounterparty={deal.pending_counterparty}
-          key={`${deal.id}:${activeOrganizationId}`}
-          dealId={deal.id}
-          organizationId={activeOrganizationId}
-          facts={currentConversation.facts}
-          onTraceSource={traceSourceMessage}
-          onFactAdded={addSuggestedFact}
-          onFactUpdated={updateSuggestedFact}
-          onFactCorrected={replaceSuggestedFact}
-          onAgreementCreated={onAgreementCreated}
-        />
+        <>
+          <p className="muted">
+            AI-generated terms are draft suggestions. A person must review and submit a human proposal;
+            AI never approves or commits an agreement.
+          </p>
+          <AISuggestionReview
+            negotiation={negotiation}
+            pendingCounterparty={deal.pending_counterparty}
+            key={`${deal.id}:${activeOrganizationId}`}
+            dealId={deal.id}
+            organizationId={activeOrganizationId}
+            facts={currentConversation.facts}
+            onTraceSource={traceSourceMessage}
+            onFactAdded={addSuggestedFact}
+            onFactUpdated={updateSuggestedFact}
+            onFactCorrected={replaceSuggestedFact}
+            onAgreementCreated={onAgreementCreated}
+          />
+        </>
       ) : null}
     </section>
   );

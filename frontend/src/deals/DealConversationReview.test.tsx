@@ -316,13 +316,16 @@ describe("DealConversationReview", () => {
     expect(await screen.findByText("We need delivery by November 1.")).toBeInTheDocument();
     expect(mockedListDealMessages).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
     expect(mockedListDealFacts).toHaveBeenCalledWith(DEAL.id, BUYER_ID);
+    const messages = screen.getByRole("list", { name: "Conversation messages" });
+    expect(within(messages).getByText("Deal participant")).toBeInTheDocument();
+    expect(within(messages).queryByText("user-12345678")).not.toBeInTheDocument();
 
     const deliveryFact = screen.getByRole("article", { name: "Delivery date: 2026-11-01" });
     expect(within(deliveryFact).getByText("🔒 Private to your org")).toBeInTheDocument();
     expect(within(deliveryFact).getByRole("button", { name: "Make Shareable" })).toBeInTheDocument();
     expect(within(deliveryFact).getByText(/extracted · unconfirmed/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/confirming one records your review; it does not approve the deal/i),
+      screen.getByText(/confirming one records your review; it does not create a human proposal/i),
     ).toBeInTheDocument();
 
     const minQtyFact = screen.getByRole("article", { name: "Minimum quantity: 2026-11-01" });
@@ -347,6 +350,23 @@ describe("DealConversationReview", () => {
     fireEvent.click(screen.getByRole("button", { name: /private here/i }));
     expect(screen.getByRole("article", { name: "Delivery date: 2026-11-01" })).toBeInTheDocument();
     expect(screen.queryByRole("article", { name: "Preferred port: 2026-11-01" })).not.toBeInTheDocument();
+  });
+
+  it("shows assistant messages without exposing internal agent identifiers", async () => {
+    mockedListDealMessages.mockResolvedValue([message({
+      id: "assistant-message",
+      author_user_id: null,
+      author_agent_id: "private-agent-identifier",
+      source_type: "AGENT",
+      body: "Suggested delivery terms",
+    })]);
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+
+    const messages = await screen.findByRole("list", { name: "Conversation messages" });
+    expect(within(messages).getByText("SyncAlly assistant")).toBeInTheDocument();
+    expect(within(messages).queryByText("private-agent-identifier")).not.toBeInTheDocument();
+    expect(screen.getByText(/AI-generated terms are draft suggestions/i)).toBeInTheDocument();
+    expect(screen.getByText(/AI never approves or commits an agreement/i)).toBeInTheDocument();
   });
 
   it("requires a party choice for dual members and scopes reads so other private facts stay hidden", async () => {
@@ -662,11 +682,12 @@ describe("DealConversationReview", () => {
     ]);
     mockedListDealFacts.mockResolvedValueOnce([sharedFact]);
 
-    render(<DealConversationReview deal={DEAL} />);
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
 
     expect(await screen.findByText("Warranty period")).toBeInTheDocument();
     expect(screen.getByText("24 months")).toBeInTheDocument();
     expect(screen.getByText("🌐 Shared with counterparty")).toBeInTheDocument();
+    expect(mockedListDealFacts).toHaveBeenCalledTimes(1);
 
     mockedListDealFacts.mockResolvedValue([]);
 
@@ -675,6 +696,7 @@ describe("DealConversationReview", () => {
     await vi.waitFor(() => {
       expect(screen.queryByText("Warranty period")).not.toBeInTheDocument();
     });
+    expect(mockedListDealFacts).toHaveBeenCalledTimes(2);
     expect(
       screen.getByText("No facts are available for this organization yet."),
     ).toBeInTheDocument();
@@ -1019,7 +1041,7 @@ describe("synchronized fact review and proposal drafts", () => {
     fireEvent.change(within(proposal).getByLabelText("Delivery destination"), { target: { value: "Mumbai" } });
     fireEvent.change(within(proposal).getByLabelText("Payment timing"), { target: { value: "seller_invoice" } });
     mockedReviewDealFact.mockResolvedValue({ ...quantity, status: "CONFIRMED", typed_value: "24", version: 2 });
-    fireEvent.click(within(screen.getByRole("article", { name: "quantity: 12" })).getByRole("button", { name: "Confirm" }));
+    fireEvent.click(within(screen.getByRole("article", { name: "Quantity: 12" })).getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(within(suggestion).getByText("confirmed")).toBeInTheDocument());
     expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("24");
     expect(within(suggestion).getByLabelText("Suggested value")).toBeDisabled();
@@ -1038,7 +1060,7 @@ describe("synchronized fact review and proposal drafts", () => {
     fireEvent.change(within(suggestion).getByLabelText("Suggested value"), { target: { value: "18" } });
     mockedListDealFacts.mockResolvedValue([{ ...quantity, typed_value: "20", version: 1 }]);
     fireEvent.focus(window);
-    await screen.findByRole("article", { name: "quantity: 20" });
+    await screen.findByRole("article", { name: "Quantity: 20" });
     expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("18");
     fireEvent.change(within(suggestion).getByLabelText("Suggested value"), { target: { value: "12" } });
     expect(within(suggestion).getByLabelText("Suggested value")).toHaveValue("12");
@@ -1047,7 +1069,7 @@ describe("synchronized fact review and proposal drafts", () => {
   it("leaves suggestions and draft unchanged when confirmation fails", async () => {
     const proposal = await openReview();
     mockedReviewDealFact.mockRejectedValue(new ApiError(409, "Review conflict"));
-    fireEvent.click(within(screen.getByRole("article", { name: "quantity: 12" })).getByRole("button", { name: "Confirm" }));
+    fireEvent.click(within(screen.getByRole("article", { name: "Quantity: 12" })).getByRole("button", { name: "Confirm" }));
     expect(await screen.findByText("Review conflict")).toBeInTheDocument();
     expect(within(screen.getByRole("article", { name: "Fact suggestion: quantity" })).getByText("extracted")).toBeInTheDocument();
     expect(within(proposal).getByLabelText("Quantity")).toHaveValue("12");
@@ -1059,8 +1081,8 @@ describe("synchronized fact review and proposal drafts", () => {
     render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
     fireEvent.click(await screen.findByRole("button", { name: "Draft proposed terms" }));
     mockedReviewDealFact.mockResolvedValue({ ...quantity, status: "CONFIRMED", typed_value: "36", version: 2 });
-    fireEvent.click(within(screen.getByRole("article", { name: "quantity: 12" })).getByRole("button", { name: "Confirm" }));
-    await screen.findByRole("article", { name: "quantity: 36" });
+    fireEvent.click(within(screen.getByRole("article", { name: "Quantity: 12" })).getByRole("button", { name: "Confirm" }));
+    await screen.findByRole("article", { name: "Quantity: 36" });
     await act(async () => resolve(draft));
     expect(within(await screen.findByLabelText("Proposed terms draft")).getByLabelText("Quantity")).toHaveValue("36");
   });
@@ -1077,8 +1099,8 @@ describe("synchronized fact review and proposal drafts", () => {
     mockedListDealFacts.mockResolvedValue(change === "revoked" ? [] : [{ ...shared, status: "REJECTED", version: 2 }]);
     fireEvent.focus(window);
     await waitFor(() => {
-      if (change === "revoked") expect(screen.queryByRole("article", { name: "quantity: 12" })).not.toBeInTheDocument();
-      else expect(within(screen.getByRole("article", { name: "quantity: 12" })).getByText("rejected")).toBeInTheDocument();
+      if (change === "revoked") expect(screen.queryByRole("article", { name: "Quantity: 12" })).not.toBeInTheDocument();
+      else expect(within(screen.getByRole("article", { name: "Quantity: 12" })).getByText("rejected")).toBeInTheDocument();
     });
     await act(async () => resolve(draft));
     const proposal = await screen.findByLabelText("Proposed terms draft");
@@ -1109,7 +1131,7 @@ describe("synchronized fact review and proposal drafts", () => {
     mockedReviewDealFact.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
     mockedListDealFacts.mockResolvedValueOnce([quantity]);
     render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
-    const factItem = await screen.findByRole("article", { name: "quantity: 12" });
+    const factItem = await screen.findByRole("article", { name: "Quantity: 12" });
 
     // Poll is started and pending
     mockedListDealFacts.mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
@@ -1124,7 +1146,7 @@ describe("synchronized fact review and proposal drafts", () => {
     await act(async () => {
       resolvePoll([]);
     });
-    await waitFor(() => expect(screen.queryByRole("article", { name: "quantity: 12" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("article", { name: "Quantity: 12" })).not.toBeInTheDocument());
 
     // Late review response resolves
     await act(async () => {
@@ -1132,14 +1154,14 @@ describe("synchronized fact review and proposal drafts", () => {
     });
 
     // Fact must NOT reappear
-    expect(screen.queryByRole("article", { name: "quantity: 12" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("article", { name: "Quantity: 12" })).not.toBeInTheDocument();
   });
 
   it("preserves newly saved facts when a stale polling response arrives", async () => {
     let resolvePoll!: (val: DealFact[]) => void;
     mockedListDealFacts.mockResolvedValueOnce([quantity]);
     render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
-    await screen.findByRole("article", { name: "quantity: 12" });
+    await screen.findByRole("article", { name: "Quantity: 12" });
 
     mockedListDealFacts.mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
     fireEvent.focus(window);
@@ -1150,13 +1172,13 @@ describe("synchronized fact review and proposal drafts", () => {
     fireEvent.change(screen.getByLabelText("Term type"), { target: { value: "delivery_destination" } });
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "Tokyo" } });
     fireEvent.click(screen.getByRole("button", { name: "Add term" }));
-    await screen.findByRole("article", { name: "delivery_destination: Tokyo" });
+    await screen.findByRole("article", { name: "Delivery location: Tokyo" });
 
     await act(async () => {
       resolvePoll([quantity]);
     });
 
-    expect(screen.getByRole("article", { name: "delivery_destination: Tokyo" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Delivery location: Tokyo" })).toBeInTheDocument();
   });
 
   it("blocks agreement creation and clears proposal field when currency metadata contradicts proposal currency", async () => {

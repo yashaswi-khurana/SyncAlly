@@ -430,4 +430,99 @@ describe("AgreementReview", () => {
     expect(screen.getByText("25000.00 USD for obligation ship-alpha")).toBeInTheDocument();
     expect(screen.getByText(/Taxes, freight, customs classification, and other fees: Not specified in committed terms/)).toBeInTheDocument();
   });
+
+  it("sends a verified single-party choice and current agreement to the overview", async () => {
+    const onOverviewChange = vi.fn();
+    const onOrganizationChange = vi.fn();
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        onOrganizationChange={onOrganizationChange}
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+
+    await screen.findByText("VERSION 3");
+    expect(onOrganizationChange).toHaveBeenCalledWith(BUYER_ID);
+    await waitFor(() => expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      dealId: DEAL_ID,
+      organizationId: BUYER_ID,
+      status: "ready",
+      partyVerified: true,
+      agreement: expect.objectContaining({ deal_id: DEAL_ID, version_number: 3, terms_hash: AGREEMENT.terms_hash }),
+    })));
+  });
+
+  it("waits for the exact current version read before publishing agreement status", async () => {
+    let resolveExact!: (agreement: AgreementVersion) => void;
+    vi.mocked(getAgreementVersion).mockImplementationOnce(() => new Promise((resolve) => { resolveExact = resolve; }));
+    const onOverviewChange = vi.fn();
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+
+    await screen.findByText("VERSION 3");
+    await waitFor(() => expect(getAgreementVersion).toHaveBeenCalled());
+    expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({ status: "loading" }));
+    resolveExact(AGREEMENT);
+    await waitFor(() => expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      organizationId: BUYER_ID,
+      status: "ready",
+      partyVerified: true,
+      agreement: AGREEMENT,
+    })));
+  });
+
+  it("keeps the overview neutral until a dual member chooses a deal party", async () => {
+    mockedListOrganizations.mockResolvedValue([BUYER, SELLER]);
+    const onOverviewChange = vi.fn();
+    const onOrganizationChange = vi.fn();
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId=""
+        onOrganizationChange={onOrganizationChange}
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+
+    await screen.findByText("VERSION 3");
+    expect(onOrganizationChange).not.toHaveBeenCalled();
+    expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      organizationId: "",
+      status: "ready",
+      partyVerified: false,
+    }));
+    fireEvent.change(screen.getByLabelText("Approve as organization"), { target: { value: SELLER_ID } });
+    expect(onOrganizationChange).toHaveBeenCalledWith(SELLER_ID);
+  });
+
+  it("does not publish an empty agreement state when the history check fails", async () => {
+    mockedGetCurrent.mockRejectedValue(new ApiError(404, "No current agreement"));
+    vi.mocked(getAgreementHistory).mockRejectedValue(new ApiError(500, "History unavailable"));
+    const onOverviewChange = vi.fn();
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+
+    expect(await screen.findByText("History unavailable")).toBeInTheDocument();
+    expect(onOverviewChange).not.toHaveBeenCalledWith(expect.objectContaining({ status: "empty" }));
+    expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({ status: "error" }));
+  });
 });

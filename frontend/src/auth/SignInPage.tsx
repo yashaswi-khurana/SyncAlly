@@ -104,6 +104,8 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         setFormError("Invalid email or password.");
+      } else if (caught instanceof ApiError && (caught.status === 0 || caught.status === 404 || caught.status === 405 || caught.status >= 500)) {
+        setFormError("Sign in is temporarily unavailable. Please try again later.");
       } else if (caught instanceof ApiError) {
         setFormError(caught.message);
       } else {
@@ -208,12 +210,12 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
 
       <section className="auth-hero" aria-labelledby="auth-title">
         <div className="auth-hero__meta">
-          <span className="eyebrow">Cross-border trade on autopilot</span>
+          <span className="eyebrow">A clearer way to manage trade</span>
           <span className="auth-hero__edition">BUYER ↔ SELLER</span>
         </div>
         <h1 id="auth-title">
-          Cross-Border Trade<br />
-          <span>on Autopilot.</span>
+          Bring your trade<br />
+          <span>agreements together.</span>
         </h1>
         <p className="auth-hero__lede">
           Turn a buyer and seller conversation into a clear, mutually approved deal—with invoicing
@@ -235,11 +237,11 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
             </div>
             <div>
               <span>02 / APPROVE</span>
-              <strong>Cryptographic Bilateral Approval</strong>
+              <strong>Review and approve together</strong>
             </div>
             <div>
               <span>03 / INVOICE</span>
-              <strong>Automated PayPal Invoicing</strong>
+              <strong>Request an invoice</strong>
             </div>
           </div>
         </div>
@@ -250,9 +252,9 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
         <section className="auth-benefits" aria-labelledby="why-syncally">
           <h2 id="why-syncally">Why SyncAlly</h2>
           <ul>
-            <li><strong>Guaranteed consensus</strong><span>One agreed version, approved by both sides.</span></li>
+            <li><strong>Shared agreement</strong><span>Both sides review and approve the same version.</span></li>
             <li><strong>Private by design</strong><span>Keep internal terms private; share only what the deal needs.</span></li>
-            <li><strong>Immutable audit record</strong><span>Every approval stays traceable.</span></li>
+            <li><strong>Traceable decisions</strong><span>Review the history of your agreements and approvals.</span></li>
           </ul>
         </section>
       </section>
@@ -265,7 +267,9 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           </div>
           <h2 id="invite-onboarding-heading">{intent.kind === "TEAM" ? "Join your team." : "Join via counterparty invite."}</h2>
           <p className="auth-card__intro">
-            Create your account and register your organization to immediately access the invited deal.
+            {intent.kind === "TEAM"
+              ? "Create your account to join your organization."
+              : "Create your account and add your company details to join the deal."}
           </p>
           <form className="form" onSubmit={handleInviteSubmit} noValidate>
             {intent.recipientEmail ? <p>Addressed to {intent.recipientEmail}</p> : null}
@@ -375,7 +379,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           </div>
           <h2 id="sign-in-heading">Open your trade desk.</h2>
           <p className="auth-card__intro">
-            Sign in with a provisioned buyer or seller account. Public registration is turned off.
+            Sign in with your account. If you haven't joined yet, ask your organization or trading partner for an invitation.
           </p>
           <form className="form" onSubmit={handleSubmit} noValidate>
             {demoQuickFillEnabled() ? (
@@ -446,7 +450,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           </form>
           <div className="auth-card__fineprint">
             <span className="auth-card__fineprint-dot" aria-hidden="true" />
-            <span>Development accounts · records saved to the local database</span>
+            <span>Access is by invitation</span>
           </div>
         </aside>
       )}

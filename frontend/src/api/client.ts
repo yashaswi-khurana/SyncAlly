@@ -182,8 +182,8 @@ export function listOrganizations(): Promise<Organization[]> {
   return apiRequest<Organization[]>("/organizations");
 }
 
-export function getOrganization(organizationId: string): Promise<OrganizationDirectoryItem> {
-  return apiRequest<OrganizationDirectoryItem>(`/organizations/${encodeURIComponent(organizationId)}`);
+export function getOrganization(organizationId: string, options?: { signal?: AbortSignal }): Promise<OrganizationDirectoryItem> {
+  return apiRequest<OrganizationDirectoryItem>(`/organizations/${encodeURIComponent(organizationId)}`, { signal: options?.signal });
 }
 
 export function getOrganizationProfile(organizationId: string): Promise<OrganizationProfile> {

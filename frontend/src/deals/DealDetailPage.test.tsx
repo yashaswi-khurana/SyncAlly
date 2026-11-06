@@ -175,13 +175,19 @@ describe("DealDetailPage", () => {
 
   it("shares the selected party with committed downloads and never fetches the legacy latest draft", async () => {
     const agreement = { id: "version-1", deal_id: DEAL.id, version_number: 1, status: "COMMITTED",
-      terms_hash: "a".repeat(64), created_at: "2026-10-31T10:00:00Z", approvals: [],
+      is_current: true, terms_hash: "a".repeat(64), created_at: "2026-10-31T10:00:00Z",
+      approvals: [DEAL.buyer_organization_id, DEAL.seller_organization_id].map((organization_id) => ({
+        deal_id: DEAL.id, version_number: 1, organization_id, user_id: `${organization_id}-user`,
+        decision: "APPROVE", terms_hash: "a".repeat(64), created_at: "2026-10-31T10:01:00Z",
+      })),
       terms: { line_items: [], shipments: [], payment_terms: [] } } as unknown as AgreementVersion;
     mockedGetDeal.mockResolvedValue({ ...DEAL, status: "AGREED" });
     mockedGetCurrentAgreement.mockResolvedValue(agreement);
     vi.mocked(getAgreementVersion).mockResolvedValue(agreement);
     vi.mocked(getTradePack).mockRejectedValueOnce(new ApiError(409, "Test conflict"));
     render(<DealDetailPage dealId={DEAL.id} onBackToDeals={vi.fn()} freshnessIntervalMs={0} />);
+    expect(await screen.findByText("Viewing as buyer.")).toBeInTheDocument();
+    expect(screen.getByText("Current stage: Agreement committed")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Download trade pack" }));
     expect(getTradePack).toHaveBeenCalledWith(DEAL.id, agreement, DEAL.buyer_organization_id, "zip", expect.any(AbortSignal));
     await screen.findByText("Test conflict");
@@ -274,10 +280,10 @@ describe("DealDetailPage", () => {
       screen.getByText("Introduce trade terms in the conversation below (e.g. quantity, price, delivery port)."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Review AI-extracted terms and toggle them to Shareable."),
+      screen.getByText("Review suggested details and share only those you want the other party to see."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Approve the bilateral agreement to generate your invoice."),
+      screen.getByText("Both parties review and approve the same agreement. After it is committed, the seller can request payment."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start conversation/i })).toBeInTheDocument();
   });

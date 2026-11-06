@@ -2,7 +2,7 @@
 
 import unicodedata
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 import jwt
@@ -129,7 +129,9 @@ class CreateInvitationRequest(BaseModel):
 
 
 class CreateCounterpartyInvitationRequest(CreateOrganizationRequest):
-    buyer_organization_id: UUID
+    buyer_organization_id: UUID | None = None
+    inviting_organization_id: UUID | None = None
+    inviter_party: Literal["BUYER", "SELLER"] = "BUYER"
     recipient_email: str = Field(max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
     @field_validator("recipient_email", mode="before")
@@ -1082,6 +1084,7 @@ def _create_invitation_token(
     *,
     recipient_email: str | None = None,
     shell_id: UUID | None = None,
+    inviter_party: str = "BUYER",
 ) -> tuple[str, datetime, UUID]:
     if not settings.jwt_secret:
         raise HTTPException(
@@ -1107,7 +1110,10 @@ def _create_invitation_token(
         claims.update(version=1, kind="COUNTERPARTY" if shell_id else "TEAM",
                       recipient_email=recipient_email, role="MEMBER")
         if shell_id is not None:
-            claims.update(shell_id=str(shell_id), buyer_id=str(organization.id))
+            if inviter_party == "BUYER":
+                claims.update(shell_id=str(shell_id), buyer_id=str(organization.id))
+            else:
+                claims.update(version=2, shell_id=str(shell_id), inviting_org_id=str(organization.id), inviter_party=inviter_party)
     token = jwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
     return token, expires_at, jti
 
@@ -1127,9 +1133,9 @@ def _decode_invitation_token(token: str) -> dict[str, object]:
         )
         if claims.get("typ") != "organization_invitation":
             raise jwt.InvalidTokenError("Token type is not valid for invitation")
-        typed_keys = {"version", "kind", "recipient_email", "shell_id", "buyer_id"}
+        typed_keys = {"version", "kind", "recipient_email", "shell_id", "buyer_id", "inviting_org_id", "inviter_party"}
         if typed_keys.intersection(claims):
-            if type(claims.get("version")) is not int or claims["version"] != 1:
+            if type(claims.get("version")) is not int or claims["version"] not in (1, 2):
                 raise jwt.InvalidTokenError("Unknown invitation version")
             if claims.get("kind") not in {"TEAM", "COUNTERPARTY"}:
                 raise jwt.InvalidTokenError("Unknown invitation kind")
@@ -1141,13 +1147,18 @@ def _decode_invitation_token(token: str) -> dict[str, object]:
             for key in ("jti", "org_id", "inviter_user_id"):
                 UUID(str(claims[key]))
             if claims["kind"] == "TEAM":
-                if claims.get("deal_id") or "shell_id" in claims or "buyer_id" in claims:
+                if claims["version"] != 1 or claims.get("deal_id") or any(key in claims for key in ("shell_id", "buyer_id", "inviting_org_id", "inviter_party")):
                     raise jwt.InvalidTokenError("Invalid team invitation binding")
             else:
-                for key in ("deal_id", "shell_id", "buyer_id"):
+                party_key = "buyer_id" if claims["version"] == 1 else "inviting_org_id"
+                for key in ("deal_id", "shell_id", party_key):
                     UUID(str(claims[key]))
-                if claims["buyer_id"] != claims["org_id"] or claims["shell_id"] == claims["buyer_id"]:
+                if claims[party_key] != claims["org_id"] or claims["shell_id"] == claims[party_key]:
                     raise jwt.InvalidTokenError("Invalid counterparty binding")
+                if claims["version"] == 2 and (claims.get("inviter_party") != "SELLER" or "buyer_id" in claims):
+                    raise jwt.InvalidTokenError("Invalid inviting party")
+                if claims["version"] == 1 and ("inviting_org_id" in claims or "inviter_party" in claims):
+                    raise jwt.InvalidTokenError("Invalid legacy binding")
         return claims
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(
@@ -1229,33 +1240,43 @@ def create_counterparty_invitation(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     try:
-        buyer, _ = _active_admin_membership(db, payload.buyer_organization_id, actor.user_id)
+        if payload.inviting_organization_id and payload.buyer_organization_id:
+            raise HTTPException(status_code=422, detail="Specify one inviting organization")
+        if payload.inviter_party == "SELLER" and (payload.buyer_organization_id or not payload.inviting_organization_id):
+            raise HTTPException(status_code=422, detail="Seller invitations require the inviting organization")
+        inviting_id = payload.inviting_organization_id or payload.buyer_organization_id
+        if inviting_id is None:
+            raise HTTPException(status_code=422, detail="An inviting organization is required")
+        inviter, _ = _active_admin_membership(db, inviting_id, actor.user_id)
         active_user = db.scalar(select(User.id).where(User.id == actor.user_id, User.status == "ACTIVE").with_for_update())
         if active_user is None:
             raise HTTPException(status_code=401, detail="Active user session not found")
         shell = Organization(legal_name=payload.legal_name, country_code=payload.country_code, status="INACTIVE")
         db.add(shell)
         db.flush()
-        lock_demo_deal_creation(db, buyer.id, shell.id)
+        buyer_id = inviter.id if payload.inviter_party == "BUYER" else shell.id
+        seller_id = shell.id if payload.inviter_party == "BUYER" else inviter.id
+        lock_demo_deal_creation(db, buyer_id, seller_id)
         now = datetime.now(UTC)
-        deal = DomainDeal(id=DealId(uuid4()), buyer_organization_id=OrganizationId(buyer.id),
-                          seller_organization_id=OrganizationId(shell.id), created_at=now, version=1)
+        deal = DomainDeal(id=DealId(uuid4()), buyer_organization_id=OrganizationId(buyer_id),
+                          seller_organization_id=OrganizationId(seller_id), created_at=now, version=1)
         SqlAlchemyDealRepository(db).stage(deal)
         token, expires_at, jti = _create_invitation_token(
-            buyer, actor.user_id, deal.id, recipient_email=payload.recipient_email, shell_id=shell.id
+            inviter, actor.user_id, deal.id, recipient_email=payload.recipient_email, shell_id=shell.id,
+            inviter_party=payload.inviter_party,
         )
         db.flush()
         db.add(CounterpartyOnboarding(invitation_jti=jti, deal_id=deal.id,
-                                     buyer_organization_id=buyer.id, shell_organization_id=shell.id,
+                                     inviting_organization_id=inviter.id, inviter_party=payload.inviter_party, shell_organization_id=shell.id,
                                      inviter_user_id=actor.user_id, recipient_email=payload.recipient_email,
                                      expires_at=expires_at))
         db.add(AuditEvent(id=uuid4(), aggregate_type="organization_invitation", aggregate_id=jti,
                           event_type="invitation.created", actor_type="USER", actor_id=str(actor.user_id),
                           occurred_at=now, payload={"kind": "COUNTERPARTY", "deal_id": str(deal.id),
-                                                    "organization_id": str(buyer.id), "expires_at": expires_at.isoformat()}))
+                                                    "organization_id": str(inviter.id), "expires_at": expires_at.isoformat()}))
         db.commit()
         return {"token": token, "invite_url": f"{settings.public_frontend_url}/#/invite?token={token}",
-                "organization_id": str(buyer.id), "organization_legal_name": buyer.legal_name,
+                "organization_id": str(inviter.id), "organization_legal_name": inviter.legal_name,
                 "deal_id": str(deal.id), "role": "ADMIN", "kind": "COUNTERPARTY",
                 "expires_at": expires_at.isoformat(), "pending_counterparty": True}
     except Exception:
@@ -1350,9 +1371,10 @@ def _accept_invitation(
         onboarding = db.scalar(select(CounterpartyOnboarding).where(CounterpartyOnboarding.invitation_jti == jti)
                                .with_for_update().execution_options(populate_existing=True))
         if onboarding is None or (
-            onboarding.deal_id != deal_uuid or str(onboarding.buyer_organization_id) != claims["buyer_id"]
+            onboarding.deal_id != deal_uuid or str(onboarding.inviting_organization_id) != str(org_id)
             or str(onboarding.shell_organization_id) != claims["shell_id"]
             or onboarding.inviter_user_id != inviter_user_id or onboarding.recipient_email != claims["recipient_email"]
+            or onboarding.inviter_party != (claims.get("inviter_party") if claims["version"] == 2 else "BUYER")
         ):
             raise HTTPException(status_code=409, detail="Counterparty invitation binding is no longer valid")
         if onboarding.consumed_at is not None:
@@ -1421,7 +1443,10 @@ def _accept_invitation(
         if onboarding is None and linking_deal.onboarding is not None:
             raise HTTPException(status_code=409, detail="This deal requires its bound counterparty invitation")
         if onboarding is not None:
-            if linking_deal.buyer_organization_id != onboarding.buyer_organization_id or linking_deal.seller_organization_id != onboarding.shell_organization_id:
+            expected_parties = ((onboarding.inviting_organization_id, onboarding.shell_organization_id)
+                                if onboarding.inviter_party == "BUYER" else
+                                (onboarding.shell_organization_id, onboarding.inviting_organization_id))
+            if (linking_deal.buyer_organization_id, linking_deal.seller_organization_id) != expected_parties:
                 raise HTTPException(status_code=409, detail="Deal parties have changed")
             has_messages = db.scalar(select(Message.id).join(Conversation, Conversation.id == Message.conversation_id)
                                      .where(Conversation.deal_id == deal_uuid).limit(1))

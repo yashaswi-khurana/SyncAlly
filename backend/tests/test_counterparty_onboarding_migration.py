@@ -49,6 +49,10 @@ class CounterpartyOnboardingMigrationTests(unittest.TestCase):
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
         self.assertEqual(migration.down_revision, "0014_outbox_dispatch_started_at")
+        party_path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0023_inviting_party.py"
+        party_spec = importlib.util.spec_from_file_location("inviting_party_migration", party_path)
+        party_migration = importlib.util.module_from_spec(party_spec)
+        party_spec.loader.exec_module(party_migration)
         engine = create_database_engine("sqlite://")
         try:
             with engine.begin() as connection:
@@ -60,17 +64,26 @@ class CounterpartyOnboardingMigrationTests(unittest.TestCase):
                 original = connection.execute(select(Deal.__table__)).all()
                 migration.op = Operations(MigrationContext.configure(connection))
                 migration.upgrade()
+                party_migration.op = Operations(MigrationContext.configure(connection))
+                party_migration.upgrade()
                 self.assertEqual(connection.execute(select(CounterpartyOnboarding.__table__)).all(), [])
                 self.assertEqual(connection.execute(select(Deal.__table__)).all(), original)
+                party_migration.op = Operations(MigrationContext.configure(connection))
+                party_migration.downgrade()
                 migration.downgrade()
                 self.assertNotIn("counterparty_onboardings", inspect(connection).get_table_names())
                 migration.upgrade()
+                party_migration.op = Operations(MigrationContext.configure(connection))
+                party_migration.upgrade()
                 from datetime import UTC, datetime
-                connection.execute(CounterpartyOnboarding.__table__.insert().values(invitation_jti=uuid4(), deal_id=deal, buyer_organization_id=buyer, shell_organization_id=seller, inviter_user_id=user, recipient_email="seller@example.com", expires_at=datetime.now(UTC)))
+                connection.execute(CounterpartyOnboarding.__table__.insert().values(invitation_jti=uuid4(), deal_id=deal, inviting_organization_id=buyer, shell_organization_id=seller, inviter_user_id=user, recipient_email="seller@example.com", expires_at=datetime.now(UTC)))
+                party_migration.op = Operations(MigrationContext.configure(connection))
+                party_migration.downgrade()
+                migration.op = Operations(MigrationContext.configure(connection))
                 with self.assertRaisesRegex(RuntimeError, "onboarding history"):
                     migration.downgrade()
                 self.assertEqual(connection.execute(select(Deal.__table__)).all(), original)
-                self.assertEqual(len(connection.execute(select(CounterpartyOnboarding.__table__)).all()), 1)
+                self.assertEqual(connection.execute(text("SELECT COUNT(*) FROM counterparty_onboardings")).scalar_one(), 1)
         finally:
             engine.dispose()
 

@@ -159,8 +159,8 @@ export default function OrganizationsPanel() {
         <h2 id="organizations-heading">Organization IDs</h2>
       </div>
       <p className="muted">
-        Share an organization ID so the other party can name your organization as the buyer or
-        seller of a deal.
+        View your organizations and their reference IDs. Trading partners can search for your
+        organization when creating a deal.
       </p>
       {state.organizations.length === 0 ? (
         <p className="empty-state">

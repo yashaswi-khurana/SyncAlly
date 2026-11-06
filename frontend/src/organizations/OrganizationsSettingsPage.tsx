@@ -195,8 +195,8 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
         </div>
         <h1 className="display">Organizations.</h1>
         <p className="hero__lede">
-          Share your organization IDs with counterparties to create deals, manage registered trading
-          entities, and invite team members.
+          Manage your organizations, their profiles and team members. Search for a trading
+          partner when you create a deal.
         </p>
         <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
           <button

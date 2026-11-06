@@ -13,6 +13,7 @@ import {
 import type { AgreementApproval, AgreementVersion, AgreementHistory, AgreementComparison, Organization } from "../api/types";
 import { paymentTimingLabel } from "../api/types";
 import CommercialDocumentPanel from "./CommercialDocumentPanel";
+import type { OverviewSnapshot } from "./DealOverview";
 
 interface AgreementReviewProps {
   dealId: string;
@@ -22,6 +23,7 @@ interface AgreementReviewProps {
   onCommitted?: () => void;
   selectedOrganizationId?: string;
   onOrganizationChange?: (organizationId: string) => void;
+  onOverviewChange?: (snapshot: OverviewSnapshot) => void;
 }
 
 type AgreementState =
@@ -41,6 +43,26 @@ function apiMessage(error: unknown): string {
 
 function partyName(organizations: Organization[], id: string): string {
   return organizations.find((organization) => organization.id === id)?.legal_name ?? id;
+}
+
+function agreementStatusLabel(status: string): string {
+  switch (status) {
+    case "PENDING_APPROVAL": return "Awaiting party decisions";
+    case "COMMITTED": return "Agreed and committed";
+    case "SUPERSEDED": return "Replaced by a newer version";
+    case "VOIDED": return "Withdrawn";
+    default: return status.replaceAll("_", " ").toLowerCase();
+  }
+}
+
+function decisionLabel(decision?: AgreementApproval["decision"]): string {
+  if (decision === "APPROVE") return "Approved";
+  if (decision === "REJECT") return "Rejected";
+  return "Awaiting decision";
+}
+
+function approvalMatchesVersion(approval: AgreementApproval | undefined, agreement: AgreementVersion): boolean {
+  return Boolean(approval && approval.version_number === agreement.version_number && approval.terms_hash === agreement.terms_hash);
 }
 
 function approvalFor(
@@ -85,6 +107,7 @@ export default function AgreementReview({
   onCommitted,
   selectedOrganizationId: sharedOrganizationId,
   onOrganizationChange,
+  onOverviewChange,
 }: AgreementReviewProps) {
   const [state, setState] = useState<AgreementState>({ status: "loading" });
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
@@ -139,16 +162,40 @@ export default function AgreementReview({
         || (comparison && (comparison.before.deal_id !== dealId || comparison.after.deal_id !== dealId
           || comparison.before.version_number !== compareBefore || comparison.after.version_number !== number
           || comparison.after.terms_hash !== agreement.terms_hash))) throw new Error("Version response mismatch");
-      if (!controller.signal.aborted) setVersionView({ key: contextSignature, agreement, comparison });
+      if (!controller.signal.aborted) {
+        setVersionView({ key: contextSignature, agreement, comparison });
+        if (!viewedVersion && !compareBefore && (agreement.is_current === false || agreement.terms_hash !== state.agreement.terms_hash)) {
+          onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
+        } else if (!viewedVersion && !compareBefore) {
+          onOverviewChange?.({
+            dealId,
+            organizationId: actingOrganizationId || "",
+            reloadToken,
+            status: "ready",
+            partyVerified: state.status === "ready" && state.organizations.some((party) => party.id === actingOrganizationId),
+            agreement,
+          });
+        }
+      }
     }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setVersionView({ key: contextSignature, error: apiMessage(error) });
+      if (!controller.signal.aborted) {
+        setVersionView({ key: contextSignature, error: apiMessage(error) });
+        if (!viewedVersion && !compareBefore) onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
+      }
     });
     return () => controller.abort();
-  }, [dealId, actingOrganizationId, viewedVersion, compareBefore, contextSignature, state]);
+  }, [dealId, actingOrganizationId, viewedVersion, compareBefore, contextSignature, state, onOverviewChange, reloadToken, sharedOrganizationId]);
 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    const overviewContext = {
+      dealId,
+      organizationId: sharedOrganizationId || selectedPartyRef.current || "",
+      reloadToken,
+    };
+    let errorOverviewContext = overviewContext;
+    onOverviewChange?.({ ...overviewContext, status: "loading" });
     void Promise.all([getCurrentAgreement(dealId, { organizationId: sharedOrganizationId, signal: controller.signal }).catch((error: unknown) => {
       if (error instanceof ApiError && error.status === 404) return null;
       throw error;
@@ -160,44 +207,62 @@ export default function AgreementReview({
             organization.id === buyerOrganizationId ||
             organization.id === sellerOrganizationId,
         );
-        setSelectedOrganizationId((current) =>
-          parties.some((party) => party.id === current)
-            ? current
-            : parties.length === 1
-              ? parties[0].id
-              : "",
-        );
+        if (parties.length === 0) throw new Error("No active deal organization is available");
+
+        const requestedParty = sharedOrganizationId || selectedPartyRef.current;
+        const partyId = parties.some((party) => party.id === requestedParty)
+          ? requestedParty
+          : parties.length === 1
+            ? parties[0].id
+            : "";
+        selectedPartyRef.current = partyId;
+        setSelectedOrganizationId(partyId);
+        if (partyId && !sharedOrganizationId && parties.length === 1) onOrganizationChange?.(partyId);
+
+        const partyVerified = Boolean(partyId && parties.some((party) => party.id === partyId));
+        const partyOverviewContext = { dealId, organizationId: partyId, reloadToken };
+        errorOverviewContext = partyOverviewContext;
+
+        if (agreement && (agreement.deal_id !== dealId || agreement.is_current === false)) {
+          throw new Error("The current agreement response does not match this deal");
+        }
+
+        if (agreement) {
+          onOverviewChange?.({ ...partyOverviewContext, status: partyVerified ? "loading" : "ready", partyVerified, agreement });
+          setState({ status: "ready", agreement, organizations: parties });
+          return;
+        }
+
         if (!agreement) {
-          const party = sharedOrganizationId || selectedPartyRef.current || (parties.length === 1 ? parties[0].id : "");
-          if (party) {
-            const saved = await getAgreementHistory(dealId, party, controller.signal);
+          if (partyId) {
+            const saved = await getAgreementHistory(dealId, partyId, controller.signal);
             if (cancelled) return;
+            if (saved.deal_id !== dealId || saved.organization_id !== partyId || saved.current_version_id !== null) {
+              throw new Error("Agreement history does not confirm the current deal state");
+            }
             if (saved.versions.length) {
               const latest = saved.versions[0];
-              setHistory({ key: JSON.stringify([dealId, party, reloadToken, reloadCount]), data: saved });
+              setHistory({ key: JSON.stringify([dealId, partyId, reloadToken, reloadCount]), data: saved });
               setViewedVersion(latest.version_number);
+              onOverviewChange?.({ ...partyOverviewContext, status: "empty", partyVerified });
               setState({ status: "ready", agreement: latest, organizations: parties });
               return;
             }
           }
+          onOverviewChange?.({ ...partyOverviewContext, status: "empty", partyVerified });
           setState({ status: "empty", organizations: parties });
-          return;
         }
-        setState({ status: "ready", agreement, organizations: parties });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        if (error instanceof ApiError && error.status === 404) {
-          setState({ status: "empty" });
-        } else {
-          setState({ status: "error", message: apiMessage(error) });
-        }
+        onOverviewChange?.({ ...errorOverviewContext, status: "error" });
+        setState({ status: "error", message: apiMessage(error) });
       });
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [dealId, buyerOrganizationId, sellerOrganizationId, sharedOrganizationId, reloadCount, reloadToken]);
+  }, [dealId, buyerOrganizationId, sellerOrganizationId, sharedOrganizationId, reloadCount, reloadToken, onOverviewChange, onOrganizationChange]);
 
   async function decide(decision: "approve" | "reject") {
     if (state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || viewedVersion || compareBefore) return;
@@ -222,6 +287,7 @@ export default function AgreementReview({
       if (!active.current || atStart !== context.current) return;
       if (error instanceof ApiError && error.status === 409) {
         setStale(true);
+        onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
         setDecisionError(
           "This agreement changed or this decision conflicts with one already recorded. Reload and review the current version before continuing.",
         );
@@ -256,6 +322,7 @@ export default function AgreementReview({
       if (!active.current || atStart !== context.current) return;
       if (error instanceof ApiError && error.status === 409) {
         setStale(true);
+        onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
         setDecisionError(
           "This agreement changed or is no longer ready to commit. Reload and review the current version before continuing.",
         );
@@ -268,6 +335,7 @@ export default function AgreementReview({
   }
 
   function reloadAgreement() {
+    onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "loading" });
     setState({ status: "loading" });
     setStale(false);
     setDecisionError("");
@@ -286,6 +354,11 @@ export default function AgreementReview({
         <div>
           <span className="eyebrow">Saved terms</span>
           <h2 id="agreement-review-heading">Agreement review</h2>
+          <p className="muted">
+            Review this saved version, then each organization records its own decision. AI suggestions,
+            extracted facts, and accepted proposals do not approve it. Both organizations must approve
+            this same version before an authorized member can commit it as the agreed deal.
+          </p>
         </div>
         {state.status === "ready" ? (
           <span className="badge badge--kind">VERSION {viewedVersion || state.agreement.version_number}</span>
@@ -333,7 +406,7 @@ export default function AgreementReview({
             onChange={(event) => setViewedVersion(Number(event.target.value))}>
             <option value={0}>Current version</option>
             {currentHistory.versions.map((version) => <option key={version.id ?? version.version_number} value={version.version_number}>
-              Version {version.version_number} · {version.status.replaceAll("_", " ")}
+              Version {version.version_number} · {agreementStatusLabel(version.status)}
             </option>)}
           </select>
           <label htmlFor={`agreement-compare-${dealId}`}>Compare before</label>
@@ -397,11 +470,7 @@ export default function AgreementReview({
             <div className="agreement-review__summary">
               <div>
                 <span className="fact-source__label">VERSION STATUS</span>
-                <strong>{agreement.status.replaceAll("_", " ")}</strong>
-              </div>
-              <div>
-                <span className="fact-source__label">EXACT TERMS HASH</span>
-                <code className="agreement-review__hash">{agreement.terms_hash}</code>
+                <strong>{agreementStatusLabel(agreement.status)}</strong>
               </div>
               <div>
                 <span className="fact-source__label">SAVED</span>
@@ -410,6 +479,18 @@ export default function AgreementReview({
                 </time>
               </div>
             </div>
+
+            <details className="agreement-review__technical-details">
+              <summary>Technical verification details</summary>
+              <p>These values identify the exact saved terms and recorded decisions.</p>
+              <p>Version {agreement.version_number} terms hash</p>
+              <code className="agreement-review__hash">{agreement.terms_hash}</code>
+              {agreement.approvals.length > 0 ? <ul>
+                {agreement.approvals.map((approval) => <li key={`${approval.organization_id}:${approval.user_id}`}>
+                  {partyName(state.organizations, approval.organization_id)} · version {approval.version_number} · actor {approval.user_id} · {approval.decision} · {approval.terms_hash}
+                </li>)}
+              </ul> : <p>No party decisions have been recorded for this version.</p>}
+            </details>
 
             {agreement.status === "COMMITTED" ? (
               <p className="agreement-review__notice" role="status">
@@ -444,8 +525,7 @@ export default function AgreementReview({
                   </dl>
                 ))}
                 <p className="hint">
-                  Both parties review these exact terms before signing. The terms hash above
-                  covers them.
+                  Both organizations review and decide on these saved terms before the agreement can be committed.
                 </p>
               </div>
             ) : null}
@@ -513,13 +593,15 @@ export default function AgreementReview({
               <h3>Decisions for version {agreement.version_number}</h3>
               {[buyerOrganizationId, sellerOrganizationId].map((organizationId) => {
                 const approval = organizationId === buyerOrganizationId ? buyerApproval : sellerApproval;
+                const matchesVersion = approvalMatchesVersion(approval, agreement);
+                const displayedDecision = matchesVersion ? approval?.decision : undefined;
                 return (
                   <div className="agreement-review__approval" key={organizationId}>
                     <span>{partyName(state.organizations, organizationId)}</span>
-                    <span className={`badge ${approval?.decision === "APPROVE" ? "badge--status-confirmed" : approval?.decision === "REJECT" ? "badge--status-rejected" : "badge--status-extracted"}`}>
-                      {approval?.decision ?? "AWAITING DECISION"}
+                    <span className={`badge ${displayedDecision === "APPROVE" ? "badge--status-confirmed" : displayedDecision === "REJECT" ? "badge--status-rejected" : "badge--status-extracted"}`}>
+                      {approval && !matchesVersion ? "Needs review" : decisionLabel(displayedDecision)}
                     </span>
-                    {approval ? <div><span>Actor {approval.user_id}</span> <time dateTime={approval.created_at}>{new Date(approval.created_at).toLocaleString()}</time><code className="agreement-review__hash">{approval.terms_hash}</code></div> : null}
+                    {approval ? <div><span>{matchesVersion ? "Decision recorded " : "Recorded decision is for different terms "}</span><time dateTime={approval.created_at}>{new Date(approval.created_at).toLocaleString()}</time></div> : null}
                   </div>
                 );
               })}
@@ -528,9 +610,11 @@ export default function AgreementReview({
             {canDecide ? (
               <>
                 {myApproval ? (
-                  <p className="hint">Your organization recorded {myApproval.decision.toLowerCase()} for this exact version.</p>
+                  <p className="hint">{approvalMatchesVersion(myApproval, agreement)
+                    ? `Your organization recorded a decision for version ${agreement.version_number}: ${decisionLabel(myApproval.decision).toLowerCase()}.`
+                    : "Your organization's recorded decision is for different terms. Reload this agreement to review the current version."}</p>
                 ) : null}
-                <p className="hint">Your decision will include version {agreement.version_number} and the hash shown above.</p>
+                <p className="hint">Your decision applies to agreement version {agreement.version_number}.</p>
                 <div className="fact-actions">
                   <button
                     type="button"

@@ -23,6 +23,20 @@ function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "Unable to load delivery records.";
 }
 
+function stageLabel(stage: FulfillmentStage): string {
+  switch (stage) {
+    case "SHIPPED": return "Seller reported shipment";
+    case "OBSERVED": return "Buyer recorded received quantity";
+    case "CONFIRMED": return "Buyer confirmed received quantity";
+  }
+}
+
+function eventReporter(organizationId: string, buyerOrganizationId: string, sellerOrganizationId: string): string {
+  if (organizationId === buyerOrganizationId) return "Reported by buyer";
+  if (organizationId === sellerOrganizationId) return "Reported by seller";
+  return "Reported by a deal participant";
+}
+
 export default function FulfillmentPanel({
   dealId,
   buyerOrganizationId,
@@ -132,8 +146,8 @@ export default function FulfillmentPanel({
     <section className="card payment-status fulfillment-panel" aria-labelledby="fulfillment-heading">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">Participant delivery record</span>
-          <h2 id="fulfillment-heading">Fulfillment</h2>
+          <span className="eyebrow">Delivery progress</span>
+          <h2 id="fulfillment-heading">Delivery</h2>
         </div>
         <button type="button" className="button secondary button--compact" onClick={refresh}>
           Refresh status
@@ -152,21 +166,21 @@ export default function FulfillmentPanel({
         </div>
       ) : null}
       {snapshot?.state === "PENDING" ? (
-        <p role="status">A committed agreement is required before delivery facts can be recorded.</p>
+        <p role="status">Delivery updates become available after both parties commit the agreement.</p>
       ) : null}
       {snapshot?.state === "STALE" ? (
         <>
           <div className="payment-status__message" role="status">
-            <p>Saved delivery facts belong to an earlier agreement version. Review the current committed agreement before continuing.</p>
+            <p>These delivery updates belong to an earlier agreement version. Review the current committed terms before adding another update.</p>
           </div>
           <div className="payment-status__list" aria-label="Delivery history">
             {snapshot.events.length ? snapshot.events.map((item) => (
               <article className="payment-status__item" key={item.id}>
                 <div className="payment-status__summary">
-                  <h3>{item.event_type.toLowerCase()} · {item.quantity} {item.unit}</h3>
+                  <h3>{stageLabel(item.event_type)} · {item.quantity} {item.unit}</h3>
                   <span>Earlier terms</span>
                 </div>
-                <p>{new Date(item.recorded_at).toLocaleString()} · reported by a deal participant</p>
+                <p>{new Date(item.recorded_at).toLocaleString()} · {eventReporter(item.organization_id, buyerOrganizationId, sellerOrganizationId)}</p>
               </article>
             )) : <p>No delivery facts recorded yet.</p>}
           </div>
@@ -175,28 +189,28 @@ export default function FulfillmentPanel({
       {snapshot && snapshot.state !== "PENDING" && snapshot.state !== "STALE" ? (
         <>
           <dl className="fulfillment-panel__terms">
-            <div><dt>Planned</dt><dd>{snapshot.planned_quantity} {snapshot.unit}</dd></div>
+            <div><dt>Agreed quantity</dt><dd>{snapshot.planned_quantity} {snapshot.unit}</dd></div>
             <div><dt>Destination</dt><dd>{snapshot.destination}</dd></div>
             <div><dt>Target date</dt><dd>{snapshot.target_date ?? "Not specified"}</dd></div>
-            <div><dt>Shipped</dt><dd>{snapshot.shipped_quantity} {snapshot.unit}</dd></div>
-            <div><dt>Observed</dt><dd>{snapshot.observed_quantity} {snapshot.unit}</dd></div>
-            <div><dt>Confirmed</dt><dd>{snapshot.confirmed_quantity} {snapshot.unit}</dd></div>
+            <div><dt>Seller reported shipped</dt><dd>{snapshot.shipped_quantity} {snapshot.unit}</dd></div>
+            <div><dt>Buyer recorded received</dt><dd>{snapshot.observed_quantity} {snapshot.unit}</dd></div>
+            <div><dt>Buyer confirmed received</dt><dd>{snapshot.confirmed_quantity} {snapshot.unit}</dd></div>
           </dl>
           {snapshot.deal_completed ? (
-            <p role="status">Delivery and required payments are reconciled. The deal is complete.</p>
+            <p role="status">This deal is complete. The agreed delivery quantity is confirmed and required payments are reconciled.</p>
           ) : (
             <p className="payment-status__footnote">
-              Completion requires the full agreed quantity to be confirmed and all required payments to be reconciled.
+              Completion requires the buyer to confirm the full agreed quantity and all required payments to be reconciled.
             </p>
           )}
           {allowedStages.length > 0 ? (
             <form className="fulfillment-panel__form" onSubmit={submit}>
               {allowedStages.length > 1 ? (
                 <label>
-                  Delivery fact
+                  Delivery update
                   <select value={currentStage} onChange={(event) => setStage(event.target.value as FulfillmentStage)} disabled={saving}>
-                    <option value="OBSERVED">Observed by buyer</option>
-                    <option value="CONFIRMED">Confirmed by buyer</option>
+                    <option value="OBSERVED">Record received quantity</option>
+                    <option value="CONFIRMED">Confirm received quantity</option>
                   </select>
                 </label>
               ) : null}
@@ -206,18 +220,18 @@ export default function FulfillmentPanel({
                   inputMode="decimal"
                   value={quantity}
                   onChange={(event) => setQuantity(event.target.value)}
-                  placeholder="Enter an exact quantity"
+                  placeholder="Enter the quantity"
                   required
                   disabled={saving}
                 />
               </label>
               <button type="submit" className="button" disabled={saving || !quantity.trim()}>
-                {saving ? "Saving…" : `Record ${currentStage.toLowerCase()}`}
+                {saving ? "Saving…" : currentStage === "SHIPPED" ? "Report shipment" : currentStage === "OBSERVED" ? "Record received quantity" : "Confirm received quantity"}
               </button>
             </form>
           ) : null}
-          {!selectedOrganizationId ? <p>Select a buyer or seller organization to record a delivery fact.</p> : null}
-          {selectedOrganizationId && !isBuyer && !isSeller ? <p>Select a deal party organization to record a delivery fact.</p> : null}
+          {!selectedOrganizationId ? <p>Choose the buyer or seller organization above to record a delivery update.</p> : null}
+          {selectedOrganizationId && !isBuyer && !isSeller ? <p>Choose an organization that belongs to this deal to record a delivery update.</p> : null}
           {writeError ? (
             <div className="payment-status__message" role="alert">
               <p>{writeError}</p>
@@ -228,10 +242,10 @@ export default function FulfillmentPanel({
             {snapshot.events.length ? snapshot.events.map((item) => (
               <article className="payment-status__item" key={item.id}>
                 <div className="payment-status__summary">
-                  <h3>{item.event_type.toLowerCase()} · {item.quantity} {item.unit}</h3>
+                  <h3>{stageLabel(item.event_type)} · {item.quantity} {item.unit}</h3>
                   <span>{item.agreement_version_id === snapshot.agreement_version_id ? "Current terms" : "Earlier terms"}</span>
                 </div>
-                <p>{new Date(item.recorded_at).toLocaleString()} · reported by a deal participant</p>
+                <p>{new Date(item.recorded_at).toLocaleString()} · {eventReporter(item.organization_id, buyerOrganizationId, sellerOrganizationId)}</p>
               </article>
             )) : <p>No delivery facts recorded yet.</p>}
           </div>

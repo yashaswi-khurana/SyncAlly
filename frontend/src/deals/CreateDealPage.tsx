@@ -33,13 +33,13 @@ function describeError(caught: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
-function describeCreateError(caught: unknown): string {
+function describeCreateError(caught: unknown, initiatorParty: "BUYER" | "SELLER"): string {
   if (caught instanceof ApiError) {
     if (caught.status === 401) {
       return "Your session has expired. Sign in again.";
     }
     if (caught.status === 403) {
-      return "You cannot create a deal for that buyer organization.";
+      return `You cannot create a deal for that ${initiatorParty.toLowerCase()} organization.`;
     }
     if (caught.status === 404) {
       return "The buyer or seller organization was not found.";
@@ -54,6 +54,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     status: "loading",
   });
   const [buyerOrganizationId, setBuyerOrganizationId] = useState("");
+  const [initiatorParty, setInitiatorParty] = useState<"BUYER" | "SELLER">("BUYER");
   const [query, setQuery] = useState("");
   const [seller, setSeller] = useState<DirectoryItem | null>(null);
   const [searchState, setSearchState] = useState<SearchState>({ status: "idle" });
@@ -143,7 +144,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     if (submitting) return;
     const nextErrors: FieldErrors = {};
     if (buyerOrganizationId === "") {
-      nextErrors.buyer = "Choose the buyer organization.";
+      nextErrors.buyer = "Choose your organization.";
     }
     if (mode === "invite") {
       const buyer = organizationsState.status === "ready" ? organizationsState.organizations.find((org) => org.id === buyerOrganizationId) : null;
@@ -152,7 +153,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
         nextErrors.seller = "Enter the counterparty email, company legal name, and two-letter country code.";
       }
     } else if (!seller) {
-      nextErrors.seller = "Choose a seller organization from the search results.";
+      nextErrors.seller = `Choose a ${initiatorParty === "BUYER" ? "seller" : "buyer"} organization from the search results.`;
     } else if (seller.id === buyerOrganizationId) {
       nextErrors.seller = "Buyer and seller must be different organizations.";
     }
@@ -165,7 +166,9 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     setSubmitting(true);
     try {
       if (mode === "invite") {
-        const result = await createCounterpartyInvitation({ buyer_organization_id: buyerOrganizationId,
+        const result = await createCounterpartyInvitation({ ...(initiatorParty === "BUYER"
+          ? { buyer_organization_id: buyerOrganizationId }
+          : { inviting_organization_id: buyerOrganizationId, inviter_party: "SELLER" as const }),
           recipient_email: recipientEmail.trim().toLowerCase(), legal_name: counterpartyName.trim(),
           country_code: countryCode.trim().toUpperCase() });
         setInvitation(result);
@@ -173,12 +176,13 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
       }
       if (!seller) return;
       const deal = await createDeal({
-        buyer_organization_id: buyerOrganizationId,
-        seller_organization_id: seller.id,
+        buyer_organization_id: initiatorParty === "BUYER" ? buyerOrganizationId : seller.id,
+        seller_organization_id: initiatorParty === "SELLER" ? buyerOrganizationId : seller.id,
+        ...(initiatorParty === "SELLER" ? { initiator_party: "SELLER" as const } : {}),
       });
       onCreated(deal.id);
     } catch (caught) {
-      setSubmitError(describeCreateError(caught));
+      setSubmitError(describeCreateError(caught, initiatorParty));
     } finally {
       setSubmitting(false);
     }
@@ -252,32 +256,40 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
             <h2 id="create-deal-heading">Create a draft deal</h2>
           </div>
           <p className="muted">
-            You act for the buyer organization. The seller must be a different active
-            organization.
+            Choose your role and the other organization for this deal.
           </p>
           {invitation ? (
             <div className="form" style={{ marginTop: 22 }}>
               <h3>Awaiting counterparty</h3>
+              <p role="status">Your deal is ready, but the invitation has not been sent. Copy the link and send it securely to {recipientEmail.trim().toLowerCase()}.</p>
+              <p className="hint">Only share this single-use link with the intended recipient. Copy it before leaving this page.</p>
               <label htmlFor="counterparty-link">Counterparty invitation link</label>
               <input id="counterparty-link" readOnly value={invitation.invite_url} />
               <p className="muted">Expires {new Date(invitation.expires_at).toLocaleString()}</p>
               <div className="actions">
                 <button type="button" className="button" onClick={() => {
-                  if (!navigator.clipboard?.writeText) { setSubmitError("Clipboard unavailable. The link is available above."); return; }
-                  void navigator.clipboard.writeText(invitation.invite_url).then(() => setCopied(true), () => setSubmitError("Clipboard unavailable. The link is available above."));
+                  setCopied(false);
+                  setSubmitError(null);
+                  if (!navigator.clipboard?.writeText) { setSubmitError("Could not copy the link. Select it above and copy it manually."); return; }
+                  void navigator.clipboard.writeText(invitation.invite_url).then(() => setCopied(true), () => setSubmitError("Could not copy the link. Select it above and copy it manually."));
                 }}>{copied ? "Copied!" : "Copy Link"}</button>
-                <button type="button" className="button secondary" onClick={() => invitation.deal_id && onCreated(invitation.deal_id)}>Open pending deal</button>
+                <button type="button" className="button secondary" disabled={!invitation.deal_id} onClick={() => invitation.deal_id && onCreated(invitation.deal_id)}>Open pending deal</button>
               </div>
               {submitError ? <p role="alert">{submitError}</p> : null}
             </div>
           ) : <form className="form" onSubmit={handleSubmit} noValidate style={{ marginTop: 22 }}>
+            <fieldset disabled={submitting}>
+              <legend>Your role</legend>
+              <label><input type="radio" name="initiator-party" checked={initiatorParty === "BUYER"} onChange={() => { setInitiatorParty("BUYER"); setFieldErrors({}); }} /> Buyer</label>
+              <label><input type="radio" name="initiator-party" checked={initiatorParty === "SELLER"} onChange={() => { setInitiatorParty("SELLER"); setFieldErrors({}); }} /> Seller</label>
+            </fieldset>
             <fieldset disabled={submitting}>
               <legend>Counterparty</legend>
               <label><input type="radio" name="counterparty-mode" checked={mode === "directory"} onChange={() => { setMode("directory"); setFieldErrors({}); }} /> Existing organization</label>
               <label><input type="radio" name="counterparty-mode" checked={mode === "invite"} onChange={() => { setMode("invite"); setFieldErrors({}); }} /> Invite counterparty</label>
             </fieldset>
             <div className="field">
-              <label htmlFor="buyer-organization">Buyer organization</label>
+              <label htmlFor="buyer-organization">{initiatorParty === "BUYER" ? "Buyer organization" : "Seller organization"}</label>
               <select
                 id="buyer-organization"
                 name="buyer-organization"
@@ -309,7 +321,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
               <div className="field"><label htmlFor="counterparty-country">Country code</label><input id="counterparty-country" maxLength={2} disabled={submitting} value={countryCode} onChange={(event) => setCountryCode(event.target.value.toUpperCase())} /></div>
               {fieldErrors.seller ? <p role="alert">{fieldErrors.seller}</p> : null}
             </> : <div className="field">
-              <label htmlFor="seller-organization">Seller organization</label>
+              <label htmlFor="seller-organization">{initiatorParty === "BUYER" ? "Seller organization" : "Buyer organization"}</label>
               <input
                 id="seller-organization"
                 name="seller-organization"
@@ -355,10 +367,10 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 }}
               />
               <p id="seller-organization-hint" className="hint">
-                Search for a company, then select the seller from the results.
+                Search for a company, then select the {initiatorParty === "BUYER" ? "seller" : "buyer"} from the results.
               </p>
               {listOpen ? (
-                <ul id="seller-results" role="listbox" aria-label="Seller organizations"
+                <ul id="seller-results" role="listbox" aria-label={initiatorParty === "BUYER" ? "Seller organizations" : "Buyer organizations"}
                   style={{ listStyle: "none", padding: 0 }}>
                   {results.map((item, index) => (
                     <li key={item.id} id={`seller-option-${index}`} role="option"

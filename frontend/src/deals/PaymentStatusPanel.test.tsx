@@ -121,10 +121,10 @@ describe("PaymentStatusPanel", () => {
     mockedPreviewDealPayment.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve; }));
     render(<PaymentStatusPanel dealId="deal-1" sellerOrganizationId="seller-org-1" />);
     fireEvent.click(await screen.findByRole("button", { name: "Request Payment" }));
-    expect(screen.getByRole("button", { name: "Confirm & Send Invoice" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send test invoice" })).toBeDisabled();
     await act(async () => resolvePreview({ provider: "OFFLINE_DEMO", execution_mode: "OFFLINE_DEMO" }));
-    expect(screen.getByText("Offline demo: simulated payment")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
+    expect(screen.getByText("Demo simulation")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create demo invoice" }));
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith("deal-1", expect.any(String), "OFFLINE_DEMO");
   });
 
@@ -222,7 +222,7 @@ describe("PaymentStatusPanel", () => {
 
     expect(await screen.findByRole("dialog", { name: "Confirm Invoice Recipient" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send test invoice" }));
 
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith("deal-1", expect.any(String), "PAYPAL_SANDBOX");
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Refresh status" }));
@@ -243,6 +243,82 @@ describe("PaymentStatusPanel", () => {
     expect(await screen.findByText(/no payment request is available/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Request Payment" })).not.toBeInTheDocument();
     expect(mockedAuthorizeDealPayment).not.toHaveBeenCalled();
+  });
+
+  it("requires a dual member to choose the active deal party before seeing payment actions", async () => {
+    mockedListPaymentStatuses.mockResolvedValue([]);
+    mockedGetCurrentAgreement.mockResolvedValue({ status: "COMMITTED" } as AgreementVersion);
+    mockedListOrganizations.mockResolvedValue([
+      { id: "buyer-org-1", legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
+      { id: "seller-org-1", legal_name: "Seller Co", country_code: "CA", role: "ADMIN" },
+    ]);
+
+    const { rerender } = render(<PaymentStatusPanel
+      dealId="deal-1"
+      buyerOrganizationId="buyer-org-1"
+      sellerOrganizationId="seller-org-1"
+      selectedOrganizationId=""
+    />);
+
+    expect(await screen.findByText(/choose the buyer or seller organization above/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request Payment" })).not.toBeInTheDocument();
+
+    rerender(<PaymentStatusPanel
+      dealId="deal-1"
+      buyerOrganizationId="buyer-org-1"
+      sellerOrganizationId="seller-org-1"
+      selectedOrganizationId="buyer-org-1"
+    />);
+    expect(await screen.findByText(/a seller can authorize one/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request Payment" })).not.toBeInTheDocument();
+
+    rerender(<PaymentStatusPanel
+      dealId="deal-1"
+      buyerOrganizationId="buyer-org-1"
+      sellerOrganizationId="seller-org-1"
+      selectedOrganizationId="seller-org-1"
+    />);
+    expect(await screen.findByRole("button", { name: "Request Payment" })).toBeInTheDocument();
+  });
+
+  it("shows a test invoice only when viewing as the active buyer party", async () => {
+    mockedListPaymentStatuses.mockResolvedValue([{
+      ...PAYMENT,
+      status: "SENT",
+      invoice_url: "https://www.sandbox.paypal.com/invoice/p/#TEST-INVOICE",
+    }]);
+    mockedGetCurrentAgreement.mockResolvedValue({ status: "COMMITTED" } as AgreementVersion);
+    mockedListOrganizations.mockResolvedValue([
+      { id: "buyer-org-1", legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
+      { id: "seller-org-1", legal_name: "Seller Co", country_code: "CA", role: "ADMIN" },
+    ]);
+
+    const { rerender } = render(<PaymentStatusPanel
+      dealId="deal-1"
+      buyerOrganizationId="buyer-org-1"
+      sellerOrganizationId="seller-org-1"
+      selectedOrganizationId=""
+    />);
+    expect(await screen.findByText(/choose the buyer or seller organization above/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open PayPal test invoice" })).not.toBeInTheDocument();
+
+    rerender(<PaymentStatusPanel
+      dealId="deal-1"
+      buyerOrganizationId="buyer-org-1"
+      sellerOrganizationId="seller-org-1"
+      selectedOrganizationId="buyer-org-1"
+    />);
+    expect(await screen.findByRole("link", { name: "Open PayPal test invoice" })).toBeInTheDocument();
+    expect(screen.getByText(/does not transfer real money/i)).toBeInTheDocument();
+
+    rerender(<PaymentStatusPanel
+      dealId="deal-1"
+      buyerOrganizationId="buyer-org-1"
+      sellerOrganizationId="seller-org-1"
+      selectedOrganizationId="seller-org-1"
+    />);
+    expect(screen.queryByRole("link", { name: "Open PayPal test invoice" })).not.toBeInTheDocument();
+    expect(screen.getByText(/issued to buyer/i)).toBeInTheDocument();
   });
 
   it("prompts recipient confirmation dialog with buyer details and formatted milestone amount before authorizing", async () => {
@@ -284,12 +360,12 @@ describe("PaymentStatusPanel", () => {
     expect(screen.getByText("Resolved by the backend at issuance")).toBeInTheDocument();
     expect(screen.getByText("USD 22,500.00")).toBeInTheDocument();
     expect(
-      screen.getByText("This will create a formal PayPal invoice dispatched to the recipient above."),
+      screen.getByText("This sends a PayPal test invoice to the recipient above. It does not transfer real money."),
     ).toBeInTheDocument();
 
     expect(mockedAuthorizeDealPayment).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send test invoice" }));
 
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith("deal-1", expect.any(String), "PAYPAL_SANDBOX");
   });
@@ -455,7 +531,7 @@ describe("PaymentStatusPanel", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
-  it("displays prominent '💳 View & Pay PayPal Invoice' link opening in new tab for buyer", async () => {
+  it("displays a clearly marked PayPal test invoice link for the buyer", async () => {
     mockedListOrganizations.mockResolvedValue([
       { id: "buyer-org-1", legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
     ]);
@@ -475,7 +551,7 @@ describe("PaymentStatusPanel", () => {
       />,
     );
 
-    const payLink = await screen.findByRole("link", { name: "💳 View & Pay PayPal Invoice" });
+    const payLink = await screen.findByRole("link", { name: "Open PayPal test invoice" });
     expect(payLink).toBeInTheDocument();
     expect(payLink).toHaveAttribute(
       "href",
@@ -508,7 +584,7 @@ describe("PaymentStatusPanel", () => {
     expect(await screen.findByText("INV2-SIM-TEST1234")).toBeInTheDocument();
     expect(screen.getByText("Payment Instructions")).toBeInTheDocument();
     expect(
-      screen.getByText(/Review your order details and milestone amount on PayPal/i),
+      screen.getByText(/This is a test payment and does not transfer real money/i),
     ).toBeInTheDocument();
   });
 
@@ -586,7 +662,7 @@ describe("PaymentStatusPanel", () => {
 
     fireEvent.click(retryButton);
     await act(async () => {});
-    fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send test invoice" }));
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith("deal-1", expect.any(String), "PAYPAL_SANDBOX");
   });
 
@@ -858,7 +934,7 @@ describe("PaymentStatusPanel", () => {
     mockedListPaymentStatuses.mockResolvedValueOnce([{ ...PAYMENT, status: "PAID", requires_polling: false }]);
     fireEvent.click(screen.getByRole("button", { name: "Retry Request" }));
     await act(async () => {});
-    fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send test invoice" }));
     await act(async () => {});
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledTimes(1);
     expect(oldSignal?.aborted).toBe(true);

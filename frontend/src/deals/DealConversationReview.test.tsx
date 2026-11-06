@@ -682,11 +682,12 @@ describe("DealConversationReview", () => {
     ]);
     mockedListDealFacts.mockResolvedValueOnce([sharedFact]);
 
-    render(<DealConversationReview deal={DEAL} />);
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
 
     expect(await screen.findByText("Warranty period")).toBeInTheDocument();
     expect(screen.getByText("24 months")).toBeInTheDocument();
     expect(screen.getByText("🌐 Shared with counterparty")).toBeInTheDocument();
+    expect(mockedListDealFacts).toHaveBeenCalledTimes(1);
 
     mockedListDealFacts.mockResolvedValue([]);
 
@@ -695,6 +696,7 @@ describe("DealConversationReview", () => {
     await vi.waitFor(() => {
       expect(screen.queryByText("Warranty period")).not.toBeInTheDocument();
     });
+    expect(mockedListDealFacts).toHaveBeenCalledTimes(2);
     expect(
       screen.getByText("No facts are available for this organization yet."),
     ).toBeInTheDocument();

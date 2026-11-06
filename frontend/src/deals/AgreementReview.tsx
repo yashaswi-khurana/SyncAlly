@@ -13,6 +13,7 @@ import {
 import type { AgreementApproval, AgreementVersion, AgreementHistory, AgreementComparison, Organization } from "../api/types";
 import { paymentTimingLabel } from "../api/types";
 import CommercialDocumentPanel from "./CommercialDocumentPanel";
+import type { OverviewSnapshot } from "./DealOverview";
 
 interface AgreementReviewProps {
   dealId: string;
@@ -22,6 +23,7 @@ interface AgreementReviewProps {
   onCommitted?: () => void;
   selectedOrganizationId?: string;
   onOrganizationChange?: (organizationId: string) => void;
+  onOverviewChange?: (snapshot: OverviewSnapshot) => void;
 }
 
 type AgreementState =
@@ -65,6 +67,7 @@ export default function AgreementReview({
   onCommitted,
   selectedOrganizationId: sharedOrganizationId,
   onOrganizationChange,
+  onOverviewChange,
 }: AgreementReviewProps) {
   const [state, setState] = useState<AgreementState>({ status: "loading" });
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
@@ -119,16 +122,40 @@ export default function AgreementReview({
         || (comparison && (comparison.before.deal_id !== dealId || comparison.after.deal_id !== dealId
           || comparison.before.version_number !== compareBefore || comparison.after.version_number !== number
           || comparison.after.terms_hash !== agreement.terms_hash))) throw new Error("Version response mismatch");
-      if (!controller.signal.aborted) setVersionView({ key: contextSignature, agreement, comparison });
+      if (!controller.signal.aborted) {
+        setVersionView({ key: contextSignature, agreement, comparison });
+        if (!viewedVersion && !compareBefore && (agreement.is_current === false || agreement.terms_hash !== state.agreement.terms_hash)) {
+          onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
+        } else if (!viewedVersion && !compareBefore) {
+          onOverviewChange?.({
+            dealId,
+            organizationId: actingOrganizationId || "",
+            reloadToken,
+            status: "ready",
+            partyVerified: state.status === "ready" && state.organizations.some((party) => party.id === actingOrganizationId),
+            agreement,
+          });
+        }
+      }
     }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setVersionView({ key: contextSignature, error: apiMessage(error) });
+      if (!controller.signal.aborted) {
+        setVersionView({ key: contextSignature, error: apiMessage(error) });
+        if (!viewedVersion && !compareBefore) onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
+      }
     });
     return () => controller.abort();
-  }, [dealId, actingOrganizationId, viewedVersion, compareBefore, contextSignature, state]);
+  }, [dealId, actingOrganizationId, viewedVersion, compareBefore, contextSignature, state, onOverviewChange, reloadToken, sharedOrganizationId]);
 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    const overviewContext = {
+      dealId,
+      organizationId: sharedOrganizationId || selectedPartyRef.current || "",
+      reloadToken,
+    };
+    let errorOverviewContext = overviewContext;
+    onOverviewChange?.({ ...overviewContext, status: "loading" });
     void Promise.all([getCurrentAgreement(dealId, { organizationId: sharedOrganizationId, signal: controller.signal }).catch((error: unknown) => {
       if (error instanceof ApiError && error.status === 404) return null;
       throw error;
@@ -140,44 +167,62 @@ export default function AgreementReview({
             organization.id === buyerOrganizationId ||
             organization.id === sellerOrganizationId,
         );
-        setSelectedOrganizationId((current) =>
-          parties.some((party) => party.id === current)
-            ? current
-            : parties.length === 1
-              ? parties[0].id
-              : "",
-        );
+        if (parties.length === 0) throw new Error("No active deal organization is available");
+
+        const requestedParty = sharedOrganizationId || selectedPartyRef.current;
+        const partyId = parties.some((party) => party.id === requestedParty)
+          ? requestedParty
+          : parties.length === 1
+            ? parties[0].id
+            : "";
+        selectedPartyRef.current = partyId;
+        setSelectedOrganizationId(partyId);
+        if (partyId && !sharedOrganizationId && parties.length === 1) onOrganizationChange?.(partyId);
+
+        const partyVerified = Boolean(partyId && parties.some((party) => party.id === partyId));
+        const partyOverviewContext = { dealId, organizationId: partyId, reloadToken };
+        errorOverviewContext = partyOverviewContext;
+
+        if (agreement && (agreement.deal_id !== dealId || agreement.is_current === false)) {
+          throw new Error("The current agreement response does not match this deal");
+        }
+
+        if (agreement) {
+          onOverviewChange?.({ ...partyOverviewContext, status: partyVerified ? "loading" : "ready", partyVerified, agreement });
+          setState({ status: "ready", agreement, organizations: parties });
+          return;
+        }
+
         if (!agreement) {
-          const party = sharedOrganizationId || selectedPartyRef.current || (parties.length === 1 ? parties[0].id : "");
-          if (party) {
-            const saved = await getAgreementHistory(dealId, party, controller.signal);
+          if (partyId) {
+            const saved = await getAgreementHistory(dealId, partyId, controller.signal);
             if (cancelled) return;
+            if (saved.deal_id !== dealId || saved.organization_id !== partyId || saved.current_version_id !== null) {
+              throw new Error("Agreement history does not confirm the current deal state");
+            }
             if (saved.versions.length) {
               const latest = saved.versions[0];
-              setHistory({ key: JSON.stringify([dealId, party, reloadToken, reloadCount]), data: saved });
+              setHistory({ key: JSON.stringify([dealId, partyId, reloadToken, reloadCount]), data: saved });
               setViewedVersion(latest.version_number);
+              onOverviewChange?.({ ...partyOverviewContext, status: "empty", partyVerified });
               setState({ status: "ready", agreement: latest, organizations: parties });
               return;
             }
           }
+          onOverviewChange?.({ ...partyOverviewContext, status: "empty", partyVerified });
           setState({ status: "empty", organizations: parties });
-          return;
         }
-        setState({ status: "ready", agreement, organizations: parties });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        if (error instanceof ApiError && error.status === 404) {
-          setState({ status: "empty" });
-        } else {
-          setState({ status: "error", message: apiMessage(error) });
-        }
+        onOverviewChange?.({ ...errorOverviewContext, status: "error" });
+        setState({ status: "error", message: apiMessage(error) });
       });
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [dealId, buyerOrganizationId, sellerOrganizationId, sharedOrganizationId, reloadCount, reloadToken]);
+  }, [dealId, buyerOrganizationId, sellerOrganizationId, sharedOrganizationId, reloadCount, reloadToken, onOverviewChange, onOrganizationChange]);
 
   async function decide(decision: "approve" | "reject") {
     if (state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || viewedVersion || compareBefore) return;
@@ -202,6 +247,7 @@ export default function AgreementReview({
       if (!active.current || atStart !== context.current) return;
       if (error instanceof ApiError && error.status === 409) {
         setStale(true);
+        onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
         setDecisionError(
           "This agreement changed or this decision conflicts with one already recorded. Reload and review the current version before continuing.",
         );
@@ -236,6 +282,7 @@ export default function AgreementReview({
       if (!active.current || atStart !== context.current) return;
       if (error instanceof ApiError && error.status === 409) {
         setStale(true);
+        onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "error" });
         setDecisionError(
           "This agreement changed or is no longer ready to commit. Reload and review the current version before continuing.",
         );
@@ -248,6 +295,7 @@ export default function AgreementReview({
   }
 
   function reloadAgreement() {
+    onOverviewChange?.({ dealId, organizationId: actingOrganizationId || "", reloadToken, status: "loading" });
     setState({ status: "loading" });
     setStale(false);
     setDecisionError("");

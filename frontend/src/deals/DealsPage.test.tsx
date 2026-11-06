@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, getOrganization, listDeals, listOrganizations } from "../api/client";
@@ -102,7 +102,7 @@ describe("DealsPage", () => {
     expect(screen.getByText("Trading partner: Name unavailable")).toBeInTheDocument();
     expect(screen.getByText("Reference: deal-1")).toBeInTheDocument();
     expect(screen.getByText("Reference: deal-2")).toBeInTheDocument();
-    expect(mockedGetOrganization).not.toHaveBeenCalledWith("unclaimed-shell");
+    expect(mockedGetOrganization.mock.calls.some(([id]) => id === "unclaimed-shell")).toBe(false);
   });
 
   it("shows available partner names without waiting for another lookup", async () => {
@@ -115,6 +115,25 @@ describe("DealsPage", () => {
     render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
     expect(await screen.findByText("Trading partner: Seller Co")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open deal" })).toHaveLength(2);
+  });
+
+  it("bounds partner lookups and cancels them when leaving the list", async () => {
+    mockedListDeals.mockResolvedValue(Array.from({ length: 10 }, (_, i) =>
+      deal({ id: `deal-${i}`, seller_organization_id: `seller-${i}` }),
+    ));
+    let finishFirst: (() => void) | undefined;
+    const signals: AbortSignal[] = [];
+    mockedGetOrganization.mockImplementation((id, options) => new Promise((resolve) => {
+      if (options?.signal) signals.push(options.signal);
+      if (id === "seller-0") finishFirst = () => resolve({ id, legal_name: "Seller 0", country_code: "US" });
+    }));
+    const { unmount } = render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
+    await waitFor(() => expect(mockedGetOrganization).toHaveBeenCalledTimes(4));
+    finishFirst?.();
+    await waitFor(() => expect(mockedGetOrganization).toHaveBeenCalledTimes(5));
+    unmount();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(mockedGetOrganization).toHaveBeenCalledTimes(5);
   });
 
   it("shows an empty state when the actor has no deals", async () => {

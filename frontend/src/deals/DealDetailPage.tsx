@@ -17,6 +17,8 @@ import AgreementReview from "./AgreementReview";
 import PaymentStatusPanel from "./PaymentStatusPanel";
 import NegotiationReview from "./NegotiationReview";
 import FulfillmentPanel from "./FulfillmentPanel";
+import DealOverview from "./DealOverview";
+import type { OverviewSnapshot } from "./DealOverview";
 
 type DealState =
   | { status: "loading" }
@@ -66,6 +68,7 @@ export default function DealDetailPage({
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [counterpartyName, setCounterpartyName] = useState("Counterparty");
   const [negotiation, setNegotiation] = useState<NegotiationView | null>(null);
+  const [overview, setOverview] = useState<OverviewSnapshot | null>(null);
   function commercialChanged() {
     setNegotiation(null);
     setAgreementReloadToken((token) => token + 1);
@@ -145,6 +148,21 @@ export default function DealDetailPage({
 
         if (cancelled) return;
 
+        // Resolve the active organization even when an agreement already exists. Otherwise
+        // returning users with membership in exactly one party would see agreement details
+        // but no role context or next step until they changed the selector manually.
+        if (organizationsResult.status === "fulfilled") {
+          const organizations = organizationsResult.value;
+          const partyOrganizations = organizations.filter(
+            (org) => org.id === deal.buyer_organization_id || org.id === deal.seller_organization_id,
+          );
+          const selectedPartyIsActive = partyOrganizations.some((org) => org.id === selectedOrganizationId);
+          if (selectedOrganizationId && !selectedPartyIsActive) setSelectedOrganizationId("");
+          if (partyOrganizations.length === 1 && !selectedPartyIsActive) {
+            setSelectedOrganizationId(partyOrganizations[0].id);
+          }
+        }
+
         // 1. Inspect agreement check result
         if (agreementResult.status === "fulfilled" && agreementResult.value !== null) {
           setFreshness("not-fresh");
@@ -179,10 +197,11 @@ export default function DealDetailPage({
             org.id === deal.buyer_organization_id || org.id === deal.seller_organization_id,
         );
 
-        let effectivePartyId = selectedOrganizationId;
-        if (partyOrganizations.length === 1 && !selectedOrganizationId) {
+        let effectivePartyId = partyOrganizations.some((org) => org.id === selectedOrganizationId)
+          ? selectedOrganizationId
+          : "";
+        if (partyOrganizations.length === 1 && !effectivePartyId) {
           effectivePartyId = partyOrganizations[0].id;
-          setSelectedOrganizationId(partyOrganizations[0].id);
         }
 
         if (!effectivePartyId) {
@@ -358,6 +377,7 @@ export default function DealDetailPage({
   }, [freshness, state, agreementReloadToken, selectedOrganizationId, freshnessChecked, freshnessIntervalMs]);
 
   function retryDeal() {
+    setOverview(null);
     setState({ status: "loading" });
     setReloadCount((count) => count + 1);
     setFreshnessChecked(false);
@@ -685,6 +705,7 @@ export default function DealDetailPage({
           </dl>
         </section>
 
+        <DealOverview deal={deal} organizationId={selectedOrganizationId} reloadToken={agreementReloadToken} snapshot={overview} />
         <DealConversationReview
           negotiation={negotiation?.organization_id === selectedOrganizationId && negotiation.deal_id === deal.id ? negotiation : null}
           deal={deal}
@@ -711,6 +732,7 @@ export default function DealDetailPage({
           selectedOrganizationId={selectedOrganizationId}
           onOrganizationChange={handleOrganizationChange}
           onCommitted={commercialChanged}
+          onOverviewChange={setOverview}
         /> : null}
         <FulfillmentPanel
           dealId={deal.id}

@@ -57,18 +57,28 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
   useEffect(() => {
     if (state.status !== "ready") return;
     let cancelled = false;
+    const controller = new AbortController();
     // An unaccepted counterparty is an inactive shell and must not be looked up.
     const ids = new Set(state.deals.flatMap((deal) => {
       if (deal.pending_counterparty) return [];
       if (deal.viewer_role === "BOTH") return [deal.buyer_organization_id, deal.seller_organization_id];
       return [deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id];
     }));
-    for (const id of ids) {
-      void getOrganization(id).then((organization) => {
-        if (!cancelled) setOrganizationNames((names) => ({ ...names, [id]: organization.legal_name }));
-      }).catch(() => {});
-    }
-    return () => { cancelled = true; };
+    const queue = [...ids];
+    let next = 0;
+    const loadNames = async () => {
+      while (!cancelled && next < queue.length) {
+        const id = queue[next++];
+        try {
+          const organization = await getOrganization(id, { signal: controller.signal });
+          if (!cancelled) setOrganizationNames((names) => ({ ...names, [id]: organization.legal_name }));
+        } catch {
+          // A missing or inaccessible party name does not prevent opening the deal.
+        }
+      }
+    };
+    for (let i = 0; i < Math.min(4, queue.length); i++) void loadNames();
+    return () => { cancelled = true; controller.abort(); };
   }, [state]);
 
   function retryDeals() {

@@ -8,7 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
-from syncally.api.agreements import CreateReviewedAgreementDraftRequest
+from syncally.api.agreements import (
+    CreateReviewedAgreementDraftRequest,
+    build_trade_terms_from_request,
+)
 from syncally.api.auth import get_current_actor
 from syncally.application.identity import ActorContext
 from syncally.application.negotiation import (
@@ -21,7 +24,7 @@ from syncally.application.negotiation import (
     NegotiationOrganizationRequired,
     ProposalBase,
 )
-from syncally.domain.ai.contracts import AIContractError, ProposedTerms
+from syncally.domain.ai.contracts import AIContractError
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.infrastructure.database import get_db
@@ -156,12 +159,11 @@ def write_negotiation(deal_id: UUID, action: NegotiationActionKind, payload: Neg
         if payload.terms is not None:
             if payload.terms.organization_id is not None and payload.terms.organization_id != payload.organization_id:
                 raise InvariantViolation("Terms organization must match the selected party")
-            terms = ProposedTerms(
-                schema_version=payload.terms.schema_version, description=payload.terms.description,
-                quantity=payload.terms.quantity, unit=payload.terms.unit, unit_price=payload.terms.unit_price,
-                currency=payload.terms.currency, delivery_destination=payload.terms.delivery_destination,
-                delivery_date=payload.terms.delivery_date,
-            ).to_trade_terms(buyer_id=OrganizationId(deal.buyer_organization_id), seller_id=OrganizationId(deal.seller_organization_id))
+            terms = build_trade_terms_from_request(
+                payload.terms,
+                buyer_id=OrganizationId(deal.buyer_organization_id),
+                seller_id=OrganizationId(deal.seller_organization_id),
+            )
         ack = payload.supersede_current_candidate
         return negotiate_in_transaction(db, NegotiationCommand(
             deal_id=deal_id, user_id=actor.user_id, organization_id=payload.organization_id,

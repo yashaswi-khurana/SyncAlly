@@ -10,7 +10,7 @@ from decimal import Decimal
 from io import BytesIO
 from typing import Any
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zipfile import ZipFile
 
 import httpx
@@ -1274,6 +1274,208 @@ class AgreementRouteTests(unittest.TestCase):
             self.session.scalar(select(FulfillmentEvent).where(FulfillmentEvent.deal_id == self.deal.id)),
             None,
         )
+
+    def _schema_2_reviewed_terms(self, **overrides: object) -> dict[str, Any]:
+        return {
+            "schema_version": 2,
+            "organization_id": str(self.buyer.id),
+            "line_items": [
+                {
+                    "id": "item-1",
+                    "description": "Desk",
+                    "quantity": "10",
+                    "unit": "pieces",
+                    "unit_price": {"amount": "25.00", "currency": "USD"},
+                    "sku": "DSK-1",
+                },
+                {
+                    "id": "item-2",
+                    "description": "Chair",
+                    "quantity": "20",
+                    "unit": "pieces",
+                    "unit_price": {"amount": "10.00", "currency": "USD"},
+                    "sku": "CHR-1",
+                },
+            ],
+            "shipments": [
+                {
+                    "id": "ship-1",
+                    "destination": "Toronto",
+                    "target_date": "2030-01-01",
+                    "quantity": "30",
+                    "allocations": [
+                        {"line_item_id": "item-1", "quantity": "10", "unit": "pieces"},
+                        {"line_item_id": "item-2", "quantity": "20", "unit": "pieces"},
+                    ],
+                },
+            ],
+            "payment_terms": [
+                {
+                    "id": "pay-1",
+                    "amount": {"amount": "450.00", "currency": "USD"},
+                    "trigger": "seller_invoice",
+                    "due_condition": "when seller invoices",
+                    "allocations": [
+                        {"obligation_id": "ship-1", "amount": {"amount": "450.00", "currency": "USD"}},
+                    ],
+                },
+            ],
+            "delivery_location": "Toronto",
+            "incoterm": "FOB",
+            "cancellation_terms": "Standard cancellation",
+            **overrides,
+        }
+
+    def test_create_reviewed_agreement_draft_schema_2(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        payload = self._schema_2_reviewed_terms()
+        response = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=payload,
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()
+        self.assertEqual(data["version_number"], 1)
+        self.assertEqual(data["terms"]["schema_version"], 2)
+        self.assertEqual(len(data["terms"]["line_items"]), 2)
+        self.assertEqual(data["terms"]["line_items"][0]["id"], "item-1")
+        self.assertEqual(data["terms"]["line_items"][1]["id"], "item-2")
+        self.assertEqual(len(data["terms"]["shipments"]), 1)
+        self.assertEqual(data["terms"]["shipments"][0]["id"], "ship-1")
+        self.assertEqual(len(data["terms"]["shipments"][0]["allocations"]), 2)
+        self.assertEqual(len(data["terms"]["payment_terms"]), 1)
+        self.assertEqual(data["terms"]["payment_terms"][0]["id"], "pay-1")
+        self.assertEqual(len(data["terms"]["payment_terms"][0]["allocations"]), 1)
+
+    def test_create_reviewed_agreement_draft_schema_2_invariants_rejected(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+
+        # Duplicate ID
+        duplicate_id_payload = self._schema_2_reviewed_terms()
+        duplicate_id_payload["shipments"][0]["id"] = "item-1"
+        resp = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=duplicate_id_payload,
+        )
+        self.assertEqual(resp.status_code, 422)
+
+        # Allocation to unknown line item
+        unknown_alloc_payload = self._schema_2_reviewed_terms()
+        unknown_alloc_payload["shipments"][0]["allocations"][0]["line_item_id"] = "nonexistent"
+        resp = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=unknown_alloc_payload,
+        )
+        self.assertEqual(resp.status_code, 422)
+
+        # Allocation unit mismatch
+        unit_mismatch_payload = self._schema_2_reviewed_terms()
+        unit_mismatch_payload["shipments"][0]["allocations"][0]["unit"] = "boxes"
+        resp = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=unit_mismatch_payload,
+        )
+        self.assertEqual(resp.status_code, 422)
+
+        # Allocation quantity exceeds line item
+        excess_alloc_payload = self._schema_2_reviewed_terms()
+        excess_alloc_payload["shipments"][0]["allocations"][0]["quantity"] = "100"
+        resp = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/agreements/from-reviewed-terms",
+            json=excess_alloc_payload,
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_negotiate_schema_2_submit_and_counter(self) -> None:
+        self._authenticate(self._actor(self.buyer_user, self.buyer))
+        session = self.session.scalar(
+            select(NegotiationSession).where(NegotiationSession.deal_id == self.deal.id)
+        )
+        assert session is not None
+        session.current_proposal_id = self.proposal.id
+        self.session.commit()
+
+        terms_payload = self._schema_2_reviewed_terms()
+        cmd_id = str(uuid4())
+        submit_resp = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/negotiation/submit",
+            json={
+                "command_id": cmd_id,
+                "expected_deal_revision": 0,
+                "organization_id": str(self.buyer.id),
+                "base": {
+                    "id": str(self.proposal.id),
+                    "terms_hash": self.proposal.terms_hash,
+                    "status": self.proposal.status,
+                },
+                "terms": terms_payload,
+            },
+        )
+        self.assertEqual(submit_resp.status_code, 200, submit_resp.text)
+        self.assertEqual(submit_resp.json()["outcome"], "APPLIED")
+        new_proposal_id = submit_resp.json()["proposal_id"]
+        self.assertIsNotNone(new_proposal_id)
+
+        # Now authenticate seller and counter
+        self._authenticate(self._actor(self.seller_user, self.seller))
+        counter_terms = self._schema_2_reviewed_terms(
+            organization_id=str(self.seller.id),
+            line_items=[
+                {
+                    "id": "item-1",
+                    "description": "Desk",
+                    "quantity": "10",
+                    "unit": "pieces",
+                    "unit_price": {"amount": "30.00", "currency": "USD"},
+                    "sku": "DSK-1",
+                },
+                {
+                    "id": "item-2",
+                    "description": "Chair",
+                    "quantity": "20",
+                    "unit": "pieces",
+                    "unit_price": {"amount": "10.00", "currency": "USD"},
+                    "sku": "CHR-1",
+                },
+            ],
+            payment_terms=[
+                {
+                    "id": "pay-1",
+                    "amount": {"amount": "500.00", "currency": "USD"},
+                    "trigger": "seller_invoice",
+                    "due_condition": "when seller invoices",
+                    "allocations": [
+                        {"obligation_id": "ship-1", "amount": {"amount": "500.00", "currency": "USD"}},
+                    ],
+                },
+            ],
+        )
+        counter_cmd_id = str(uuid4())
+        counter_resp = self._request(
+            "POST",
+            f"/deals/{self.deal.id}/negotiation/counter",
+            json={
+                "command_id": counter_cmd_id,
+                "expected_deal_revision": 1,
+                "organization_id": str(self.seller.id),
+                "base": {
+                    "id": new_proposal_id,
+                    "terms_hash": self.session.scalar(
+                        select(Proposal.terms_hash).where(Proposal.id == UUID(new_proposal_id))
+                    ),
+                    "status": "SUBMITTED",
+                },
+                "terms": counter_terms,
+            },
+        )
+        self.assertEqual(counter_resp.status_code, 200, counter_resp.text)
+        self.assertEqual(counter_resp.json()["outcome"], "APPLIED")
 
 
 if __name__ == "__main__":

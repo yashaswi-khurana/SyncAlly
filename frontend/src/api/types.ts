@@ -158,11 +158,39 @@ export function paymentTimingLabel(trigger: string): string {
 }
 
 export interface AgreementLineItem {
+  id?: string;
   description: string;
   sku: string | null;
   quantity: string;
   unit: string;
   unit_price: { amount: string; currency: string };
+}
+
+export interface ShipmentItemAllocation {
+  line_item_id: string;
+  quantity: string;
+  unit: string;
+}
+
+export interface AgreementShipment {
+  id?: string;
+  quantity: string | null;
+  destination: string;
+  target_date: string | null;
+  allocations?: ShipmentItemAllocation[];
+}
+
+export interface PaymentObligationAllocation {
+  obligation_id: string;
+  amount: { amount: string; currency: string };
+}
+
+export interface AgreementPaymentTerm {
+  id?: string;
+  amount: { amount: string; currency: string };
+  trigger: string;
+  due_condition: string;
+  allocations?: PaymentObligationAllocation[];
 }
 
 export interface AgreementVersion {
@@ -187,12 +215,8 @@ export interface AgreementVersion {
     buyer_id: string;
     seller_id: string;
     line_items: AgreementLineItem[];
-    shipments: Array<{ quantity: string; destination: string; target_date: string | null }>;
-    payment_terms: Array<{
-      amount: { amount: string; currency: string };
-      trigger: string;
-      due_condition: string;
-    }>;
+    shipments: AgreementShipment[];
+    payment_terms: AgreementPaymentTerm[];
     delivery_location: string;
     incoterm: string | null;
     cancellation_terms: string;
@@ -474,8 +498,23 @@ export interface ProposalSuggestion {
  * timing is unambiguous. The due condition is derived from the trigger by the
  * domain contract.
  */
-export interface ReviewedProposalTerms extends Omit<ProposalSuggestion, "status" | "provenance"> {
-  payment_trigger: PaymentTrigger;
+export interface ReviewedProposalTerms {
+  schema_version: number;
+  description?: string;
+  quantity?: string;
+  unit?: string;
+  unit_price?: string;
+  currency?: "USD" | string;
+  delivery_destination?: string;
+  delivery_date?: string | null;
+  payment_trigger?: PaymentTrigger;
+  organization_id?: string;
+  line_items?: AgreementLineItem[];
+  shipments?: AgreementShipment[];
+  payment_terms?: AgreementPaymentTerm[];
+  delivery_location?: string;
+  incoterm?: string | null;
+  cancellation_terms?: string;
 }
 
 export interface FactCorrectionResult {

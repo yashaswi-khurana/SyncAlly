@@ -396,9 +396,9 @@
     "semantic_hash": "cd7fc1a2c725332f55536979c7b2809b"
   },
   "backend/src/syncally/domain/shared/money.py": {
-    "mtime": 1793940279.6447668,
-    "seen": 1793941117.9892309,
-    "ast_hash": "a555a8d59b154dcb48659e16a3dbc9b9",
+    "mtime": 1793941710.6787305,
+    "seen": 1793941948.4764247,
+    "ast_hash": "b13a337ae5cfe567db6b8e8fe58b8466",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/__init__.py": {
@@ -762,9 +762,9 @@
     "semantic_hash": "aaacbc23df5dce6cf4c5a011004be4da"
   },
   "backend/tests/test_domain_fixes.py": {
-    "mtime": 1793940881.625923,
-    "seen": 1793941117.989438,
-    "ast_hash": "b8feea2ced55ed9ebdad80375a277130",
+    "mtime": 1793941728.3481102,
+    "seen": 1793941948.476741,
+    "ast_hash": "509602d5f59122b30fd95793e7344a19",
     "semantic_hash": ""
   },
   "backend/tests/test_gmail.py": {
@@ -1470,9 +1470,9 @@
     "semantic_hash": "60cb68f31e0d87d2cbce72d4fcc18922"
   },
   "backend/src/syncally/infrastructure/repositories/negotiation.py": {
-    "mtime": 1793940505.553508,
-    "seen": 1793941117.9893305,
-    "ast_hash": "a920e0917562ddb80de924ea855fb806",
+    "mtime": 1793941735.2842562,
+    "seen": 1793941948.4765499,
+    "ast_hash": "f2d30a138ca53c8553bd23629b495ff3",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/offline_payments.py": {
@@ -1638,9 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1793939897.7190135,
-    "seen": 1793941117.98982,
-    "ast_hash": "3beaf0520346a77c1ea2c14ea5e2ec20",
+    "mtime": 1793942461.8916717,
+    "seen": 1793942891.775565,
+    "ast_hash": "39155693296ba91f2673bc465d7fd3cb",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -1764,9 +1764,9 @@
     "semantic_hash": ""
   },
   "backend/tests/test_trade_terms_collection_schema.py": {
-    "mtime": 1793940624.3734426,
-    "seen": 1793941117.9895198,
-    "ast_hash": "d3b6f4ce681144217b136c1e60761e99",
+    "mtime": 1793941719.5019214,
+    "seen": 1793941948.4769177,
+    "ast_hash": "8aed76fb30d755a3ed753c298f0ff63d",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

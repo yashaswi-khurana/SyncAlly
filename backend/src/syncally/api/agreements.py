@@ -16,7 +16,7 @@ from typing import Any, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
@@ -47,11 +47,20 @@ from syncally.application.deals import (
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
-from syncally.domain.agreements.trade_terms import SUPPORTED_DEMO_PAYMENT_TRIGGER
+from syncally.domain.agreements.trade_terms import (
+    SUPPORTED_DEMO_PAYMENT_TRIGGER,
+    PaymentObligationAllocation,
+    PaymentTerm,
+    ShipmentItemAllocation,
+    ShipmentTerm,
+    TradeLineItem,
+    TradeTerms,
+)
 from syncally.domain.ai.contracts import AIContractError, ProposedTerms
 from syncally.domain.organizations.organization import OrganizationCapability
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
+from syncally.domain.shared.money import Money
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.identity import verify_member_capability
 from syncally.infrastructure.repositories import (
@@ -76,47 +85,218 @@ class CreateAgreementDraftRequest(BaseModel):
     proposal_id: UUID
 
 
+class MoneyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    amount: Decimal
+    currency: str = Field(min_length=3, max_length=3)
+
+
+class ShipmentItemAllocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    line_item_id: str = Field(min_length=1, max_length=64)
+    quantity: Decimal
+    unit: str = Field(min_length=1, max_length=100)
+
+
+class PaymentObligationAllocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    obligation_id: str = Field(min_length=1, max_length=64)
+    amount: MoneyRequest
+
+
+class TradeLineItemDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=2_000)
+    quantity: Decimal
+    unit: str = Field(min_length=1, max_length=100)
+    unit_price: MoneyRequest
+    sku: str | None = Field(default=None, max_length=100)
+
+
+class ShipmentTermDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    destination: str = Field(min_length=1, max_length=2_000)
+    target_date: date | None = None
+    allocations: list[ShipmentItemAllocationRequest] = Field(default_factory=list)
+    quantity: Decimal | None = None
+
+
+class PaymentTermDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    amount: MoneyRequest
+    trigger: str = Field(min_length=1, max_length=100)
+    due_condition: str = Field(min_length=1, max_length=200)
+    allocations: list[PaymentObligationAllocationRequest] = Field(default_factory=list)
+
+
 class CreateReviewedAgreementDraftRequest(BaseModel):
-    """Explicitly submit the user's reviewed AI draft for bilateral approval."""
+    """Explicitly submit the user's reviewed AI draft or schema 2 collections for bilateral approval."""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = Field(ge=1)
-    description: str = Field(min_length=1, max_length=2_000)
-    quantity: Decimal
-    unit: str = Field(min_length=1, max_length=100)
-    unit_price: Decimal
-    currency: str = Field(min_length=3, max_length=3)
-    delivery_destination: str = Field(min_length=1, max_length=2_000)
-    delivery_date: date | None
-    # Rollout shim: clients deployed before this field existed omit it, and during
-    # a backend-first rollout they still reach new instances. Omission is
-    # unambiguous because the demo contract supports exactly one trigger, and
-    # ``ProposedTerms.to_trade_terms()`` derives that same trigger regardless of
-    # this acknowledgement. An explicit unsupported value is still rejected.
-    # Make the field required once every client sends it.
-    payment_trigger: str = Field(
-        default=SUPPORTED_DEMO_PAYMENT_TRIGGER, min_length=1, max_length=100
-    )
+    # Schema 1 flat fields
+    description: str | None = Field(default=None, max_length=2_000)
+    quantity: Decimal | None = None
+    unit: str | None = Field(default=None, max_length=100)
+    unit_price: Decimal | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    delivery_destination: str | None = Field(default=None, max_length=2_000)
+    delivery_date: date | None = None
+    payment_trigger: str | None = Field(default=None, max_length=100)
     organization_id: UUID | None = None
+
+    # Schema 2 collection fields
+    line_items: list[TradeLineItemDraftRequest] | None = None
+    shipments: list[ShipmentTermDraftRequest] | None = None
+    payment_terms: list[PaymentTermDraftRequest] | None = None
+    delivery_location: str | None = Field(default=None, max_length=2_000)
+    incoterm: str | None = Field(default=None, max_length=10)
+    cancellation_terms: str = Field(default="", max_length=2_000)
 
     @field_validator("payment_trigger")
     @classmethod
-    def supported_payment_trigger(cls, value: str) -> str:
-        """Reject a timing the demo contract cannot build, instead of silently ignoring it.
-
-        The proposer explicitly picks the trigger; the due condition is derived
-        from it by ``ProposedTerms.to_trade_terms()``, so it is not accepted here.
-        """
+    def supported_payment_trigger(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         trigger = value.strip().casefold()
         if trigger != SUPPORTED_DEMO_PAYMENT_TRIGGER:
-            # Never interpolate the submitted value: the 422 handler strips
-            # Pydantic's ``input`` field but keeps ``msg``, so echoing it here
-            # would reflect caller-supplied text despite the redaction contract.
             raise ValueError(
                 f"Unsupported payment timing; supported: {SUPPORTED_DEMO_PAYMENT_TRIGGER}"
             )
         return trigger
+
+    @model_validator(mode="after")
+    def validate_schema_fields(self) -> CreateReviewedAgreementDraftRequest:
+        if self.schema_version == 1:
+            missing = []
+            if not self.description:
+                missing.append("description")
+            if self.quantity is None:
+                missing.append("quantity")
+            if not self.unit:
+                missing.append("unit")
+            if self.unit_price is None:
+                missing.append("unit_price")
+            if not self.currency:
+                missing.append("currency")
+            if not self.delivery_destination:
+                missing.append("delivery_destination")
+            if missing:
+                raise ValueError(f"Schema 1 requires flat fields: {', '.join(missing)}")
+            if self.payment_trigger is None:
+                self.payment_trigger = SUPPORTED_DEMO_PAYMENT_TRIGGER
+        elif self.schema_version == 2:
+            missing = []
+            if not self.line_items:
+                missing.append("line_items")
+            if not self.shipments:
+                missing.append("shipments")
+            if not self.payment_terms:
+                missing.append("payment_terms")
+            if not self.delivery_location:
+                missing.append("delivery_location")
+            if missing:
+                raise ValueError(f"Schema 2 requires collection fields: {', '.join(missing)}")
+        else:
+            raise ValueError(f"Unsupported schema_version: {self.schema_version}")
+        return self
+
+
+def build_trade_terms_from_request(
+    payload: CreateReviewedAgreementDraftRequest,
+    buyer_id: OrganizationId,
+    seller_id: OrganizationId,
+) -> TradeTerms:
+    if payload.schema_version == 1:
+        assert payload.description is not None
+        assert payload.quantity is not None
+        assert payload.unit is not None
+        assert payload.unit_price is not None
+        assert payload.currency is not None
+        assert payload.delivery_destination is not None
+        proposed_terms = ProposedTerms(
+            schema_version=payload.schema_version,
+            description=payload.description,
+            quantity=payload.quantity,
+            unit=payload.unit,
+            unit_price=payload.unit_price,
+            currency=payload.currency,
+            delivery_destination=payload.delivery_destination,
+            delivery_date=payload.delivery_date,
+        )
+        return proposed_terms.to_trade_terms(buyer_id=buyer_id, seller_id=seller_id)
+    if payload.schema_version == 2:
+        assert payload.line_items is not None
+        assert payload.shipments is not None
+        assert payload.payment_terms is not None
+        assert payload.delivery_location is not None
+
+        domain_items = tuple(
+            TradeLineItem(
+                id=item.id,
+                description=item.description,
+                quantity=item.quantity,
+                unit=item.unit,
+                unit_price=Money(item.unit_price.amount, item.unit_price.currency),
+                sku=item.sku,
+            )
+            for item in payload.line_items
+        )
+        domain_shipments = tuple(
+            ShipmentTerm(
+                id=shipment.id,
+                destination=shipment.destination,
+                target_date=shipment.target_date,
+                quantity=shipment.quantity,
+                allocations=tuple(
+                    ShipmentItemAllocation(
+                        line_item_id=alloc.line_item_id,
+                        quantity=alloc.quantity,
+                        unit=alloc.unit,
+                    )
+                    for alloc in shipment.allocations
+                ),
+            )
+            for shipment in payload.shipments
+        )
+        domain_payment_terms = tuple(
+            PaymentTerm(
+                id=term.id,
+                amount=Money(term.amount.amount, term.amount.currency),
+                trigger=term.trigger,
+                due_condition=term.due_condition,
+                allocations=tuple(
+                    PaymentObligationAllocation(
+                        obligation_id=alloc.obligation_id,
+                        amount=Money(alloc.amount.amount, alloc.amount.currency),
+                    )
+                    for alloc in term.allocations
+                ),
+            )
+            for term in payload.payment_terms
+        )
+        return TradeTerms(
+            buyer_id=buyer_id,
+            seller_id=seller_id,
+            line_items=domain_items,
+            shipments=domain_shipments,
+            payment_terms=domain_payment_terms,
+            delivery_location=payload.delivery_location,
+            incoterm=payload.incoterm,
+            cancellation_terms=payload.cancellation_terms,
+            schema_version=payload.schema_version,
+        )
+    raise InvariantViolation(f"Unsupported trade terms schema version: {payload.schema_version}")
 
 
 class RecordApprovalRequest(BaseModel):
@@ -372,19 +552,8 @@ def create_reviewed_agreement_draft_route(
         author_organization_id = resolve_party_organization(
             actor, deal, payload.organization_id
         )
-        # payment_trigger is already pinned to the supported demo trigger by the
-        # request validator; the domain contract derives the due condition from it.
-        proposed_terms = ProposedTerms(
-            schema_version=payload.schema_version,
-            description=payload.description,
-            quantity=payload.quantity,
-            unit=payload.unit,
-            unit_price=payload.unit_price,
-            currency=payload.currency,
-            delivery_destination=payload.delivery_destination,
-            delivery_date=payload.delivery_date,
-        )
-        terms = proposed_terms.to_trade_terms(
+        terms = build_trade_terms_from_request(
+            payload,
             buyer_id=OrganizationId(deal.buyer_organization_id),
             seller_id=OrganizationId(deal.seller_organization_id),
         )

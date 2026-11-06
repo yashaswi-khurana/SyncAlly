@@ -1,7 +1,8 @@
 import hashlib
 import json
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from io import BytesIO
 from unittest import TestCase
 from unittest.mock import patch
@@ -23,6 +24,10 @@ from syncally.domain.agreements.agreement import (
     Agreement,
     Approval,
     ApprovalDecision,
+)
+from syncally.domain.agreements.trade_terms import (
+    ShipmentItemAllocation,
+    ShipmentTerm,
 )
 from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.identifiers import (
@@ -242,3 +247,138 @@ class CommercialDocumentDraftTests(TestCase):
                 self.pack(projection)
             renderer.assert_not_called()
             compress.assert_not_called()
+
+    def test_generates_draft_from_schema_2_committed_terms(self) -> None:
+        now = datetime(2030, 1, 1, tzinfo=UTC)
+        buyer_id = OrganizationId(uuid4())
+        seller_id = OrganizationId(uuid4())
+        deal_id = DealId(uuid4())
+        terms = build_terms(
+            buyer_id=buyer_id,
+            seller_id=seller_id,
+            schema_version=2,
+            shipments=(
+                ShipmentTerm(
+                    id="ship-1",
+                    destination="Toronto",
+                    target_date=date(2030, 1, 1),
+                    allocations=(
+                        ShipmentItemAllocation(
+                            line_item_id="item-1",
+                            quantity=Decimal("1"),
+                            unit="each",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        deal = Deal(
+            id=deal_id,
+            buyer_organization_id=buyer_id,
+            seller_organization_id=seller_id,
+            created_at=now,
+        )
+        agreement = Agreement(
+            id=AgreementId(uuid4()),
+            version_id=AgreementVersionId(uuid4()),
+            deal_id=deal_id,
+            version_number=1,
+            terms=terms,
+            created_at=now,
+        )
+        for org_id in (buyer_id, seller_id):
+            agreement.record_approval(
+                Approval(
+                    organization_id=org_id,
+                    user_id=UserId(uuid4()),
+                    decision=ApprovalDecision.APPROVE,
+                    terms_hash=terms.terms_hash,
+                    created_at=now,
+                )
+            )
+        agreement.commit(terms.terms_hash, datetime(2030, 1, 2, tzinfo=UTC))
+        actor = ActorContext(uuid4(), frozenset({buyer_id}))
+        draft = generate_commercial_document_draft(
+            actor,
+            deal_id,
+            FakeDealRepository(deal),
+            FakeAgreementRepository(agreement),
+        )
+        self.assertIn("DRAFT - FOR REVIEW ONLY", draft.content)
+        self.assertIn("Item 1 (ID: item-1):", draft.content)
+        self.assertIn("Shipment 1 (ID: ship-1):", draft.content)
+        self.assertIn("1 each of item item-1", draft.content)
+        self.assertIn("Payment term 1 (ID: pay-1):", draft.content)
+        self.assertIn("10 USD for obligation ship-1", draft.content)
+        self.assertIn(
+            "Taxes, freight, customs classification, and other fees: Not specified in committed terms",
+            draft.content,
+        )
+
+    def test_trade_pack_schema_2_deterministic_and_escaped(self) -> None:
+        now = datetime(2030, 1, 1, tzinfo=UTC)
+        buyer_id = OrganizationId(uuid4())
+        seller_id = OrganizationId(uuid4())
+        deal_id = DealId(uuid4())
+        version_id = uuid4()
+        terms = build_terms(
+            buyer_id=buyer_id,
+            seller_id=seller_id,
+            schema_version=2,
+            shipments=(
+                ShipmentTerm(
+                    id="ship-1",
+                    destination="Toronto",
+                    target_date=date(2030, 1, 1),
+                    allocations=(
+                        ShipmentItemAllocation(
+                            line_item_id="item-1",
+                            quantity=Decimal("1"),
+                            unit="each",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        projection = {
+            "id": str(version_id),
+            "deal_id": str(deal_id),
+            "version_number": 1,
+            "terms_hash": terms.terms_hash,
+            "status": "COMMITTED",
+            "created_at": now,
+            "committed_at": now,
+            "terms": terms.to_storage_dict(),
+            "approvals": [
+                {
+                    "organization_id": str(org_id),
+                    "agreement_version_id": str(version_id),
+                    "deal_id": str(deal_id),
+                    "version_number": 1,
+                    "decision": "APPROVE",
+                    "terms_hash": terms.terms_hash,
+                }
+                for org_id in (buyer_id, seller_id)
+            ],
+        }
+        pack = generate_trade_pack(
+            projection,
+            deal_id=deal_id,
+            number=1,
+            agreement_version_id=version_id,
+            terms_hash=terms.terms_hash,
+            format="zip",
+        )
+        self.assertEqual(pack.media_type, "application/zip")
+        with ZipFile(BytesIO(pack.content)) as archive:
+            html = archive.read("trade-pack.html").decode()
+            self.assertIn("Item ID", html)
+            self.assertIn("item-1", html)
+            self.assertIn("Shipment ID", html)
+            self.assertIn("ship-1", html)
+            self.assertIn("1 each of item item-1", html)
+            self.assertIn("Payment term ID", html)
+            self.assertIn("pay-1", html)
+            self.assertIn("10 USD for obligation ship-1", html)
+            self.assertIn("Commitment provenance", html)
+            self.assertIn("Fulfillment provenance", html)

@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; Steps 05–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); Steps 06–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -18,7 +18,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | [02 Permissions](02-permissions.md) | 01 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 48/48 backend tests pass; 83/83 focused frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Full server capability matrix, safe defaults, no blanket finance/fulfillment, self-escalation (403), last-admin (409), optimistic concurrency (409), commit-time row-lock verification, and migration 0019 downgrade safeguard verified. |
 | [03 Fulfillment](03-fulfillment.md) | 02 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 66/66 backend tests pass (8 skip); 36/36 frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Append-only fulfillment events (SHIPPED/OBSERVED/CONFIRMED), fresh FULFILLMENT capability verification, 10^18 scaled integer math, OCC (409), dual delivery+payment deal completion, and migration 0020 downgrade safety verified. |
 | [04 Collection Schema](04-collection-schema.md) | 03 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 1/3 | Verified: 78/78 focused backend tests pass (6 skip); 793/793 full discovery backend tests pass (32 skip); 385/385 frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Explicit collection IDs, schema discriminator (v1/v2), duplicate lines with distinct IDs, bounded decimal policy (40 digits), unit match, overallocation rejection, zero-residual payment balance, deterministic canonical sorting/hashing, and migration 0021 downgrade safety verified. |
-| [05 Collections API UI Docs](05-collections-api-ui-docs.md) | 04 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
+| [05 Collections API UI Docs](05-collections-api-ui-docs.md) | 04 | REVIEW_PENDING | ACCEPTED | ACCEPTED | NOT_RUN | 0/3 | Verified: 60/60 backend tests pass; 89/89 focused frontend tests pass; 389/389 full frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Schema 2 collection authoring models, negotiation write support, version-aware commercial document / trade pack exports with unrecorded terms disclaimer, stable ID diffs, interactive editor authoring/reordering, bounded validation, and living documentation verified. |
 | [06 Milestone Payments](06-milestone-payments.md) | 02, 03, 05 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [07 Amendments](07-amendments.md) | 05, 06 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [08 Cancel Disputes](08-cancel-disputes.md) | 03, 06, 07 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
@@ -308,4 +308,65 @@ Optional election: elected / explicitly not elected / unknown:
   - N/A for Step 04.
 Completion report / next concrete operator actions:
   - Step 04 Collection Schema fully implemented, independently reviewed, and verified. Ready for Step 05 Collections API UI Docs.
+```
+
+## Step 05 Execution Evidence
+
+```text
+UTC timestamp: 2026-11-06T12:05:00Z
+Step / dependency verification / current status: Step 05 Collections API UI Docs (F10b) / Dependency 04 (Collection Schema) verified / REVIEW_PENDING
+Role identity / coordination evidence (never pretend):
+  - PLANNER: Read-only Architecture Planner subagent (id: 4ea82fc6-e7e2-47df-a721-a477ce0ee0da) inspected codebase, formulated 4-phase developer plan, 5 falsifiable hypotheses, cheapest checks, and edge cases matrix.
+  - DEVELOPER: Specialized Role Developer subagent (id: 7412f490-890f-4af6-a68a-5f4e6200dfaf) implemented Phase 1 (Backend API & Projections), Phase 2 (Frontend Types & Client), Phase 3 (Frontend UI & Tests), and Phase 4 (Living Documentation & Evidence); verified all gates.
+  - REVIEWER: Independent Code Reviewer subagent (pending dispatch by Orchestrator).
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch: 132-task-05-collections-api-ui-docs---f10b
+  - Migration actual head: 0021_collection_schema (head intact, no new migration required)
+  - Inspected: backend/src/syncally/api/agreements.py:L115-L270, backend/src/syncally/api/negotiation.py:L140-L195, backend/src/syncally/application/documents.py:L140-L315, frontend/src/api/types.ts:L110-L165, frontend/src/deals/AgreementReview.tsx:L25-L105,L490-L530, frontend/src/deals/NegotiationReview.tsx:L120-L480,L535-L820
+Hypothesis / cheapest discriminating check:
+  - Byte preservation: historical Schema 1 canonical terms and commercial document exports remain 100% byte-identical.
+  - Collection authoring & negotiation: Schema 2 collection models create drafts and negotiate counter-proposals with stable IDs and explicit allocations.
+  - Unrecorded terms disclaimer: Schema 2 documents and UI review projections explicitly state "Taxes, freight, customs classification, and other fees: Not specified in committed terms".
+  - Bounded validation: Client and server enforce bounds (40-int, 18-frac decimals, matching units, single currency, zero residual).
+  - Cheapest checks: python test runner test_agreement_routes.py test_commercial_documents.py && npm test -- src/deals/AgreementReview.test.tsx src/deals/NegotiationReview.test.tsx
+Authorized scope / policy or private operator election (no secrets):
+  - F10b Collections API, UI & Docs bounded scope; no client role escalation, no verifier invented, no secret leaks, preserved dirty user files.
+Files changed / preserved unrelated changes:
+  - Modified: backend/src/syncally/api/agreements.py, backend/src/syncally/api/negotiation.py, backend/src/syncally/application/documents.py, backend/tests/test_agreement_routes.py, backend/tests/test_commercial_documents.py, frontend/src/api/types.ts, frontend/src/deals/AgreementReview.tsx, frontend/src/deals/NegotiationReview.tsx, frontend/src/deals/AgreementReview.test.tsx, frontend/src/deals/NegotiationReview.test.tsx, docs/engineering/plan.md, docs/engineering/decision.md, docs/engineering/log.md, docs/remaining-tasks/progress.md
+  - Preserved dirty work: untouched historical fixtures, config, and uncommitted user edits.
+Command exactly / cwd / immediate exit code:
+  - Isolated backend runner: backend/.venv/bin/python -c '<isolated runner script>' / backend / exit 0
+  - Backend ruff check: backend/.venv/bin/ruff check backend/src backend/tests / repo root / exit 0
+  - Focused frontend tests: npm --prefix frontend test -- src/deals/AgreementReview.test.tsx src/deals/NegotiationReview.test.tsx src/deals/CommercialDocumentPanel.test.tsx src/api/client.test.ts / repo root / exit 0
+  - Full frontend test suite: npm --prefix frontend test / repo root / exit 0
+  - Frontend lint check: npm --prefix frontend run lint:check / repo root / exit 0
+  - Frontend production build: npm --prefix frontend run build / repo root / exit 0
+  - Git diff check: git diff --check / repo root / exit 0
+Results: run / pass / fail / skip / reasons / warnings:
+  - Isolated backend: Ran 60, passed 60, failed 0, skipped 0 (13.594s).
+  - Backend ruff: 0 errors (All checks passed).
+  - Focused frontend: 4 test files, 89 passed, 0 failed (3.59s).
+  - Full frontend tests: 19 test files, 389 passed, 0 failed (16.99s).
+  - Frontend lint check: 0 errors, 3 pre-existing warnings in untouched PaymentStatusPanel.tsx.
+  - Frontend build: built in 897ms, 0 errors.
+  - Git diff check: 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Actual Alembic head 0021_collection_schema unchanged.
+  - Schema 1 byte preservation: test_trade_pack_zip_deterministic_and_historical_hash_verified passes with 100% byte equality.
+  - Schema 2 draft creation and negotiation write: test_create_reviewed_agreement_draft_schema_2 and test_negotiate_schema_2_submit_and_counter pass.
+  - Version-aware document and trade pack projections: test_generates_draft_from_schema_2_committed_terms and test_trade_pack_schema_2_deterministic_and_escaped pass.
+  - Frontend review & authoring: AgreementReview.test.tsx and NegotiationReview.test.tsx pass.
+  - Living artifacts: docs/engineering/plan.md, docs/engineering/decision.md (ADR-021, ADR-022), docs/engineering/log.md.
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - None yet (Developer phase complete; ready for independent Reviewer).
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 0/3. Developer phase complete; ready for independent review.
+Implementation acceptance versus live verification versus production approval:
+  - Step 05 Developer implementation complete and verified. Independent Reviewer audit pending. Live verification (Step 12/13) and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - Step 05 unblocks Step 06 (Milestone Payments) and Step 07 (Amendments).
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 05.
+Completion report / next concrete operator actions:
+  - Developer has completed implementation, passed all verification suites, and updated documentation. Ready for independent Reviewer audit.
 ```

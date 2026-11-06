@@ -9,7 +9,9 @@ from syncally.infrastructure.repositories.agreements import (
     commit_agreement_in_transaction,
     create_agreement_draft_in_transaction,
     create_reviewed_agreement_draft_in_transaction,
+    propose_amendment_in_transaction,
     record_approval_in_transaction,
+    withdraw_amendment_in_transaction,
 )
 from syncally.infrastructure.repositories.communications import (
     CommunicationScopeError,
@@ -41,5 +43,7 @@ __all__ = [
     "commit_agreement_in_transaction",
     "create_agreement_draft_in_transaction",
     "create_reviewed_agreement_draft_in_transaction",
+    "propose_amendment_in_transaction",
     "record_approval_in_transaction",
+    "withdraw_amendment_in_transaction",
 ]

@@ -31,9 +31,11 @@ from syncally.application.agreements import (
     CreateReviewedAgreementDraftCommand,
     DuplicateApproval,
     ProposalNotFound,
+    ProposeAmendmentCommand,
     RecordApprovalCommand,
     StaleAgreementVersion,
     UnauthorizedApproval,
+    WithdrawAmendmentCommand,
     WrongTermsHash,
     compare_agreement_terms,
     get_current_agreement,
@@ -47,6 +49,15 @@ from syncally.application.deals import (
 )
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
+from syncally.domain.agreements.amendment import (
+    AmendmentAlreadyCommitted as DomainAmendmentAlreadyCommitted,
+)
+from syncally.domain.agreements.amendment import (
+    AmendmentConflict,
+    AmendmentImpactBlocked,
+    StalePriorVersion,
+    WrongPriorHash,
+)
 from syncally.domain.agreements.trade_terms import (
     SUPPORTED_DEMO_PAYMENT_TRIGGER,
     PaymentObligationAllocation,
@@ -69,7 +80,9 @@ from syncally.infrastructure.repositories import (
     commit_agreement_in_transaction,
     create_agreement_draft_in_transaction,
     create_reviewed_agreement_draft_in_transaction,
+    propose_amendment_in_transaction,
     record_approval_in_transaction,
+    withdraw_amendment_in_transaction,
 )
 
 router = APIRouter(prefix="/deals/{deal_id}/agreements", tags=["agreements"])
@@ -321,6 +334,66 @@ class CommitAgreementRequest(BaseModel):
     organization_id: UUID | None = None
 
 
+class ProposeAmendmentRequest(CreateReviewedAgreementDraftRequest):
+    """Propose an amendment against an exact committed agreement version and hash."""
+
+    prior_version_number: int = Field(ge=1)
+    prior_terms_hash: str = _TERMS_HASH_FIELD
+    rationale: str | None = Field(default=None, max_length=2_000)
+    replace_pending_draft: bool = False
+
+
+class WithdrawAmendmentRequest(BaseModel):
+    """Withdraw a pending amendment candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    terms_hash: str = _TERMS_HASH_FIELD
+    organization_id: UUID | None = None
+
+
+class PreviewAmendmentImpactRequest(CreateReviewedAgreementDraftRequest):
+    """Preview impacts of proposed terms against the current committed agreement."""
+
+    pass
+
+
+class FulfillmentObligationImpactResponse(BaseModel):
+    obligation_reference: str
+    item_id: str | None = None
+    planned_quantity: str
+    unit: str
+    shipped_quantity: str
+    confirmed_quantity: str
+    preserved: bool
+    status: str
+    details: str | None = None
+
+
+class PaymentMilestoneImpactResponse(BaseModel):
+    milestone_reference: str
+    amount: str
+    currency: str
+    payment_status: str
+    has_active_intent: bool
+    preserved: bool
+    status: str
+    details: str | None = None
+
+
+class AmendmentImpactResponse(BaseModel):
+    prior_version_number: int
+    prior_terms_hash: str
+    proposed_version_number: int
+    proposed_terms_hash: str
+    diff: dict[str, Any]
+    fulfillment_impact: list[FulfillmentObligationImpactResponse]
+    payment_impact: list[PaymentMilestoneImpactResponse]
+    active_cases: list[dict[str, Any]]
+    blockers: list[str]
+    can_commit: bool
+
+
 class ApprovalResponse(BaseModel):
     """Public representation of one organization's recorded decision."""
 
@@ -351,6 +424,9 @@ class AgreementVersionResponse(BaseModel):
     payment_due_condition: str | None = None
     created_at: datetime
     committed_at: datetime | None = None
+    prior_agreement_version_id: UUID | None = None
+    prior_terms_hash: str | None = None
+    amendment_rationale: str | None = None
     approvals: list[ApprovalResponse] = Field(default_factory=list)
     id: UUID | None = None
     proposal_id: UUID | None = None
@@ -423,6 +499,9 @@ def _to_agreement_response(agreement: Agreement) -> AgreementVersionResponse:
         payment_due_condition=single_payment.due_condition if single_payment else None,
         created_at=agreement.created_at,
         committed_at=agreement.committed_at,
+        prior_agreement_version_id=agreement.prior_agreement_version_id,
+        prior_terms_hash=agreement.prior_terms_hash,
+        amendment_rationale=agreement.amendment_rationale,
         approvals=[
             _to_approval_response(agreement.deal_id, agreement.version_number, approval)
             for approval in agreement.approvals.values()
@@ -496,6 +575,11 @@ def _raise_agreement_error(error: Exception) -> NoReturn:
             AgreementAlreadyCommitted,
             AgreementVersionConflict,
             InvalidTransition,
+            AmendmentConflict,
+            AmendmentImpactBlocked,
+            StalePriorVersion,
+            WrongPriorHash,
+            DomainAmendmentAlreadyCommitted,
         ),
     ):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -676,6 +760,143 @@ def commit_agreement_route(
                 deal_id=deal_id,
                 expected_version=version_number,
                 expected_terms_hash=payload.terms_hash,
+                user_id=actor.user_id,
+                organization_id=organization_id,
+            ),
+        )
+    except Exception as exc:
+        _raise_agreement_error(exc)
+    return _to_agreement_response(agreement)
+
+
+@router.post(
+    "/amendments/propose",
+    status_code=status.HTTP_201_CREATED,
+    response_model=AgreementVersionResponse,
+)
+def propose_amendment_route(
+    deal_id: UUID,
+    payload: ProposeAmendmentRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> AgreementVersionResponse:
+    """Propose an amendment against the current committed agreement version."""
+    try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        author_organization_id = resolve_party_organization(
+            actor, deal, payload.organization_id
+        )
+        terms = build_trade_terms_from_request(
+            payload,
+            buyer_id=OrganizationId(deal.buyer_organization_id),
+            seller_id=OrganizationId(deal.seller_organization_id),
+        )
+        agreement = propose_amendment_in_transaction(
+            db,
+            ProposeAmendmentCommand(
+                deal_id=deal_id,
+                author_organization_id=author_organization_id,
+                user_id=actor.user_id,
+                prior_version_number=payload.prior_version_number,
+                prior_terms_hash=payload.prior_terms_hash,
+                terms=terms,
+                rationale=payload.rationale,
+                replace_pending_draft=payload.replace_pending_draft,
+            ),
+        )
+    except (AIContractError, InvariantViolation) as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Proposed amendment terms do not match supported agreement format: {error}",
+        ) from error
+    except Exception as error:
+        db.rollback()
+        _raise_agreement_error(error)
+    return _to_agreement_response(agreement)
+
+
+@router.get(
+    "/amendments/impact",
+    response_model=AmendmentImpactResponse,
+)
+def read_amendment_impact_route(
+    deal_id: UUID,
+    version_number: int | None = Query(default=None, ge=1),
+    actor: ActorContext = Depends(get_current_actor),
+    repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> AmendmentImpactResponse:
+    """Assess operational fulfillment, payment, and policy impact of a pending amendment."""
+    try:
+        get_deal(actor, deal_id, deal_repository)
+        impact = repository.assess_amendment_impact(
+            deal_id,
+            pending_version_number=version_number,
+        )
+        return AmendmentImpactResponse.model_validate(impact.to_dict())
+    except Exception as exc:
+        _raise_agreement_error(exc)
+
+
+@router.post(
+    "/amendments/preview-impact",
+    response_model=AmendmentImpactResponse,
+)
+def preview_amendment_impact_route(
+    deal_id: UUID,
+    payload: PreviewAmendmentImpactRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> AmendmentImpactResponse:
+    """Preview operational impact of proposed terms before submitting an amendment candidate."""
+    try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        terms = build_trade_terms_from_request(
+            payload,
+            buyer_id=OrganizationId(deal.buyer_organization_id),
+            seller_id=OrganizationId(deal.seller_organization_id),
+        )
+        impact = repository.assess_amendment_impact(
+            deal_id,
+            proposed_terms=terms,
+        )
+        return AmendmentImpactResponse.model_validate(impact.to_dict())
+    except (AIContractError, InvariantViolation) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Proposed terms do not match supported agreement format: {error}",
+        ) from error
+    except Exception as exc:
+        _raise_agreement_error(exc)
+
+
+@router.post(
+    "/amendments/{version_number}/withdraw",
+    response_model=AgreementVersionResponse,
+)
+def withdraw_amendment_route(
+    deal_id: UUID,
+    payload: WithdrawAmendmentRequest,
+    version_number: int = Path(ge=1),
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+    deal_repository: DealRepository = Depends(get_deal_repository),
+) -> AgreementVersionResponse:
+    """Withdraw/void a pending amendment candidate."""
+    try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        organization_id = resolve_party_organization(
+            actor, deal, payload.organization_id
+        )
+        agreement = withdraw_amendment_in_transaction(
+            db,
+            WithdrawAmendmentCommand(
+                deal_id=deal_id,
+                version_number=version_number,
+                terms_hash=payload.terms_hash,
                 user_id=actor.user_id,
                 organization_id=organization_id,
             ),

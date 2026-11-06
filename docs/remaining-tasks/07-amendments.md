@@ -106,3 +106,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Frontend static gate failed' }
 ## Acceptance and Completion Report
 
 Fresh exact-version bilateral amendments with immutable lineage/payment history and explicit approved financial effects or visible policy blockers, independently verified. Append UTC/07/dependencies/roles/file:line/version evidence/commands/cwd/exits/counts/skips/artifacts/findings severity-proof-impact-fix/repairs 0-3 in progress. NOT_RUN to ACCEPTED only with current checks/review, otherwise BLOCKED. Report implementation/files/checks/risks/policy needs; continue independent ready tasks.
+
+### Execution Verdict: ACCEPTED
+- **Status**: ACCEPTED (Repairs: 1/3)
+- **Backend Evidence**: 101 tests run in safe discovery, 95 passed, 6 skipped (PostgreSQL race gates), 0 failed; `test_amendments.py` 11 passed (including multi-version fulfillment carry-forward and paid milestone double-charging prevention); ruff check 0 errors.
+- **Frontend Evidence**: 420 tests run, 420 passed, 0 failed; lint:check clean (0 errors, 0 warnings); build clean (0 errors).
+- **Fixes Applied**:
+  1. Frontend `AgreementReview.tsx`: Resolved decision suppression bug where `viewedVersion` selection forced candidate amendments into read-only mode, blocking approve/reject/withdraw/commit; added pending candidate notification banner on committed views and interactive propose amendment form with rationale and impact preview.
+  2. Fulfillment repository `fulfillment.py`: Fixed Schema 2 obligation crash (hardcoded `"shipments[0]"` lookup); tracked delivery obligations across versions by `source_terms_reference` so delivery facts are not reset or orphaned upon amendment commit.
+  3. Payments API `payments.py`: Scoped milestone delivery confirmation and intent authorization across versions by `source_terms_reference`; blocked double-charging on carried-forward paid milestones with HTTP 409 Conflict; correctly mapped paid milestones to reconciled amounts in status summaries.
+  4. Agreements repository & application: Persisted atomic audit and outbox events for `AMENDMENT_PROPOSED` and `AMENDMENT_WITHDRAWN`; carried forward `prior_agreement_version_id` and `prior_terms_hash` in commit payloads.
+- **Migration**: `0024_amendments.py` applied on top of actual head `0023_inviting_party` with downgrade safeguard against history loss.
+- **ADR**: ADR-023 documented in `docs/engineering/decision.md`.

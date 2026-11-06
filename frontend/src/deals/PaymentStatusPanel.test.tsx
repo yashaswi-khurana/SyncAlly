@@ -1195,7 +1195,7 @@ describe("PaymentStatusPanel", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("Confirm Invoice Recipient")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Confirm & Send Invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: /Send test invoice|Confirm & Send Invoice/ }));
 
     expect(mockedAuthorizeDealPayment).toHaveBeenCalledWith(
       "deal-1",

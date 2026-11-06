@@ -724,7 +724,7 @@ export default function DealDetailPage({
           onLoaded={setNegotiation} onChanged={commercialChanged}
         /> : null}
         {!deal.pending_counterparty ? <AgreementReview
-          key={`${deal.id}:${selectedOrganizationId}`}
+          key={`agreement:${deal.id}:${selectedOrganizationId}`}
           dealId={deal.id}
           buyerOrganizationId={deal.buyer_organization_id}
           sellerOrganizationId={deal.seller_organization_id}
@@ -743,8 +743,11 @@ export default function DealDetailPage({
           onChanged={commercialChanged}
         />
         <PaymentStatusPanel
+          key={`payment:${deal.id}:${selectedOrganizationId}`}
           dealId={deal.id}
+          buyerOrganizationId={deal.buyer_organization_id}
           sellerOrganizationId={deal.seller_organization_id}
+          selectedOrganizationId={selectedOrganizationId}
           reloadToken={agreementReloadToken}
         />
 

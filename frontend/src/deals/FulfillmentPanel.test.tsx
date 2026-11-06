@@ -58,9 +58,9 @@ describe("FulfillmentPanel", () => {
 
     const onChanged = vi.fn();
     render(<FulfillmentPanel {...props} onChanged={onChanged} />);
-    await screen.findByText("Planned");
+    await screen.findByText("Agreed quantity");
     fireEvent.change(screen.getByLabelText("Quantity (boxes)"), { target: { value: "1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Record shipped" }));
+    fireEvent.click(screen.getByRole("button", { name: "Report shipment" }));
 
     await waitFor(() => expect(mockedRecordFulfillment).toHaveBeenCalledWith("deal-1", {
       agreement_version_id: "agreement-1",
@@ -82,9 +82,9 @@ describe("FulfillmentPanel", () => {
     mockedRecordFulfillment.mockRejectedValue(new ApiError(403, "Fulfillment capability required"));
 
     render(<FulfillmentPanel {...props} />);
-    await screen.findByText("Planned");
+    await screen.findByText("Agreed quantity");
     fireEvent.change(screen.getByLabelText("Quantity (boxes)"), { target: { value: "1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Record shipped" }));
+    fireEvent.click(screen.getByRole("button", { name: "Report shipment" }));
 
     expect(await screen.findByText(/membership or fulfillment permission is unavailable/i)).toBeTruthy();
   });
@@ -93,7 +93,7 @@ describe("FulfillmentPanel", () => {
     mockedGetFulfillment.mockResolvedValue(SNAPSHOT);
     render(<FulfillmentPanel {...props} selectedOrganizationId="buyer-1" />);
 
-    expect(await screen.findByLabelText("Delivery fact")).toBeTruthy();
+    expect(await screen.findByLabelText("Delivery update")).toBeTruthy();
     expect(screen.queryByRole("option", { name: /shipped/i })).toBeNull();
   });
 });

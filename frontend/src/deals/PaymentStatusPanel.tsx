@@ -20,6 +20,7 @@ type PaymentState =
       agreementCommitted: boolean;
       sellerMember: boolean;
       buyerMember: boolean;
+      buyerOrganizationId: string | null;
       buyerOrganization: OrganizationDirectoryItem | null;
       milestone: { amount: string; currency: string } | null;
     };
@@ -141,6 +142,7 @@ function displayAmount(amount: string, currency: string): string {
 interface PaymentStatusPanelProps {
   dealId: string;
   sellerOrganizationId: string;
+  selectedOrganizationId?: string;
   reloadToken?: number;
   buyerOrganizationId?: string;
 }
@@ -148,6 +150,7 @@ interface PaymentStatusPanelProps {
 export default function PaymentStatusPanel({
   dealId,
   sellerOrganizationId,
+  selectedOrganizationId,
   reloadToken = 0,
   buyerOrganizationId,
 }: PaymentStatusPanelProps) {
@@ -195,7 +198,7 @@ export default function PaymentStatusPanel({
     const currentGeneration = ++requestGenerationRef.current;
     void Promise.all([
       listPaymentStatuses(dealId, { signal: controller.signal }),
-      getCurrentAgreement(dealId).catch((caught: unknown) => {
+      getCurrentAgreement(dealId, { signal: controller.signal }).catch((caught: unknown) => {
         if (caught instanceof ApiError && caught.status === 404) return null;
         throw caught;
       }),
@@ -215,13 +218,14 @@ export default function PaymentStatusPanel({
           agreementCommitted: agreement?.status === "COMMITTED",
           sellerMember: isSellerMember,
           buyerMember: isBuyerMember,
+          buyerOrganizationId: buyerOrgId ?? null,
           buyerOrganization: null,
           milestone: firstMilestoneAmount(payments, agreement),
         });
 
         if (!buyerOrgId) return;
 
-        void getOrganization(buyerOrgId)
+        void getOrganization(buyerOrgId, { signal: controller.signal })
           .catch(() => null)
           .then((buyerOrganization) => {
             if (cancelled || currentGeneration !== requestGenerationRef.current || !buyerOrganization) return;
@@ -397,16 +401,23 @@ export default function PaymentStatusPanel({
     }
   }
 
+  const selectedPartyId = selectedOrganizationId ?? (
+    state.status === "ready" && state.buyerMember !== state.sellerMember
+      ? state.sellerMember ? sellerOrganizationId : state.buyerOrganizationId ?? ""
+      : ""
+  );
+  const isBuyer = state.status === "ready" && state.buyerMember &&
+    Boolean(state.buyerOrganizationId) && selectedPartyId === state.buyerOrganizationId;
+  const isSeller = state.status === "ready" && state.sellerMember &&
+    selectedPartyId === sellerOrganizationId;
   const canRequestPayment =
-    state.status === "ready" && state.agreementCommitted && state.sellerMember;
-  const isBuyer = state.status === "ready" && (state.buyerMember || !state.sellerMember);
-  const isSeller = state.status === "ready" && state.sellerMember;
+    state.status === "ready" && state.agreementCommitted && isSeller;
 
   return (
     <section className="card payment-status" aria-labelledby="payment-status-heading">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">Persisted payment record</span>
+          <span className="eyebrow">Payment progress</span>
           <h2 id="payment-status-heading">Payment status</h2>
         </div>
         <button
@@ -427,6 +438,9 @@ export default function PaymentStatusPanel({
             Try again
           </button>
         </div>
+      ) : null}
+      {state.status === "ready" && !isBuyer && !isSeller && (state.buyerMember || state.sellerMember) ? (
+        <p className="payment-status__footnote">Choose the buyer or seller organization above to see payment actions for that party.</p>
       ) : null}
       {state.status === "ready" && state.payments.length === 0 ? (
         <>
@@ -489,45 +503,47 @@ export default function PaymentStatusPanel({
                   </span>
                 </div>
                 <p className="muted">{presentation.detail}</p>
-                <p>{offline ? "Offline demo" : sandbox ? "PayPal Sandbox: not production" : "Payment mode unknown"}</p>
-                <p>Evidence: {trustedSource ? offline ? "Simulation / OFFLINE_DEMO" : "Provider / PAYPAL_SANDBOX" : payment.reconciliation_source === "NONE" ? "Not reconciled" : "Legacy or unknown, unverified"}</p>
-                {offline && payment.invoice_reference ? <p>Invoice reference: {payment.invoice_reference}</p> : null}
+                <p>{offline ? "Demo only: no real payment was made." : sandbox ? "PayPal test payment: no real money is transferred." : "Payment method could not be verified."}</p>
                 {payment.status === "PARTIALLY_PAID" && paidAmount !== null ? (
                   <p className="payment-status__amount">
                     {offline ? "Simulated so far" : trustedSource ? "Confirmed so far" : "Recorded so far"}: {displayAmount(paidAmount, payment.currency)} of{" "}
                     {displayAmount(payment.amount, payment.currency)}
                   </p>
                 ) : null}
-                <p className="payment-status__checked">
-                  Last checked by backend: {backendCheckedAt !== null
-                    ? new Date(backendCheckedAt).toLocaleString() : "Unavailable"}
-                </p>
-
-                {/* Retrying Observability Widget */}
-                {isRetrying ? (
-                  <div className="payment-status__retry-card" role="status">
-                    <div className="payment-status__retry-header">
-                      <span className="badge badge--retrying">Retrying</span>
-                      <h4>Automatic Retry Scheduled</h4>
+                <details className="payment-status__details">
+                  <summary>Payment record details</summary>
+                  <p>Evidence: {trustedSource ? offline ? "Simulation / OFFLINE_DEMO" : "Provider / PAYPAL_SANDBOX" : payment.reconciliation_source === "NONE" ? "Not reconciled" : "Legacy or unknown, unverified"}</p>
+                  {offline && payment.invoice_reference ? <p>Invoice reference: {payment.invoice_reference}</p> : null}
+                  <p className="payment-status__checked">
+                    Last checked by backend: {backendCheckedAt !== null
+                      ? new Date(backendCheckedAt).toLocaleString() : "Unavailable"}
+                  </p>
+                  {isRetrying ? (
+                    <div className="payment-status__retry-card" role="status">
+                      <div className="payment-status__retry-header">
+                        <span className="badge badge--retrying">Retrying</span>
+                        <h4>Automatic Retry Scheduled</h4>
+                      </div>
+                      <p className="payment-status__retry-meta">
+                        Payment request retry #{payment.retry_count ?? 0}{countdown === null
+                          ? ": Retry time unavailable." : ` in ~${countdown} seconds.`}
+                        {" "}Cause: {payment.failure_reason || "Cause unavailable"}.
+                      </p>
                     </div>
-                    <p className="payment-status__retry-meta">
-                      Payment request retry #{payment.retry_count ?? 0}{countdown === null
-                        ? ": Retry time unavailable." : ` in ~${countdown} seconds.`}
-                      {" "}Cause: {payment.failure_reason || "Cause unavailable"}.
-                    </p>
-                  </div>
+                  ) : null}
+                  {isFailed && payment.failure_reason ? <p>Processor message: {payment.failure_reason}</p> : null}
+                </details>
+                {isRetrying ? (
+                  <p className="payment-status__message" role="status">The payment request is still being processed. Please wait while we check its status.</p>
                 ) : null}
 
                 {/* Failed State Observability Widget */}
                 {isFailed ? (
                   <div className="payment-status__failure-card" role="alert">
                     <div className="payment-status__failure-header">
-                      <span className="badge badge--danger">Failed</span>
                       <h4>Payment Request Failed</h4>
                     </div>
-                    <p className="payment-status__failure-cause">
-                      <strong>Cause:</strong> {payment.failure_reason || "Payment processing encountered an error."}
-                    </p>
+                    <p>Refresh to check the latest status. The seller can review the recipient and try again if a new request is still needed.</p>
                     {canRequestPayment ? (
                       <button
                         type="button"
@@ -545,7 +561,7 @@ export default function PaymentStatusPanel({
                 {sandbox && payment.invoice_url && isBuyer ? (
                   <div className="payment-status__invoice-card">
                     <div className="payment-status__invoice-card-header">
-                      <span className="eyebrow">PayPal Sandbox invoice ready</span>
+                      <span className="eyebrow">PayPal test invoice ready</span>
                       <p className="payment-status__invoice-number">
                         Invoice #: <strong>{invoiceNum}</strong>
                       </p>
@@ -556,14 +572,13 @@ export default function PaymentStatusPanel({
                       rel="noopener noreferrer"
                       className="button payment-status__pay-button"
                     >
-                      💳 View &amp; Pay PayPal Invoice
+                      Open PayPal test invoice
                     </a>
                     <div className="payment-status__instructions">
                       <h4>Payment Instructions</h4>
                       <p>
-                        Review your order details and milestone amount on PayPal. Click the button above to authorize
-                        your payment in PayPal Sandbox. SyncAlly will automatically detect the payment confirmation
-                        and mark this milestone as paid.
+                        Review the order details and amount on PayPal. This is a test payment and does not transfer
+                        real money. SyncAlly will update this milestone only after payment is confirmed by PayPal.
                       </p>
                     </div>
                   </div>
@@ -630,24 +645,24 @@ export default function PaymentStatusPanel({
             </div>
 
             <p className="muted">
-              {paymentPreview?.execution_mode === "OFFLINE_DEMO" ? "Offline demo: simulated invoice, no money transfer or recipient email." : "Review the recipient and execution mode before authorization."}
+              {paymentPreview?.execution_mode === "OFFLINE_DEMO" ? "Demo only: this creates a simulated invoice. No money is transferred and no email is sent." : "Review the recipient and payment amount before sending the test invoice."}
             </p>
 
             <dl className="invoice-recipient-dialog__details">
               <div>
-                <dt>Payment mode</dt>
-                <dd>{paymentPreview ? paymentPreview.execution_mode === "OFFLINE_DEMO" ? "Offline demo: simulated payment" : "PayPal Sandbox: not production" : "Loading payment mode..."}</dd>
+                <dt>Payment environment</dt>
+                <dd>{paymentPreview ? paymentPreview.execution_mode === "OFFLINE_DEMO" ? "Demo simulation" : "PayPal test environment" : "Checking payment environment…"}</dd>
               </div>
               <div>
                 <dt>Buyer legal name</dt>
                 <dd>{recipientPreview.legalName}</dd>
               </div>
               <div>
-                <dt>Registered country code</dt>
+                <dt>Billing country</dt>
                 <dd>{recipientPreview.countryCode}</dd>
               </div>
               <div>
-                <dt>Recipient billing email</dt>
+                <dt>Invoice recipient email</dt>
                 <dd>{recipientPreview.billingEmail}</dd>
               </div>
               <div>
@@ -661,7 +676,7 @@ export default function PaymentStatusPanel({
             </dl>
 
             <p id="invoice-recipient-notice" className="invoice-recipient-dialog__notice">
-              {paymentPreview?.execution_mode === "OFFLINE_DEMO" ? "This queues an offline simulated invoice only. It does not mark the payment paid." : paymentPreview ? "This will create a formal PayPal invoice dispatched to the recipient above." : "Payment mode must be available before confirmation."}
+              {paymentPreview?.execution_mode === "OFFLINE_DEMO" ? "This creates a simulated invoice only. It does not mark the payment as paid." : paymentPreview ? "This sends a PayPal test invoice to the recipient above. It does not transfer real money." : "Wait until the payment environment is available before confirming."}
             </p>
 
             <div className="invoice-recipient-dialog__actions">
@@ -669,7 +684,7 @@ export default function PaymentStatusPanel({
                 Cancel
               </button>
               <button type="button" className="button" disabled={!paymentPreview || authorizing} onClick={confirmRecipientAndSend}>
-                Confirm &amp; Send Invoice
+                {paymentPreview?.execution_mode === "OFFLINE_DEMO" ? "Create demo invoice" : "Send test invoice"}
               </button>
             </div>
           </div>

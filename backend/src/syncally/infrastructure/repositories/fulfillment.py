@@ -138,9 +138,17 @@ class SqlAlchemyFulfillmentRepository:
         if terms.terms_hash != agreement.terms_hash:
             raise FulfillmentUnavailable("Committed delivery terms failed integrity verification")
         obligation = self._delivery_obligation(deal_id, agreement.id)
+        matching_obligation_ids = set(
+            self._db.scalars(
+                select(Obligation.id).where(
+                    Obligation.deal_id == deal_id,
+                    Obligation.source_terms_reference == obligation.source_terms_reference,
+                )
+            )
+        ) if obligation.source_terms_reference else {obligation.id}
         current_events = [
             row for row in all_events
-            if row.agreement_version_id == agreement.id and row.obligation_id == obligation.id
+            if row.obligation_id in matching_obligation_ids
         ]
         return FulfillmentSnapshot(
             deal_id=deal_id,
@@ -223,11 +231,19 @@ class SqlAlchemyFulfillmentRepository:
             if command.quantity > terms.shipments[0].quantity:
                 raise InvariantViolation("Fulfillment quantity exceeds the agreed shipment quantity")
 
+            matching_obligation_ids = (
+                select(Obligation.id).where(
+                    Obligation.deal_id == deal.id,
+                    Obligation.source_terms_reference == obligation.source_terms_reference,
+                )
+                if obligation.source_terms_reference
+                else [obligation.id]
+            )
             existing = list(
                 self._db.scalars(
                     select(FulfillmentEvent).where(
-                        FulfillmentEvent.obligation_id == obligation.id,
-                        FulfillmentEvent.agreement_version_id == agreement.id,
+                        FulfillmentEvent.deal_id == deal.id,
+                        FulfillmentEvent.obligation_id.in_(matching_obligation_ids),
                     )
                 )
             )
@@ -337,14 +353,32 @@ class SqlAlchemyFulfillmentRepository:
             raise
 
     def _delivery_obligation(self, deal_id: UUID, agreement_version_id: UUID) -> Obligation:
+        agreement = self._db.get(AgreementVersion, agreement_version_id)
+        ref = "shipments[0]"
+        if agreement is not None:
+            try:
+                terms = TradeTerms.from_canonical_json(agreement.canonical_terms_json)
+                if terms.shipments:
+                    s0 = terms.shipments[0]
+                    ref = s0.id if (terms.schema_version == 2 and s0.id) else "shipments[0]"
+            except Exception:
+                pass
         obligation = self._db.scalar(
             select(Obligation).where(
                 Obligation.deal_id == deal_id,
                 Obligation.agreement_version_id == agreement_version_id,
                 Obligation.obligation_type == "DELIVERY",
-                Obligation.source_terms_reference == "shipments[0]",
+                Obligation.source_terms_reference == ref,
             )
         )
+        if obligation is None:
+            obligation = self._db.scalar(
+                select(Obligation).where(
+                    Obligation.deal_id == deal_id,
+                    Obligation.agreement_version_id == agreement_version_id,
+                    Obligation.obligation_type == "DELIVERY",
+                )
+            )
         if obligation is None:
             raise FulfillmentUnavailable("The committed delivery obligation is unavailable")
         return obligation

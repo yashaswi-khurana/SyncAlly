@@ -225,7 +225,61 @@ export interface AgreementVersion {
   };
   created_at: string;
   committed_at: string | null;
+  prior_agreement_version_id?: string | null;
+  prior_terms_hash?: string | null;
+  amendment_rationale?: string | null;
   approvals: AgreementApproval[];
+}
+
+export interface FulfillmentObligationImpact {
+  obligation_reference: string;
+  item_id?: string | null;
+  planned_quantity: string;
+  unit: string;
+  shipped_quantity: string;
+  confirmed_quantity: string;
+  preserved: boolean;
+  status: string;
+  details?: string | null;
+}
+
+export interface PaymentMilestoneImpact {
+  milestone_reference: string;
+  amount: string;
+  currency: string;
+  payment_status: string;
+  has_active_intent: boolean;
+  preserved: boolean;
+  status: string;
+  details?: string | null;
+}
+
+export interface AmendmentImpact {
+  prior_version_number: number;
+  prior_terms_hash: string;
+  proposed_version_number: number;
+  proposed_terms_hash: string;
+  diff: {
+    fields?: Array<{ path: string; before: unknown; after: unknown }>;
+    collections?: Record<string, { added: unknown[]; removed: unknown[]; modified: unknown[] }>;
+  };
+  fulfillment_impact: FulfillmentObligationImpact[];
+  payment_impact: PaymentMilestoneImpact[];
+  active_cases: Array<Record<string, unknown>>;
+  blockers: string[];
+  can_commit: boolean;
+}
+
+export interface ProposeAmendmentRequest extends ReviewedProposalTerms {
+  prior_version_number: number;
+  prior_terms_hash: string;
+  rationale?: string | null;
+  replace_pending_draft?: boolean;
+}
+
+export interface WithdrawAmendmentRequest {
+  terms_hash: string;
+  organization_id?: string | null;
 }
 
 export interface AgreementApproval {

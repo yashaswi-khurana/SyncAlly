@@ -67,13 +67,15 @@ def delivery_obligation_fulfilled(
         )
         if len(obligations) != 1:
             return False
-        obligation = obligations[0]
+        matching_obligation_ids = select(Obligation.id).where(
+            Obligation.deal_id == deal_id,
+            Obligation.source_terms_reference == "shipments[0]",
+        )
         events = list(
             db.scalars(
                 select(FulfillmentEvent).where(
                     FulfillmentEvent.deal_id == deal_id,
-                    FulfillmentEvent.agreement_version_id == agreement.id,
-                    FulfillmentEvent.obligation_id == obligation.id,
+                    FulfillmentEvent.obligation_id.in_(matching_obligation_ids),
                 )
             )
         )
@@ -85,22 +87,15 @@ def delivery_obligation_fulfilled(
     # Schema 2: verify every shipment's delivery obligation has reached 100% confirmation
     for index, shipment in enumerate(terms.shipments):
         ref = shipment.id if shipment.id else f"shipments[{index}]"
-        obligation = db.scalar(
-            select(Obligation).where(
-                Obligation.deal_id == deal_id,
-                Obligation.agreement_version_id == agreement.id,
-                Obligation.obligation_type == "DELIVERY",
-                Obligation.source_terms_reference == ref,
-            )
+        matching_obligation_ids = select(Obligation.id).where(
+            Obligation.deal_id == deal_id,
+            Obligation.source_terms_reference == ref,
         )
-        if obligation is None:
-            return False
         events = list(
             db.scalars(
                 select(FulfillmentEvent).where(
                     FulfillmentEvent.deal_id == deal_id,
-                    FulfillmentEvent.agreement_version_id == agreement.id,
-                    FulfillmentEvent.obligation_id == obligation.id,
+                    FulfillmentEvent.obligation_id.in_(matching_obligation_ids),
                 )
             )
         )
@@ -150,11 +145,18 @@ def payments_reconciled(
             or (term.id and milestone.source_terms_reference and milestone.source_terms_reference != term.id)
         ):
             return False
+        matching_milestone_ids = (
+            select(PaymentMilestone.id).where(
+                PaymentMilestone.deal_id == deal_id,
+                PaymentMilestone.source_terms_reference == milestone.source_terms_reference,
+            )
+            if milestone.source_terms_reference
+            else [milestone.id]
+        )
         paid = db.scalar(
             select(PaymentIntent.id).where(
                 PaymentIntent.deal_id == deal_id,
-                PaymentIntent.agreement_version_id == agreement_version_id,
-                PaymentIntent.payment_milestone_id == milestone.id,
+                PaymentIntent.payment_milestone_id.in_(matching_milestone_ids),
                 PaymentIntent.seller_organization_id == seller_organization_id,
                 PaymentIntent.payer_organization_id == milestone.payer_organization_id,
                 PaymentIntent.status == "PAID",

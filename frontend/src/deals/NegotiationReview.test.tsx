@@ -40,7 +40,7 @@ describe("NegotiationReview", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Accept proposal for agreement review" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Reload and review");
     expect(screen.getByRole("button", { name: "Reject proposal" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Reload rounds" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh proposals" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Reject proposal" })).toBeEnabled());
   });
 
@@ -49,7 +49,7 @@ describe("NegotiationReview", () => {
     vi.mocked(getNegotiation).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
     const { rerender } = render(<NegotiationReview deal={deal} organizationId="buyer" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
     rerender(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
-    expect(await screen.findByText("Latest proposal: round 1")).toBeInTheDocument();
+    expect(await screen.findByText(/Latest human proposal/i)).toBeInTheDocument();
     await act(async () => resolve({ ...view, organization_id: "buyer", latest: { ...view.latest!, terms_hash: "PRIVATE-ONLY-HASH" } }));
     expect(screen.queryByText("PRIVATE-ONLY-HASH")).not.toBeInTheDocument();
   });

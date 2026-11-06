@@ -7,10 +7,23 @@ import {
   getAgreementHistory,
   getAgreementVersion,
   compareAgreementVersions,
+  getAmendmentImpact,
+  previewAmendmentImpact,
+  proposeAmendment,
   listOrganizations,
   recordAgreementDecision,
+  withdrawAmendment,
 } from "../api/client";
-import type { AgreementApproval, AgreementVersion, AgreementHistory, AgreementComparison, Organization } from "../api/types";
+import type {
+  AgreementApproval,
+  AgreementVersion,
+  AgreementHistory,
+  AgreementComparison,
+  AmendmentImpact,
+  Organization,
+  PaymentTrigger,
+  ProposeAmendmentRequest,
+} from "../api/types";
 import { paymentTimingLabel } from "../api/types";
 import CommercialDocumentPanel from "./CommercialDocumentPanel";
 import type { OverviewSnapshot } from "./DealOverview";
@@ -113,13 +126,20 @@ export default function AgreementReview({
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const selectedPartyRef = useRef("");
   const [reloadCount, setReloadCount] = useState(0);
-  const [pendingDecision, setPendingDecision] = useState<"approve" | "reject" | "commit" | null>(null);
+  const [pendingDecision, setPendingDecision] = useState<"approve" | "reject" | "commit" | "withdraw" | null>(null);
   const [decisionError, setDecisionError] = useState("");
   const [stale, setStale] = useState(false);
   const [viewedVersion, setViewedVersion] = useState(0);
   const [compareBefore, setCompareBefore] = useState(0);
   const [history, setHistory] = useState<{ key: string; data: AgreementHistory } | null>(null);
   const [versionView, setVersionView] = useState<{ key: string; agreement?: AgreementVersion; comparison?: AgreementComparison; error?: string } | null>(null);
+  const [amendmentImpact, setAmendmentImpact] = useState<AmendmentImpact | null>(null);
+  const [showProposeAmendment, setShowProposeAmendment] = useState(false);
+  const [amendmentRationale, setAmendmentRationale] = useState("");
+  const [submittingAmendment, setSubmittingAmendment] = useState(false);
+  const [amendmentError, setAmendmentError] = useState("");
+  const [previewingImpact, setPreviewingImpact] = useState(false);
+  const [proposedImpact, setProposedImpact] = useState<AmendmentImpact | null>(null);
   const actingOrganizationId = sharedOrganizationId ?? selectedOrganizationId;
   const context = useRef("");
   const contextSignature = JSON.stringify([dealId, actingOrganizationId, reloadToken, reloadCount, viewedVersion, compareBefore]);
@@ -136,6 +156,13 @@ export default function AgreementReview({
     setCompareBefore(0);
     setHistory(null);
     setVersionView(null);
+    setAmendmentImpact(null);
+    setShowProposeAmendment(false);
+    setAmendmentRationale("");
+    setSubmittingAmendment(false);
+    setAmendmentError("");
+    setPreviewingImpact(false);
+    setProposedImpact(null);
   }
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
@@ -145,7 +172,11 @@ export default function AgreementReview({
     if (!actingOrganizationId || state.status !== "ready") return;
     const controller = new AbortController();
     void getAgreementHistory(dealId, actingOrganizationId, controller.signal)
-      .then((data) => { if (!controller.signal.aborted) setHistory({ key: historyKey, data }); })
+      .then((data) => {
+        if (!controller.signal.aborted) {
+          setHistory({ key: historyKey, data });
+        }
+      })
       .catch(() => { if (!controller.signal.aborted) setHistory(null); });
     return () => controller.abort();
   }, [dealId, actingOrganizationId, reloadToken, reloadCount, historyKey, state.status]);
@@ -264,11 +295,18 @@ export default function AgreementReview({
     };
   }, [dealId, buyerOrganizationId, sellerOrganizationId, sharedOrganizationId, reloadCount, reloadToken, onOverviewChange, onOrganizationChange]);
 
+  function getActiveAgreement(): AgreementVersion | null {
+    if (state.status !== "ready") return null;
+    if (viewedVersion && versionView?.key === contextSignature && versionView.agreement) {
+      return versionView.agreement;
+    }
+    return state.agreement;
+  }
+
   async function decide(decision: "approve" | "reject") {
-    if (state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || viewedVersion || compareBefore) return;
-    if (state.agreement.is_current === false) return;
-    if (versionView?.key === contextSignature && (versionView.error || versionView.agreement?.is_current === false
-      || versionView.agreement?.terms_hash !== state.agreement.terms_hash)) return;
+    const agreement = getActiveAgreement();
+    if (!agreement || state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || compareBefore) return;
+    if (agreement.status !== "PENDING_APPROVAL") return;
     const atStart = context.current;
     setPendingDecision(decision);
     setDecisionError("");
@@ -276,8 +314,8 @@ export default function AgreementReview({
     try {
       await recordAgreementDecision(
         dealId,
-        state.agreement.version_number,
-        state.agreement.terms_hash,
+        agreement.version_number,
+        agreement.terms_hash,
         decision,
         actingOrganizationId || undefined,
       );
@@ -300,10 +338,9 @@ export default function AgreementReview({
   }
 
   async function commitCurrentAgreement() {
-    if (state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || viewedVersion || compareBefore) return;
-    if (state.agreement.is_current === false) return;
-    if (versionView?.key === contextSignature && (versionView.error || versionView.agreement?.is_current === false
-      || versionView.agreement?.terms_hash !== state.agreement.terms_hash)) return;
+    const agreement = getActiveAgreement();
+    if (!agreement || state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || compareBefore) return;
+    if (agreement.status !== "PENDING_APPROVAL") return;
     const atStart = context.current;
     setPendingDecision("commit");
     setDecisionError("");
@@ -311,8 +348,8 @@ export default function AgreementReview({
     try {
       await commitAgreementVersion(
         dealId,
-        state.agreement.version_number,
-        state.agreement.terms_hash,
+        agreement.version_number,
+        agreement.terms_hash,
         actingOrganizationId,
       );
       if (!active.current || atStart !== context.current) return;
@@ -331,6 +368,121 @@ export default function AgreementReview({
       }
     } finally {
       if (active.current && atStart === context.current) setPendingDecision(null);
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (state.status !== "ready") {
+      void Promise.resolve().then(() => {
+        if (!controller.signal.aborted) setAmendmentImpact(null);
+      });
+      return () => controller.abort();
+    }
+    const currentAgreement = viewedVersion ? versionView?.agreement : state.agreement;
+    if (currentAgreement && currentAgreement.version_number > 1 && currentAgreement.status === "PENDING_APPROVAL") {
+      void getAmendmentImpact(dealId, { versionNumber: currentAgreement.version_number, signal: controller.signal })
+        .then((impact) => {
+          if (!controller.signal.aborted) setAmendmentImpact(impact);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setAmendmentImpact(null);
+        });
+      return () => controller.abort();
+    } else {
+      void Promise.resolve().then(() => {
+        if (!controller.signal.aborted) setAmendmentImpact(null);
+      });
+      return () => controller.abort();
+    }
+  }, [dealId, state, viewedVersion, versionView]);
+
+  async function withdrawCurrentAmendment() {
+    const agreement = getActiveAgreement();
+    if (!agreement || state.status !== "ready" || pendingDecision || !actingOrganizationId || stale || compareBefore) return;
+    if (agreement.version_number <= 1 || agreement.status !== "PENDING_APPROVAL") return;
+    const atStart = context.current;
+    setPendingDecision("withdraw");
+    setDecisionError("");
+    try {
+      await withdrawAmendment(
+        dealId,
+        agreement.version_number,
+        agreement.terms_hash,
+        actingOrganizationId || undefined,
+      );
+      if (!active.current || atStart !== context.current) return;
+      reloadAgreement();
+    } catch (error) {
+      if (!active.current || atStart !== context.current) return;
+      setDecisionError(apiMessage(error));
+    } finally {
+      if (active.current && atStart === context.current) setPendingDecision(null);
+    }
+  }
+
+  async function handleSubmitAmendment(committedAgreement: AgreementVersion) {
+    if (!actingOrganizationId || !amendmentRationale.trim()) return;
+    setSubmittingAmendment(true);
+    setAmendmentError("");
+    try {
+      const terms = committedAgreement.terms;
+      const request: ProposeAmendmentRequest = {
+        schema_version: terms.schema_version,
+        prior_version_number: committedAgreement.version_number,
+        prior_terms_hash: committedAgreement.terms_hash,
+        rationale: amendmentRationale.trim(),
+        organization_id: actingOrganizationId,
+        line_items: terms.line_items,
+        shipments: terms.shipments,
+        payment_terms: terms.payment_terms,
+        delivery_location: terms.delivery_location,
+        incoterm: terms.incoterm,
+        cancellation_terms: terms.cancellation_terms,
+      };
+      if (terms.schema_version === 1) {
+        request.description = terms.line_items[0]?.description;
+        request.quantity = terms.line_items[0]?.quantity;
+        request.unit = terms.line_items[0]?.unit;
+        request.unit_price = terms.line_items[0]?.unit_price.amount;
+        request.currency = terms.line_items[0]?.unit_price.currency as "USD";
+        request.delivery_destination = terms.shipments[0]?.destination;
+        request.delivery_date = terms.shipments[0]?.target_date ?? null;
+        request.payment_trigger = terms.payment_terms[0]?.trigger as PaymentTrigger;
+      }
+      await proposeAmendment(dealId, request);
+      setShowProposeAmendment(false);
+      setAmendmentRationale("");
+      setProposedImpact(null);
+      reloadAgreement();
+    } catch (error) {
+      setAmendmentError(apiMessage(error));
+    } finally {
+      setSubmittingAmendment(false);
+    }
+  }
+
+  async function handlePreviewProposedImpact(committedAgreement: AgreementVersion) {
+    if (!actingOrganizationId) return;
+    setPreviewingImpact(true);
+    setAmendmentError("");
+    try {
+      const terms = committedAgreement.terms;
+      const impact = await previewAmendmentImpact(dealId, {
+        schema_version: terms.schema_version,
+        organization_id: actingOrganizationId,
+        line_items: terms.line_items,
+        shipments: terms.shipments,
+        payment_terms: terms.payment_terms,
+        delivery_location: terms.delivery_location,
+        incoterm: terms.incoterm,
+        cancellation_terms: terms.cancellation_terms,
+      });
+      setProposedImpact(impact);
+    } catch (error) {
+      setAmendmentError(apiMessage(error));
+    } finally {
+      setPreviewingImpact(false);
     }
   }
 
@@ -423,9 +575,13 @@ export default function AgreementReview({
         const myApproval = actingOrganizationId
           ? approvalFor(agreement.approvals, actingOrganizationId)
           : undefined;
-        const readConflict = !viewedVersion && currentView && (currentView.error || currentView.agreement?.is_current === false
-          || currentView.agreement?.terms_hash !== agreement.terms_hash);
-        const canDecide = agreement.status === "PENDING_APPROVAL" && agreement.is_current !== false && !viewedVersion && !compareBefore && !readConflict;
+        const isPendingCandidate = agreement.status === "PENDING_APPROVAL";
+        const readConflict = currentView && (Boolean(currentView.error) || (!viewedVersion && currentView.agreement?.is_current === false)
+          || (Boolean(currentView.agreement) && currentView.agreement?.terms_hash !== agreement.terms_hash));
+        const canDecide = isPendingCandidate && !compareBefore && !readConflict;
+        const pendingCandidate = currentHistory?.versions.find(
+          (v) => v.status === "PENDING_APPROVAL" && v.version_number > 1,
+        );
         // Prefer the explicit, hashed projection; fall back to the nested terms
         // so a cached payload from before that field existed still renders.
         const paymentTiming = agreement.payment_trigger && agreement.payment_due_condition
@@ -445,7 +601,19 @@ export default function AgreementReview({
           <>
             {partySelector}
             {selectors}
-            {viewedVersion ? <p role="status">Historical version · Read-only</p> : null}
+            {viewedVersion && !isPendingCandidate ? <p role="status">Historical version · Read-only</p> : null}
+            {agreement.status === "COMMITTED" && pendingCandidate ? (
+              <div role="status" className="agreement-review__pending-notice" style={{ margin: "1rem 0", padding: "0.75rem", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: "4px" }}>
+                <p style={{ margin: "0 0 0.5rem 0" }}>An amendment (Version {pendingCandidate.version_number}) is awaiting approval.</p>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setViewedVersion(pendingCandidate.version_number)}
+                >
+                  Review pending amendment (Version {pendingCandidate.version_number})
+                </button>
+              </div>
+            ) : null}
             {readConflict ? <div role="alert"><p>The agreement changed or is unavailable.</p><button type="button" className="button secondary" onClick={reloadAgreement}>Reload agreement</button></div> : null}
             {currentView?.comparison ? <div aria-label="Structured agreement comparison">
               <h3>Version {currentView.comparison.before.version_number} to {currentView.comparison.after.version_number}</h3>
@@ -467,6 +635,23 @@ export default function AgreementReview({
                   && ref.terms_hash === agreement.terms_hash && !stale && !readConflict ? <blockquote>{ref.source_span}</blockquote> : null}
               </div>)}
             </div> : null}
+            {agreement.version_number > 1 ? (
+              <div className="agreement-review__lineage" role="region" aria-label="Amendment lineage" style={{ marginBottom: "1rem" }}>
+                <span className="badge badge--kind">
+                  Amends version {agreement.version_number - 1}
+                </span>
+                {agreement.prior_terms_hash ? (
+                  <span className="muted" style={{ marginLeft: "0.5rem" }}>
+                    Prior hash: <code>{agreement.prior_terms_hash.slice(0, 12)}…</code>
+                  </span>
+                ) : null}
+                {agreement.amendment_rationale ? (
+                  <p className="agreement-review__rationale" style={{ marginTop: "0.5rem" }}>
+                    <strong>Rationale:</strong> {agreement.amendment_rationale}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="agreement-review__summary">
               <div>
                 <span className="fact-source__label">VERSION STATUS</span>
@@ -492,6 +677,43 @@ export default function AgreementReview({
               </ul> : <p>No party decisions have been recorded for this version.</p>}
             </details>
 
+            {amendmentImpact?.blockers && amendmentImpact.blockers.length > 0 ? (
+              <div role="alert" className="agreement-review__impact-blocker" style={{ margin: "1rem 0", padding: "1rem", background: "#fef2f2", border: "1px solid #f87171", borderRadius: "4px" }}>
+                <h4>Amendment Policy Blockers</h4>
+                <ul>
+                  {amendmentImpact.blockers.map((blocker, idx) => (
+                    <li key={idx}>{blocker}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {amendmentImpact ? (
+              <div className="agreement-review__impact" aria-label="Operational impact preview">
+                <h3>Operational impact preview</h3>
+                {amendmentImpact.fulfillment_impact.length > 0 ? (
+                  <div className="impact-group">
+                    <h4>Fulfillment impact</h4>
+                    {amendmentImpact.fulfillment_impact.map((f, idx) => (
+                      <p key={idx}>
+                        {f.obligation_reference}: planned {f.planned_quantity} {f.unit} (shipped: {f.shipped_quantity}, confirmed: {f.confirmed_quantity}) · <strong>{f.status}</strong>
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+                {amendmentImpact.payment_impact.length > 0 ? (
+                  <div className="impact-group">
+                    <h4>Payment milestone impact</h4>
+                    {amendmentImpact.payment_impact.map((p, idx) => (
+                      <p key={idx}>
+                        {p.milestone_reference}: {p.amount} {p.currency} (status: {p.payment_status}) · <strong>{p.status}</strong>
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {agreement.status === "COMMITTED" ? (
               <p className="agreement-review__notice" role="status">
                 This agreement is committed. Its terms are read-only and cannot be changed in place.
@@ -504,6 +726,101 @@ export default function AgreementReview({
               && currentView.agreement.status === "COMMITTED" && !stale && !readConflict ? (
               <CommercialDocumentPanel key={contextSignature} dealId={dealId} agreement={agreement}
                 organizationId={actingOrganizationId} contextKey={contextSignature} />
+            ) : null}
+
+            {agreement.status === "COMMITTED" && !pendingCandidate && actingOrganizationId ? (
+              <div className="agreement-review__amendment-propose" style={{ margin: "1.5rem 0" }}>
+                {!showProposeAmendment ? (
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={() => {
+                      setShowProposeAmendment(true);
+                      setProposedImpact(null);
+                      setAmendmentError("");
+                    }}
+                  >
+                    Propose amendment
+                  </button>
+                ) : (
+                  <div className="card" style={{ padding: "1rem", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                    <h3>Propose terms amendment</h3>
+                    <p className="hint">
+                      Proposing an amendment creates a new version against this committed version. Both organizations must approve it before it can be committed.
+                    </p>
+                    <div className="field">
+                      <label htmlFor={`amendment-rationale-${dealId}`}>Amendment rationale (required)</label>
+                      <textarea
+                        id={`amendment-rationale-${dealId}`}
+                        rows={3}
+                        value={amendmentRationale}
+                        placeholder="Explain the operational or commercial rationale for this amendment..."
+                        onChange={(e) => setAmendmentRationale(e.target.value)}
+                      />
+                    </div>
+
+                    {amendmentError ? (
+                      <p role="alert" className="form-error">{amendmentError}</p>
+                    ) : null}
+
+                    {proposedImpact ? (
+                      <div className="agreement-review__impact" aria-label="Proposed operational impact preview" style={{ margin: "1rem 0" }}>
+                        <h4>Operational impact preview</h4>
+                        {proposedImpact.blockers.length > 0 ? (
+                          <div role="alert" className="form-error">
+                            <strong>Policy blockers:</strong>
+                            <ul>
+                              {proposedImpact.blockers.map((b, idx) => (
+                                <li key={idx}>{b}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {proposedImpact.fulfillment_impact.map((f, idx) => (
+                          <p key={idx}>
+                            {f.obligation_reference}: planned {f.planned_quantity} {f.unit} · {f.status}
+                          </p>
+                        ))}
+                        {proposedImpact.payment_impact.map((p, idx) => (
+                          <p key={idx}>
+                            {p.milestone_reference}: {p.amount} {p.currency} · {p.status}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <div className="fact-actions" style={{ marginTop: "1rem" }}>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        disabled={previewingImpact || submittingAmendment}
+                        onClick={() => void handlePreviewProposedImpact(agreement)}
+                      >
+                        {previewingImpact ? "Previewing impact…" : "Preview operational impact"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        disabled={submittingAmendment || !amendmentRationale.trim()}
+                        onClick={() => void handleSubmitAmendment(agreement)}
+                      >
+                        {submittingAmendment ? "Submitting amendment…" : "Submit amendment proposal"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        disabled={submittingAmendment}
+                        onClick={() => {
+                          setShowProposeAmendment(false);
+                          setAmendmentError("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : null}
 
             {paymentTiming.length > 0 ? (
@@ -632,16 +949,31 @@ export default function AgreementReview({
                   >
                     {pendingDecision === "reject" ? "Submitting rejection…" : "Reject this version"}
                   </button>
+                  {agreement.version_number > 1 ? (
+                    <button
+                      type="button"
+                      className="button secondary"
+                      disabled={stale || !actingOrganizationId || pendingDecision !== null}
+                      onClick={() => void withdrawCurrentAmendment()}
+                    >
+                      {pendingDecision === "withdraw" ? "Withdrawing…" : "Withdraw amendment"}
+                    </button>
+                  ) : null}
                 </div>
                 {bothApproved ? (
                   <div className="agreement-review__commit">
                     <p className="agreement-review__notice">
                       Both organizations approved this exact version. Commit it to mark the deal agreed.
                     </p>
+                    {amendmentImpact && !amendmentImpact.can_commit ? (
+                      <p className="form-error">
+                        Cannot commit amendment: unresolved policy blockers must be addressed.
+                      </p>
+                    ) : null}
                     <button
                       type="button"
                       className="button"
-                      disabled={stale || !actingOrganizationId || pendingDecision !== null}
+                      disabled={stale || !actingOrganizationId || pendingDecision !== null || (amendmentImpact !== null && !amendmentImpact.can_commit)}
                       onClick={() => void commitCurrentAgreement()}
                     >
                       {pendingDecision === "commit" ? "Committing agreement…" : "Commit approved agreement"}

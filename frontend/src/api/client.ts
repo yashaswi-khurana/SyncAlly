@@ -11,6 +11,8 @@ import type {
   AgreementHistory,
   AgreementComparison,
   AgreementVersion,
+  AmendmentImpact,
+  ProposeAmendmentRequest,
   CommercialDocumentDraft,
   CreateDealFactInput,
   Deal,
@@ -423,6 +425,63 @@ export function createAgreementFromReviewedTerms(
       body: JSON.stringify({
         ...terms,
         organization_id: organizationId,
+      }),
+    },
+  );
+}
+
+export function proposeAmendment(
+  dealId: string,
+  input: ProposeAmendmentRequest,
+): Promise<AgreementVersion> {
+  return apiRequest<AgreementVersion>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/amendments/propose`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function getAmendmentImpact(
+  dealId: string,
+  options?: { versionNumber?: number; signal?: AbortSignal },
+): Promise<AmendmentImpact> {
+  const query = options?.versionNumber ? `?version_number=${options.versionNumber}` : "";
+  return apiRequest<AmendmentImpact>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/amendments/impact${query}`,
+    { signal: options?.signal },
+  );
+}
+
+export function previewAmendmentImpact(
+  dealId: string,
+  input: ReviewedProposalTerms,
+  signal?: AbortSignal,
+): Promise<AmendmentImpact> {
+  return apiRequest<AmendmentImpact>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/amendments/preview-impact`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal,
+    },
+  );
+}
+
+export function withdrawAmendment(
+  dealId: string,
+  versionNumber: number,
+  termsHash: string,
+  organizationId?: string,
+): Promise<AgreementVersion> {
+  return apiRequest<AgreementVersion>(
+    `/deals/${encodeURIComponent(dealId)}/agreements/amendments/${versionNumber}/withdraw`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        terms_hash: termsHash,
+        ...(organizationId ? { organization_id: organizationId } : {}),
       }),
     },
   );

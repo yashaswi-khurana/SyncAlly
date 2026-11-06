@@ -182,12 +182,15 @@ def _check_milestone_delivery_confirmed(
             )
             if obligation is None:
                 return False
+            matching_obligation_ids = select(Obligation.id).where(
+                Obligation.deal_id == deal_id,
+                Obligation.source_terms_reference == alloc.obligation_id,
+            )
             events = list(
                 db.scalars(
                     select(FulfillmentEvent).where(
                         FulfillmentEvent.deal_id == deal_id,
-                        FulfillmentEvent.agreement_version_id == agreement_version_id,
-                        FulfillmentEvent.obligation_id == obligation.id,
+                        FulfillmentEvent.obligation_id.in_(matching_obligation_ids),
                     )
                 )
             )
@@ -206,12 +209,21 @@ def _check_milestone_delivery_confirmed(
         return True
 
     if milestone.obligation_id:
+        ob = db.get(Obligation, milestone.obligation_id)
+        ref = ob.source_terms_reference if ob else None
+        matching_obligation_ids = (
+            select(Obligation.id).where(
+                Obligation.deal_id == deal_id,
+                Obligation.source_terms_reference == ref,
+            )
+            if ref
+            else [milestone.obligation_id]
+        )
         events = list(
             db.scalars(
                 select(FulfillmentEvent).where(
                     FulfillmentEvent.deal_id == deal_id,
-                    FulfillmentEvent.agreement_version_id == agreement_version_id,
-                    FulfillmentEvent.obligation_id == milestone.obligation_id,
+                    FulfillmentEvent.obligation_id.in_(matching_obligation_ids),
                 )
             )
         )
@@ -239,12 +251,15 @@ def _check_milestone_delivery_confirmed(
     if not delivery_obs:
         return False
     for index, ob in enumerate(delivery_obs):
+        matching_obligation_ids = select(Obligation.id).where(
+            Obligation.deal_id == deal_id,
+            Obligation.source_terms_reference == ob.source_terms_reference,
+        )
         events = list(
             db.scalars(
                 select(FulfillmentEvent).where(
                     FulfillmentEvent.deal_id == deal_id,
-                    FulfillmentEvent.agreement_version_id == agreement_version_id,
-                    FulfillmentEvent.obligation_id == ob.id,
+                    FulfillmentEvent.obligation_id.in_(matching_obligation_ids),
                 )
             )
         )
@@ -469,12 +484,15 @@ def authorize_payment_route(
                 active_milestone_ids = set(
                     db.scalars(
                         select(PaymentIntent.payment_milestone_id).where(
-                            PaymentIntent.agreement_version_id == agreement.version_id,
+                            PaymentIntent.deal_id == deal_id,
                             PaymentIntent.status.notin_(("FAILED", "CANCELLED")),
                         )
                     )
                 )
-                available = [m for m in all_milestones if m.id not in active_milestone_ids]
+                available = [
+                    m for m in all_milestones
+                    if m.status != "PAID" and m.id not in active_milestone_ids
+                ]
                 milestone = available[0] if available else all_milestones[0]
 
         matching_term = next(
@@ -484,13 +502,25 @@ def authorize_payment_route(
         if matching_term is None and 0 <= milestone.sequence_number - 1 < len(terms.payment_terms):
             matching_term = terms.payment_terms[milestone.sequence_number - 1]
 
+        matching_milestone_ids = (
+            select(PaymentMilestone.id).where(
+                PaymentMilestone.deal_id == deal_id,
+                PaymentMilestone.source_terms_reference == milestone.source_terms_reference,
+            )
+            if milestone.source_terms_reference
+            else [milestone.id]
+        )
         existing_paid = db.scalar(
             select(PaymentIntent).where(
-                PaymentIntent.payment_milestone_id == milestone.id,
+                PaymentIntent.deal_id == deal_id,
+                PaymentIntent.payment_milestone_id.in_(matching_milestone_ids),
                 PaymentIntent.status == "PAID",
             ).limit(1)
         )
-        if existing_paid is not None and existing_paid.idempotency_key != payload.idempotency_key:
+        if (
+            milestone.status == "PAID"
+            or (existing_paid is not None and existing_paid.idempotency_key != payload.idempotency_key)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Payment milestone {milestone.sequence_number} has already been paid",
@@ -666,15 +696,19 @@ def list_payment_milestones_route(
     intent_rows = list(
         db.scalars(
             select(PaymentIntent)
-            .where(PaymentIntent.agreement_version_id == agreement.version_id)
+            .where(PaymentIntent.deal_id == deal_id)
             .order_by(PaymentIntent.created_at.desc(), PaymentIntent.id.desc())
         )
     )
 
     intents_by_milestone: dict[UUID, PaymentIntent] = {}
+    intents_by_reference: dict[str, PaymentIntent] = {}
     for intent in intent_rows:
         if intent.payment_milestone_id not in intents_by_milestone:
             intents_by_milestone[intent.payment_milestone_id] = intent
+        m_row = db.get(PaymentMilestone, intent.payment_milestone_id)
+        if m_row and m_row.source_terms_reference and m_row.source_terms_reference not in intents_by_reference:
+            intents_by_reference[m_row.source_terms_reference] = intent
 
     results: list[MilestonePaymentSummaryResponse] = []
     for milestone in milestone_rows:
@@ -690,6 +724,8 @@ def list_payment_milestones_route(
             matching_term = terms.payment_terms[milestone.sequence_number - 1]
 
         intent = intents_by_milestone.get(milestone.id)
+        if intent is None and milestone.source_terms_reference:
+            intent = intents_by_reference.get(milestone.source_terms_reference)
 
         delivery_confirmed = False
         trigger_norm = milestone.trigger_type.strip().casefold()
@@ -704,14 +740,14 @@ def list_payment_milestones_route(
             delivery_confirmed=delivery_confirmed,
         )
 
-        if intent is not None and intent.status == "PAID":
+        if milestone.status == "PAID" or (intent is not None and intent.status == "PAID"):
             is_eligible = False
             ineligibility_reason = "Payment already reconciled"
 
         lifecycle_state = (
             _derive_lifecycle_state(intent.status)
             if intent is not None
-            else ("eligible" if is_eligible else "ineligible")
+            else ("reconciled" if milestone.status == "PAID" else ("eligible" if is_eligible else "ineligible"))
         )
 
         alloc_responses = [
@@ -748,7 +784,7 @@ def list_payment_milestones_route(
                 reconciled_amount=(
                     canonical_decimal(intent.reconciled_amount)
                     if intent and intent.reconciled_amount is not None
-                    else None
+                    else (canonical_decimal(milestone.amount) if milestone.status == "PAID" else None)
                 ),
                 last_checked_at=intent.last_checked_at if intent else None,
                 last_reconciled_at=intent.last_reconciled_at if intent else None,

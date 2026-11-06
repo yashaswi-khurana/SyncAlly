@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -32,20 +33,34 @@ from syncally.application.agreements import (
     DuplicateApproval,
     OutboxEventDraft,
     ProposalNotFound,
+    ProposeAmendmentCommand,
     RecordApprovalCommand,
     StaleAgreementVersion,
     UnauthorizedApproval,
+    WithdrawAmendmentCommand,
     WrongTermsHash,
     commit_agreement,
     create_agreement_draft,
     create_reviewed_agreement_draft,
+    propose_amendment,
     record_approval,
+    withdraw_amendment,
 )
 from syncally.application.documents import export_display_terms
 from syncally.application.workflow_notifications import NotificationKind
 from syncally.domain.agreements.agreement import Agreement as DomainAgreement
 from syncally.domain.agreements.agreement import AgreementStatus, ApprovalDecision
 from syncally.domain.agreements.agreement import Approval as DomainApproval
+from syncally.domain.agreements.amendment import (
+    AmendmentConflict,
+    AmendmentImpact,
+    AmendmentImpactBlocked,
+    StalePriorVersion,
+    WrongPriorHash,
+)
+from syncally.domain.agreements.amendment import (
+    assess_amendment_impact as domain_assess_amendment_impact,
+)
 from syncally.domain.agreements.obligations import ObligationDraft, PaymentMilestoneDraft
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.deals.deal import Deal as DomainDeal
@@ -79,12 +94,14 @@ from syncally.infrastructure.models import (
     Constraint,
     Conversation,
     Deal,
+    FulfillmentEvent,
     Message,
     NegotiationSession,
     Obligation,
     Organization,
     OrganizationMember,
     OutboxEvent,
+    PaymentIntent,
     PaymentMilestone,
     Proposal,
     User,
@@ -127,7 +144,7 @@ def _agreement_to_domain(
         )
         for row in approval_rows
     }
-    return DomainAgreement(
+    agreement = DomainAgreement(
         id=AgreementId(version_row.deal_id),
         version_id=AgreementVersionId(version_row.id),
         deal_id=DealId(version_row.deal_id),
@@ -135,7 +152,19 @@ def _agreement_to_domain(
         terms=terms,
         created_at=as_utc(version_row.created_at),
         approvals=approvals,
+        prior_agreement_version_id=(
+            AgreementVersionId(version_row.prior_agreement_version_id)
+            if version_row.prior_agreement_version_id is not None
+            else None
+        ),
+        prior_terms_hash=version_row.prior_terms_hash,
+        amendment_rationale=version_row.amendment_rationale,
     )
+    if version_row.status == AgreementStatus.VOIDED.value:
+        agreement.void()
+    elif version_row.status == AgreementStatus.SUPERSEDED.value:
+        agreement.supersede()
+    return agreement
 
 
 class SqlAlchemyAgreementRepository:
@@ -187,6 +216,9 @@ class SqlAlchemyAgreementRepository:
                     "terms_hash": row.terms_hash, "status": row.status, "terms": display,
                     "created_at": as_utc(row.created_at),
                     "committed_at": as_utc(row.committed_at) if row.committed_at else None,
+                    "prior_agreement_version_id": str(row.prior_agreement_version_id) if row.prior_agreement_version_id else None,
+                    "prior_terms_hash": row.prior_terms_hash,
+                    "amendment_rationale": row.amendment_rationale,
                     "approvals": [{"agreement_version_id": str(approval.agreement_version_id),
                         "deal_id": str(approval.deal_id), "version_number": row.version_number,
                         "organization_id": str(approval.organization_id),
@@ -204,6 +236,9 @@ class SqlAlchemyAgreementRepository:
                 "terms": terms.to_storage_dict(), "created_at": as_utc(row.created_at),
                 "committed_at": as_utc(row.committed_at) if row.committed_at else None,
                 "is_current": deal.current_agreement_version_id == row.id,
+                "prior_agreement_version_id": str(row.prior_agreement_version_id) if row.prior_agreement_version_id else None,
+                "prior_terms_hash": row.prior_terms_hash,
+                "amendment_rationale": row.amendment_rationale,
                 "payment_trigger": payment.trigger if payment else None,
                 "payment_due_condition": payment.due_condition if payment else None,
                 "approvals": [{"id": str(approval.id), "agreement_version_id": str(row.id),
@@ -571,9 +606,16 @@ class SqlAlchemyAgreementRepository:
         version_row = self._get_version(command.deal_id, command.version_number)
         if version_row is None:
             raise AgreementNotFound("Agreement version not found")
+        is_current_candidate = (
+            deal_row.current_agreement_version_id == version_row.id
+            or (
+                version_row.prior_agreement_version_id is not None
+                and deal_row.current_agreement_version_id == version_row.prior_agreement_version_id
+            )
+        )
         if (
             version_row.status != AgreementStatus.PENDING_APPROVAL.value
-            or deal_row.current_agreement_version_id != version_row.id
+            or not is_current_candidate
         ):
             raise StaleAgreementVersion("Agreement version is no longer pending approval")
         if version_row.terms_hash != command.terms_hash:
@@ -663,9 +705,16 @@ class SqlAlchemyAgreementRepository:
             self._require_active_member(command.organization_id, command.user_id)
         if version_row.status == AgreementStatus.SUPERSEDED.value:
             raise StaleAgreementVersion("Agreement version was superseded; reload before continuing")
+        is_current_candidate = (
+            deal_row.current_agreement_version_id == version_row.id
+            or (
+                version_row.prior_agreement_version_id is not None
+                and deal_row.current_agreement_version_id == version_row.prior_agreement_version_id
+            )
+        )
         if (
             version_row.status == AgreementStatus.PENDING_APPROVAL.value
-            and deal_row.current_agreement_version_id != version_row.id
+            and not is_current_candidate
         ):
             raise StaleAgreementVersion(
                 "Agreement version is no longer current for this deal"
@@ -719,18 +768,55 @@ class SqlAlchemyAgreementRepository:
         version_row.status = AgreementStatus.COMMITTED.value
         version_row.committed_at = now
 
-        domain_deal = _deal_to_domain(deal_row)
-        domain_deal.mark_agreed(AgreementVersionId(version_row.id))
-        deal_updated = self._db.execute(
-            update(Deal)
-            .where(Deal.id == deal_row.id, Deal.version == deal_row.version)
-            .values(status=domain_deal.status.value, version=domain_deal.version)
-            .execution_options(synchronize_session=False)
-        )
-        if cast(CursorResult[Any], deal_updated).rowcount != 1:
-            raise AgreementAlreadyCommitted("Deal was concurrently modified")
-        deal_row.status = domain_deal.status.value
-        deal_row.version = domain_deal.version
+        if version_row.prior_agreement_version_id is None:
+            domain_deal = _deal_to_domain(deal_row)
+            domain_deal.mark_agreed(AgreementVersionId(version_row.id))
+            deal_updated = self._db.execute(
+                update(Deal)
+                .where(Deal.id == deal_row.id, Deal.version == deal_row.version)
+                .values(
+                    status=domain_deal.status.value,
+                    version=domain_deal.version,
+                    current_agreement_version_id=version_row.id,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if cast(CursorResult[Any], deal_updated).rowcount != 1:
+                raise AgreementAlreadyCommitted("Deal was concurrently modified")
+            deal_row.status = domain_deal.status.value
+            deal_row.version = domain_deal.version
+            deal_row.current_agreement_version_id = version_row.id
+        else:
+            impact = self.assess_amendment_impact(
+                command.deal_id, pending_version_number=version_row.version_number
+            )
+            if not impact.can_commit:
+                raise AmendmentImpactBlocked(
+                    "Amendment cannot be committed due to policy blockers: "
+                    + "; ".join(impact.blockers)
+                )
+
+            if version_row.prior_agreement_version_id is not None:
+                self._db.execute(
+                    update(AgreementVersion)
+                    .where(AgreementVersion.id == version_row.prior_agreement_version_id)
+                    .values(status=AgreementStatus.SUPERSEDED.value)
+                    .execution_options(synchronize_session=False)
+                )
+
+            deal_updated = self._db.execute(
+                update(Deal)
+                .where(Deal.id == deal_row.id, Deal.version == deal_row.version)
+                .values(
+                    current_agreement_version_id=version_row.id,
+                    version=deal_row.version + 1,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if cast(CursorResult[Any], deal_updated).rowcount != 1:
+                raise AgreementAlreadyCommitted("Deal was concurrently modified")
+            deal_row.current_agreement_version_id = version_row.id
+            deal_row.version += 1
 
         self._db.flush()
         return agreement, True
@@ -803,6 +889,337 @@ class SqlAlchemyAgreementRepository:
         if is_active_member is None:
             raise UnauthorizedApproval("User must be an active member of the owning organization")
 
+    def propose_amendment(
+        self, command: ProposeAmendmentCommand, *, now: datetime
+    ) -> DomainAgreement:
+        deal_row = lock_deal(self._db, command.deal_id)
+        if deal_row is None:
+            raise AgreementNotFound("Deal not found")
+        if is_pending(self._db, command.deal_id):
+            raise AgreementVersionConflict("Awaiting counterparty acceptance")
+        if deal_row.current_agreement_version_id is None:
+            raise AgreementVersionConflict("Cannot propose an amendment for a deal without a committed agreement")
+        if command.author_organization_id not in (
+            deal_row.buyer_organization_id,
+            deal_row.seller_organization_id,
+        ):
+            raise UnauthorizedApproval("Amendment author must be a party to this deal")
+        self._require_active_member(command.author_organization_id, command.user_id)
+
+        prior_version_row = self._db.get(AgreementVersion, deal_row.current_agreement_version_id)
+        if prior_version_row is None:
+            raise AgreementNotFound("Current agreement version not found")
+        if prior_version_row.version_number != command.prior_version_number:
+            raise StalePriorVersion(
+                f"Amendment targets version {command.prior_version_number}, but current committed version is {prior_version_row.version_number}"
+            )
+        if prior_version_row.terms_hash != command.prior_terms_hash:
+            raise WrongPriorHash(
+                "Prior terms hash does not match current committed agreement terms hash"
+            )
+        if command.terms.terms_hash == prior_version_row.terms_hash:
+            raise AmendmentConflict("Proposed amendment terms are identical to current committed agreement")
+
+        pending_version = self._pending_version(command.deal_id)
+        if pending_version is not None:
+            if command.replace_pending_draft:
+                pending_version.status = AgreementStatus.VOIDED.value
+                self._db.flush()
+            else:
+                raise AmendmentConflict(
+                    f"Deal already has a pending agreement version {pending_version.version_number}. "
+                    "Pass replace_pending_draft=True to withdraw and replace it."
+                )
+
+        session_row = self._db.scalar(
+            select(NegotiationSession)
+            .where(NegotiationSession.deal_id == command.deal_id)
+            .with_for_update()
+        )
+        if session_row is None:
+            session_row = NegotiationSession(
+                deal_id=command.deal_id,
+                max_rounds=DEFAULT_MAX_NEGOTIATION_ROUNDS,
+                round_count=0,
+            )
+            self._db.add(session_row)
+            self._db.flush()
+
+        proposal_id = uuid4()
+        proposal_number = self._next_proposal_number(command.deal_id)
+        proposal_row = Proposal(
+            id=proposal_id,
+            deal_id=command.deal_id,
+            negotiation_session_id=session_row.id,
+            proposal_number=proposal_number,
+            author_organization_id=command.author_organization_id,
+            based_on_proposal_id=prior_version_row.proposal_id,
+            terms_json=command.terms.to_storage_dict(),
+            terms_hash=command.terms.terms_hash,
+            schema_version=command.terms.schema_version,
+            lifecycle_origin="LEGACY",
+            status="ACCEPTED_AS_CANDIDATE",
+            created_by=command.user_id,
+            created_at=now,
+        )
+        self._db.add(proposal_row)
+        self._db.flush()
+
+        version_id = uuid4()
+        version_number = self._next_version_number(command.deal_id)
+        version_row = AgreementVersion(
+            id=version_id,
+            deal_id=command.deal_id,
+            proposal_id=proposal_id,
+            version_number=version_number,
+            canonical_terms_json=command.terms.to_storage_dict(),
+            terms_hash=command.terms.terms_hash,
+            schema_version=command.terms.schema_version,
+            status=AgreementStatus.PENDING_APPROVAL.value,
+            created_by=command.user_id,
+            prior_agreement_version_id=prior_version_row.id,
+            prior_terms_hash=prior_version_row.terms_hash,
+            amendment_rationale=command.rationale,
+            created_at=now,
+        )
+        self._db.add(version_row)
+        self._db.add(
+            AuditEvent(
+                id=uuid4(),
+                aggregate_type="agreement",
+                aggregate_id=version_id,
+                event_type="AMENDMENT_PROPOSED",
+                actor_type="USER",
+                actor_id=str(command.user_id),
+                occurred_at=now,
+                payload={
+                    "deal_id": str(command.deal_id),
+                    "version_number": version_number,
+                    "prior_version_number": command.prior_version_number,
+                    "prior_terms_hash": command.prior_terms_hash,
+                    "terms_hash": command.terms.terms_hash,
+                    "rationale": command.rationale,
+                },
+            )
+        )
+        self._db.add(
+            OutboxEvent(
+                id=uuid4(),
+                aggregate_type="agreement",
+                aggregate_id=version_id,
+                event_type="AMENDMENT_PROPOSED",
+                payload={
+                    "deal_id": str(command.deal_id),
+                    "agreement_version_id": str(version_id),
+                    "version_number": version_number,
+                },
+            )
+        )
+        self._db.flush()
+
+        queue_deal_workflow_notification(
+            self._db,
+            deal_id=command.deal_id,
+            record_id=proposal_id,
+            kind=NotificationKind.PROPOSAL_SUBMITTED,
+        )
+
+        return _agreement_to_domain(version_row, [])
+
+    def withdraw_amendment(
+        self, command: WithdrawAmendmentCommand, *, now: datetime
+    ) -> DomainAgreement:
+        deal_row = lock_deal(self._db, command.deal_id)
+        if deal_row is None:
+            raise AgreementNotFound("Deal not found")
+        if command.organization_id not in (
+            deal_row.buyer_organization_id,
+            deal_row.seller_organization_id,
+        ):
+            raise UnauthorizedApproval("Withdrawing user must belong to a deal party")
+        self._require_active_member(command.organization_id, command.user_id)
+
+        version_row = self._get_version(command.deal_id, command.version_number)
+        if version_row is None:
+            raise AgreementNotFound("Agreement version not found")
+        if version_row.version_number <= 1:
+            raise AgreementVersionConflict("Cannot withdraw initial agreement version")
+        if version_row.status != AgreementStatus.PENDING_APPROVAL.value:
+            raise AgreementVersionConflict(
+                f"Agreement version is {version_row.status} and cannot be withdrawn"
+            )
+        if version_row.terms_hash != command.terms_hash:
+            raise WrongTermsHash("Terms hash does not match the agreement version")
+
+        version_row.status = AgreementStatus.VOIDED.value
+        self._db.add(
+            AuditEvent(
+                id=uuid4(),
+                aggregate_type="agreement",
+                aggregate_id=version_row.id,
+                event_type="AMENDMENT_WITHDRAWN",
+                actor_type="USER",
+                actor_id=str(command.user_id),
+                occurred_at=now,
+                payload={
+                    "deal_id": str(command.deal_id),
+                    "version_number": version_row.version_number,
+                    "terms_hash": version_row.terms_hash,
+                },
+            )
+        )
+        self._db.add(
+            OutboxEvent(
+                id=uuid4(),
+                aggregate_type="agreement",
+                aggregate_id=version_row.id,
+                event_type="AMENDMENT_WITHDRAWN",
+                payload={
+                    "deal_id": str(command.deal_id),
+                    "agreement_version_id": str(version_row.id),
+                    "version_number": version_row.version_number,
+                },
+            )
+        )
+        self._db.flush()
+        queue_deal_workflow_notification(
+            self._db,
+            deal_id=command.deal_id,
+            record_id=version_row.id,
+            kind=NotificationKind.AGREEMENT_APPROVAL_RECORDED,
+        )
+        return _agreement_to_domain(version_row, [])
+
+    def assess_amendment_impact(
+        self,
+        deal_id: UUID,
+        proposed_terms: TradeTerms | None = None,
+        pending_version_number: int | None = None,
+    ) -> AmendmentImpact:
+        deal_row = self._db.get(Deal, deal_id)
+        if deal_row is None or deal_row.current_agreement_version_id is None:
+            raise AgreementNotFound("Deal or current agreement version not found")
+
+        prior_version_row = self._db.get(AgreementVersion, deal_row.current_agreement_version_id)
+        if prior_version_row is None:
+            raise AgreementNotFound("Current agreement version not found")
+        prior_terms = TradeTerms.from_canonical_json(prior_version_row.canonical_terms_json)
+
+        if pending_version_number is not None:
+            pending_row = self._get_version(deal_id, pending_version_number)
+            if pending_row is None:
+                raise AgreementNotFound(f"Agreement version {pending_version_number} not found")
+            proposed_version_number = pending_row.version_number
+            proposed_terms = TradeTerms.from_canonical_json(pending_row.canonical_terms_json)
+        elif proposed_terms is not None:
+            pending_row = self._pending_version(deal_id)
+            if pending_row is not None:
+                proposed_version_number = pending_row.version_number
+            else:
+                proposed_version_number = self._next_version_number(deal_id)
+        else:
+            pending_row = self._pending_version(deal_id)
+            if pending_row is None:
+                raise AgreementNotFound("No pending amendment version or proposed terms to assess")
+            proposed_version_number = pending_row.version_number
+            proposed_terms = TradeTerms.from_canonical_json(pending_row.canonical_terms_json)
+
+        # 1. Fulfillment operational facts on the prior committed version
+        obligations = list(
+            self._db.scalars(
+                select(Obligation).where(
+                    Obligation.deal_id == deal_id,
+                    Obligation.agreement_version_id == prior_version_row.id,
+                    Obligation.obligation_type == "DELIVERY",
+                )
+            )
+        )
+        fulfillment_summary: list[dict[str, Any]] = []
+        for obl in obligations:
+            matching_ids = (
+                select(Obligation.id).where(
+                    Obligation.deal_id == deal_id,
+                    Obligation.source_terms_reference == obl.source_terms_reference,
+                )
+                if obl.source_terms_reference
+                else [obl.id]
+            )
+            events = list(
+                self._db.scalars(
+                    select(FulfillmentEvent).where(
+                        FulfillmentEvent.deal_id == deal_id,
+                        FulfillmentEvent.obligation_id.in_(matching_ids),
+                    )
+                )
+            )
+            shipped = sum(
+                Decimal(e.quantity) for e in events if e.event_type == "SHIPPED"
+            )
+            confirmed = sum(
+                Decimal(e.quantity) for e in events if e.event_type == "CONFIRMED"
+            )
+            unit = events[0].unit if events else ""
+            fulfillment_summary.append({
+                "obligation_reference": obl.source_terms_reference or "",
+                "item_id": None,
+                "shipped_quantity": str(shipped),
+                "confirmed_quantity": str(confirmed),
+                "unit": unit,
+            })
+
+        # 2. Payment operational facts on the prior committed version
+        milestones = list(
+            self._db.scalars(
+                select(PaymentMilestone).where(
+                    PaymentMilestone.deal_id == deal_id,
+                    PaymentMilestone.agreement_version_id == prior_version_row.id,
+                ).order_by(PaymentMilestone.sequence_number)
+            )
+        )
+        payment_summary: list[dict[str, Any]] = []
+        for m in milestones:
+            matching_milestone_ids = (
+                select(PaymentMilestone.id).where(
+                    PaymentMilestone.deal_id == deal_id,
+                    PaymentMilestone.source_terms_reference == m.source_terms_reference,
+                )
+                if m.source_terms_reference
+                else [m.id]
+            )
+            has_active = self._db.scalar(
+                select(PaymentIntent.id).where(
+                    PaymentIntent.deal_id == deal_id,
+                    PaymentIntent.payment_milestone_id.in_(matching_milestone_ids),
+                    PaymentIntent.status.not_in(["PAID", "FAILED", "CANCELLED"]),
+                ).limit(1)
+            ) is not None
+            has_paid = (m.status == "PAID") or (
+                self._db.scalar(
+                    select(PaymentIntent.id).where(
+                        PaymentIntent.deal_id == deal_id,
+                        PaymentIntent.payment_milestone_id.in_(matching_milestone_ids),
+                        PaymentIntent.status == "PAID",
+                    ).limit(1)
+                ) is not None
+            )
+            payment_summary.append({
+                "milestone_reference": m.source_terms_reference or f"payment_terms[{m.sequence_number - 1}]",
+                "amount": str(m.amount),
+                "currency": m.currency,
+                "payment_status": "PAID" if has_paid else "PENDING",
+                "has_active_intent": has_active,
+            })
+
+        return domain_assess_amendment_impact(
+            prior_version_number=prior_version_row.version_number,
+            prior_terms=prior_terms,
+            proposed_version_number=proposed_version_number,
+            proposed_terms=proposed_terms,
+            prior_fulfillment_summary=fulfillment_summary,
+            prior_payment_summary=payment_summary,
+            active_cases=[],
+        )
+
 
 class SqlAlchemyObligationRepository:
     def __init__(self, db: Session) -> None:
@@ -843,6 +1260,15 @@ class SqlAlchemyPaymentMilestoneRepository:
         obligation_ids_by_reference: dict[str, UUID],
     ) -> None:
         for draft in drafts:
+            prior_paid = False
+            if draft.source_terms_reference:
+                prior_paid = self._db.scalar(
+                    select(PaymentMilestone.id).where(
+                        PaymentMilestone.deal_id == deal_id,
+                        PaymentMilestone.source_terms_reference == draft.source_terms_reference,
+                        PaymentMilestone.status == "PAID",
+                    ).limit(1)
+                ) is not None
             self._db.add(
                 PaymentMilestone(
                     deal_id=deal_id,
@@ -855,6 +1281,7 @@ class SqlAlchemyPaymentMilestoneRepository:
                     trigger_type=draft.trigger_type,
                     due_condition=draft.due_condition,
                     source_terms_reference=draft.source_terms_reference,
+                    status="PAID" if prior_paid else "PENDING",
                 )
             )
         self._db.flush()
@@ -979,6 +1406,40 @@ def commit_agreement_in_transaction(
             now=now,
             correlation_id=correlation_id,
         )
+        db.commit()
+        return agreement
+    except Exception:
+        db.rollback()
+        raise
+
+
+def propose_amendment_in_transaction(
+    db: Session,
+    command: ProposeAmendmentCommand,
+    *,
+    now: datetime | None = None,
+) -> DomainAgreement:
+    """Run ProposeAmendment as its own transaction: commits on success, rolls back on failure."""
+    now = now or datetime.now(UTC)
+    try:
+        agreement = propose_amendment(command, SqlAlchemyAgreementRepository(db), now=now)
+        db.commit()
+        return agreement
+    except Exception:
+        db.rollback()
+        raise
+
+
+def withdraw_amendment_in_transaction(
+    db: Session,
+    command: WithdrawAmendmentCommand,
+    *,
+    now: datetime | None = None,
+) -> DomainAgreement:
+    """Run WithdrawAmendment as its own transaction: commits on success, rolls back on failure."""
+    now = now or datetime.now(UTC)
+    try:
+        agreement = withdraw_amendment(command, SqlAlchemyAgreementRepository(db), now=now)
         db.commit()
         return agreement
     except Exception:

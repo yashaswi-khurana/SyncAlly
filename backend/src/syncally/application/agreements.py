@@ -145,6 +145,31 @@ class CommitAgreementCommand:
 
 
 @dataclass(frozen=True)
+class ProposeAmendmentCommand:
+    """Input for proposing an amendment to an already committed agreement version."""
+
+    deal_id: UUID
+    author_organization_id: UUID
+    user_id: UUID
+    prior_version_number: int
+    prior_terms_hash: str
+    terms: TradeTerms
+    rationale: str | None = None
+    replace_pending_draft: bool = False
+
+
+@dataclass(frozen=True)
+class WithdrawAmendmentCommand:
+    """Input for withdrawing a pending amendment candidate."""
+
+    deal_id: UUID
+    version_number: int
+    terms_hash: str
+    user_id: UUID
+    organization_id: UUID
+
+
+@dataclass(frozen=True)
 class AuditEventDraft:
     aggregate_type: str
     aggregate_id: UUID
@@ -204,6 +229,24 @@ class AgreementRepository(Protocol):
         this exact version - the caller must then skip re-deriving
         obligations, payment milestones, and audit/outbox records.
         """
+
+    def propose_amendment(
+        self, command: ProposeAmendmentCommand, *, now: datetime
+    ) -> Agreement:
+        """Create a pending amendment version against an already-committed agreement."""
+
+    def withdraw_amendment(
+        self, command: WithdrawAmendmentCommand, *, now: datetime
+    ) -> Agreement:
+        """Withdraw/void a pending amendment candidate."""
+
+    def assess_amendment_impact(
+        self,
+        deal_id: UUID,
+        proposed_terms: TradeTerms | None = None,
+        pending_version_number: int | None = None,
+    ) -> Any:
+        """Assess fulfillment, payment, and case impact of an amendment."""
 
 
 class ObligationRepository(Protocol):
@@ -362,6 +405,13 @@ def commit_agreement(
                 "agreement_version_id": str(agreement.version_id),
                 "version_number": agreement.version_number,
                 "terms_hash": agreement.terms_hash,
+                "prior_agreement_version_id": (
+                    str(agreement.prior_agreement_version_id)
+                    if agreement.prior_agreement_version_id
+                    else None
+                ),
+                "prior_terms_hash": agreement.prior_terms_hash,
+                "is_amendment": agreement.prior_agreement_version_id is not None,
             },
         )
     )
@@ -373,7 +423,45 @@ def commit_agreement(
             payload={
                 "deal_id": str(command.deal_id),
                 "agreement_version_id": str(agreement.version_id),
+                "version_number": agreement.version_number,
+                "is_amendment": agreement.prior_agreement_version_id is not None,
             },
         )
     )
     return agreement
+
+
+def propose_amendment(
+    command: ProposeAmendmentCommand,
+    repository: AgreementRepository,
+    *,
+    now: datetime | None = None,
+) -> Agreement:
+    """Validate proposed terms and persist an amendment candidate."""
+    command.terms.validate_for_commit()
+    return repository.propose_amendment(command, now=now or datetime.now(UTC))
+
+
+def withdraw_amendment(
+    command: WithdrawAmendmentCommand,
+    repository: AgreementRepository,
+    *,
+    now: datetime | None = None,
+) -> Agreement:
+    """Withdraw a pending amendment candidate."""
+    return repository.withdraw_amendment(command, now=now or datetime.now(UTC))
+
+
+def assess_amendment_impact(
+    deal_id: UUID,
+    repository: AgreementRepository,
+    *,
+    proposed_terms: TradeTerms | None = None,
+    pending_version_number: int | None = None,
+) -> Any:
+    """Assess impacts of an amendment on fulfillment and payments."""
+    return repository.assess_amendment_impact(
+        deal_id,
+        proposed_terms=proposed_terms,
+        pending_version_number=pending_version_number,
+    )

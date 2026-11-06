@@ -8,9 +8,13 @@ import {
   getAgreementHistory,
   getAgreementVersion,
   compareAgreementVersions,
+  getAmendmentImpact,
   listOrganizations,
   recordAgreementDecision,
   getTradePack,
+  withdrawAmendment,
+  proposeAmendment,
+  previewAmendmentImpact,
 } from "../api/client";
 import type { AgreementVersion, Organization } from "../api/types";
 import AgreementReview from "./AgreementReview";
@@ -24,9 +28,13 @@ vi.mock("../api/client", async (importOriginal) => {
     getAgreementHistory: vi.fn(),
     getAgreementVersion: vi.fn(),
     compareAgreementVersions: vi.fn(),
+    getAmendmentImpact: vi.fn(),
     listOrganizations: vi.fn(),
     recordAgreementDecision: vi.fn(),
     getTradePack: vi.fn(),
+    withdrawAmendment: vi.fn(),
+    proposeAmendment: vi.fn(),
+    previewAmendmentImpact: vi.fn(),
   };
 });
 
@@ -85,6 +93,10 @@ const mockedGetCurrent = vi.mocked(getCurrentAgreement);
 const mockedCommitAgreement = vi.mocked(commitAgreementVersion);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedRecordDecision = vi.mocked(recordAgreementDecision);
+const mockedWithdrawAmendment = vi.mocked(withdrawAmendment);
+const mockedGetAmendmentImpact = vi.mocked(getAmendmentImpact);
+const mockedProposeAmendment = vi.mocked(proposeAmendment);
+const mockedPreviewAmendmentImpact = vi.mocked(previewAmendmentImpact);
 
 function renderReview() {
   return render(
@@ -99,8 +111,30 @@ function renderReview() {
 describe("AgreementReview", () => {
   beforeEach(() => {
     vi.mocked(getAgreementHistory).mockResolvedValue({ deal_id: DEAL_ID, organization_id: BUYER_ID, current_version_id: "current", versions: [AGREEMENT, { ...AGREEMENT, id: "old", version_number: 2, status: "SUPERSEDED" }] });
-    vi.mocked(getAgreementVersion).mockImplementation(async (_deal, number) => ({ ...AGREEMENT, id: number === 2 ? "old" : "current", version_number: number, status: number === 2 ? "SUPERSEDED" : "PENDING_APPROVAL" }));
+    vi.mocked(getAgreementVersion).mockImplementation(async (_deal, number) => ({
+      ...AGREEMENT,
+      id: number === 2 ? "old" : "current",
+      version_number: number,
+      terms_hash: number === 4 ? "b".repeat(64) : AGREEMENT.terms_hash,
+      status: number === 2 ? "SUPERSEDED" : "PENDING_APPROVAL",
+    }));
     vi.mocked(compareAgreementVersions).mockResolvedValue({ before: { ...AGREEMENT, version_number: 2 }, after: AGREEMENT, changes: { fields: [], collections: {} } });
+    mockedGetAmendmentImpact.mockResolvedValue({
+      prior_version_number: 1,
+      prior_terms_hash: "0".repeat(64),
+      proposed_version_number: 3,
+      proposed_terms_hash: AGREEMENT.terms_hash,
+      diff: { fields: [], collections: {} },
+      fulfillment_impact: [],
+      payment_impact: [],
+      active_cases: [],
+      blockers: [],
+      can_commit: true,
+    });
+    mockedWithdrawAmendment.mockResolvedValue({
+      ...AGREEMENT,
+      status: "VOIDED",
+    });
     mockedGetCurrent.mockResolvedValue(AGREEMENT);
     mockedListOrganizations.mockResolvedValue([BUYER]);
     mockedRecordDecision.mockResolvedValue({
@@ -246,7 +280,7 @@ describe("AgreementReview", () => {
         BUYER_ID,
       ),
     );
-    expect(await screen.findByText("APPROVE")).toBeInTheDocument();
+    expect(await screen.findByText("Approved")).toBeInTheDocument();
     expect(mockedGetCurrent).toHaveBeenCalledTimes(2);
   });
 
@@ -524,5 +558,270 @@ describe("AgreementReview", () => {
     expect(await screen.findByText("History unavailable")).toBeInTheDocument();
     expect(onOverviewChange).not.toHaveBeenCalledWith(expect.objectContaining({ status: "empty" }));
     expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({ status: "error" }));
+  });
+
+  it("renders amendment lineage badge, prior hash and rationale when version_number > 1", async () => {
+    const amendmentVersion: AgreementVersion = {
+      ...AGREEMENT,
+      version_number: 2,
+      prior_terms_hash: "f".repeat(64),
+      amendment_rationale: "Price adjustment agreed by both parties",
+    };
+    mockedGetCurrent.mockResolvedValue(amendmentVersion);
+    vi.mocked(getAgreementVersion).mockResolvedValue(amendmentVersion);
+
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+      />,
+    );
+
+    expect(await screen.findByText("Amends version 1")).toBeInTheDocument();
+    expect(screen.getByText(/Price adjustment agreed by both parties/)).toBeInTheDocument();
+    expect(screen.getByText(/Prior hash:/)).toBeInTheDocument();
+  });
+
+  it("renders withdraw amendment button for pending amendment version > 1 and calls withdrawAmendment", async () => {
+    const amendmentVersion: AgreementVersion = {
+      ...AGREEMENT,
+      version_number: 2,
+      prior_terms_hash: "f".repeat(64),
+      status: "PENDING_APPROVAL",
+    };
+    mockedGetCurrent.mockResolvedValue(amendmentVersion);
+    vi.mocked(getAgreementVersion).mockResolvedValue(amendmentVersion);
+
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+      />,
+    );
+
+    const withdrawBtn = await screen.findByRole("button", { name: "Withdraw amendment" });
+    expect(withdrawBtn).toBeInTheDocument();
+    fireEvent.click(withdrawBtn);
+
+    await waitFor(() => {
+      expect(mockedWithdrawAmendment).toHaveBeenCalledWith(
+        DEAL_ID,
+        2,
+        amendmentVersion.terms_hash,
+        BUYER_ID,
+      );
+    });
+  });
+
+  it("disables commit button and displays blocker warning when amendment impact has can_commit === false", async () => {
+    const bothApprovedAmendment: AgreementVersion = {
+      ...AGREEMENT,
+      version_number: 2,
+      prior_terms_hash: "f".repeat(64),
+      status: "PENDING_APPROVAL",
+      approvals: [
+        {
+          deal_id: DEAL_ID,
+          version_number: 2,
+          organization_id: BUYER_ID,
+          user_id: "buyer-user",
+          decision: "APPROVE",
+          terms_hash: AGREEMENT.terms_hash,
+          created_at: "2026-10-19T10:01:00Z",
+        },
+        {
+          deal_id: DEAL_ID,
+          version_number: 2,
+          organization_id: SELLER_ID,
+          user_id: "seller-user",
+          decision: "APPROVE",
+          terms_hash: AGREEMENT.terms_hash,
+          created_at: "2026-10-19T10:01:00Z",
+        },
+      ],
+    };
+    mockedGetCurrent.mockResolvedValue(bothApprovedAmendment);
+    vi.mocked(getAgreementVersion).mockResolvedValue(bothApprovedAmendment);
+    mockedGetAmendmentImpact.mockResolvedValue({
+      prior_version_number: 1,
+      prior_terms_hash: "f".repeat(64),
+      proposed_version_number: 2,
+      proposed_terms_hash: AGREEMENT.terms_hash,
+      diff: { fields: [], collections: {} },
+      fulfillment_impact: [],
+      payment_impact: [],
+      active_cases: [],
+      blockers: ["Fulfilled obligations cannot be reduced"],
+      can_commit: false,
+    });
+
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Cannot commit amendment: unresolved policy blockers must be addressed."),
+    ).toBeInTheDocument();
+    const commitBtn = screen.getByRole("button", { name: "Commit approved agreement" });
+    expect(commitBtn).toBeDisabled();
+  });
+
+  it("allows reviewing and approving a pending amendment candidate selected from version dropdown", async () => {
+    const committedV1: AgreementVersion = {
+      ...AGREEMENT,
+      id: "v1",
+      version_number: 1,
+      status: "COMMITTED",
+      committed_at: "2026-10-19T09:00:00Z",
+    };
+    const pendingV2: AgreementVersion = {
+      ...AGREEMENT,
+      id: "v2",
+      version_number: 2,
+      status: "PENDING_APPROVAL",
+      prior_terms_hash: committedV1.terms_hash,
+      amendment_rationale: "Increase quantity for demand spike",
+      approvals: [],
+    };
+
+    mockedGetCurrent.mockResolvedValue(committedV1);
+    vi.mocked(getAgreementHistory).mockResolvedValue({
+      deal_id: DEAL_ID,
+      organization_id: BUYER_ID,
+      current_version_id: "v1",
+      versions: [pendingV2, committedV1],
+    });
+    vi.mocked(getAgreementVersion).mockImplementation(async (_deal, number) => {
+      if (number === 2) return pendingV2;
+      return committedV1;
+    });
+
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+      />,
+    );
+
+    // Initial view shows committed V1 and the pending notice banner
+    expect(await screen.findByText("This agreement is committed. Its terms are read-only and cannot be changed in place.")).toBeInTheDocument();
+    expect(await screen.findByText("An amendment (Version 2) is awaiting approval.")).toBeInTheDocument();
+
+    // Click banner button to switch to Version 2
+    fireEvent.click(await screen.findByRole("button", { name: "Review pending amendment (Version 2)" }));
+
+    // Now viewing Version 2
+    expect(await screen.findByText("Amends version 1")).toBeInTheDocument();
+    expect(screen.getByText(/Increase quantity for demand spike/)).toBeInTheDocument();
+    expect(screen.queryByText("Historical version · Read-only")).not.toBeInTheDocument();
+
+    // Decision buttons are available
+    const approveBtn = screen.getByRole("button", { name: "Approve this version" });
+    expect(approveBtn).toBeEnabled();
+    const withdrawBtn = screen.getByRole("button", { name: "Withdraw amendment" });
+    expect(withdrawBtn).toBeEnabled();
+
+    // Approve Version 2
+    fireEvent.click(approveBtn);
+    await waitFor(() => {
+      expect(mockedRecordDecision).toHaveBeenCalledWith(
+        DEAL_ID,
+        2,
+        pendingV2.terms_hash,
+        "approve",
+        BUYER_ID,
+      );
+    });
+  });
+
+  it("allows proposing an amendment from a committed agreement when no pending candidate exists", async () => {
+    const committedV1: AgreementVersion = {
+      ...AGREEMENT,
+      id: "v1",
+      version_number: 1,
+      status: "COMMITTED",
+      committed_at: "2026-10-19T09:00:00Z",
+    };
+
+    mockedGetCurrent.mockResolvedValue(committedV1);
+    vi.mocked(getAgreementHistory).mockResolvedValue({
+      deal_id: DEAL_ID,
+      organization_id: BUYER_ID,
+      current_version_id: "v1",
+      versions: [committedV1],
+    });
+    vi.mocked(getAgreementVersion).mockResolvedValue(committedV1);
+    mockedPreviewAmendmentImpact.mockResolvedValue({
+      prior_version_number: 1,
+      prior_terms_hash: committedV1.terms_hash,
+      proposed_version_number: 2,
+      proposed_terms_hash: "new-hash",
+      diff: { fields: [], collections: {} },
+      fulfillment_impact: [],
+      payment_impact: [],
+      active_cases: [],
+      blockers: [],
+      can_commit: true,
+    });
+    mockedProposeAmendment.mockResolvedValue({
+      ...committedV1,
+      id: "v2",
+      version_number: 2,
+      status: "PENDING_APPROVAL",
+    });
+
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+      />,
+    );
+
+    // Initial committed view without pending candidate has "Propose amendment"
+    const proposeBtn = await screen.findByRole("button", { name: "Propose amendment" });
+    expect(proposeBtn).toBeInTheDocument();
+    fireEvent.click(proposeBtn);
+
+    // Form is displayed
+    const rationaleInput = screen.getByLabelText("Amendment rationale (required)");
+    const submitBtn = screen.getByRole("button", { name: "Submit amendment proposal" });
+    expect(submitBtn).toBeDisabled();
+
+    // Enter rationale
+    fireEvent.change(rationaleInput, { target: { value: "Expanding delivery scope" } });
+    expect(submitBtn).toBeEnabled();
+
+    // Preview impact
+    const previewBtn = screen.getByRole("button", { name: "Preview operational impact" });
+    fireEvent.click(previewBtn);
+    await waitFor(() => {
+      expect(mockedPreviewAmendmentImpact).toHaveBeenCalledWith(DEAL_ID, expect.objectContaining({
+        organization_id: BUYER_ID,
+      }));
+    });
+
+    // Submit amendment
+    fireEvent.click(submitBtn);
+    await waitFor(() => {
+      expect(mockedProposeAmendment).toHaveBeenCalledWith(DEAL_ID, expect.objectContaining({
+        prior_version_number: 1,
+        prior_terms_hash: committedV1.terms_hash,
+        rationale: "Expanding delivery scope",
+        organization_id: BUYER_ID,
+      }));
+    });
   });
 });

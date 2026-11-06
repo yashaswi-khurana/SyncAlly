@@ -48,6 +48,9 @@ class AgreementVersion(Base):
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING_APPROVAL")
     created_by: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("users.id"), nullable=False)
+    prior_agreement_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("agreement_versions.id"), nullable=True)
+    prior_terms_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    amendment_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -50,6 +50,9 @@ class Agreement:
     created_at: datetime
     approvals: Mapping[OrganizationId, Approval] = field(default_factory=dict)
     committed_at: datetime | None = None
+    prior_agreement_version_id: AgreementVersionId | None = None
+    prior_terms_hash: str | None = None
+    amendment_rationale: str | None = None
     _status: AgreementStatus = field(default=AgreementStatus.PENDING_APPROVAL, init=False, repr=False)
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -58,7 +61,7 @@ class Agreement:
             raise InvalidTransition("Finalized agreement versions are immutable; create a new version")
         if name == "_status" and hasattr(self, "_status"):
             raise InvalidTransition("Agreement status changes must use domain methods")
-        if name in {"id", "version_id", "deal_id", "version_number", "created_at"} and hasattr(self, name):
+        if name in {"id", "version_id", "deal_id", "version_number", "created_at", "prior_agreement_version_id", "prior_terms_hash"} and hasattr(self, name):
             raise InvalidTransition("Agreement version identity is immutable")
         object.__setattr__(self, name, value)
 
@@ -106,12 +109,17 @@ class Agreement:
         self._ensure_pending()
         object.__setattr__(self, "_status", AgreementStatus.SUPERSEDED)
 
+    def void(self) -> None:
+        self._ensure_pending()
+        object.__setattr__(self, "_status", AgreementStatus.VOIDED)
+
     def create_next_version(
         self,
         *,
         version_id: AgreementVersionId,
         terms: TradeTerms,
         created_at: datetime,
+        rationale: str | None = None,
     ) -> Agreement:
         if self.status is not AgreementStatus.COMMITTED:
             raise InvalidTransition("Only a committed agreement can create a new version")
@@ -128,6 +136,9 @@ class Agreement:
             version_number=self.version_number + 1,
             terms=terms,
             created_at=created_at,
+            prior_agreement_version_id=self.version_id,
+            prior_terms_hash=self.terms_hash,
+            amendment_rationale=rationale,
         )
 
     def _ensure_pending(self) -> None:

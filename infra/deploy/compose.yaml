@@ -42,7 +42,7 @@ services:
       retries: 20
 
   temporal-schema:
-    image: temporalio/admin-tools:${TEMPORAL_VERSION:-1.32.1}
+    image: temporalio/admin-tools:${TEMPORAL_VERSION:-1.32.2}
     restart: "no"
     depends_on:
       db:
@@ -60,7 +60,7 @@ services:
       - ./setup-temporal-postgres.sh:/scripts/setup-temporal-postgres.sh:ro
 
   temporal:
-    image: temporalio/server:${TEMPORAL_VERSION:-1.32.1}
+    image: temporalio/server:${TEMPORAL_VERSION:-1.32.2}
     restart: unless-stopped
     depends_on:
       temporal-schema:
@@ -87,7 +87,7 @@ services:
     # Port 7233 stays private; Caddy terminates public TLS on TEMPORAL_DOMAIN.
 
   temporal-namespace:
-    image: temporalio/admin-tools:${TEMPORAL_VERSION:-1.32.1}
+    image: temporalio/admin-tools:${TEMPORAL_VERSION:-1.32.2}
     restart: "no"
     depends_on:
       temporal:

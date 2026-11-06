@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { ApiError, listDeals } from "../api/client";
+import { ApiError, getOrganization, listDeals } from "../api/client";
 import type { DealSummary, ViewerRole } from "../api/types";
 import Reveal from "../ui/Reveal";
 
@@ -33,6 +33,7 @@ function describeError(caught: unknown): string {
 export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) {
   const [state, setState] = useState<DealsState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
+  const [organizationNames, setOrganizationNames] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +53,23 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
       cancelled = true;
     };
   }, [reloadCount]);
+
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    let cancelled = false;
+    // An unaccepted counterparty is an inactive shell and must not be looked up.
+    const ids = new Set(state.deals.flatMap((deal) => {
+      if (deal.pending_counterparty) return [];
+      if (deal.viewer_role === "BOTH") return [deal.buyer_organization_id, deal.seller_organization_id];
+      return [deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id];
+    }));
+    for (const id of ids) {
+      void getOrganization(id).then((organization) => {
+        if (!cancelled) setOrganizationNames((names) => ({ ...names, [id]: organization.legal_name }));
+      }).catch(() => {});
+    }
+    return () => { cancelled = true; };
+  }, [state]);
 
   function retryDeals() {
     setState({ status: "loading" });
@@ -108,7 +126,14 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
                 <div className="deal-meta">
                   <span className="badge">{deal.status}</span>
                   <span className="deal-role">{ROLE_LABELS[deal.viewer_role]}</span>
-                  <span className="mono">{deal.id}</span>
+                  {deal.pending_counterparty ? <span>Waiting for trading partner to join</span> : (
+                    <span>
+                      {deal.viewer_role === "BOTH"
+                        ? `${organizationNames[deal.buyer_organization_id] ?? "Buyer"} ↔ ${organizationNames[deal.seller_organization_id] ?? "Seller"}`
+                        : `Trading partner: ${organizationNames[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id] ?? "Name unavailable"}`}
+                    </span>
+                  )}
+                  <span className="mono">Reference: {deal.id}</span>
                 </div>
                 <button
                   type="button"

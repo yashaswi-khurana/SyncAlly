@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, listDeals, listOrganizations } from "../api/client";
+import { ApiError, getOrganization, listDeals, listOrganizations } from "../api/client";
 import type { DealSummary } from "../api/types";
 import DealsPage from "./DealsPage";
 
@@ -11,11 +11,13 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     listDeals: vi.fn(),
     listOrganizations: vi.fn(),
+    getOrganization: vi.fn().mockRejectedValue(new Error("Unavailable")),
   };
 });
 
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
+const mockedGetOrganization = vi.mocked(getOrganization);
 
 function deal(overrides: Partial<DealSummary> = {}): DealSummary {
   return {
@@ -72,6 +74,47 @@ describe("DealsPage", () => {
     render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
 
     expect(await screen.findByText("You are the seller")).toBeInTheDocument();
+  });
+
+  it("shows the other party to buyers and sellers and keeps both parties identifiable", async () => {
+    mockedListDeals.mockResolvedValue([
+      deal(), deal({ id: "deal-2", viewer_role: "SELLER" }),
+      deal({ id: "deal-3", viewer_role: "BOTH" }),
+    ]);
+    mockedGetOrganization.mockImplementation(async (id) => ({
+      id, legal_name: id.startsWith("111") ? "Buyer Co" : "Seller Co", country_code: "US",
+    }));
+    render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
+    expect(await screen.findByText("Trading partner: Seller Co")).toBeInTheDocument();
+    expect(screen.getByText("Trading partner: Buyer Co")).toBeInTheDocument();
+    expect(screen.getByText("Buyer Co ↔ Seller Co")).toBeInTheDocument();
+    expect(mockedGetOrganization).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not look up an unclaimed counterparty and still lists deals when lookups fail", async () => {
+    mockedListDeals.mockResolvedValue([
+      deal({ pending_counterparty: true, seller_organization_id: "unclaimed-shell" }),
+      deal({ id: "deal-2" }),
+    ]);
+    mockedGetOrganization.mockRejectedValue(new ApiError(404, "Organization not found"));
+    render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
+    expect(await screen.findByText("Waiting for trading partner to join")).toBeInTheDocument();
+    expect(screen.getByText("Trading partner: Name unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Reference: deal-1")).toBeInTheDocument();
+    expect(screen.getByText("Reference: deal-2")).toBeInTheDocument();
+    expect(mockedGetOrganization).not.toHaveBeenCalledWith("unclaimed-shell");
+  });
+
+  it("shows available partner names without waiting for another lookup", async () => {
+    mockedListDeals.mockResolvedValue([
+      deal(), deal({ id: "deal-2", seller_organization_id: "other-seller" }),
+    ]);
+    mockedGetOrganization.mockImplementation((id) => id === "other-seller"
+      ? new Promise(() => {})
+      : Promise.resolve({ id, legal_name: "Seller Co", country_code: "US" }));
+    render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
+    expect(await screen.findByText("Trading partner: Seller Co")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Open deal" })).toHaveLength(2);
   });
 
   it("shows an empty state when the actor has no deals", async () => {

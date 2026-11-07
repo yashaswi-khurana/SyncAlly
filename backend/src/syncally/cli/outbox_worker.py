@@ -29,6 +29,7 @@ def _connect_with_retry(*, poll_interval: float) -> TemporalDealWorkflowStarter:
                 namespace=settings.temporal_namespace,
                 task_queue=settings.temporal_task_queue,
                 tls=settings.temporal_tls,
+                api_key=settings.temporal_api_key.get_secret_value() or None,
             )
         except temporalio.service.RPCError as error:
             if is_permanent_rpc_error(error):

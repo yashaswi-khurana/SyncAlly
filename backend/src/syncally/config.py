@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     temporal_task_queue: str = "syncally-deals"
     temporal_tls: bool = False
+    temporal_api_key: SecretStr = SecretStr("")
     outbox_poll_interval_seconds: float = 2.0
     outbox_batch_size: int = 25
     ai_provider: Literal["offline", "openai", "openai_with_offline_fallback"] = "offline"

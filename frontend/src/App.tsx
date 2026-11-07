@@ -34,6 +34,26 @@ export default function App() {
   }, [currentSessionKey]);
 
   useEffect(() => {
+    function handleExpiredSession() {
+      sessionRef.current = null;
+      setOrganizations(null);
+      setToast(null);
+      signOut();
+    }
+    function handleStorageChange(event: StorageEvent) {
+      if (event.key === "syncally.accessToken" && event.newValue === null && accessToken) {
+        handleExpiredSession();
+      }
+    }
+    window.addEventListener("syncally:session-expired", handleExpiredSession);
+    window.addEventListener("storage", handleStorageChange);
+    return () => {
+      window.removeEventListener("syncally:session-expired", handleExpiredSession);
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [accessToken, signOut]);
+
+  useEffect(() => {
     if (!accessToken) return;
     let cancelled = false;
     void (async () => {

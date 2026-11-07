@@ -1,0 +1,314 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SyncAlly Temporal and payment workers on private ECS Fargate tasks.
+
+Parameters:
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets in two or more AZs. Use private subnets plus NAT with AssignPublicIp DISABLED, or public subnets for a sandbox with AssignPublicIp ENABLED.
+  WorkerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Egress-only worker group; permit PostgreSQL and HTTPS/gRPC egress.
+  ImageUri:
+    Type: String
+    Description: Immutable ECR image URI including tag or digest.
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose SecretString is the full SQLAlchemy DATABASE_URL.
+  JwtSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose SecretString is the production JWT signing secret.
+  PublicFrontendUrl:
+    Type: String
+    Description: Public HTTPS URL used by production configuration validation.
+  TemporalAddress:
+    Type: String
+    Description: Temporal Cloud endpoint host and port, usually namespace address ending in :7233.
+  TemporalNamespace:
+    Type: String
+  TemporalApiKeySecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose SecretString is the Temporal Cloud API key.
+  AppEnv:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+  TaskCpu:
+    Type: String
+    Default: '512'
+    AllowedValues: ['256', '512', '1024', '2048', '4096']
+  TaskMemory:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048', '3072', '4096', '5120', '6144', '7168', '8192', '9216', '10240', '12288', '16384', '20480', '24576', '30720']
+  WorkflowWorkerCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+  OutboxWorkerCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+  PaymentWorkerCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+  AssignPublicIp:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Enable public task IPs only for a sandbox in public subnets with no inbound security-group rules.
+  DeployPaymentWorker:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Set true only when deploying the non-Temporal payment worker.
+  DeployWorkerServices:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Keep false until the one-off Alembic migration succeeds, then update to true.
+  PaypalCredentialsSecretArn:
+    Type: String
+    Default: ''
+    Description: Optional JSON SecretString with PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_WEBHOOK_ID.
+
+Conditions:
+  HasPaypalCredentials: !Not [!Equals [!Ref PaypalCredentialsSecretArn, '']]
+  DeployWorkerServicesCondition: !Equals [!Ref DeployWorkerServices, 'true']
+  DeployPayment: !And
+    - !Condition DeployWorkerServicesCondition
+    - !Equals [!Ref DeployPaymentWorker, 'true']
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${AWS::StackName}-workers'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadSyncAllyTaskSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue]
+                Resource:
+                  - !Ref DatabaseUrlSecretArn
+                  - !Ref JwtSecretArn
+                  - !Ref TemporalApiKeySecretArn
+                  - !If [HasPaypalCredentials, !Ref PaypalCredentialsSecretArn, !Ref AWS::NoValue]
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+
+  CommonLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/syncally/${AWS::StackName}/workers'
+      RetentionInDays: 30
+
+  WorkflowTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-workflow'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform: {OperatingSystemFamily: LINUX, CpuArchitecture: X86_64}
+      ContainerDefinitions:
+        - Name: workflow-worker
+          Image: !Ref ImageUri
+          Essential: true
+          Command: [python, -m, syncally.workflows.worker]
+          Environment:
+            - {Name: APP_ENV, Value: !Ref AppEnv}
+            - {Name: PUBLIC_FRONTEND_URL, Value: !Ref PublicFrontendUrl}
+            - {Name: TEMPORAL_ADDRESS, Value: !Ref TemporalAddress}
+            - {Name: TEMPORAL_NAMESPACE, Value: !Ref TemporalNamespace}
+            - {Name: TEMPORAL_TASK_QUEUE, Value: syncally-deals}
+            - {Name: TEMPORAL_TLS, Value: 'true'}
+          Secrets:
+            - {Name: DATABASE_URL, ValueFrom: !Ref DatabaseUrlSecretArn}
+            - {Name: JWT_SECRET, ValueFrom: !Ref JwtSecretArn}
+            - {Name: TEMPORAL_API_KEY, ValueFrom: !Ref TemporalApiKeySecretArn}
+          LogConfiguration: &workerLogs
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CommonLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: workflow
+
+  OutboxTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-outbox'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform: {OperatingSystemFamily: LINUX, CpuArchitecture: X86_64}
+      ContainerDefinitions:
+        - Name: outbox-worker
+          Image: !Ref ImageUri
+          Essential: true
+          Command: [python, -m, syncally.cli.outbox_worker]
+          Environment:
+            - {Name: APP_ENV, Value: !Ref AppEnv}
+            - {Name: PUBLIC_FRONTEND_URL, Value: !Ref PublicFrontendUrl}
+            - {Name: TEMPORAL_ADDRESS, Value: !Ref TemporalAddress}
+            - {Name: TEMPORAL_NAMESPACE, Value: !Ref TemporalNamespace}
+            - {Name: TEMPORAL_TASK_QUEUE, Value: syncally-deals}
+            - {Name: TEMPORAL_TLS, Value: 'true'}
+          Secrets:
+            - {Name: DATABASE_URL, ValueFrom: !Ref DatabaseUrlSecretArn}
+            - {Name: JWT_SECRET, ValueFrom: !Ref JwtSecretArn}
+            - {Name: TEMPORAL_API_KEY, ValueFrom: !Ref TemporalApiKeySecretArn}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CommonLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: outbox
+
+  PaymentTask:
+    Condition: DeployPayment
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-payment'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform: {OperatingSystemFamily: LINUX, CpuArchitecture: X86_64}
+      ContainerDefinitions:
+        - Name: payment-worker
+          Image: !Ref ImageUri
+          Essential: true
+          Command: [python, -m, syncally.cli.payment_worker]
+          Environment:
+            - {Name: APP_ENV, Value: !Ref AppEnv}
+            - {Name: PUBLIC_FRONTEND_URL, Value: !Ref PublicFrontendUrl}
+            - {Name: PAYMENT_MODE, Value: PAYPAL_SANDBOX}
+          Secrets:
+            - {Name: DATABASE_URL, ValueFrom: !Ref DatabaseUrlSecretArn}
+            - {Name: JWT_SECRET, ValueFrom: !Ref JwtSecretArn}
+            - !If
+              - HasPaypalCredentials
+              - {Name: PAYPAL_CLIENT_ID, ValueFrom: !Sub '${PaypalCredentialsSecretArn}:PAYPAL_CLIENT_ID::'}
+              - !Ref AWS::NoValue
+            - !If
+              - HasPaypalCredentials
+              - {Name: PAYPAL_CLIENT_SECRET, ValueFrom: !Sub '${PaypalCredentialsSecretArn}:PAYPAL_CLIENT_SECRET::'}
+              - !Ref AWS::NoValue
+            - !If
+              - HasPaypalCredentials
+              - {Name: PAYPAL_WEBHOOK_ID, ValueFrom: !Sub '${PaypalCredentialsSecretArn}:PAYPAL_WEBHOOK_ID::'}
+              - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CommonLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: payment
+
+  WorkflowService:
+    Condition: DeployWorkerServicesCondition
+    Type: AWS::ECS::Service
+    DependsOn: [Cluster]
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-workflow'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref WorkflowWorkerCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      TaskDefinition: !Ref WorkflowTask
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: !Ref AssignPublicIp
+          SecurityGroups: [!Ref WorkerSecurityGroupId]
+          Subnets: !Ref SubnetIds
+
+  OutboxService:
+    Condition: DeployWorkerServicesCondition
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-outbox'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref OutboxWorkerCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      TaskDefinition: !Ref OutboxTask
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: !Ref AssignPublicIp
+          SecurityGroups: [!Ref WorkerSecurityGroupId]
+          Subnets: !Ref SubnetIds
+
+  PaymentService:
+    Condition: DeployPayment
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-payment'
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: !Ref PaymentWorkerCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      TaskDefinition: !Ref PaymentTask
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: !Ref AssignPublicIp
+          SecurityGroups: [!Ref WorkerSecurityGroupId]
+          Subnets: !Ref SubnetIds
+
+Outputs:
+  EcsClusterName:
+    Value: !Ref Cluster
+  WorkflowServiceName:
+    Condition: DeployWorkerServicesCondition
+    Value: !GetAtt WorkflowService.Name
+  OutboxServiceName:
+    Condition: DeployWorkerServicesCondition
+    Value: !GetAtt OutboxService.Name
+  PaymentServiceName:
+    Condition: DeployPayment
+    Value: !GetAtt PaymentService.Name
+  WorkerLogGroup:
+    Value: !Ref CommonLogGroup
+  WorkflowTaskDefinition:
+    Value: !Ref WorkflowTask
+  WorkerSecurityGroupId:
+    Value: !Ref WorkerSecurityGroupId

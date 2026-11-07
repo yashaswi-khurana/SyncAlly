@@ -30,6 +30,7 @@ class Deal:
     current_agreement_version_id: AgreementVersionId | None = None
     version: int = 0
     pending_counterparty: bool = False
+    display_name: str | None = None
 
     def __init__(
         self,
@@ -41,11 +42,13 @@ class Deal:
         current_agreement_version_id: AgreementVersionId | None = None,
         version: int = 0,
         pending_counterparty: bool = False,
+        display_name: str | None = None,
     ) -> None:
         self.id = id
         self.buyer_organization_id = buyer_organization_id
         self.seller_organization_id = seller_organization_id
         self.created_at = created_at
+        self.display_name = display_name.strip() if display_name and display_name.strip() else None
         self._status = status
         self.current_agreement_version_id = current_agreement_version_id
         self.version = version

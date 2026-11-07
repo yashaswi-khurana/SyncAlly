@@ -53,7 +53,13 @@ class TemporalDealWorkflowStarter:
 
     @classmethod
     def connect(
-        cls, *, address: str, namespace: str, task_queue: str, tls: bool = False
+        cls,
+        *,
+        address: str,
+        namespace: str,
+        task_queue: str,
+        tls: bool = False,
+        api_key: str | None = None,
     ) -> TemporalDealWorkflowStarter:
         # One event loop for the worker process's whole lifetime,
         # shared by connect() and every start_deal_workflow() call, instead
@@ -61,7 +67,12 @@ class TemporalDealWorkflowStarter:
         loop = asyncio.new_event_loop()
         try:
             client = loop.run_until_complete(
-                temporalio.client.Client.connect(address, namespace=namespace, tls=tls)
+                temporalio.client.Client.connect(
+                    address,
+                    namespace=namespace,
+                    tls=tls,
+                    api_key=api_key or None,
+                )
             )
         except BaseException:
             loop.close()

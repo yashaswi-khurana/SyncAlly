@@ -584,7 +584,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               }}>Add Line Item</button>
 
               {items.map((it, idx) => (
-                <div key={idx} className="collection-item-row" style={{ border: "1px solid #ccc", padding: "8px", margin: "8px 0" }}>
+                <div key={idx} className="collection-item-row">
                   <div>
                     <label>ID: <input type="text" aria-label={`Item ID ${idx + 1}`} value={it.id} onChange={(e) => {
                       const updated = [...items];
@@ -651,7 +651,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               }}>Add Shipment</button>
 
               {shipments.map((s, idx) => (
-                <div key={idx} className="collection-shipment-row" style={{ border: "1px solid #ccc", padding: "8px", margin: "8px 0" }}>
+                <div key={idx} className="collection-shipment-row">
                   <div>
                     <label>ID: <input type="text" aria-label={`Shipment ID ${idx + 1}`} value={s.id} onChange={(e) => {
                       const updated = [...shipments];
@@ -683,7 +683,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                       setIsDirty(true);
                     }}>Add Allocation</button>
                     {s.allocations.map((a, aIdx) => (
-                      <div key={aIdx} style={{ margin: "4px 0" }}>
+                      <div key={aIdx} className="collection-allocation-row">
                         <label>Item: <input type="text" aria-label={`Shipment ${idx + 1} allocation line item ${aIdx + 1}`} value={a.line_item_id} onChange={(e) => {
                           const updated = [...shipments];
                           updated[idx].allocations[aIdx].line_item_id = e.target.value;
@@ -733,7 +733,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               }}>Add Payment Term</button>
 
               {payments.map((p, idx) => (
-                <div key={idx} className="collection-payment-row" style={{ border: "1px solid #ccc", padding: "8px", margin: "8px 0" }}>
+                <div key={idx} className="collection-payment-row">
                   <div>
                     <label>ID: <input type="text" aria-label={`Payment term ID ${idx + 1}`} value={p.id} onChange={(e) => {
                       const updated = [...payments];
@@ -776,7 +776,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                       setIsDirty(true);
                     }}>Add Allocation</button>
                     {p.allocations.map((a, aIdx) => (
-                      <div key={aIdx} style={{ margin: "4px 0" }}>
+                      <div key={aIdx} className="collection-allocation-row">
                         <label>Obligation: <input type="text" aria-label={`Payment term ${idx + 1} allocation obligation ${aIdx + 1}`} value={a.obligation_id} onChange={(e) => {
                           const updated = [...payments];
                           updated[idx].allocations[aIdx].obligation_id = e.target.value;

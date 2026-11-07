@@ -156,7 +156,7 @@ export default function OrganizationsPanel() {
     <section className="card" aria-labelledby="organizations-heading">
       <div className="panel-head">
         <span className="eyebrow">Your organizations</span>
-        <h2 id="organizations-heading">Organization IDs</h2>
+        <h2 id="organizations-heading">Your organizations</h2>
       </div>
       <p className="muted">
         View your organizations and their reference IDs. Trading partners can search for your
@@ -244,7 +244,7 @@ export default function OrganizationsPanel() {
             <div className="panel-head" style={{ marginBottom: 0 }}>
               <span className="eyebrow">Members</span>
               <h3 className="display" style={{ fontSize: "1.25rem" }}>
-                Invite a member
+                Add an existing member
               </h3>
             </div>
             <div className="field">

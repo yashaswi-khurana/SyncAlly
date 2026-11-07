@@ -145,7 +145,11 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, respon
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new ApiError(response.status, await readErrorDetail(response));
+      const detail = await readErrorDetail(response);
+      if (response.status === 401 && token && typeof window !== "undefined") {
+        window.dispatchEvent(new Event("syncally:session-expired"));
+      }
+      throw new ApiError(response.status, detail);
     }
     if (response.status === 204) {
       return undefined as T;

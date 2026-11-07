@@ -3909,9 +3909,61 @@ body::after {
   line-height: 1.5;
 }
 
-.deal-onboarding-steps {
+.deal-onboarding-prep {
+  margin-top: 22px;
+  padding: clamp(16px, 2.4vw, 24px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.deal-onboarding-prep__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.deal-onboarding-prep__header h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink);
+}
+
+.deal-onboarding-prep__list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deal-onboarding-prep__list li {
+  padding: 12px;
+  border-left: 2px solid var(--accent);
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.deal-onboarding-prep__note {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.deal-onboarding-guide-heading {
+  margin: 24px 0 0;
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+
+.deal-onboarding-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: clamp(14px, 2.5vw, 28px);
   margin: 28px 0;
   padding: 0;
@@ -4004,6 +4056,15 @@ body::after {
 }
 
 @media (max-width: 768px) {
+  .deal-onboarding-prep__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .deal-onboarding-prep__list {
+    grid-template-columns: 1fr;
+  }
+
   .deal-onboarding-steps {
     grid-template-columns: 1fr;
     gap: 18px;

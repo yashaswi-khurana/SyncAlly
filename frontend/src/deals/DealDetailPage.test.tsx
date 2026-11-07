@@ -262,7 +262,7 @@ describe("DealDetailPage", () => {
     expect(onBackToDeals).toHaveBeenCalledTimes(1);
   });
 
-  it("renders the 3-step onboarding walkthrough banner for a fresh deal with 0 messages and no agreement", async () => {
+  it("renders buyer trade requirements and the end-to-end guide for a fresh deal", async () => {
     mockedGetDeal.mockResolvedValue(DEAL);
     mockedListOrganizations.mockResolvedValue([
       {
@@ -290,16 +290,49 @@ describe("DealDetailPage", () => {
     expect(await screen.findByRole("heading", { name: /deal created with seller logistics ltd!/i })).toBeInTheDocument();
     expect(mockedListDealMessages).toHaveBeenCalledWith("deal-1", DEAL.buyer_organization_id);
     expect(screen.getByText(/next steps/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Information to agree" })).toBeInTheDocument();
+    expect(screen.getByText("Buyer checklist")).toBeInTheDocument();
     expect(
-      screen.getByText("Introduce trade terms in the conversation below (e.g. quantity, price, delivery port)."),
+      screen.getByText("Product or specification, quantity and unit, plus any acceptable alternatives."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Review suggested details and share only those you want the other party to see."),
+      screen.getByText("Your target price and currency, or the price quote you need from the seller."),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Both parties review and approve the same agreement. After it is committed, the seller can request payment."),
+      screen.getByText("Delivery destination and required date, plus preferred payment amount and timing."),
     ).toBeInTheDocument();
+    expect(screen.getByText(/submit a structured proposal with the item, quantities, price, delivery, and payment terms/i)).toBeInTheDocument();
+    expect(screen.getByText(/same agreement version/i)).toBeInTheDocument();
+    expect(screen.getByText("Step 3 · Approve and commit")).toBeInTheDocument();
+    expect(screen.getByText("Step 4 · Record payment and delivery")).toBeInTheDocument();
+    expect(screen.getByText(/marks the deal complete only after all required payments are reconciled/i)).toBeInTheDocument();
+    expect(screen.getByText(/offline demo payment is simulated and transfers no money/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start conversation/i })).toBeInTheDocument();
+  });
+
+  it("shows a seller-specific preparation checklist for a seller member", async () => {
+    mockedGetDeal.mockResolvedValue(DEAL);
+    mockedGetOrganization.mockResolvedValue({
+      id: DEAL.buyer_organization_id,
+      legal_name: "Buyer Co",
+      country_code: "US",
+    });
+    mockedListOrganizations.mockResolvedValue([{
+      id: DEAL.seller_organization_id,
+      legal_name: "Seller Logistics Ltd",
+      country_code: "US",
+      role: "ADMIN",
+    }]);
+    mockedListDealMessages.mockResolvedValue([]);
+    mockedGetCurrentAgreement.mockRejectedValue(new ApiError(404, "No current agreement"));
+
+    render(<DealDetailPage dealId="deal-1" onBackToDeals={vi.fn()} freshnessIntervalMs={0} />);
+
+    expect(await screen.findByRole("heading", { name: /deal created with buyer co!/i })).toBeInTheDocument();
+    expect(screen.getByText("Seller checklist")).toBeInTheDocument();
+    expect(screen.getByText("Product or specification offered, available quantity and unit, and any limits.")).toBeInTheDocument();
+    expect(screen.getByText("Your quoted unit price and currency, plus minimum quantities or other limits.")).toBeInTheDocument();
+    expect(screen.getByText("Delivery timing and destination, plus payment amounts and triggers you accept.")).toBeInTheDocument();
   });
 
   it("renders the onboarding banner immediately for single-organization members naming the actual counterparty", async () => {

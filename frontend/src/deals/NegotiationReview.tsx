@@ -89,15 +89,15 @@ interface PaymentDraft {
 function defaultDraft() {
   return {
     items: [
-      { id: "item-1", description: "Desk", quantity: "10", unit: "pieces", unitPrice: "25.00", currency: "USD", sku: "" },
+      { id: "item-1", description: "", quantity: "", unit: "", unitPrice: "", currency: "", sku: "" },
     ],
     shipments: [
-      { id: "ship-1", destination: "Toronto", targetDate: "2030-01-01", allocations: [{ line_item_id: "item-1", quantity: "10", unit: "pieces" }] },
+      { id: "ship-1", destination: "", targetDate: "", allocations: [{ line_item_id: "item-1", quantity: "", unit: "" }] },
     ],
     payments: [
-      { id: "pay-1", amount: "250.00", currency: "USD", trigger: "seller_invoice", dueCondition: "when seller invoices", allocations: [{ obligation_id: "ship-1", amount: "250.00", currency: "USD" }] },
+      { id: "pay-1", amount: "", currency: "", trigger: "", dueCondition: "", allocations: [{ obligation_id: "ship-1", amount: "", currency: "" }] },
     ],
-    deliveryLocation: "Toronto",
+    deliveryLocation: "",
     incoterm: "",
     cancellationTerms: "",
   };
@@ -140,7 +140,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const [items, setItems] = useState<ItemDraft[]>(defaultDraft().items);
   const [shipments, setShipments] = useState<ShipmentDraft[]>(defaultDraft().shipments);
   const [payments, setPayments] = useState<PaymentDraft[]>(defaultDraft().payments);
-  const [deliveryLocation, setDeliveryLocation] = useState("Toronto");
+  const [deliveryLocation, setDeliveryLocation] = useState("");
   const [incoterm, setIncoterm] = useState("");
   const [cancellationTerms, setCancellationTerms] = useState("");
   const [isDirty, setIsDirty] = useState(false);
@@ -207,12 +207,13 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     if (view?.latest?.terms && view.latest.terms.schema_version === 2) {
       populateEditorFromTerms(view.latest.terms);
     } else {
-      setItems([{ id: "item-1", description: "Industrial Valves", quantity: "100", unit: "pieces", unitPrice: "250.00", currency: "USD", sku: "VALVE-100" }]);
-      setShipments([{ id: "ship-1", destination: "Warehouse 4A, Hamburg Port", targetDate: "2026-12-01", allocations: [{ line_item_id: "item-1", quantity: "100", unit: "pieces" }] }]);
-      setPayments([{ id: "pay-1", amount: "25000.00", currency: "USD", trigger: "customs_clearance", dueCondition: "Net 30 days after arrival", allocations: [{ obligation_id: "ship-1", amount: "25000.00", currency: "USD" }] }]);
-      setDeliveryLocation("Warehouse 4A, Hamburg Port");
-      setIncoterm("DAP");
-      setCancellationTerms("Standard bilateral 14-day notice with forfeiture of accrued logistics deposits.");
+      const draft = defaultDraft();
+      setItems(draft.items);
+      setShipments(draft.shipments);
+      setPayments(draft.payments);
+      setDeliveryLocation(draft.deliveryLocation);
+      setIncoterm(draft.incoterm);
+      setCancellationTerms(draft.cancellationTerms);
     }
     setError("");
     setAuthorError("");
@@ -502,7 +503,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     ? "empty"
     : isDirty
     ? "unsaved"
-    : "ready";
+    : view?.latest?.terms.schema_version === 2 ? "ready" : "draft";
 
   return (
     <section className="negotiation-review" aria-labelledby={`negotiation-heading-${deal.id}`}>
@@ -571,6 +572,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
         {view.eligible_actions.includes("submit") || view.eligible_actions.includes("counter") ? (
           <div className="collection-authoring" aria-label="Create a trade proposal">
             <h3>Create a trade proposal</h3>
+            <p className="hint">Enter the actual item, delivery, and payment terms your organizations have reviewed. Blank fields are intentional.</p>
             <p className="hint" aria-label="Authoring draft status">Draft status: <strong>{authoringStatus}</strong></p>
             <button type="button" className="button secondary" onClick={resetEditor} style={{ marginBottom: "8px" }}>Reset draft</button>
             {authorError ? <p role="alert" className="form-error">{authorError}</p> : null}
@@ -579,7 +581,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               <h4>Line items</h4>
               <button type="button" className="button secondary" onClick={() => {
                 const nextNum = items.length + 1;
-                setItems([...items, { id: `item-${nextNum}`, description: "", quantity: "1", unit: "pieces", unitPrice: "0.00", currency: "USD", sku: "" }]);
+                setItems([...items, { id: `item-${nextNum}`, description: "", quantity: "", unit: "", unitPrice: "", currency: "", sku: "" }]);
                 setIsDirty(true);
               }}>Add Line Item</button>
 
@@ -646,7 +648,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               <h4>Shipments</h4>
               <button type="button" className="button secondary" onClick={() => {
                 const nextNum = shipments.length + 1;
-                setShipments([...shipments, { id: `ship-${nextNum}`, destination: deliveryLocation, targetDate: "2030-01-01", allocations: [] }]);
+                setShipments([...shipments, { id: `ship-${nextNum}`, destination: "", targetDate: "", allocations: [] }]);
                 setIsDirty(true);
               }}>Add Shipment</button>
 
@@ -678,7 +680,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                       const updated = [...shipments];
                       const firstItemId = items[0]?.id || "";
                       const firstItemUnit = items[0]?.unit || "pieces";
-                      updated[idx].allocations.push({ line_item_id: firstItemId, quantity: "1", unit: firstItemUnit });
+                      updated[idx].allocations.push({ line_item_id: firstItemId, quantity: "", unit: firstItemUnit });
                       setShipments(updated);
                       setIsDirty(true);
                     }}>Add Allocation</button>
@@ -728,7 +730,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               <h4>Payment terms</h4>
               <button type="button" className="button secondary" onClick={() => {
                 const nextNum = payments.length + 1;
-                setPayments([...payments, { id: `pay-${nextNum}`, amount: "0.00", currency: "USD", trigger: "seller_invoice", dueCondition: "when seller invoices", allocations: [] }]);
+                setPayments([...payments, { id: `pay-${nextNum}`, amount: "", currency: "", trigger: "", dueCondition: "", allocations: [] }]);
                 setIsDirty(true);
               }}>Add Payment Term</button>
 
@@ -771,7 +773,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                     <button type="button" aria-label={`Add allocation to payment term ${idx + 1}`} onClick={() => {
                       const updated = [...payments];
                       const firstObligationId = shipments[0]?.id || items[0]?.id || "";
-                      updated[idx].allocations.push({ obligation_id: firstObligationId, amount: "0.00", currency: p.currency });
+                      updated[idx].allocations.push({ obligation_id: firstObligationId, amount: "", currency: p.currency });
                       setPayments(updated);
                       setIsDirty(true);
                     }}>Add Allocation</button>

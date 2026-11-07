@@ -21,6 +21,32 @@ const view: NegotiationView = {
 describe("NegotiationReview", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(getNegotiation).mockResolvedValue(view); });
 
+  it("starts and resets a blank draft when no proposal exists", async () => {
+    vi.mocked(getNegotiation).mockResolvedValue({
+      ...view,
+      eligible_actions: ["submit"],
+      round_count: 0,
+      latest: null,
+      current_candidate: null,
+      proposals: [],
+      history: [],
+    });
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+
+    const description = await screen.findByLabelText("Item description 1");
+    expect(description).toHaveValue("");
+    expect(screen.getByLabelText("Item quantity 1")).toHaveValue("");
+    expect(screen.getByLabelText("Shipment destination 1")).toHaveValue("");
+    expect(screen.getByLabelText("Payment term amount 1")).toHaveValue("");
+    expect(screen.getByLabelText("Delivery location")).toHaveValue("");
+    expect(screen.getByLabelText("Authoring draft status")).toHaveTextContent("draft");
+
+    fireEvent.change(description, { target: { value: "Copper cable" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset draft" }));
+    expect(description).toHaveValue("");
+    expect(screen.getByLabelText("Authoring draft status")).toHaveTextContent("draft");
+  });
+
   it("accepts the exact latest proposal without recording agreement approval", async () => {
     const changed = vi.fn();
     vi.mocked(negotiateDeal).mockResolvedValue({ outcome: "APPLIED", deal_revision: 2, proposal_id: "proposal", candidate_id: "candidate" });

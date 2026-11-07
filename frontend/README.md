@@ -58,8 +58,8 @@ near-black canvas, electric-blue accent, oversized display type, marquees, an an
 background, film grain, a pointer-follower cursor, and scroll-reveal motion. Motion is disabled
 for users who prefer reduced motion.
 
-During local development the Vite dev server proxies `/auth`, `/organizations`, and `/deals`
-to the backend so the browser stays same-origin. Point the proxy at a non-default backend with
+During local development the Vite dev server proxies `/auth`, `/dev`, `/organizations`, `/deals`,
+`/invitations`, and `/marketplace` to the backend so the browser stays same-origin. Point the proxy at a non-default backend with
 `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:8000`). To call the API from a different
 origin, set `VITE_API_BASE_URL`; that environment needs CORS configured on the backend.
 

@@ -115,14 +115,24 @@ class CaseResponse(BaseModel):
     version: int
 
 
+class DeliveryExceptionEvidenceMetadata(BaseModel):
+    kind: Literal["DELIVERY_EXCEPTION"] = "DELIVERY_EXCEPTION"
+    exception_type: Literal["SHORTAGE", "DAMAGE", "OTHER"]
+    affected_quantity: str | None = Field(default=None, max_length=64, pattern=r"^\d+(?:\.\d+)?$")
+    unit: str = Field(min_length=1, max_length=32)
+    fulfillment_event_id: UUID
+
+
 class RaiseCaseRequest(BaseModel):
     case_type: Literal["CANCELLATION", "DISPUTE"]
     reason: str
     agreement_version_id: UUID
     agreement_terms_hash: str
+    case_id: UUID | None = None
     obligation_references: list[str] = []
     evidence_visibility: Literal["PRIVATE_OPERATOR", "COUNTERPARTY_RESTRICTED", "MUTUAL_VISIBLE"] = "MUTUAL_VISIBLE"
     evidence_notes: str | None = None
+    delivery_exception: DeliveryExceptionEvidenceMetadata | None = None
     acting_organization_id: UUID | None = None
 
 
@@ -312,9 +322,15 @@ def _raise_case_impl(
                 reason=payload.reason,
                 agreement_version_id=payload.agreement_version_id,
                 agreement_terms_hash=payload.agreement_terms_hash,
+                case_id=payload.case_id,
                 obligation_references=payload.obligation_references,
                 evidence_visibility=EvidenceVisibility(payload.evidence_visibility),
                 evidence_notes=payload.evidence_notes,
+                evidence_metadata=(
+                    payload.delivery_exception.model_dump(mode="json", exclude_none=True)
+                    if payload.delivery_exception
+                    else {}
+                ),
                 actor_user_id=actor.user_id,
                 actor_organization_id=acting_org,
             ),

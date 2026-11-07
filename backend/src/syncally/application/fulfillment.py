@@ -91,6 +91,7 @@ class FulfillmentSnapshot:
     agreement_version_number: int | None
     terms_hash: str | None
     obligation_id: UUID | None
+    obligation_reference: str | None
     planned_quantity: Decimal | None
     unit: str | None
     destination: str | None

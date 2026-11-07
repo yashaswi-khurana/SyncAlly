@@ -497,6 +497,7 @@ export interface FulfillmentSnapshot {
   agreement_version_number: number | null;
   terms_hash: string | null;
   obligation_id: string | null;
+  obligation_reference?: string | null;
   planned_quantity: string | null;
   unit: string | null;
   destination: string | null;
@@ -868,9 +869,17 @@ export interface RaiseCaseInput {
   reason: string;
   agreement_version_id: string;
   agreement_terms_hash: string;
+  case_id?: string;
   obligation_references?: string[];
   evidence_visibility?: EvidenceVisibility;
   evidence_notes?: string | null;
+  delivery_exception?: {
+    kind: "DELIVERY_EXCEPTION";
+    exception_type: "SHORTAGE" | "DAMAGE" | "OTHER";
+    affected_quantity?: string | null;
+    unit: string;
+    fulfillment_event_id: string;
+  };
   acting_organization_id?: string | null;
 }
 

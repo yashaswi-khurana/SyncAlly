@@ -3304,7 +3304,8 @@ body::after {
 }
 
 .fulfillment-panel__form input,
-.fulfillment-panel__form select {
+.fulfillment-panel__form select,
+.fulfillment-panel__form textarea {
   min-width: 180px;
   padding: 10px 12px;
 }

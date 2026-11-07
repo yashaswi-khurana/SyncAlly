@@ -50,6 +50,11 @@ import type {
   ThreadImportPreview,
   ThreadPreviewInput,
   Visibility,
+  DealCase,
+  DealCaseEvidence,
+  RaiseCaseInput,
+  RespondCaseInput,
+  AddCaseEvidenceInput,
 } from "./types";
 
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
@@ -471,7 +476,6 @@ export function proposeAmendment(
     },
   );
 }
-
 export function getAmendmentImpact(
   dealId: string,
   options?: { versionNumber?: number; signal?: AbortSignal },
@@ -714,6 +718,54 @@ export function updateFactVisibility(
     {
       method: "PATCH",
       body: JSON.stringify({ visibility }),
+    },
+  );
+}
+
+export function listDealCases(
+  dealId: string,
+  organizationId?: string,
+  options?: { signal?: AbortSignal },
+): Promise<DealCase[]> {
+  const query = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+  return apiRequest<DealCase[]>(`/deals/${encodeURIComponent(dealId)}/cases${query}`, {
+    signal: options?.signal,
+  });
+}
+
+export function raiseDealCase(
+  dealId: string,
+  input: RaiseCaseInput,
+): Promise<DealCase> {
+  return apiRequest<DealCase>(`/deals/${encodeURIComponent(dealId)}/cases`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function respondToDealCase(
+  dealId: string,
+  caseId: string,
+  input: RespondCaseInput,
+): Promise<DealCase> {
+  return apiRequest<DealCase>(
+    `/deals/${encodeURIComponent(dealId)}/cases/${encodeURIComponent(caseId)}/respond`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+export function addCaseEvidence(
+  dealId: string,
+  caseId: string,
+  input: AddCaseEvidenceInput,
+): Promise<DealCaseEvidence> {
+  return apiRequest<DealCaseEvidence>(
+    `/deals/${encodeURIComponent(dealId)}/cases/${encodeURIComponent(caseId)}/evidence`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
     },
   );
 }

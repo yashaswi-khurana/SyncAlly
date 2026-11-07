@@ -15,6 +15,7 @@ import DealConstellation from "./DealConstellation";
 import DealConversationReview from "./DealConversationReview";
 import AgreementReview from "./AgreementReview";
 import PaymentStatusPanel from "./PaymentStatusPanel";
+import DealCasesPanel from "./DealCasesPanel";
 import NegotiationReview from "./NegotiationReview";
 import FulfillmentPanel from "./FulfillmentPanel";
 import DealOverview from "./DealOverview";
@@ -767,6 +768,13 @@ export default function DealDetailPage({
           sellerOrganizationId={deal.seller_organization_id}
           selectedOrganizationId={selectedOrganizationId}
           reloadToken={agreementReloadToken}
+        />
+        <DealCasesPanel
+          key={`cases:${deal.id}`}
+          deal={deal}
+          selectedOrganizationId={selectedOrganizationId}
+          reloadToken={agreementReloadToken}
+          onCaseChanged={commercialChanged}
         />
 
         {showInviteModal ? (

@@ -507,3 +507,73 @@ Optional election: elected / explicitly not elected / unknown:
 Completion report / next concrete operator actions:
   - Step 07 Amendments fully implemented, independently reviewed, repaired (1 iteration), and verified across backend (101 safe discovery tests pass, 11 amendment integration tests pass, ruff clean) and frontend (420 tests pass, lint 0 errors 0 warnings, build pass). Ready for Step 08 Cancel Disputes.
 ```
+
+```text
+UTC timestamp: 2026-11-07T07:15:00Z
+Step / dependency verification / current status:
+  - Step 08 Cancel Disputes (Feature Code F8) / Dependencies 03, 06, 07 verified present / ACCEPTED.
+Role identity / coordination evidence (never pretend):
+  - PLANNER: Read-only Architecture Planner subagent (1bddfd62-9d22-4966-b5b7-cc5123170c4d) analyzed domain, persistence, API, operational blockers, state machine, and import safety; produced .orchestrator/plans/cancel_disputes_plan.md.
+  - DEVELOPER: Full-Stack Feature Developer subagent (d67c88c6-464f-4235-ba03-3950f7d7df13) implemented domain entities (DealCase, CaseEvidence, enums), aggregate transitions (mark_disputed, resolve_dispute, cancel_committed), models (DealCaseModel, DealCaseEvidenceModel), additive migration 0025_cancel_disputes.py, application services with atomic audit/outbox events, API endpoints (/deals/{deal_id}/cases), frontend client, types, <DealCasesPanel /> in DealDetailPage.tsx, and test_deal_cases.py.
+  - REVIEWER: Independent Code Reviewer subagent (de0d01ba-e4b7-4774-adb7-427899bd100e) audited full diff, ran independent verification suites, identified P2 migration parallel head with 0025_system_admin, and verified zero P0/P1 defects; issued VERDICT: PASS.
+Current repo version or worktree snapshot / inspected file:line:
+  - Head migration: 0025_system_admin -> 0025_cancel_disputes.py
+  - Inspected: backend/src/syncally/domain/deals/cases.py, backend/src/syncally/domain/deals/deal.py, backend/src/syncally/infrastructure/models/deal_cases.py, backend/alembic/versions/0025_cancel_disputes.py, backend/src/syncally/infrastructure/repositories/deal_cases.py, backend/src/syncally/application/deal_cases.py, backend/src/syncally/api/deals.py, backend/src/syncally/infrastructure/ai/graph.py, frontend/src/api/types.ts, frontend/src/api/client.ts, frontend/src/deals/DealCasesPanel.tsx, frontend/src/deals/DealDetailPage.tsx, backend/tests/test_deal_cases.py, frontend/src/deals/DealDetailPage.test.tsx.
+Hypothesis / cheapest discriminating check:
+  - Stale agreement version or modified terms hash fails closed with HTTP 409 Conflict.
+  - Forged tenant access rejected with HTTP 403 Forbidden.
+  - Pre-commit unilateral cancellation on DRAFT/NEGOTIATING deals preserved without regression.
+  - Operational impact blockers detect paid milestones and fulfilled shipments; automated money movement/refunds prevented.
+  - Mutual cancellation requires counterparty bilateral consent on matching terms hash.
+  - Evidence visibility (MUTUAL_VISIBLE, COUNTERPARTY_RESTRICTED, PRIVATE_OPERATOR) strictly enforces tenant isolation.
+  - Migration downgrade blocked when deal case history exists.
+  - Cheapest checks: cd backend && PYTHONPATH=src:tests .venv/bin/python -m unittest tests/test_deal_cases.py && cd frontend && npm test -- src/deals/DealDetailPage.test.tsx
+Authorized scope / policy or private operator election (no secrets):
+  - F8 Cancel Disputes: Bilateral human consent/reject/withdraw on exact agreement version/hash; zero AI authority; no policy expansion; no automated funds movement or liability waiver; private secrets preserved.
+Files changed / preserved unrelated changes:
+  - Created: backend/src/syncally/domain/deals/cases.py, backend/src/syncally/infrastructure/models/deal_cases.py, backend/alembic/versions/0025_cancel_disputes.py, backend/src/syncally/infrastructure/repositories/deal_cases.py, backend/src/syncally/application/deal_cases.py, frontend/src/deals/DealCasesPanel.tsx, backend/tests/test_deal_cases.py.
+  - Modified: backend/src/syncally/domain/deals/deal.py, backend/src/syncally/domain/deals/__init__.py, backend/src/syncally/infrastructure/models/__init__.py, backend/src/syncally/infrastructure/repositories/__init__.py, backend/src/syncally/api/deals.py, backend/src/syncally/api/main.py, backend/src/syncally/infrastructure/ai/graph.py, frontend/src/api/types.ts, frontend/src/api/client.ts, frontend/src/deals/DealDetailPage.tsx, frontend/src/deals/AgreementReview.tsx, frontend/src/deals/DealDetailPage.test.tsx, frontend/src/platform/PlatformOrganizationsPage.tsx, docs/remaining-tasks/08-cancel-disputes.md, docs/remaining-tasks/progress.md.
+  - Preserved dirty work: untouched graphify-out/ files and existing uncommitted work.
+Command exactly / cwd / immediate exit code:
+  - Backend deal cases tests: cd backend && PYTHONPATH=src:tests .venv/bin/python -m unittest tests/test_deal_cases.py / exit 0
+  - Backend discovery runner: cd backend && .venv/bin/python discovery runner script / exit 0
+  - Backend ruff check: cd backend && .venv/bin/ruff check src tests / exit 0
+  - Frontend focused tests: cd frontend && npm test -- src/deals/DealDetailPage.test.tsx / exit 0
+  - Full frontend test suite: cd frontend && npm test / exit 0
+  - Frontend lint check: cd frontend && npm run lint:check / exit 0
+  - Frontend production build: cd frontend && npm run build / exit 0
+  - Git diff check: git diff --check / exit 0
+Results: run / pass / fail / skip / reasons / warnings:
+  - Backend test_deal_cases.py: Ran 12, passed 12, failed 0, skipped 0 (1.654s).
+  - Backend discovery runner: Ran 58, passed 50, failed 0, skipped 8 (Temporal ephemeral server unavailable offline) (4.692s).
+  - Backend ruff check: 0 errors (clean).
+  - Frontend focused tests: 1 test file, 37 passed, 0 failed (6.80s).
+  - Full frontend test suite: 20 test files, 424 passed, 0 failed (16.82s).
+  - Frontend lint check: 0 errors, 0 warnings (100% clean).
+  - Frontend production build: built in 753ms, 0 errors.
+  - Git diff check: 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Additive migration 0025_cancel_disputes.py linear on actual head 0025_system_admin with downgrade protection blocking history loss.
+  - Domain models: DealCase, CaseEvidence, CaseType (CANCELLATION, DISPUTE), CaseStatus (OPEN, UNDER_REVIEW, RESOLVED, REJECTED, WITHDRAWN), EvidenceVisibility, BilateralDecision.
+  - Pre-commit preservation: Deal aggregate cancel() preserves unilateral uncommitted cancellation on DRAFT/NEGOTIATING deals.
+  - Post-commit bilateral mutual cancellation: cancel_committed() requires verified counterparty bilateral consent on identical terms hash and zero operational blockers.
+  - Operational impact blockers: assess_deal_case_blockers detects paid milestones and fulfilled shipments, blocking automated deal cancellation while keeping blockers visible.
+  - Tenant evidence isolation: list_deal_cases filters COUNTERPARTY_RESTRICTED and PRIVATE_OPERATOR evidence according to caller's organization.
+  - Concurrency & atomic audit/outbox: optimistic 409 Conflict on stale hash/version, atomic deal_cases, deals, audit_events, outbox_events in single DB transaction; zero external network calls inside DB locks.
+  - Frontend DealDetailPage: integrated <DealCasesPanel /> with Case History badges, operational blocker warning alerts, evidence drawer with visibility tags, raise dispute/cancellation modal dialog, and bilateral decision actions (Consent, Reject, Withdraw).
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - Finding 1: Migration parallel heads (backend/alembic/versions/0025_cancel_disputes.py:L12). down_revision originally referenced 0024_amendments, conflicting with freshly merged 0025_system_admin. Repaired by linearizing down_revision = "0025_system_admin" so alembic heads outputs a single head.
+  - Finding 2: ESLint cascading render warning in frontend/src/platform/PlatformOrganizationsPage.tsx:L26. Synchronous setState in useEffect effect body. Repaired by wrapping async fetch in cancelled guard IIFE without synchronous setState calls.
+  - Finding 3: Discovery runner crash on missing langgraph in backend/src/syncally/infrastructure/ai/graph.py. Repaired by wrapping langgraph imports in try-except with deterministic fallback.
+  - Finding 4: Git diff EOF blank lines in graph.py, client.ts, types.ts. Repaired by stripping trailing blank lines so git diff --check exits 0.
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 1/3. All findings repaired and independently verified. Independent review verdict: ACCEPTED.
+Implementation acceptance versus live verification versus production approval:
+  - Step 08 implementation ACCEPTED. Live verification (Step 12/13) and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - Step 08 unblocks Step 09 (Approval Routing) and Step 10 (Reminders).
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 08.
+Completion report / next concrete operator actions:
+  - Step 08 Cancel Disputes fully implemented, independently reviewed, repaired (1 iteration), and verified across backend (58 discovery tests pass, 12 deal cases tests pass, ruff clean) and frontend (424 tests pass, lint clean, build pass). Ready for Step 09 Approval Routing.
+```

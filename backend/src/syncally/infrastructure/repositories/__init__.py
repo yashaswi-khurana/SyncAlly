@@ -17,6 +17,7 @@ from syncally.infrastructure.repositories.communications import (
     CommunicationScopeError,
     SqlAlchemyCommunicationRepository,
 )
+from syncally.infrastructure.repositories.deal_cases import SqlAlchemyDealCaseRepository
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 from syncally.infrastructure.repositories.organizations import (
     SqlAlchemyOrganizationMemberRepository,
@@ -32,6 +33,7 @@ __all__ = [
     "SqlAlchemyAgreementRepository",
     "SqlAlchemyAuditRepository",
     "SqlAlchemyCommunicationRepository",
+    "SqlAlchemyDealCaseRepository",
     "SqlAlchemyDealRepository",
     "SqlAlchemyObligationRepository",
     "SqlAlchemyOrganizationMemberRepository",

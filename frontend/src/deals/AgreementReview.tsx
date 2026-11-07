@@ -81,10 +81,10 @@ function approvalMatchesVersion(approval: AgreementApproval | undefined, agreeme
 }
 
 function approvalFor(
-  approvals: AgreementApproval[],
+  approvals: AgreementApproval[] | undefined,
   organizationId: string,
 ): AgreementApproval | undefined {
-  return approvals.find((approval) => approval.organization_id === organizationId);
+  return approvals?.find((approval) => approval.organization_id === organizationId);
 }
 
 function ComparedValue({ value }: { value: unknown }) {

@@ -767,3 +767,66 @@ export interface UpdateMemberPermissionsInput {
   role?: "ADMIN" | "MEMBER" | string;
   capabilities?: OrganizationCapability[];
 }
+
+export type CaseType = "CANCELLATION" | "DISPUTE";
+export type CaseStatus = "OPEN" | "UNDER_REVIEW" | "RESOLVED" | "REJECTED" | "WITHDRAWN";
+export type EvidenceVisibility = "PRIVATE_OPERATOR" | "COUNTERPARTY_RESTRICTED" | "MUTUAL_VISIBLE";
+export type BilateralDecision = "CONSENT" | "REJECT" | "WITHDRAW";
+
+export interface DealCaseEvidence {
+  evidence_id: string;
+  case_id: string;
+  submitted_by_user_id: string;
+  submitted_by_organization_id: string;
+  visibility: EvidenceVisibility;
+  notes: string;
+  submitted_at: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DealCase {
+  id: string;
+  deal_id: string;
+  agreement_version_id: string;
+  agreement_terms_hash: string;
+  case_type: CaseType;
+  reason: string;
+  obligation_references: string[];
+  requested_by_user_id: string;
+  requested_by_organization_id: string;
+  created_at: string;
+  status: CaseStatus;
+  resolution?: string | null;
+  resolved_by_user_id?: string | null;
+  resolved_at?: string | null;
+  evidence_visibility: EvidenceVisibility;
+  evidence_items: DealCaseEvidence[];
+  bilateral_consent_counterparty_id?: string | null;
+  bilateral_consent_at?: string | null;
+  operational_impact_blockers: string[];
+  version: number;
+}
+
+export interface RaiseCaseInput {
+  case_type: CaseType;
+  reason: string;
+  agreement_version_id: string;
+  agreement_terms_hash: string;
+  obligation_references?: string[];
+  evidence_visibility?: EvidenceVisibility;
+  evidence_notes?: string | null;
+  acting_organization_id?: string | null;
+}
+
+export interface RespondCaseInput {
+  decision: BilateralDecision;
+  rationale: string;
+  acting_organization_id?: string | null;
+}
+
+export interface AddCaseEvidenceInput {
+  notes: string;
+  visibility: EvidenceVisibility;
+  metadata?: Record<string, unknown>;
+  acting_organization_id?: string | null;
+}

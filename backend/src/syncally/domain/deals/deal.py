@@ -100,6 +100,35 @@ class Deal:
         """Cancel an uncommitted deal after the application authorizes the request."""
         self._close_before_commit(DealStatus.CANCELLED)
 
+    def mark_disputed(self) -> None:
+        """Mark deal disputed upon a formal dispute case being raised."""
+        if self.status in {DealStatus.COMPLETED, DealStatus.CANCELLED, DealStatus.EXPIRED}:
+            raise InvalidTransition(f"Cannot dispute terminal deal in status {self.status}")
+        if self.status != DealStatus.DISPUTED:
+            self._status = DealStatus.DISPUTED
+            self.version += 1
+
+    def resolve_dispute(
+        self, has_active_disputes: bool, resume_status: DealStatus = DealStatus.EXECUTING
+    ) -> None:
+        """Restore deal status when all dispute cases are resolved/withdrawn."""
+        if self.status != DealStatus.DISPUTED:
+            return
+        if not has_active_disputes:
+            self._status = resume_status
+            self.version += 1
+
+    def cancel_committed(self, *, bilateral_consent: bool, blockers: list[str]) -> None:
+        """Cancel an agreed or executing deal following verified bilateral consent."""
+        if not bilateral_consent:
+            raise InvalidTransition("Mutual cancellation requires verified bilateral consent")
+        if blockers:
+            raise InvalidTransition("Cannot cancel deal with unresolved operational blockers")
+        if self.status not in {DealStatus.AGREED, DealStatus.EXECUTING, DealStatus.DISPUTED}:
+            raise InvalidTransition(f"Cannot mutually cancel deal in status {self.status}")
+        self._status = DealStatus.CANCELLED
+        self.version += 1
+
     def expire(self) -> None:
         """Expire an uncommitted deal after the caller confirms its deadline elapsed."""
         self._close_before_commit(DealStatus.EXPIRED)

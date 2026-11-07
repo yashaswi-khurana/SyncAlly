@@ -18,6 +18,10 @@ import {
   listOrganizations,
   listPaymentStatuses,
   recordDealFulfillment,
+  listDealCases,
+  raiseDealCase,
+  respondToDealCase,
+  addCaseEvidence,
 } from "../api/client";
 import type { AgreementVersion, Deal } from "../api/types";
 import type { FulfillmentSnapshot } from "../api/types";
@@ -44,6 +48,10 @@ vi.mock("../api/client", async (importOriginal) => {
     listPaymentStatuses: vi.fn(),
     getDealFulfillment: vi.fn(),
     recordDealFulfillment: vi.fn(),
+    listDealCases: vi.fn().mockResolvedValue([]),
+    raiseDealCase: vi.fn(),
+    respondToDealCase: vi.fn(),
+    addCaseEvidence: vi.fn(),
   };
 });
 
@@ -59,6 +67,10 @@ const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedListPaymentStatuses = vi.mocked(listPaymentStatuses);
 const mockedGetDealFulfillment = vi.mocked(getDealFulfillment);
 const mockedRecordDealFulfillment = vi.mocked(recordDealFulfillment);
+const mockedListDealCases = vi.mocked(listDealCases);
+const mockedRaiseDealCase = vi.mocked(raiseDealCase);
+const mockedRespondToDealCase = vi.mocked(respondToDealCase);
+const mockedAddCaseEvidence = vi.mocked(addCaseEvidence);
 
 const DEAL: Deal = {
   id: "deal-1",
@@ -118,11 +130,13 @@ describe("DealDetailPage", () => {
   });
 
   beforeEach(() => {
+    mockedGetDeal.mockResolvedValue(DEAL);
     vi.mocked(getAgreementVersion).mockReset().mockRejectedValue(new ApiError(404, "No version"));
     vi.mocked(getNegotiation).mockImplementation(async (dealId, organizationId) => ({ deal_id: dealId, organization_id: organizationId,
       deal_revision: 0, latest: null, current_candidate: null, eligible_actions: ["submit"], round_count: 0, max_rounds: 5,
       escalated: false, history_ambiguous: false, proposals: [], history: [] }));
     mockedListPaymentStatuses.mockResolvedValue([]);
+    mockedListDealCases.mockResolvedValue([]);
     mockedGetDealFulfillment.mockResolvedValue(PENDING_FULFILLMENT);
     mockedRecordDealFulfillment.mockResolvedValue({
       id: "event-1",
@@ -1112,5 +1126,232 @@ describe("DealDetailPage", () => {
         Reflect.deleteProperty(navigator, "clipboard");
       }
     }
+  });
+
+  it("renders DealCasesPanel with cases and blocker alert banner", async () => {
+    mockedListDealCases.mockResolvedValue([
+      {
+        id: "case-123",
+        deal_id: DEAL.id,
+        agreement_version_id: "agreement-1",
+        agreement_terms_hash: "a".repeat(64),
+        case_type: "DISPUTE",
+        reason: "Defective shipment packaging",
+        obligation_references: ["shipments[0]"],
+        requested_by_user_id: "user-1",
+        requested_by_organization_id: DEAL.buyer_organization_id,
+        created_at: "2026-11-07T00:00:00Z",
+        status: "OPEN",
+        evidence_visibility: "MUTUAL_VISIBLE",
+        evidence_items: [
+          {
+            evidence_id: "ev-1",
+            case_id: "case-123",
+            submitted_by_user_id: "user-1",
+            submitted_by_organization_id: DEAL.buyer_organization_id,
+            visibility: "MUTUAL_VISIBLE",
+            notes: "Lab report photograph",
+            submitted_at: "2026-11-07T00:00:00Z",
+          },
+        ],
+        operational_impact_blockers: [
+          "Payment milestone payment_terms[0] is PAID; requires operational settlement",
+        ],
+        version: 0,
+      },
+    ]);
+
+    render(<DealDetailPage dealId={DEAL.id} onBackToDeals={vi.fn()} />);
+
+    expect(await screen.findByText("Defective shipment packaging")).toBeInTheDocument();
+    expect(screen.getByText("Operational Impact Blockers:")).toBeInTheDocument();
+    expect(
+      screen.getByText("Payment milestone payment_terms[0] is PAID; requires operational settlement")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Lab report photograph")).toBeInTheDocument();
+  });
+
+  it("allows raising a new dispute case via the modal", async () => {
+    mockedGetCurrentAgreement.mockResolvedValue({
+      id: "agreement-version-1",
+      deal_id: DEAL.id,
+      version_number: 1,
+      terms_hash: "a".repeat(64),
+      status: "COMMITTED",
+      is_current: true,
+      created_by: "user-1",
+      created_at: "2026-11-01T00:00:00Z",
+      committed_at: "2026-11-01T00:00:00Z",
+      prior_agreement_version_id: null,
+      prior_terms_hash: null,
+      amendment_rationale: null,
+      approvals: [],
+      terms: {
+        schema_version: 1,
+        buyer_id: DEAL.buyer_organization_id,
+        seller_id: DEAL.seller_organization_id,
+        line_items: [],
+        shipments: [],
+        payment_terms: [],
+        delivery_location: "Port",
+        incoterm: "FOB",
+        cancellation_terms: "Standard",
+      },
+    } as unknown as AgreementVersion);
+    mockedRaiseDealCase.mockResolvedValue({
+      id: "case-new",
+      deal_id: DEAL.id,
+      agreement_version_id: "agreement-version-1",
+      agreement_terms_hash: "a".repeat(64),
+      case_type: "DISPUTE",
+      reason: "Delivery timeline breached",
+      obligation_references: [],
+      requested_by_user_id: "user-1",
+      requested_by_organization_id: DEAL.buyer_organization_id,
+      created_at: "2026-11-07T00:00:00Z",
+      status: "OPEN",
+      evidence_visibility: "MUTUAL_VISIBLE",
+      evidence_items: [],
+      operational_impact_blockers: [],
+      version: 0,
+    });
+
+    render(<DealDetailPage dealId={DEAL.id} onBackToDeals={vi.fn()} />);
+
+    const raiseBtn = await screen.findByRole("button", { name: "Raise Case" });
+    fireEvent.click(raiseBtn);
+
+    expect(await screen.findByRole("heading", { name: /Raise Dispute or Cancellation/i })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Explain why this case is being raised..."), {
+      target: { value: "Delivery timeline breached" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit Case" }));
+
+    await waitFor(() => {
+      expect(mockedRaiseDealCase).toHaveBeenCalledWith(
+        DEAL.id,
+        expect.objectContaining({
+          case_type: "DISPUTE",
+          reason: "Delivery timeline breached",
+          agreement_version_id: "agreement-version-1",
+        })
+      );
+    });
+  });
+
+  it("allows bilateral decision response on an open case", async () => {
+    mockedListDealCases.mockResolvedValue([
+      {
+        id: "case-respond-1",
+        deal_id: DEAL.id,
+        agreement_version_id: "agreement-1",
+        agreement_terms_hash: "a".repeat(64),
+        case_type: "CANCELLATION",
+        reason: "Mutual cancellation request",
+        obligation_references: [],
+        requested_by_user_id: "user-2",
+        requested_by_organization_id: DEAL.seller_organization_id, // Initiated by seller
+        created_at: "2026-11-07T00:00:00Z",
+        status: "OPEN",
+        evidence_visibility: "MUTUAL_VISIBLE",
+        evidence_items: [],
+        operational_impact_blockers: [],
+        version: 0,
+      },
+    ]);
+    mockedRespondToDealCase.mockResolvedValue({
+      id: "case-respond-1",
+      deal_id: DEAL.id,
+      agreement_version_id: "agreement-1",
+      agreement_terms_hash: "a".repeat(64),
+      case_type: "CANCELLATION",
+      reason: "Mutual cancellation request",
+      obligation_references: [],
+      requested_by_user_id: "user-2",
+      requested_by_organization_id: DEAL.seller_organization_id,
+      created_at: "2026-11-07T00:00:00Z",
+      status: "RESOLVED",
+      resolution: "Consent provided by buyer",
+      evidence_visibility: "MUTUAL_VISIBLE",
+      evidence_items: [],
+      operational_impact_blockers: [],
+      version: 1,
+    });
+
+    render(<DealDetailPage dealId={DEAL.id} onBackToDeals={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: /Deal Cases/i })).toBeInTheDocument();
+    const consentBtn = await screen.findByRole("button", { name: "Consent" });
+    fireEvent.click(consentBtn);
+
+    const rationaleInput = await screen.findByPlaceholderText("State rationale for your decision...");
+    fireEvent.change(rationaleInput, { target: { value: "Consent provided by buyer" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm CONSENT" }));
+
+    await waitFor(() => {
+      expect(mockedRespondToDealCase).toHaveBeenCalledWith(
+        DEAL.id,
+        "case-respond-1",
+        expect.objectContaining({
+          decision: "CONSENT",
+          rationale: "Consent provided by buyer",
+        })
+      );
+    });
+  });
+
+  it("allows adding case evidence to an existing case", async () => {
+    mockedListDealCases.mockResolvedValue([
+      {
+        id: "case-evidence-1",
+        deal_id: DEAL.id,
+        agreement_version_id: "agreement-1",
+        agreement_terms_hash: "a".repeat(64),
+        case_type: "DISPUTE",
+        reason: "Delayed consignment shipment",
+        obligation_references: [],
+        requested_by_user_id: "user-1",
+        requested_by_organization_id: DEAL.buyer_organization_id,
+        created_at: "2026-11-07T00:00:00Z",
+        status: "OPEN",
+        evidence_visibility: "MUTUAL_VISIBLE",
+        evidence_items: [],
+        operational_impact_blockers: [],
+        version: 0,
+      },
+    ]);
+    mockedAddCaseEvidence.mockResolvedValue({
+      evidence_id: "ev-new-1",
+      case_id: "case-evidence-1",
+      submitted_by_user_id: "user-1",
+      submitted_by_organization_id: DEAL.buyer_organization_id,
+      visibility: "MUTUAL_VISIBLE",
+      notes: "Customs declaration receipt attached",
+      submitted_at: "2026-11-07T01:00:00Z",
+    });
+
+    render(<DealDetailPage dealId={DEAL.id} onBackToDeals={vi.fn()} />);
+
+    expect(await screen.findByText("Delayed consignment shipment")).toBeInTheDocument();
+    const addEvidenceBtn = await screen.findByRole("button", { name: "+ Add Evidence" });
+    fireEvent.click(addEvidenceBtn);
+
+    const notesInput = await screen.findByPlaceholderText("Add evidence notes...");
+    fireEvent.change(notesInput, { target: { value: "Customs declaration receipt attached" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Evidence" }));
+
+    await waitFor(() => {
+      expect(mockedAddCaseEvidence).toHaveBeenCalledWith(
+        DEAL.id,
+        "case-evidence-1",
+        expect.objectContaining({
+          notes: "Customs declaration receipt attached",
+          visibility: "MUTUAL_VISIBLE",
+        })
+      );
+    });
   });
 });

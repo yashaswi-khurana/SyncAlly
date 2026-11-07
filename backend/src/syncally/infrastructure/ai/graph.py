@@ -2,8 +2,6 @@
 
 from typing import TypedDict
 
-from langgraph.graph import END, START, StateGraph
-
 from syncally.application.ai import (
     AI_SCHEMA_VERSION,
     AISuggestionProvider,
@@ -53,19 +51,24 @@ def _draft(state: _ProposalState) -> dict[str, ProposalDraftResult]:
     }
 
 
-_proposal_graph = (
-    StateGraph(_ProposalState)
-    .add_node("check_readiness", _check_readiness)
-    .add_node("draft", _draft)
-    .add_edge(START, "check_readiness")
-    .add_conditional_edges(
-        "check_readiness",
-        _route_proposal,
-        {"draft": "draft", "clarification": END},
+try:
+    from langgraph.graph import END, START, StateGraph
+
+    _proposal_graph = (
+        StateGraph(_ProposalState)
+        .add_node("check_readiness", _check_readiness)
+        .add_node("draft", _draft)
+        .add_edge(START, "check_readiness")
+        .add_conditional_edges(
+            "check_readiness",
+            _route_proposal,
+            {"draft": "draft", "clarification": END},
+        )
+        .add_edge("draft", END)
+        .compile()
     )
-    .add_edge("draft", END)
-    .compile()
-)
+except ImportError:
+    _proposal_graph = None
 
 
 def draft_proposal_with_graph(
@@ -73,5 +76,10 @@ def draft_proposal_with_graph(
     provider: AISuggestionProvider,
 ) -> ProposalDraftResult:
     """Route incomplete context to guidance; call the provider only when ready."""
-    state = _proposal_graph.invoke({"context": context, "provider": provider})
-    return state["result"]
+    if _proposal_graph is not None:
+        state = _proposal_graph.invoke({"context": context, "provider": provider})
+        return state["result"]
+    readiness = _check_readiness({"context": context, "provider": provider})
+    if readiness.get("missing_fields"):
+        return readiness["result"]  # type: ignore[return-value]
+    return draft_proposal_from_context(context, provider)

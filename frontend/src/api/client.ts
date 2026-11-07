@@ -265,6 +265,10 @@ export function createMarketplaceListing(input: CreateMarketplaceListingInput): 
   });
 }
 
+export function getMarketplaceListing(listingId: string): Promise<MarketplaceListing> {
+  return apiRequest<MarketplaceListing>(`/marketplace/listings/${encodeURIComponent(listingId)}`);
+}
+
 export function deactivateMarketplaceListing(listingId: string): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/marketplace/listings/${encodeURIComponent(listingId)}`, {
     method: "DELETE",

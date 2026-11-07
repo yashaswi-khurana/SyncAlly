@@ -52,6 +52,31 @@ export interface OrganizationDirectorySearch {
   country_code?: string;
 }
 
+export interface MarketplaceListing {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  country_code: string;
+  title: string;
+  description: string;
+  category: string;
+  available_quantity: string;
+  unit: string;
+  unit_price: string;
+  currency: string;
+}
+
+export interface CreateMarketplaceListingInput {
+  organization_id: string;
+  title: string;
+  description: string;
+  category: string;
+  available_quantity: string;
+  unit: string;
+  unit_price: string;
+  currency: string;
+}
+
 export type ContactVisibility = "PRIVATE" | "PARTICIPANTS";
 
 export interface OrganizationContact {

@@ -429,7 +429,8 @@ export function recordDealFulfillment(
   dealId: string,
   input: RecordFulfillmentInput,
 ): Promise<FulfillmentEvent> {
-  return apiRequest<FulfillmentEvent>(`/deals/${encodeURIComponent(dealId)}/fulfillment/events`, {
+  const endpoint = input.event_type === "SHIPPED" ? "shipments" : "events";
+  return apiRequest<FulfillmentEvent>(`/deals/${encodeURIComponent(dealId)}/fulfillment/${endpoint}`, {
     method: "POST",
     body: JSON.stringify(input),
   });

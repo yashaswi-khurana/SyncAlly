@@ -48,8 +48,8 @@ class RecordFulfillmentCommand:
         bounded_quantity(self.quantity)
         has_shipping_details = any((self.carrier, self.tracking_number, self.dispatch_date, self.expected_delivery_date))
         if self.stage is FulfillmentStage.SHIPPED:
-            if not self.carrier or self.dispatch_date is None:
-                raise InvariantViolation("A carrier and dispatch date are required for a shipment")
+            if has_shipping_details and (not self.carrier or self.dispatch_date is None):
+                raise InvariantViolation("A carrier and dispatch date are required with shipment details")
             if self.expected_delivery_date and self.expected_delivery_date < self.dispatch_date:
                 raise InvariantViolation("Expected delivery date cannot be before dispatch date")
         elif has_shipping_details:

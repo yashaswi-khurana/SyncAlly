@@ -22,6 +22,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    has_shipping_details = bind.execute(
+        sa.text(
+            "SELECT 1 FROM fulfillment_events WHERE carrier IS NOT NULL "
+            "OR tracking_number IS NOT NULL OR dispatch_date IS NOT NULL "
+            "OR expected_delivery_date IS NOT NULL LIMIT 1"
+        )
+    ).first()
+    if has_shipping_details:
+        raise RuntimeError("Cannot downgrade fulfillment migration with recorded shipping details")
+
     op.drop_column("fulfillment_events", "expected_delivery_date")
     op.drop_column("fulfillment_events", "dispatch_date")
     op.drop_column("fulfillment_events", "tracking_number")

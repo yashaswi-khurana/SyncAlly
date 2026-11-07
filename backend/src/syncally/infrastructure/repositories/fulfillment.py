@@ -82,11 +82,20 @@ def _request_hash(command: RecordFulfillmentCommand) -> str:
         "organization_id": str(command.organization_id),
         "stage": command.stage.value,
         "quantity": quantity_text(command.quantity),
-        "carrier": command.carrier,
-        "tracking_number": command.tracking_number,
-        "dispatch_date": command.dispatch_date.isoformat() if command.dispatch_date else None,
-        "expected_delivery_date": command.expected_delivery_date.isoformat() if command.expected_delivery_date else None,
     }
+    if any((command.carrier, command.tracking_number, command.dispatch_date, command.expected_delivery_date)):
+        payload.update(
+            {
+                "carrier": command.carrier,
+                "tracking_number": command.tracking_number,
+                "dispatch_date": command.dispatch_date.isoformat() if command.dispatch_date else None,
+                "expected_delivery_date": (
+                    command.expected_delivery_date.isoformat()
+                    if command.expected_delivery_date
+                    else None
+                ),
+            }
+        )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

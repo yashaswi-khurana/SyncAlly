@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import NoReturn
+from typing import Literal, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -45,12 +45,23 @@ class RecordFulfillmentRequest(BaseModel):
     terms_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     obligation_id: UUID
     organization_id: UUID
-    event_type: FulfillmentStage
+    event_type: FulfillmentStage = Field(
+        description=(
+            "SHIPPED requests may omit all shipping details for legacy compatibility; "
+            "new clients should send carrier and dispatch_date. Other stages cannot include them."
+        )
+    )
     quantity: Decimal
-    carrier: str | None = Field(default=None, max_length=120)
+    carrier: str | None = Field(
+        default=None,
+        max_length=120,
+        description="Required with dispatch_date on new SHIPPED requests; both may be omitted by legacy clients.",
+    )
     tracking_number: str | None = Field(default=None, max_length=128)
-    dispatch_date: date | None = None
-    expected_delivery_date: date | None = None
+    dispatch_date: date | None = Field(
+        default=None,
+        description="Required with carrier on new SHIPPED requests; both may be omitted by legacy clients.",
+    )
     expected_version: int = Field(ge=0, strict=True)
     idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"\S")
 
@@ -76,11 +87,9 @@ class RecordFulfillmentRequest(BaseModel):
     @model_validator(mode="after")
     def validate_shipping_details(self) -> RecordFulfillmentRequest:
         has_shipping_details = any((self.carrier, self.tracking_number, self.dispatch_date, self.expected_delivery_date))
-        if self.event_type is FulfillmentStage.SHIPPED:
-            if not self.carrier:
-                raise ValueError("A carrier is required when reporting a shipment")
-            if self.dispatch_date is None:
-                raise ValueError("A dispatch date is required when reporting a shipment")
+        if self.event_type == FulfillmentStage.SHIPPED:
+            if has_shipping_details and (not self.carrier or self.dispatch_date is None):
+                raise ValueError("A carrier and dispatch date are required when shipping details are provided")
             if self.expected_delivery_date and self.expected_delivery_date < self.dispatch_date:
                 raise ValueError("Expected delivery date cannot be before dispatch date")
         elif has_shipping_details:
@@ -106,6 +115,14 @@ class FulfillmentEventResponse(BaseModel):
     source_type: str
     recorded_at: str
     version: int
+
+
+class RecordShipmentRequest(RecordFulfillmentRequest):
+    """Strict request schema for new clients reporting carrier shipment details."""
+
+    event_type: Literal["SHIPPED"]
+    carrier: str = Field(min_length=1, max_length=120)
+    dispatch_date: date
 
 
 class FulfillmentSnapshotResponse(BaseModel):
@@ -203,7 +220,12 @@ def read_fulfillment_route(
         _raise_fulfillment_error(error)
 
 
-@router.post("/events", status_code=status.HTTP_201_CREATED, response_model=FulfillmentEventResponse)
+@router.post(
+    "/events",
+    status_code=status.HTTP_201_CREATED,
+    response_model=FulfillmentEventResponse,
+    deprecated=True,
+)
 def record_fulfillment_route(
     deal_id: UUID,
     payload: RecordFulfillmentRequest,
@@ -211,6 +233,36 @@ def record_fulfillment_route(
     deal_repository=Depends(get_deal_repository),
     fulfillment_repository: FulfillmentRepository = Depends(get_fulfillment_repository),
     db: Session = Depends(get_db),
+) -> FulfillmentEventResponse:
+    """Backward-compatible endpoint; new clients should use the strict shipment route."""
+    return _record_fulfillment_event(
+        deal_id, payload, actor, deal_repository, fulfillment_repository, db
+    )
+
+
+@router.post(
+    "/shipments", status_code=status.HTTP_201_CREATED, response_model=FulfillmentEventResponse
+)
+def record_shipment_route(
+    deal_id: UUID,
+    payload: RecordShipmentRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    deal_repository=Depends(get_deal_repository),
+    fulfillment_repository: FulfillmentRepository = Depends(get_fulfillment_repository),
+    db: Session = Depends(get_db),
+) -> FulfillmentEventResponse:
+    return _record_fulfillment_event(
+        deal_id, payload, actor, deal_repository, fulfillment_repository, db
+    )
+
+
+def _record_fulfillment_event(
+    deal_id: UUID,
+    payload: RecordFulfillmentRequest,
+    actor: ActorContext,
+    deal_repository,
+    fulfillment_repository: FulfillmentRepository,
+    db: Session,
 ) -> FulfillmentEventResponse:
     try:
         deal: Deal = get_deal(actor, deal_id, deal_repository)
@@ -234,7 +286,7 @@ def record_fulfillment_route(
                 terms_hash=payload.terms_hash,
                 obligation_id=payload.obligation_id,
                 organization_id=payload.organization_id,
-                stage=payload.event_type,
+                stage=FulfillmentStage(payload.event_type),
                 quantity=payload.quantity,
                 carrier=payload.carrier,
                 tracking_number=payload.tracking_number,

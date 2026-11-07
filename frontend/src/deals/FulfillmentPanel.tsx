@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApiError, getDealFulfillment, recordDealFulfillment } from "../api/client";
-import type { FulfillmentSnapshot, FulfillmentStage } from "../api/types";
+import type { FulfillmentEvent, FulfillmentSnapshot, FulfillmentStage } from "../api/types";
 
 type FulfillmentState =
   | { status: "loading" }
@@ -35,6 +35,15 @@ function eventReporter(organizationId: string, buyerOrganizationId: string, sell
   if (organizationId === buyerOrganizationId) return "Reported by buyer";
   if (organizationId === sellerOrganizationId) return "Reported by seller";
   return "Reported by a deal participant";
+}
+
+function shipmentDetails(event: FulfillmentEvent): string {
+  return [
+    event.carrier ?? "Carrier not recorded",
+    event.tracking_number ? `Tracking ${event.tracking_number}` : "No tracking number",
+    event.dispatch_date ? `Dispatched ${event.dispatch_date}` : null,
+    event.expected_delivery_date ? `Expected ${event.expected_delivery_date}` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 function today(): string {
@@ -123,20 +132,26 @@ export default function FulfillmentPanel({
     setSaving(true);
     setWriteError("");
     try {
-      await recordDealFulfillment(dealId, {
+      const common = {
         agreement_version_id: snapshot.agreement_version_id,
         terms_hash: snapshot.terms_hash,
         obligation_id: snapshot.obligation_id,
         organization_id: selectedOrganizationId,
-        event_type: currentStage,
         quantity,
-        carrier: currentStage === "SHIPPED" ? carrier.trim() : null,
-        tracking_number: currentStage === "SHIPPED" ? trackingNumber.trim() || null : null,
-        dispatch_date: currentStage === "SHIPPED" ? dispatchDate : null,
-        expected_delivery_date: currentStage === "SHIPPED" ? expectedDeliveryDate || null : null,
         expected_version: snapshot.fulfillment_version,
         idempotency_key: idempotencyKey,
-      });
+      };
+      const input = currentStage === "SHIPPED"
+        ? {
+            ...common,
+            event_type: "SHIPPED" as const,
+            carrier: carrier.trim(),
+            tracking_number: trackingNumber.trim() || null,
+            dispatch_date: dispatchDate,
+            expected_delivery_date: expectedDeliveryDate || null,
+          }
+        : { ...common, event_type: currentStage };
+      await recordDealFulfillment(dealId, input);
       idempotency.current = null;
       setQuantity("");
       setCarrier("");
@@ -202,6 +217,7 @@ export default function FulfillmentPanel({
                   <span>Earlier terms</span>
                 </div>
                 <p>{new Date(item.recorded_at).toLocaleString()} · {eventReporter(item.organization_id, buyerOrganizationId, sellerOrganizationId)}</p>
+                {item.event_type === "SHIPPED" ? <p>{shipmentDetails(item)}</p> : null}
               </article>
             )) : <p>No delivery facts recorded yet.</p>}
           </div>
@@ -288,12 +304,7 @@ export default function FulfillmentPanel({
                 </div>
                 <p>{new Date(item.recorded_at).toLocaleString()} · {eventReporter(item.organization_id, buyerOrganizationId, sellerOrganizationId)}</p>
                 {item.event_type === "SHIPPED" ? (
-                  <p>
-                    {item.carrier ?? "Carrier not recorded"}
-                    {item.tracking_number ? ` · Tracking ${item.tracking_number}` : " · No tracking number"}
-                    {item.dispatch_date ? ` · Dispatched ${item.dispatch_date}` : ""}
-                    {item.expected_delivery_date ? ` · Expected ${item.expected_delivery_date}` : ""}
-                  </p>
+                  <p>{shipmentDetails(item)}</p>
                 ) : null}
               </article>
             )) : <p>No delivery facts recorded yet.</p>}

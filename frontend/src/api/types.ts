@@ -510,20 +510,27 @@ export interface FulfillmentSnapshot {
   events: FulfillmentEvent[];
 }
 
-export interface RecordFulfillmentInput {
+interface RecordFulfillmentInputBase {
   agreement_version_id: string;
   terms_hash: string;
   obligation_id: string;
   organization_id: string;
-  event_type: FulfillmentStage;
   quantity: string;
-  carrier: string | null;
-  tracking_number: string | null;
-  dispatch_date: string | null;
-  expected_delivery_date: string | null;
   expected_version: number;
   idempotency_key: string;
 }
+
+export type RecordFulfillmentInput =
+  | (RecordFulfillmentInputBase & {
+      event_type: "SHIPPED";
+      carrier: string;
+      tracking_number?: string | null;
+      dispatch_date: string;
+      expected_delivery_date?: string | null;
+    })
+  | (RecordFulfillmentInputBase & {
+      event_type: "OBSERVED" | "CONFIRMED";
+    });
 
 export interface PaymentAuthorization {
   id: string;

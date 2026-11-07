@@ -103,6 +103,27 @@ def search_marketplace_listings(
     return [_response(listing, organization) for listing, organization in db.execute(statement)]
 
 
+@router.get("/listings/{listing_id}", response_model=MarketplaceListingResponse)
+def get_marketplace_listing(
+    listing_id: UUID,
+    _actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    result = db.execute(
+        select(MarketplaceListing, Organization)
+        .join(Organization, Organization.id == MarketplaceListing.organization_id)
+        .where(
+            MarketplaceListing.id == listing_id,
+            MarketplaceListing.status == "ACTIVE",
+            Organization.status == "ACTIVE",
+        )
+    ).one_or_none()
+    if result is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    listing, organization = result
+    return _response(listing, organization)
+
+
 @router.post("/listings", status_code=201, response_model=MarketplaceListingResponse)
 def create_marketplace_listing(
     payload: MarketplaceListingRequest,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, getMarketplaceRFQ, getOrganization, listOrganizations } from "../api/client";
+import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, getMarketplaceListing, getMarketplaceRFQ, getOrganization, listOrganizations } from "../api/client";
 import type { Invitation, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 import type { OpeningMessageDraftInput } from "./openingMessageDraft";
@@ -29,6 +29,7 @@ interface CreateDealPageProps {
   initialCounterpartyId?: string;
   initialInitiatorParty?: "BUYER" | "SELLER";
   initialRfqId?: string;
+  initialListingId?: string;
 }
 
 function describeError(caught: unknown): string {
@@ -82,7 +83,7 @@ function counterpartyInvitePreview(inviteUrl: string): string {
   }
 }
 
-export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, initialCounterpartyId, initialInitiatorParty = "BUYER", initialRfqId }: CreateDealPageProps) {
+export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, initialCounterpartyId, initialInitiatorParty = "BUYER", initialRfqId, initialListingId }: CreateDealPageProps) {
   const [organizationsState, setOrganizationsState] = useState<OrganizationsState>({
     status: "loading",
   });
@@ -97,6 +98,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [loadingListingContext, setLoadingListingContext] = useState(Boolean(initialListingId));
   const [reloadCount, setReloadCount] = useState(0);
   const [mode, setMode] = useState<"directory" | "invite">("directory");
   const [recipientEmail, setRecipientEmail] = useState("");
@@ -197,6 +199,38 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
     );
     return () => { cancelled = true; };
   }, [initialRfqId]);
+
+  useEffect(() => {
+    if (!initialListingId) return;
+    let cancelled = false;
+    setLoadingListingContext(true);
+    void getMarketplaceListing(initialListingId).then(
+      (listing) => {
+        if (cancelled) return;
+        if (initialCounterpartyId && listing.organization_id !== initialCounterpartyId) {
+          setSubmitError("This listing belongs to a different seller. Reopen the deal from the marketplace.");
+          return;
+        }
+        const openingLines = [
+          `Hello ${listing.organization_name},`,
+          "",
+          `I'm interested in your ${listing.title} listing (${listing.category}).`,
+          `Listed availability: ${listing.available_quantity} ${listing.unit}.`,
+          `Listed price: ${listing.unit_price} ${listing.currency} / ${listing.unit}.`,
+          listing.description ? `Listing details: ${listing.description}` : null,
+          "",
+          "Please confirm current availability and share delivery options and payment terms.",
+        ].filter((line) => line !== null);
+        setOpeningMessage(openingLines.join("\n"));
+      },
+      (caught: unknown) => {
+        if (!cancelled) setSubmitError(describeError(caught));
+      },
+    ).finally(() => {
+      if (!cancelled) setLoadingListingContext(false);
+    });
+    return () => { cancelled = true; };
+  }, [initialCounterpartyId, initialListingId]);
 
   const results = searchState.status === "ready" ? searchState.items : [];
   const listOpen = searchOpen && results.length > 0;
@@ -460,7 +494,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                 id="deal-opening-message"
                 value={openingMessage}
                 maxLength={8000}
-                rows={4}
+                rows={initialListingId ? 8 : 4}
                 disabled={submitting}
                 placeholder={initiatorParty === "BUYER"
                   ? "We need [product/specification], [quantity and unit], delivered to [destination] by [date]. Please quote in [currency] and include your payment terms."
@@ -595,8 +629,8 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                 {submitError}
               </p>
             ) : null}
-            <button type="submit" className="button" disabled={submitting}>
-              {submitting ? "Creating deal…" : "Create deal"}
+            <button type="submit" className="button" disabled={submitting || loadingListingContext}>
+              {loadingListingContext ? "Loading listing…" : submitting ? "Creating deal…" : "Create deal"}
             </button>
           </form>
         </section>

@@ -301,6 +301,7 @@ export default function App() {
             initialCounterpartyId={route.sellerOrganizationId}
             initialInitiatorParty={route.initiatorParty}
             initialRfqId={route.rfqId}
+            initialListingId={route.listingId}
           />
         ) : route.name === "marketplace" ? (
           <MarketplacePage organizations={organizations ?? []} />

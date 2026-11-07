@@ -354,7 +354,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
                 {deactivatingId === listing.id ? "Taking down…" : "Take down listing"}
               </button>
             ) : !ownOrganizationIds.has(listing.organization_id) && organizations.length > 0 ? (
-              <button className="button secondary" type="button" onClick={() => navigateToCreateDeal(listing.organization_id)}>Start a deal</button>
+              <button className="button secondary" type="button" onClick={() => navigateToCreateDeal(listing.organization_id, "BUYER", undefined, listing.id)}>Start a deal</button>
             ) : null}
           </article>
         ))}

@@ -16,6 +16,7 @@ from syncally.api.deals import router as deals_router
 from syncally.api.dev import router as dev_router
 from syncally.api.documents import router as documents_router
 from syncally.api.fulfillment import router as fulfillment_router
+from syncally.api.marketplace import router as marketplace_router
 from syncally.api.negotiation import router as negotiation_router
 from syncally.api.operations import OperationalFastAPI
 from syncally.api.organizations import router as organizations_router
@@ -123,6 +124,7 @@ app.include_router(deals_api_v1_router)
 app.include_router(conversations_router)
 app.include_router(agreements_router)
 app.include_router(fulfillment_router)
+app.include_router(marketplace_router)
 app.include_router(negotiation_router)
 app.include_router(payments_router)
 app.include_router(documents_router)

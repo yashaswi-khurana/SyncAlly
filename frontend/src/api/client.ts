@@ -35,6 +35,8 @@ import type {
   Organization,
   OrganizationDirectoryItem,
   OrganizationDirectorySearch,
+  MarketplaceListing,
+  CreateMarketplaceListingInput,
   OrganizationMember,
   OrganizationProfile,
   PlatformOrganization,
@@ -241,6 +243,30 @@ export function searchOrganizationDirectory(
     if (value?.trim()) params.set(key, value.trim());
   }
   return apiRequest<OrganizationDirectoryItem[]>(`/organizations/directory?${params.toString()}`, { signal: options?.signal });
+}
+
+export function searchMarketplaceListings(
+  filters: { q?: string; country_code?: string; category?: string } = {},
+  options?: { signal?: AbortSignal },
+): Promise<MarketplaceListing[]> {
+  const params = new URLSearchParams({ limit: "100" });
+  for (const [key, value] of Object.entries(filters)) {
+    if (value?.trim()) params.set(key, value.trim());
+  }
+  return apiRequest<MarketplaceListing[]>(`/marketplace/listings?${params.toString()}`, { signal: options?.signal });
+}
+
+export function createMarketplaceListing(input: CreateMarketplaceListingInput): Promise<MarketplaceListing> {
+  return apiRequest<MarketplaceListing>("/marketplace/listings", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deactivateMarketplaceListing(listingId: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/marketplace/listings/${encodeURIComponent(listingId)}`, {
+    method: "DELETE",
+  });
 }
 
 export function getOrganizationProfile(organizationId: string): Promise<OrganizationProfile> {

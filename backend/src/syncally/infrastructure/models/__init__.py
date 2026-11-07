@@ -29,6 +29,7 @@ from syncally.infrastructure.models.identity import (
     RefreshToken,
     User,
 )
+from syncally.infrastructure.models.marketplace import MarketplaceListing
 from syncally.infrastructure.models.negotiation import (
     NegotiationAction,
     NegotiationSession,
@@ -52,6 +53,7 @@ __all__ = [
     "DemoFixture",
     "FulfillmentEvent",
     "Message",
+    "MarketplaceListing",
     "NegotiationAction",
     "NegotiationSession",
     "Obligation",

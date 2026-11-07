@@ -4846,4 +4846,31 @@ body::after {
   gap: 16px;
 }
 
+.marketplace-page__publish,
+.marketplace-page__publish label {
+  display: grid;
+  gap: 12px;
+}
+
+.marketplace-page__publish {
+  margin-top: 18px;
+}
+
+.marketplace-page__price-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: 12px;
+}
+
+.marketplace-page__listings {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.marketplace-page__listing {
+  display: grid;
+  gap: 10px;
+}
+
 

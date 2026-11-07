@@ -76,7 +76,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
   }, []);
 
   // Fetch admin organizations when opening the invite modal
-  async function handleOpenInviteModal() {
+  async function handleOpenInviteModal(preferredOrganizationId?: string) {
     setShowInviteModal(true);
     setGenerateError(null);
     setGeneratedInvite(null);
@@ -85,7 +85,10 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
       const orgs = await listOrganizations();
       const admins = orgs.filter((org) => org.role === "ADMIN");
       setAdminOrganizations(admins);
-      if (admins.length > 0 && !selectedOrgId) {
+      const preferredAdmin = admins.find((org) => org.id === preferredOrganizationId);
+      if (preferredAdmin) {
+        setSelectedOrgId(preferredAdmin.id);
+      } else if (admins.length > 0 && !admins.some((org) => org.id === selectedOrgId)) {
         setSelectedOrgId(admins[0].id);
       }
     } catch (caught) {
@@ -191,26 +194,19 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
       <Reveal className="hero">
         <div className="workspace-intro__meta">
           <span className="eyebrow">Settings / Organizations</span>
-          <span className="workspace-intro__caption">Counterparty directory &amp; members</span>
+          <span className="workspace-intro__caption">Company profiles &amp; team access</span>
         </div>
         <h1 className="display">Organizations.</h1>
         <p className="hero__lede">
           Manage your organizations, their profiles and team members. Search for a trading
           partner when you create a deal.
         </p>
-        <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
-          <button
-            type="button"
-            className="button"
-            onClick={handleOpenInviteModal}
-          >
-            Invite team member
-          </button>
-        </div>
       </Reveal>
 
       <Reveal delay={80}>
-        <OrganizationsPanel />
+        <OrganizationsPanel
+          onInviteTeamMember={handleOpenInviteModal}
+        />
       </Reveal>
 
       {/* Shareable Invitation Modal */}
@@ -240,7 +236,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
             </div>
 
             <p className="muted" style={{ fontSize: "0.9rem", marginBottom: 16 }}>
-              Team membership invitation
+              Send a single-use link. The invited person can sign in or create their account before joining this organization.
             </p>
 
             <form className="form" onSubmit={handleGenerateInvite} noValidate>
@@ -362,8 +358,11 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
             {!acceptedResult ? (
               <>
                 <p className="muted" style={{ marginBottom: 16 }}>
-                  You have received an invitation to collaborate with a counterparty on SyncAlly.
-                  Accepting will grant your account access to trade documents and bilateral deals.
+                  {intent.kind === "TEAM"
+                    ? "You have been invited to join an organization team. Sign in or create your account, then accept to get the access assigned to your membership."
+                    : intent.kind === "COUNTERPARTY"
+                      ? "You have been invited to set up your organization and join a shared trade deal."
+                      : "You have received an invitation to collaborate in SyncAlly."}
                 </p>
 
                 {intent.recipientEmail ? <p className="muted">Addressed to {intent.recipientEmail}</p> : null}

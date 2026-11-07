@@ -2305,6 +2305,24 @@ body::after {
   gap: 20px;
 }
 
+.auth-masthead {
+  flex-wrap: wrap;
+}
+
+.auth-public-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.auth-public-nav .button {
+  padding: 8px 12px;
+  font-size: 0.78rem;
+}
+
 .auth-wordmark {
   display: inline-flex;
   align-items: center;
@@ -2496,6 +2514,60 @@ body::after {
   color: rgba(247, 244, 236, 0.63);
   font-size: 0.88rem;
   line-height: 1.6;
+}
+
+.auth-card__signup-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 18px;
+  color: rgba(247, 244, 236, 0.68);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.auth-card__signup-link .button {
+  padding: 6px 8px;
+  font-size: inherit;
+}
+
+.org-signup-card .auth-card__intro {
+  margin-bottom: 18px;
+}
+
+.org-signup-card .form {
+  gap: 13px;
+}
+
+.org-signup-card .hint {
+  color: rgba(247, 244, 236, 0.58);
+}
+
+.org-access-required {
+  max-width: 740px;
+  margin: 48px auto;
+  padding: clamp(24px, 5vw, 48px);
+}
+
+.org-access-required h1 {
+  margin-top: 12px;
+  font-family: var(--display);
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+}
+
+.org-access-required p {
+  max-width: 56ch;
+  margin-top: 10px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.org-access-required__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
 }
 
 .auth-card .form {
@@ -4133,6 +4205,490 @@ body::after {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+  }
+}
+
+/* ---------- organization workspace ---------- */
+
+.org-console {
+  display: grid;
+  gap: 24px;
+}
+
+.org-console__header,
+.org-detail__header,
+.org-team-actions,
+.org-create-form__intro,
+.org-create-form__actions,
+.org-add-member__intro,
+.org-add-member__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.org-console__header {
+  align-items: flex-start;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.org-console__header h2,
+.org-create-form h3,
+.org-detail__header h3,
+.org-section-heading h4,
+.org-team-actions h4,
+.org-add-member h5,
+.org-empty-state h3 {
+  margin: 6px 0;
+  color: var(--ink);
+  font-family: var(--display);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+
+.org-console__header h2 {
+  font-size: clamp(1.65rem, 3vw, 2.15rem);
+}
+
+.org-console__header p,
+.org-create-form p,
+.org-team-actions p,
+.org-add-member p,
+.org-empty-state p {
+  margin: 6px 0 0;
+  line-height: 1.55;
+}
+
+.org-console__layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+
+.org-switcher {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 65%, transparent);
+}
+
+.org-switcher__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 2px 8px;
+}
+
+.org-count,
+.org-step {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.org-switcher__list {
+  display: grid;
+  gap: 7px;
+}
+
+.org-switcher__item {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.org-switcher__item:hover,
+.org-switcher__item.is-selected {
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+
+.org-switcher__item.is-selected {
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.org-switcher__avatar,
+.org-detail__avatar,
+.org-empty-state__mark,
+.org-add-member__icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--accent);
+  font-family: var(--display);
+  font-weight: 600;
+}
+
+.org-switcher__avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 1.05rem;
+}
+
+.org-switcher__copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.org-switcher__copy strong {
+  overflow: hidden;
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-switcher__copy small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.org-switcher__arrow {
+  color: var(--muted);
+  font-size: 1.25rem;
+}
+
+.org-switcher__create {
+  width: 100%;
+  padding: 11px 8px 2px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.81rem;
+  font-weight: 650;
+  cursor: pointer;
+  text-align: left;
+}
+
+.org-switcher__create:hover {
+  color: var(--ink);
+}
+
+.org-detail {
+  min-width: 0;
+}
+
+.org-detail__header {
+  align-items: flex-start;
+  padding: 4px 0 18px;
+}
+
+.org-detail__title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.org-detail__avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  font-size: 1.45rem;
+}
+
+.org-detail__header h3 {
+  overflow-wrap: anywhere;
+  font-size: clamp(1.35rem, 2.4vw, 1.85rem);
+}
+
+.org-detail__header p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.org-detail__reference {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  min-width: 130px;
+}
+
+.org-detail__reference > span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.org-detail__reference code {
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.69rem;
+  text-overflow: ellipsis;
+}
+
+.org-detail__reference .button {
+  margin-top: 4px;
+  padding: 7px 10px;
+  font-size: 0.74rem;
+}
+
+.org-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.org-tabs [role="tab"] {
+  position: relative;
+  padding: 12px 15px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.org-tabs [role="tab"]::after {
+  position: absolute;
+  right: 12px;
+  bottom: -1px;
+  left: 12px;
+  height: 2px;
+  background: transparent;
+  content: "";
+}
+
+.org-tabs [role="tab"][aria-selected="true"] {
+  color: var(--ink);
+}
+
+.org-tabs [role="tab"][aria-selected="true"]::after {
+  background: var(--accent);
+}
+
+.org-tab-panel {
+  padding-top: 22px;
+}
+
+.org-section-heading,
+.org-team-actions {
+  margin-bottom: 18px;
+}
+
+.org-section-heading h4,
+.org-team-actions h4 {
+  font-size: 1.35rem;
+}
+
+.org-add-member {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 22px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.org-add-member__intro {
+  justify-content: flex-start;
+}
+
+.org-add-member__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  font: 1.2rem var(--body);
+}
+
+.org-add-member h5 {
+  font-size: 0.97rem;
+}
+
+.org-add-member__controls {
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.org-add-member__controls .field {
+  flex: 1 1 240px;
+  max-width: 440px;
+  margin: 0;
+}
+
+.org-add-member__controls .button {
+  margin-bottom: 1px;
+}
+
+.org-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  max-width: 580px;
+  margin: 10px auto;
+  padding: 44px 24px;
+  text-align: center;
+}
+
+.org-empty-state__mark {
+  width: 54px;
+  height: 54px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  font-size: 1.7rem;
+}
+
+.org-empty-state h2,
+.org-empty-state h3 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.65rem;
+}
+
+.org-empty-state .button {
+  margin-top: 10px;
+}
+
+.org-create-form {
+  display: grid;
+  gap: 18px;
+  padding: clamp(18px, 3vw, 26px);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+.org-create-form__intro {
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.org-step {
+  width: 34px;
+  height: 34px;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent);
+}
+
+.org-create-form h3 {
+  font-size: 1.45rem;
+}
+
+.org-create-form__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.25fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.org-create-form__country input {
+  text-transform: uppercase;
+}
+
+.org-create-form__actions {
+  justify-content: flex-start;
+}
+
+.org-notice {
+  margin: 0;
+}
+
+.org-console .org-list {
+  display: none;
+}
+
+.org-console [role="tabpanel"]:focus {
+  outline: none;
+}
+
+.org-console :focus-visible {
+  outline-color: var(--accent);
+  outline-offset: 3px;
+}
+
+@media (max-width: 820px) {
+  .org-console__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .org-switcher__list {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+}
+
+@media (max-width: 580px) {
+  .org-console__header,
+  .org-detail__header,
+  .org-team-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .org-console__header > .button,
+  .org-team-actions > .button {
+    width: 100%;
+  }
+
+  .org-detail__header {
+    gap: 16px;
+  }
+
+  .org-detail__reference {
+    justify-items: start;
+    padding-left: 66px;
+  }
+
+  .org-create-form__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .org-add-member__controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .org-add-member__controls .field {
+    max-width: none;
+    width: 100%;
+  }
+
+  .org-add-member__controls .button,
+  .org-create-form__actions .button {
+    width: 100%;
+  }
+
+  .org-create-form__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .org-tabs [role="tab"] {
+    flex: 1;
+    padding-inline: 6px;
   }
 }
 

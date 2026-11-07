@@ -4,7 +4,7 @@ import type { FormEvent } from "react";
 import { ApiError, apiRequest, login } from "../api/client";
 import type { InvitationAcceptance, InvitationAcceptanceInput, TokenResponse } from "../api/types";
 import { invitationPresentation } from "./invitationPresentation";
-import { navigateToDeal, navigateToDeals } from "../router";
+import { navigateToDeal, navigateToDeals, navigateToOrganizationSignup } from "../router";
 import TradeFlowScene from "../deals/TradeFlowScene";
 
 function demoQuickFillEnabled() {
@@ -206,6 +206,14 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           <span className="auth-masthead__index">SA / 01</span>
           <span>TRADE RECORDS, KEPT TOGETHER</span>
         </div>
+        {!inviteToken ? (
+          <nav className="auth-public-nav" aria-label="Account navigation">
+            <span>New to SyncAlly?</span>
+            <button type="button" className="button secondary" onClick={navigateToOrganizationSignup}>
+              Create an organization
+            </button>
+          </nav>
+        ) : null}
       </header>
 
       <section className="auth-hero" aria-labelledby="auth-title">
@@ -450,7 +458,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           </form>
           <div className="auth-card__fineprint">
             <span className="auth-card__fineprint-dot" aria-hidden="true" />
-            <span>Access is by invitation</span>
+            <span>Team members join through an organization invitation.</span>
           </div>
         </aside>
       )}

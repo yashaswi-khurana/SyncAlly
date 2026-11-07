@@ -112,7 +112,12 @@ async function readErrorDetail(response: Response): Promise<unknown> {
   }
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}, responseType: "json" | "blob" = "json"): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  responseType: "json" | "blob" = "json",
+  authRequired = true,
+): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", responseType === "blob" ? "application/zip, text/html" : "application/json");
   if (init.body !== undefined) {
@@ -146,8 +151,8 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, respon
     });
     if (!response.ok) {
       const detail = await readErrorDetail(response);
-      if (response.status === 401 && token && typeof window !== "undefined") {
-        window.dispatchEvent(new Event("syncally:session-expired"));
+      if (response.status === 401 && authRequired && token && token === getAccessToken() && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("syncally:session-expired", { detail: { token } }));
       }
       throw new ApiError(response.status, detail);
     }
@@ -179,7 +184,7 @@ export function login(email: string, password: string): Promise<TokenResponse> {
   return apiRequest<TokenResponse>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
-  });
+  }, "json", false);
 }
 
 export function listOrganizations(): Promise<Organization[]> {
@@ -280,7 +285,7 @@ export function createCounterpartyInvitation(input: CounterpartyInvitationInput)
 export function acceptInvitation(input: InvitationAcceptanceInput): Promise<InvitationAcceptance> {
   return apiRequest<InvitationAcceptance>("/invitations/accept", {
     method: "POST", body: JSON.stringify(input),
-  });
+  }, "json", false);
 }
 
 export function getDeal(dealId: string): Promise<Deal> {

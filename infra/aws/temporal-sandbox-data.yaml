@@ -8,6 +8,21 @@ Parameters:
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: At least two subnets in different Availability Zones for the RDS subnet group.
+  AwsServiceEndpointSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Dedicated security group attached to the required private AWS interface endpoints.
+  ApprovedHttpsEgressPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[0-9a-f]+$'
+    Description: Customer-managed IPv4 prefix list for firewall-approved HTTPS destinations, including AWS endpoints if reached outside the VPC.
+  TemporalEgressPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[0-9a-f]+$'
+    Description: Customer-managed IPv4 prefix list for current Temporal Cloud endpoint ranges.
+  S3GatewayPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[0-9a-f]+$'
+    Description: AWS-managed regional S3 prefix list ID used by the ECR image-layer gateway endpoint.
 
 Resources:
   WorkerSecurityGroup:
@@ -16,9 +31,21 @@ Resources:
       GroupDescription: SyncAlly sandbox worker egress; no inbound access.
       VpcId: !Ref VpcId
       SecurityGroupEgress:
-        - IpProtocol: '-1'
-          CidrIp: 0.0.0.0/0
-          Description: Worker egress to PostgreSQL, Temporal Cloud, ECR, Secrets Manager, and CloudWatch.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3GatewayPrefixListId
+          Description: S3 gateway endpoint used to download ECS image layers from ECR.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref ApprovedHttpsEgressPrefixListId
+          Description: Approved HTTPS egress only; route through the egress inspection firewall.
+        - IpProtocol: tcp
+          FromPort: 7233
+          ToPort: 7233
+          DestinationPrefixListId: !Ref TemporalEgressPrefixListId
+          Description: Temporal Cloud TLS/gRPC egress only.
 
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -31,6 +58,26 @@ Resources:
           ToPort: 5432
           SourceSecurityGroupId: !Ref WorkerSecurityGroup
           Description: PostgreSQL from SyncAlly ECS tasks only.
+
+  WorkerDatabaseEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref WorkerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      Description: PostgreSQL egress only to the SyncAlly database security group.
+
+  WorkerAwsEndpointEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref WorkerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref AwsServiceEndpointSecurityGroupId
+      Description: HTTPS egress only to the approved private AWS interface endpoints.
 
   DatabaseSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -82,7 +129,7 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${AWS::StackName}/jwt-secret'
-      Description: Generated JWT signing secret for SyncAlly ECS tasks.
+      Description: Generated JWT signing secret for the SyncAlly API only. Do not inject this secret into workers.
       GenerateSecretString:
         PasswordLength: 64
         ExcludePunctuation: true

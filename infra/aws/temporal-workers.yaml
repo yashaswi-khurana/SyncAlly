@@ -4,19 +4,16 @@ Description: SyncAlly Temporal and payment workers on private ECS Fargate tasks.
 Parameters:
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Subnets in two or more AZs. Use private subnets plus NAT with AssignPublicIp DISABLED, or public subnets for a sandbox with AssignPublicIp ENABLED.
+    Description: Subnets in two or more AZs. Use private subnets whose egress routes pass through an inspection firewall and required VPC endpoints.
   WorkerSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-    Description: Egress-only worker group; permit PostgreSQL and HTTPS/gRPC egress.
+    Description: Worker security group with egress restricted to the database, private VPC endpoints, and approved service prefix lists.
   ImageUri:
     Type: String
     Description: Immutable ECR image URI including tag or digest.
   DatabaseUrlSecretArn:
     Type: String
     Description: Secrets Manager ARN whose SecretString is the full SQLAlchemy DATABASE_URL.
-  JwtSecretArn:
-    Type: String
-    Description: Secrets Manager ARN whose SecretString is the production JWT signing secret.
   PublicFrontendUrl:
     Type: String
     Description: Public HTTPS URL used by production configuration validation.
@@ -56,7 +53,7 @@ Parameters:
     Type: String
     Default: DISABLED
     AllowedValues: [ENABLED, DISABLED]
-    Description: Enable public task IPs only for a sandbox in public subnets with no inbound security-group rules.
+    Description: Keep DISABLED so subnet firewall routes apply. The worker security group also limits egress destinations and ports.
   DeployPaymentWorker:
     Type: String
     Default: 'false'
@@ -108,7 +105,6 @@ Resources:
                 Action: [secretsmanager:GetSecretValue]
                 Resource:
                   - !Ref DatabaseUrlSecretArn
-                  - !Ref JwtSecretArn
                   - !Ref TemporalApiKeySecretArn
                   - !If [HasPaypalCredentials, !Ref PaypalCredentialsSecretArn, !Ref AWS::NoValue]
 
@@ -146,6 +142,7 @@ Resources:
           Command: [python, -m, syncally.workflows.worker]
           Environment:
             - {Name: APP_ENV, Value: !Ref AppEnv}
+            - {Name: JWT_SECRET_REQUIRED, Value: 'false'}
             - {Name: PUBLIC_FRONTEND_URL, Value: !Ref PublicFrontendUrl}
             - {Name: TEMPORAL_ADDRESS, Value: !Ref TemporalAddress}
             - {Name: TEMPORAL_NAMESPACE, Value: !Ref TemporalNamespace}
@@ -153,7 +150,6 @@ Resources:
             - {Name: TEMPORAL_TLS, Value: 'true'}
           Secrets:
             - {Name: DATABASE_URL, ValueFrom: !Ref DatabaseUrlSecretArn}
-            - {Name: JWT_SECRET, ValueFrom: !Ref JwtSecretArn}
             - {Name: TEMPORAL_API_KEY, ValueFrom: !Ref TemporalApiKeySecretArn}
           LogConfiguration: &workerLogs
             LogDriver: awslogs
@@ -180,6 +176,7 @@ Resources:
           Command: [python, -m, syncally.cli.outbox_worker]
           Environment:
             - {Name: APP_ENV, Value: !Ref AppEnv}
+            - {Name: JWT_SECRET_REQUIRED, Value: 'false'}
             - {Name: PUBLIC_FRONTEND_URL, Value: !Ref PublicFrontendUrl}
             - {Name: TEMPORAL_ADDRESS, Value: !Ref TemporalAddress}
             - {Name: TEMPORAL_NAMESPACE, Value: !Ref TemporalNamespace}
@@ -187,7 +184,6 @@ Resources:
             - {Name: TEMPORAL_TLS, Value: 'true'}
           Secrets:
             - {Name: DATABASE_URL, ValueFrom: !Ref DatabaseUrlSecretArn}
-            - {Name: JWT_SECRET, ValueFrom: !Ref JwtSecretArn}
             - {Name: TEMPORAL_API_KEY, ValueFrom: !Ref TemporalApiKeySecretArn}
           LogConfiguration:
             LogDriver: awslogs
@@ -215,11 +211,11 @@ Resources:
           Command: [python, -m, syncally.cli.payment_worker]
           Environment:
             - {Name: APP_ENV, Value: !Ref AppEnv}
+            - {Name: JWT_SECRET_REQUIRED, Value: 'false'}
             - {Name: PUBLIC_FRONTEND_URL, Value: !Ref PublicFrontendUrl}
             - {Name: PAYMENT_MODE, Value: PAYPAL_SANDBOX}
           Secrets:
             - {Name: DATABASE_URL, ValueFrom: !Ref DatabaseUrlSecretArn}
-            - {Name: JWT_SECRET, ValueFrom: !Ref JwtSecretArn}
             - !If
               - HasPaypalCredentials
               - {Name: PAYPAL_CLIENT_ID, ValueFrom: !Sub '${PaypalCredentialsSecretArn}:PAYPAL_CLIENT_ID::'}

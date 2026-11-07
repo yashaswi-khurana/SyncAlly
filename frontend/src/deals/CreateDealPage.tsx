@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, listOrganizations } from "../api/client";
+import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, createDealMessage, listOrganizations } from "../api/client";
 import type { Invitation, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 
@@ -92,6 +92,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [createdDealId, setCreatedDealId] = useState<string | null>(null);
   const [reloadCount, setReloadCount] = useState(0);
   const [mode, setMode] = useState<"directory" | "invite">("directory");
   const [recipientEmail, setRecipientEmail] = useState("");
@@ -101,6 +102,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   const [copied, setCopied] = useState(false);
   const [showFullInvitationLink, setShowFullInvitationLink] = useState(false);
   const [displayName, setDisplayName] = useState("");
+  const [openingMessage, setOpeningMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -188,7 +190,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (submitting) return;
+    if (submitting || createdDealId) return;
     const nextErrors: FieldErrors = {};
     if (buyerOrganizationId === "") {
       nextErrors.buyer = "Choose your organization.";
@@ -231,6 +233,20 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
         ...(displayName.trim() ? { display_name: displayName.trim() } : {}),
         ...(initiatorParty === "SELLER" ? { initiator_party: "SELLER" as const } : {}),
       });
+      if (mode === "directory" && openingMessage.trim()) {
+        try {
+          await createDealMessage(deal.id, {
+            body: openingMessage.trim(),
+            visibility: "SHAREABLE",
+            organization_id: buyerOrganizationId,
+            idempotency_key: crypto.randomUUID(),
+          });
+        } catch {
+          setCreatedDealId(deal.id);
+          setSubmitError("The deal was created, but the opening message could not be confirmed. Open the deal and check the conversation before sending it again.");
+          return;
+        }
+      }
       onCreated(deal.id);
     } catch (caught) {
       setSubmitError(describeCreateError(caught, initiatorParty));
@@ -378,7 +394,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
             Choose your role and the other organization for this deal.
           </p>
           <form className="form" onSubmit={handleSubmit} noValidate style={{ marginTop: 22 }}>
-            <fieldset disabled={submitting}>
+            <fieldset disabled={submitting || Boolean(createdDealId)}>
               <legend>Your role</legend>
               <label><input type="radio" name="initiator-party" checked={initiatorParty === "BUYER"} onChange={() => { setInitiatorParty("BUYER"); setFieldErrors({}); }} /> Buyer</label>
               <label><input type="radio" name="initiator-party" checked={initiatorParty === "SELLER"} onChange={() => { setInitiatorParty("SELLER"); setFieldErrors({}); }} /> Seller</label>
@@ -386,11 +402,11 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
             <div className="field">
               <label htmlFor="deal-display-name">Deal name (optional)</label>
               <input id="deal-display-name" type="text" maxLength={160} value={displayName}
-                placeholder="e.g. Toronto office furniture order" disabled={submitting}
+                placeholder="e.g. Toronto office furniture order" disabled={submitting || Boolean(createdDealId)}
                 onChange={(event) => setDisplayName(event.target.value)} />
               <p className="hint">A short name helps both sides find this deal later.</p>
             </div>
-            <fieldset disabled={submitting}>
+            <fieldset disabled={submitting || Boolean(createdDealId)}>
               <legend>Counterparty</legend>
               <label><input type="radio" name="counterparty-mode" checked={mode === "directory"} onChange={() => { setMode("directory"); setFieldErrors({}); }} /> Existing organization</label>
               <label><input type="radio" name="counterparty-mode" checked={mode === "invite"} onChange={() => { setMode("invite"); setFieldErrors({}); }} /> Invite counterparty</label>
@@ -402,7 +418,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 name="buyer-organization"
                 value={buyerOrganizationId}
                 aria-invalid={fieldErrors.buyer ? true : undefined}
-                disabled={submitting}
+                disabled={submitting || Boolean(createdDealId)}
                 onChange={(event) => {
                   setBuyerOrganizationId(event.target.value);
                   setFieldErrors(seller?.id === event.target.value
@@ -438,7 +454,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 maxLength={100}
                 placeholder="Search by company name"
                 value={query}
-                disabled={submitting}
+                disabled={submitting || Boolean(createdDealId)}
                 aria-autocomplete="list"
                 aria-expanded={listOpen}
                 aria-controls={listOpen ? "seller-results" : undefined}
@@ -511,12 +527,36 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 </p>
               ) : null}
             </div>}
-            {submitError ? (
+            {mode === "directory" ? (
+              <div className="field">
+                <label htmlFor="deal-opening-message">Opening request or quote (optional)</label>
+                <textarea
+                  id="deal-opening-message"
+                  value={openingMessage}
+                  maxLength={8000}
+                  rows={4}
+                  disabled={submitting || Boolean(createdDealId)}
+                  placeholder={initiatorParty === "BUYER"
+                    ? "We need [product/specification], [quantity and unit], delivered to [destination] by [date]. Please quote in [currency] and include your payment terms."
+                    : "We can offer [product/specification], [available quantity and unit] at [price and currency], with delivery by [date]. Our payment terms are [terms]."}
+                  onChange={(event) => setOpeningMessage(event.target.value)}
+                />
+                <p className="hint">This message is visible to both organizations. Add only details you are ready to share.</p>
+              </div>
+            ) : (
+              <p className="hint">After the invited counterparty joins, open the deal and send your request or quote in the conversation.</p>
+            )}
+            {createdDealId ? (
+              <div className="form-error" role="alert">
+                <p>{submitError}</p>
+                <button type="button" className="button" onClick={() => onCreated(createdDealId)}>Open created deal</button>
+              </div>
+            ) : submitError ? (
               <p className="form-error" role="alert">
                 {submitError}
               </p>
             ) : null}
-            <button type="submit" className="button" disabled={submitting}>
+            <button type="submit" className="button" disabled={submitting || Boolean(createdDealId)}>
               {submitting ? "Creating deal…" : "Create deal"}
             </button>
           </form>

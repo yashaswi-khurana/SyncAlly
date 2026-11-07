@@ -9,6 +9,7 @@ import type {
   NegotiationView,
   ReviewedProposalTerms,
 } from "../api/types";
+import ProposalComparison from "./ProposalComparison";
 
 interface NegotiationReviewProps {
   deal: Deal;
@@ -529,6 +530,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
             <code className="agreement-review__hash">{view.latest.terms_hash}</code>
           </details>
           {view.latest.expires_at ? <p>Respond by: <time dateTime={view.latest.expires_at}>{new Date(view.latest.expires_at).toLocaleString()}</time></p> : null}
+          <ProposalComparison latest={view.latest} proposals={view.proposals} />
           <div className="agreement-terms" aria-label="Latest proposal terms">
             {view.latest.terms.line_items.map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Item ID</dt><dd>{item.id}</dd></div> : null}

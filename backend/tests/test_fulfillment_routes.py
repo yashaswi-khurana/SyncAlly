@@ -168,7 +168,7 @@ class FulfillmentRouteTests(unittest.TestCase):
         )
 
     def _payload(
-        self, stage: str, quantity: str, version: int, key: str | None = None
+        self, stage: str, quantity: str, version: int, key: str | None = None, carrier: str | None = None
     ) -> RecordFulfillmentRequest:
         obligation = self.db.scalar(
             select(Obligation).where(
@@ -185,6 +185,10 @@ class FulfillmentRouteTests(unittest.TestCase):
             organization_id=self.seller.id if stage == "SHIPPED" else self.buyer.id,
             event_type=stage,
             quantity=quantity,
+            carrier=(carrier or "DHL") if stage == "SHIPPED" else None,
+            tracking_number="JD123" if stage == "SHIPPED" else None,
+            dispatch_date="2026-11-07" if stage == "SHIPPED" else None,
+            expected_delivery_date="2026-11-14" if stage == "SHIPPED" else None,
             expected_version=version,
             idempotency_key=key or str(uuid4()),
         )
@@ -240,12 +244,29 @@ class FulfillmentRouteTests(unittest.TestCase):
         replay = self._record(self.seller_actor, shipped)
         self.assertEqual(first.id, replay.id)
         self.assertEqual(first.source_type, "USER_ATTESTATION")
+        self.assertEqual(first.carrier, "DHL")
+        self.assertEqual(first.tracking_number, "JD123")
+        self.assertEqual(first.dispatch_date.isoformat(), "2026-11-07")
+        self.assertEqual(first.expected_delivery_date.isoformat(), "2026-11-14")
+        shipment_audit = self.db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.aggregate_id == self.deal.id,
+                AuditEvent.event_type == "FULFILLMENT_SHIPPED",
+            )
+        )
+        self.assertIsNotNone(shipment_audit)
+        assert shipment_audit is not None
+        self.assertEqual(shipment_audit.payload["tracking_number"], "JD123")
+        self.assertEqual(shipment_audit.payload["expected_delivery_date"], "2026-11-14")
         with self.assertRaises(HTTPException) as reused_key:
             self._record(
                 self.seller_actor,
                 self._payload("SHIPPED", "0.5", 1, "ship-1"),
             )
         self.assertEqual(reused_key.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as changed_tracking:
+            self._record(self.seller_actor, self._payload("SHIPPED", "1", 0, "ship-1", "UPS"))
+        self.assertEqual(changed_tracking.exception.status_code, 409)
         self.assertEqual(self.deal.status, "AGREED")
 
         self._add_paid_intent()
@@ -273,6 +294,28 @@ class FulfillmentRouteTests(unittest.TestCase):
             )
         )
         self.assertTrue(any(notice.payload["kind"] == "DEAL_COMPLETED" for notice in notices))
+
+    def test_shipping_details_are_required_and_only_allowed_on_shipped_events(self) -> None:
+        base = {
+            "agreement_version_id": self.agreement.id,
+            "terms_hash": self.agreement.terms_hash,
+            "obligation_id": uuid4(),
+            "organization_id": self.seller.id,
+            "quantity": "1",
+            "expected_version": 0,
+            "idempotency_key": "test-shipping-validation",
+        }
+        with self.assertRaises(ValidationError):
+            RecordFulfillmentRequest(**base, event_type="SHIPPED")
+        with self.assertRaises(ValidationError):
+            RecordFulfillmentRequest(
+                **base, event_type="SHIPPED", carrier="DHL", dispatch_date="2026-11-07",
+                expected_delivery_date="2026-11-06",
+            )
+        with self.assertRaises(ValidationError):
+            RecordFulfillmentRequest(
+                **base, event_type="CONFIRMED", carrier="DHL", dispatch_date="2026-11-07",
+            )
 
     def test_partial_delivery_does_not_complete_and_stage_quantities_are_enforced(self) -> None:
         shipped = self._record(

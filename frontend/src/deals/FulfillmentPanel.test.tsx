@@ -60,6 +60,10 @@ describe("FulfillmentPanel", () => {
     render(<FulfillmentPanel {...props} onChanged={onChanged} />);
     await screen.findByText("Agreed quantity");
     fireEvent.change(screen.getByLabelText("Quantity (boxes)"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Carrier"), { target: { value: "DHL" } });
+    fireEvent.change(screen.getByLabelText(/Tracking number/), { target: { value: "JD123" } });
+    fireEvent.change(screen.getByLabelText("Dispatch date"), { target: { value: "2026-11-07" } });
+    fireEvent.change(screen.getByLabelText(/Expected delivery date/), { target: { value: "2026-11-14" } });
     fireEvent.click(screen.getByRole("button", { name: "Report shipment" }));
 
     await waitFor(() => expect(mockedRecordFulfillment).toHaveBeenCalledWith("deal-1", {
@@ -69,6 +73,10 @@ describe("FulfillmentPanel", () => {
       organization_id: "seller-1",
       event_type: "SHIPPED",
       quantity: "1",
+      carrier: "DHL",
+      tracking_number: "JD123",
+      dispatch_date: "2026-11-07",
+      expected_delivery_date: "2026-11-14",
       expected_version: 0,
       idempotency_key: "idempotency-1",
     }));
@@ -84,6 +92,8 @@ describe("FulfillmentPanel", () => {
     render(<FulfillmentPanel {...props} />);
     await screen.findByText("Agreed quantity");
     fireEvent.change(screen.getByLabelText("Quantity (boxes)"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Carrier"), { target: { value: "DHL" } });
+    fireEvent.change(screen.getByLabelText("Dispatch date"), { target: { value: "2026-11-07" } });
     fireEvent.click(screen.getByRole("button", { name: "Report shipment" }));
 
     expect(await screen.findByText(/membership or fulfillment permission is unavailable/i)).toBeTruthy();
@@ -95,5 +105,36 @@ describe("FulfillmentPanel", () => {
 
     expect(await screen.findByLabelText("Delivery update")).toBeTruthy();
     expect(screen.queryByRole("option", { name: /shipped/i })).toBeNull();
+  });
+
+  it("shows shipment carrier, tracking, dispatch, and expected delivery details", async () => {
+    mockedGetFulfillment.mockResolvedValue({
+      ...SNAPSHOT,
+      state: "READY",
+      events: [{
+        id: "event-1",
+        deal_id: "deal-1",
+        agreement_version_id: "agreement-1",
+        terms_hash: "a".repeat(64),
+        obligation_id: "obligation-1",
+        organization_id: "seller-1",
+        user_id: "user-1",
+        event_type: "SHIPPED",
+        quantity: "1",
+        unit: "boxes",
+        carrier: "DHL",
+        tracking_number: "JD123",
+        dispatch_date: "2026-11-07",
+        expected_delivery_date: "2026-11-14",
+        source_type: "USER_ATTESTATION",
+        recorded_at: "2026-11-07T10:00:00Z",
+        version: 1,
+      }],
+    });
+
+    render(<FulfillmentPanel {...props} />);
+
+    expect(await screen.findByText(/DHL · Tracking JD123 · Dispatched 2026-11-07 · Expected 2026-11-14/)).toBeTruthy();
+    expect(screen.getByText(/check the carrier’s site for live tracking updates/i)).toBeTruthy();
   });
 });

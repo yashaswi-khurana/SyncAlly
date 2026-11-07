@@ -481,6 +481,10 @@ export interface FulfillmentEvent {
   event_type: FulfillmentStage;
   quantity: string;
   unit: string;
+  carrier: string | null;
+  tracking_number: string | null;
+  dispatch_date: string | null;
+  expected_delivery_date: string | null;
   source_type: "USER_ATTESTATION";
   recorded_at: string;
   version: number;
@@ -513,6 +517,10 @@ export interface RecordFulfillmentInput {
   organization_id: string;
   event_type: FulfillmentStage;
   quantity: string;
+  carrier: string | null;
+  tracking_number: string | null;
+  dispatch_date: string | null;
+  expected_delivery_date: string | null;
   expected_version: number;
   idempotency_key: string;
 }

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
@@ -46,6 +47,10 @@ class RecordFulfillmentRequest(BaseModel):
     organization_id: UUID
     event_type: FulfillmentStage
     quantity: Decimal
+    carrier: str | None = Field(default=None, max_length=120)
+    tracking_number: str | None = Field(default=None, max_length=128)
+    dispatch_date: date | None = None
+    expected_delivery_date: date | None = None
     expected_version: int = Field(ge=0, strict=True)
     idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"\S")
 
@@ -63,6 +68,25 @@ class RecordFulfillmentRequest(BaseModel):
         except InvariantViolation as error:
             raise ValueError(str(error)) from error
 
+    @field_validator("carrier", "tracking_number", mode="before")
+    @classmethod
+    def normalize_shipping_text(cls, value: object) -> object:
+        return value.strip() or None if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_shipping_details(self) -> RecordFulfillmentRequest:
+        has_shipping_details = any((self.carrier, self.tracking_number, self.dispatch_date, self.expected_delivery_date))
+        if self.event_type is FulfillmentStage.SHIPPED:
+            if not self.carrier:
+                raise ValueError("A carrier is required when reporting a shipment")
+            if self.dispatch_date is None:
+                raise ValueError("A dispatch date is required when reporting a shipment")
+            if self.expected_delivery_date and self.expected_delivery_date < self.dispatch_date:
+                raise ValueError("Expected delivery date cannot be before dispatch date")
+        elif has_shipping_details:
+            raise ValueError("Shipping details can only be added to a shipped event")
+        return self
+
 
 class FulfillmentEventResponse(BaseModel):
     id: UUID
@@ -75,6 +99,10 @@ class FulfillmentEventResponse(BaseModel):
     event_type: FulfillmentStage
     quantity: str
     unit: str
+    carrier: str | None
+    tracking_number: str | None
+    dispatch_date: date | None
+    expected_delivery_date: date | None
     source_type: str
     recorded_at: str
     version: int
@@ -116,6 +144,10 @@ def _event_response(event: FulfillmentEventRecord) -> FulfillmentEventResponse:
         event_type=event.stage,
         quantity=canonical_decimal(event.quantity),
         unit=event.unit,
+        carrier=event.carrier,
+        tracking_number=event.tracking_number,
+        dispatch_date=event.dispatch_date,
+        expected_delivery_date=event.expected_delivery_date,
         source_type=event.source_type,
         recorded_at=event.recorded_at.isoformat(),
         version=event.version,
@@ -204,6 +236,10 @@ def record_fulfillment_route(
                 organization_id=payload.organization_id,
                 stage=payload.event_type,
                 quantity=payload.quantity,
+                carrier=payload.carrier,
+                tracking_number=payload.tracking_number,
+                dispatch_date=payload.dispatch_date,
+                expected_delivery_date=payload.expected_delivery_date,
                 expected_version=payload.expected_version,
                 idempotency_key=payload.idempotency_key,
             ),

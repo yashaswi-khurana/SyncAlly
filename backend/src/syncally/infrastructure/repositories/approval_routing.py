@@ -12,7 +12,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.domain.organizations.approval_routing import ApprovalRoutingPolicy
@@ -23,6 +24,7 @@ from syncally.domain.organizations.organization import (
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId, UserId
 from syncally.infrastructure.models import (
+    AgreementRoutingDecision,
     Organization,
     OrganizationApprovalRoutingPolicy,
     OrganizationMember,
@@ -121,7 +123,16 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
                 updated_at=now,
             )
             self._db.add(row)
-            self._db.flush()
+            try:
+                self._db.flush()
+            except IntegrityError as error:
+                # SELECT ... FOR UPDATE can't lock a row that doesn't exist yet,
+                # so two concurrent first-time creates both reach this insert;
+                # the loser hits the primary key and must be told to retry,
+                # not blow up as a server error.
+                raise InvariantViolation(
+                    "Approval routing policy version conflict; stale write rejected"
+                ) from error
             return routing_policy_to_domain(row)
 
         if expected_version is not None and row.version != expected_version:
@@ -136,7 +147,13 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
         return routing_policy_to_domain(row)
 
     def delete(self, organization_id: UUID, *, expected_version: int | None) -> bool:
-        """Remove the policy, reverting the organization to default bilateral approval."""
+        """Remove the policy, reverting the organization to default bilateral approval.
+
+        Also wipes this org's recorded per-approver routing decisions: a
+        recreated policy starts back at version 1, so leaving old decisions
+        in place would let them satisfy the new policy as "current" without
+        anyone actually voting under it.
+        """
         row = self._db.scalar(
             select(OrganizationApprovalRoutingPolicy)
             .where(OrganizationApprovalRoutingPolicy.organization_id == organization_id)
@@ -148,5 +165,10 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
         if expected_version is not None and row.version != expected_version:
             raise InvariantViolation("Approval routing policy version conflict; stale write rejected")
         self._db.delete(row)
+        self._db.execute(
+            delete(AgreementRoutingDecision).where(
+                AgreementRoutingDecision.organization_id == organization_id
+            )
+        )
         self._db.flush()
         return True

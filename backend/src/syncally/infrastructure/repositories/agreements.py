@@ -82,7 +82,9 @@ from syncally.domain.negotiation.proposal import (
     Proposal as DomainProposal,
 )
 from syncally.domain.organizations.approval_routing import (
+    ApprovalRoutingPolicy,
     RoutingDecisionRecord,
+    RoutingEvaluation,
     RoutingOutcomeStatus,
     RoutingSlotStatus,
     can_act,
@@ -217,6 +219,38 @@ class SqlAlchemyAgreementRepository:
                 "current_version_id": str(deal.current_agreement_version_id) if deal.current_agreement_version_id else None,
                 "versions": [self._read_projection(row, party, deal, commitment_only=commitment_only) for row in rows]}
 
+    def _evaluate_org_routing(
+        self, organization_id: UUID, version_row: AgreementVersion
+    ) -> tuple[ApprovalRoutingPolicy, RoutingEvaluation] | None:
+        """Re-derive an org's live routing state for this version from its current
+        policy and recorded per-approver decisions (stale decisions excluded by
+        ``evaluate_routing`` itself). Returns None when no policy is configured -
+        the org's unrouted bilateral behavior is unconstrained.
+        """
+        routing_policies = SqlAlchemyApprovalRoutingPolicyRepository(self._db)
+        policy = routing_policies.get(organization_id)
+        if policy is None:
+            return None
+        decision_rows = list(
+            self._db.scalars(
+                select(AgreementRoutingDecision).where(
+                    AgreementRoutingDecision.agreement_version_id == version_row.id,
+                    AgreementRoutingDecision.organization_id == organization_id,
+                )
+            )
+        )
+        decisions = {
+            UserId(row.user_id): RoutingDecisionRecord(
+                user_id=UserId(row.user_id),
+                decision=ApprovalDecision(row.decision),
+                policy_version=row.policy_version,
+                created_at=as_utc(row.updated_at),
+            )
+            for row in decision_rows
+        }
+        eligible = routing_policies.eligible_approver_ids(organization_id, policy.approver_user_ids)
+        return policy, evaluate_routing(policy, decisions, eligible)
+
     def _routing_status_for_version(
         self, version_row: AgreementVersion, deal: Deal, viewer_organization_id: UUID
     ) -> dict[str, Any]:
@@ -226,31 +260,12 @@ class SqlAlchemyAgreementRepository:
         organization; the counterparty's projection carries aggregate
         counts only, never who its configured approvers are.
         """
-        routing_policies = SqlAlchemyApprovalRoutingPolicyRepository(self._db)
         result: dict[str, Any] = {}
         for organization_id in (deal.buyer_organization_id, deal.seller_organization_id):
-            policy = routing_policies.get(organization_id)
-            if policy is None:
+            evaluated = self._evaluate_org_routing(organization_id, version_row)
+            if evaluated is None:
                 continue
-            decision_rows = list(
-                self._db.scalars(
-                    select(AgreementRoutingDecision).where(
-                        AgreementRoutingDecision.agreement_version_id == version_row.id,
-                        AgreementRoutingDecision.organization_id == organization_id,
-                    )
-                )
-            )
-            decisions = {
-                UserId(decision_row.user_id): RoutingDecisionRecord(
-                    user_id=UserId(decision_row.user_id),
-                    decision=ApprovalDecision(decision_row.decision),
-                    policy_version=decision_row.policy_version,
-                    created_at=as_utc(decision_row.updated_at),
-                )
-                for decision_row in decision_rows
-            }
-            eligible = routing_policies.eligible_approver_ids(organization_id, policy.approver_user_ids)
-            evaluation = evaluate_routing(policy, decisions, eligible)
+            policy, evaluation = evaluated
             reveal_detail = organization_id == viewer_organization_id
             result[str(organization_id)] = {
                 "organization_id": str(organization_id),
@@ -722,10 +737,17 @@ class SqlAlchemyAgreementRepository:
         terms_hash: str,
         now: datetime,
         auth_context: dict[str, Any] | None = None,
+        allow_unchanged_decision: bool = False,
     ) -> DomainApproval:
         """Upsert the single organization-level Approval row and defensively
         re-validate it through the domain aggregate, exactly as the unrouted
         path always has. Used both directly and as the routing finalize step.
+
+        ``allow_unchanged_decision`` is set only by the routing finalize step:
+        a policy version bump can force approvers to redo their decisions and
+        legitimately land on the same final decision again, which must refresh
+        the row's ``auth_context``/``terms_hash`` rather than be rejected as a
+        no-op duplicate.
         """
         approval = DomainApproval(
             organization_id=OrganizationId(organization_id),
@@ -743,11 +765,12 @@ class SqlAlchemyAgreementRepository:
             )
         )
         if existing_row is not None:
-            if existing_row.decision == decision.value:
+            if existing_row.decision == decision.value and not allow_unchanged_decision:
                 raise DuplicateApproval(
                     "Organization already recorded this decision for this agreement version"
                 )
-            # A party is revising a prior REJECT/APPROVE while still pending.
+            # A party is revising a prior REJECT/APPROVE while still pending,
+            # or routing re-finalized under a changed policy with the same outcome.
             existing_row.decision = decision.value
             existing_row.user_id = user_id
             existing_row.terms_hash = terms_hash
@@ -888,7 +911,14 @@ class SqlAlchemyAgreementRepository:
         decisions_after[actor_id] = RoutingDecisionRecord(
             user_id=actor_id, decision=command.decision, policy_version=policy.version, created_at=now
         )
-        evaluation_after = evaluate_routing(policy, decisions_after, eligible_ids)
+        # Re-check eligibility fresh, right before any finalize write: the policy
+        # row stays locked for this whole transaction (so it can't change), but
+        # membership/capability isn't locked and could have been revoked since
+        # eligible_ids was first computed above.
+        eligible_ids_after = routing_policies.eligible_approver_ids(
+            command.organization_id, policy.approver_user_ids
+        )
+        evaluation_after = evaluate_routing(policy, decisions_after, eligible_ids_after)
 
         finalized: DomainApproval | None = None
         if evaluation_after.status is RoutingOutcomeStatus.COMPLETED and evaluation_after.finalize_decision is not None:
@@ -896,7 +926,9 @@ class SqlAlchemyAgreementRepository:
                 "finalized_via": "approval_routing",
                 "routing_policy_version": policy.version,
                 "routing_mode": policy.mode.value,
-                "decided_by": [str(slot.user_id) for slot in evaluation_after.slots],
+                "decided_by": [
+                    str(slot.user_id) for slot in evaluation_after.slots if slot.decision is not None
+                ],
             }
             finalized = self._write_approval_row(
                 version_row,
@@ -905,6 +937,7 @@ class SqlAlchemyAgreementRepository:
                 decision=evaluation_after.finalize_decision,
                 terms_hash=command.terms_hash,
                 now=now,
+                allow_unchanged_decision=True,
                 auth_context=auth_context,
             )
 
@@ -976,6 +1009,22 @@ class SqlAlchemyAgreementRepository:
             deal_row.buyer_organization_id
         ) or agreement.terms.seller_id != OrganizationId(deal_row.seller_organization_id):
             raise UnauthorizedApproval("Agreement version parties do not match the deal")
+        for organization_id in (deal_row.buyer_organization_id, deal_row.seller_organization_id):
+            evaluated = self._evaluate_org_routing(organization_id, version_row)
+            if evaluated is None:
+                continue
+            _policy, evaluation = evaluated
+            if (
+                evaluation.status is not RoutingOutcomeStatus.COMPLETED
+                or evaluation.finalize_decision is not ApprovalDecision.APPROVE
+            ):
+                # A routing policy was configured or changed after this
+                # org's stored Approval was written (directly, or finalized
+                # under a now-superseded policy version); that stale
+                # Approval row can't carry this commit.
+                raise OutOfSequenceApproval(
+                    "Organization's approval routing is not currently satisfied for this agreement version"
+                )
         agreement.commit(command.expected_terms_hash, now)
 
         committed = self._db.execute(

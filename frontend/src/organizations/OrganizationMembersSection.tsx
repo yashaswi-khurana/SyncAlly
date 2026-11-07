@@ -7,7 +7,7 @@ import {
   revokeOrganizationMember,
   updateMemberPermissions,
 } from "../api/client";
-import { getAccessToken } from "../api/tokenStore";
+import { getCurrentUserId } from "../api/tokenStore";
 import type {
   Organization,
   OrganizationCapability,
@@ -67,21 +67,6 @@ function describeError(caught: unknown): string {
     return caught.message;
   }
   return "Something went wrong. Please try again.";
-}
-
-function getCurrentUserId(): string | null {
-  const token = getAccessToken();
-  if (!token) return null;
-  try {
-    const parts = token.split(".");
-    if (parts.length < 2) return null;
-    const base64 = parts[1].replaceAll("-", "+").replaceAll("_", "/");
-    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
-    const payload = JSON.parse(atob(padded));
-    return typeof payload.sub === "string" ? payload.sub : null;
-  } catch {
-    return null;
-  }
 }
 
 export default function OrganizationMembersSection({ organization }: Props) {

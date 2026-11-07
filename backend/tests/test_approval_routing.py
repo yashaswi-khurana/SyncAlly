@@ -9,6 +9,7 @@ optimistic-concurrency version conflicts.
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -38,6 +39,7 @@ from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId, UserId
 from syncally.infrastructure.models import (
     AgreementVersion,
+    Approval,
     Base,
     Deal,
     NegotiationSession,
@@ -296,6 +298,12 @@ class ApprovalRoutingTestCase(unittest.TestCase):
         self.assertTrue(outcome.evaluation.rejected)
         self.assertEqual(outcome.finalized_approval.decision, ApprovalDecision.REJECT)
 
+        # a1 never acted - the veto must not record them as a decision-maker.
+        approval_row = self.session.query(Approval).filter_by(
+            agreement_version_id=self.version_1.id, organization_id=self.buyer_org.id
+        ).one()
+        self.assertEqual(approval_row.auth_context["decided_by"], [str(a2.id)])
+
     # -- Eligibility / revocation / staleness --
 
     def test_non_eligible_approver_cannot_act(self) -> None:
@@ -416,6 +424,43 @@ class ApprovalRoutingTestCase(unittest.TestCase):
                 updated_by_user_id=self.buyer_user.id,
             )
 
+    def test_concurrent_first_creation_conflict_is_not_a_server_error(self) -> None:
+        """SELECT ... FOR UPDATE can't lock a row that doesn't exist yet, so
+        two concurrent first-time creates for the same org can both observe
+        no policy and both attempt the insert. The loser's flush collides on
+        the primary key and must surface as a retryable InvariantViolation,
+        not an unhandled IntegrityError.
+        """
+        a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        policies = SqlAlchemyApprovalRoutingPolicyRepository(self.session)
+
+        # The other admin's request already won the race and committed.
+        policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id),),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+
+        # Force this request's own locked SELECT to see what it would have
+        # seen had it run before that commit - no row yet - so it falls
+        # through to the same first-time insert and collides for real.
+        with mock.patch.object(Session, "scalar", return_value=None):
+            with self.assertRaises(InvariantViolation):
+                policies.save(
+                    ApprovalRoutingPolicy(
+                        organization_id=OrganizationId(self.buyer_org.id),
+                        mode=ApprovalRoutingMode.PARALLEL,
+                        approver_user_ids=(UserId(a1.id),),
+                    ),
+                    expected_version=None,
+                    updated_by_user_id=self.buyer_user.id,
+                )
+
     def test_delete_reverts_to_default_bilateral_behavior(self) -> None:
         a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
         policies = SqlAlchemyApprovalRoutingPolicyRepository(self.session)
@@ -440,6 +485,155 @@ class ApprovalRoutingTestCase(unittest.TestCase):
                 decision=ApprovalDecision.APPROVE,
             ),
         )
+
+    # -- Commit must re-check routing, not trust a stale Approval row --
+
+    def test_commit_rejects_stale_approval_once_routing_is_configured(self) -> None:
+        """An org-level Approval recorded before a routing policy existed must
+        not survive the policy being configured afterward.
+        """
+        record_approval_in_transaction(
+            self.session,
+            RecordApprovalCommand(
+                deal_id=self.deal.id, version_number=1, terms_hash=self.version_1.terms_hash,
+                organization_id=self.buyer_org.id, user_id=self.buyer_user.id,
+                decision=ApprovalDecision.APPROVE,
+            ),
+        )
+
+        a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        a2 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        SqlAlchemyApprovalRoutingPolicyRepository(self.session).save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id), UserId(a2.id)),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+
+        record_approval_in_transaction(
+            self.session,
+            RecordApprovalCommand(
+                deal_id=self.deal.id, version_number=1, terms_hash=self.version_1.terms_hash,
+                organization_id=self.seller_org.id, user_id=self.seller_user.id,
+                decision=ApprovalDecision.APPROVE,
+            ),
+        )
+
+        with self.assertRaises(OutOfSequenceApproval):
+            commit_agreement_in_transaction(
+                self.session,
+                CommitAgreementCommand(
+                    deal_id=self.deal.id, expected_version=1,
+                    expected_terms_hash=self.version_1.terms_hash,
+                    user_id=self.buyer_user.id, organization_id=self.buyer_org.id,
+                ),
+            )
+
+        self._approve(self.buyer_org.id, a1.id)
+        self._approve(self.buyer_org.id, a2.id)
+        agreement = commit_agreement_in_transaction(
+            self.session,
+            CommitAgreementCommand(
+                deal_id=self.deal.id, expected_version=1,
+                expected_terms_hash=self.version_1.terms_hash,
+                user_id=self.buyer_user.id, organization_id=self.buyer_org.id,
+            ),
+        )
+        self.assertEqual(agreement.status, AgreementStatus.COMMITTED)
+
+    def test_refinalizing_under_bumped_policy_version_with_same_decision_succeeds(self) -> None:
+        """Redoing a routed decision after a policy version bump can land on
+        the same final decision; that must refresh the Approval row, not be
+        rejected as a no-op duplicate.
+        """
+        a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        a2 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        policies = SqlAlchemyApprovalRoutingPolicyRepository(self.session)
+        policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id), UserId(a2.id)),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+        self._approve(self.buyer_org.id, a1.id)
+        outcome = self._approve(self.buyer_org.id, a2.id)
+        self.assertEqual(outcome.evaluation.status, RoutingOutcomeStatus.COMPLETED)
+        self.assertIsNotNone(outcome.finalized_approval)
+
+        a3 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id), UserId(a2.id), UserId(a3.id)),
+            ),
+            expected_version=1,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+
+        self._approve(self.buyer_org.id, a1.id)
+        self._approve(self.buyer_org.id, a2.id)
+        final_outcome = self._approve(self.buyer_org.id, a3.id)
+        self.assertEqual(final_outcome.evaluation.status, RoutingOutcomeStatus.COMPLETED)
+        self.assertIsNotNone(final_outcome.finalized_approval)
+        self.assertEqual(final_outcome.finalized_approval.decision, ApprovalDecision.APPROVE)
+
+    def test_recreated_policy_after_delete_cannot_be_satisfied_by_retained_votes(self) -> None:
+        """Deleting and recreating a policy resets its version back to 1;
+        a retained decision from the deleted policy must not silently count
+        toward the new one just because the version number matches again.
+        """
+        a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        a2 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        policies = SqlAlchemyApprovalRoutingPolicyRepository(self.session)
+        policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id), UserId(a2.id)),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+        outcome = self._approve(self.buyer_org.id, a1.id)
+        self.assertEqual(outcome.evaluation.status, RoutingOutcomeStatus.PENDING)
+
+        self.assertTrue(policies.delete(self.buyer_org.id, expected_version=1))
+        self.session.commit()
+
+        a3 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        recreated = policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id), UserId(a3.id)),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.assertEqual(recreated.version, 1)
+        self.session.commit()
+
+        # a1's vote from the deleted policy must not count toward this one.
+        outcome_after_recreate = self._approve(self.buyer_org.id, a3.id)
+        self.assertEqual(outcome_after_recreate.evaluation.status, RoutingOutcomeStatus.PENDING)
+        self.assertIsNone(outcome_after_recreate.finalized_approval)
+        a1_slot = next(s for s in outcome_after_recreate.evaluation.slots if s.user_id == a1.id)
+        self.assertIsNone(a1_slot.decision)
+
+        final_outcome = self._approve(self.buyer_org.id, a1.id)
+        self.assertEqual(final_outcome.evaluation.status, RoutingOutcomeStatus.COMPLETED)
+        self.assertIsNotNone(final_outcome.finalized_approval)
 
 
 if __name__ == "__main__":

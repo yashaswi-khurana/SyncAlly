@@ -757,7 +757,11 @@ def _record_decision(
                 OrganizationCapability.AGREEMENT_APPROVAL,
                 for_update=True,
             )
-        policy = SqlAlchemyApprovalRoutingPolicyRepository(db).get(organization_id)
+        # Locked so an admin can't create/update/remove this org's policy
+        # between this branch decision and the write below; record_routing_decision
+        # re-reads under the same lock, so the response built from `policy`
+        # further down always matches what it actually evaluated against.
+        policy = SqlAlchemyApprovalRoutingPolicyRepository(db).get(organization_id, for_update=True)
         if policy is None:
             # Default: unchanged single-approver bilateral behavior.
             approval = record_approval_in_transaction(

@@ -25,6 +25,7 @@ import type {
   ProposeAmendmentRequest,
 } from "../api/types";
 import { paymentTimingLabel } from "../api/types";
+import { getCurrentUserId } from "../api/tokenStore";
 import CommercialDocumentPanel from "./CommercialDocumentPanel";
 import type { OverviewSnapshot } from "./DealOverview";
 
@@ -145,6 +146,7 @@ export default function AgreementReview({
   const [previewingImpact, setPreviewingImpact] = useState(false);
   const [proposedImpact, setProposedImpact] = useState<AmendmentImpact | null>(null);
   const actingOrganizationId = sharedOrganizationId ?? selectedOrganizationId;
+  const currentUserId = getCurrentUserId();
   const context = useRef("");
   const contextSignature = JSON.stringify([dealId, actingOrganizationId, reloadToken, reloadCount, viewedVersion, compareBefore]);
   useEffect(() => { context.current = contextSignature; }, [contextSignature]);
@@ -579,6 +581,8 @@ export default function AgreementReview({
         const myApproval = actingOrganizationId
           ? approvalFor(agreement.approvals, actingOrganizationId)
           : undefined;
+        const myRouting = actingOrganizationId ? agreement.routing_status?.[actingOrganizationId] : undefined;
+        const myRoutingSlot = myRouting?.slots?.find((slot) => slot.user_id === currentUserId) ?? null;
         const isPendingCandidate = agreement.status === "PENDING_APPROVAL";
         const readConflict = currentView && (Boolean(currentView.error) || (!viewedVersion && currentView.agreement?.is_current === false)
           || (Boolean(currentView.agreement) && currentView.agreement?.terms_hash !== agreement.terms_hash));
@@ -932,6 +936,50 @@ export default function AgreementReview({
               })}
             </div>
 
+            {[buyerOrganizationId, sellerOrganizationId].some(
+              (organizationId) => agreement.routing_status?.[organizationId],
+            ) ? (
+              <div className="agreement-review__routing" aria-label="Approval routing status by organization">
+                <h3>Approval routing</h3>
+                {[buyerOrganizationId, sellerOrganizationId].map((organizationId) => {
+                  const routing = agreement.routing_status?.[organizationId];
+                  if (!routing) return null;
+                  const orgName = organizationId === buyerOrganizationId
+                    ? buyerOrganizationName || partyName(state.organizations, organizationId)
+                    : sellerOrganizationName || partyName(state.organizations, organizationId);
+                  return (
+                    <div className="agreement-review__approval" key={`routing-${organizationId}`}>
+                      <span>{orgName} ({routing.mode.toLowerCase()})</span>
+                      <span
+                        className={`badge ${
+                          routing.status === "COMPLETED"
+                            ? "badge--status-confirmed"
+                            : routing.status === "ERROR"
+                              ? "badge--status-rejected"
+                              : "badge--status-extracted"
+                        }`}
+                      >
+                        {routing.status === "ERROR"
+                          ? "Blocked: reassign approver"
+                          : `${routing.status} (${routing.completed_approvers}/${routing.required_approvers})`}
+                      </span>
+                      {routing.slots ? (
+                        <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                          {routing.slots.map((slot, index) => (
+                            <li key={slot.user_id || index} style={{ fontSize: "0.8rem" }}>
+                              {slot.status}
+                              {slot.decision ? ` — ${decisionLabel(slot.decision)}` : ""}
+                              {slot.stale ? " (stale, needs re-decision)" : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
             {canDecide ? (
               <>
                 {myApproval ? (
@@ -944,7 +992,9 @@ export default function AgreementReview({
                   <button
                     type="button"
                     className="button"
-                    disabled={stale || !actingOrganizationId || pendingDecision !== null || myApproval?.decision === "APPROVE"}
+                    disabled={stale || !actingOrganizationId || pendingDecision !== null || (myRouting
+                      ? myRoutingSlot?.status === "REVOKED" || (myRoutingSlot?.status === "COMPLETED" && myRoutingSlot?.decision === "APPROVE")
+                      : myApproval?.decision === "APPROVE")}
                     onClick={() => void decide("approve")}
                   >
                     {pendingDecision === "approve" ? "Submitting approval…" : "Approve this version"}
@@ -952,7 +1002,9 @@ export default function AgreementReview({
                   <button
                     type="button"
                     className="button secondary"
-                    disabled={stale || !actingOrganizationId || pendingDecision !== null || myApproval?.decision === "REJECT"}
+                    disabled={stale || !actingOrganizationId || pendingDecision !== null || (myRouting
+                      ? myRoutingSlot?.status === "REVOKED" || (myRoutingSlot?.status === "COMPLETED" && myRoutingSlot?.decision === "REJECT")
+                      : myApproval?.decision === "REJECT")}
                     onClick={() => void decide("reject")}
                   >
                     {pendingDecision === "reject" ? "Submitting rejection…" : "Reject this version"}

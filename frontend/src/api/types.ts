@@ -245,6 +245,8 @@ export interface AgreementVersion {
   prior_terms_hash?: string | null;
   amendment_rationale?: string | null;
   approvals: AgreementApproval[];
+  /** Keyed by organization_id; only present for organizations with a routing policy configured. */
+  routing_status?: Record<string, RoutingStatus>;
 }
 
 export interface FulfillmentObligationImpact {
@@ -298,6 +300,27 @@ export interface WithdrawAmendmentRequest {
   organization_id?: string | null;
 }
 
+export type RoutingSlotStatus = "REQUIRED" | "PENDING" | "COMPLETED" | "REVOKED";
+export type RoutingOutcomeStatus = "REQUIRED" | "PENDING" | "COMPLETED" | "ERROR";
+
+export interface RoutingSlot {
+  user_id: string | null;
+  status: RoutingSlotStatus;
+  decision: "APPROVE" | "REJECT" | null;
+  stale: boolean;
+}
+
+export interface RoutingStatus {
+  organization_id: string;
+  mode: "SEQUENTIAL" | "PARALLEL";
+  policy_version: number;
+  status: RoutingOutcomeStatus;
+  required_approvers: number;
+  completed_approvers: number;
+  /** Full per-approver detail only for a viewer who belongs to this organization. */
+  slots: RoutingSlot[] | null;
+}
+
 export interface AgreementApproval {
   id?: string | null;
   agreement_version_id?: string | null;
@@ -308,6 +331,18 @@ export interface AgreementApproval {
   decision: "APPROVE" | "REJECT";
   terms_hash: string;
   created_at: string;
+  /** Present when this organization has a routing policy configured. */
+  routing?: RoutingStatus | null;
+}
+
+export interface ApprovalRoutingPolicy {
+  organization_id: string;
+  mode: "SEQUENTIAL" | "PARALLEL";
+  approver_user_ids: string[];
+  version: number;
+  updated_by_user_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface AgreementEvidence {

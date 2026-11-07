@@ -17,7 +17,13 @@ import {
   previewAmendmentImpact,
 } from "../api/client";
 import type { AgreementVersion, Organization } from "../api/types";
+import { clearAccessToken, setAccessToken } from "../api/tokenStore";
 import AgreementReview from "./AgreementReview";
+
+function fakeJwt(sub: string): string {
+  const payload = btoa(JSON.stringify({ sub })).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  return `header.${payload}.sig`;
+}
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -153,7 +159,10 @@ describe("AgreementReview", () => {
     });
   });
 
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    clearAccessToken();
+  });
 
   it("downloads the displayed historical committed snapshot and returns to the exact current one", async () => {
     const current = { ...AGREEMENT, id: "current", status: "COMMITTED" as const };
@@ -361,6 +370,52 @@ describe("AgreementReview", () => {
     );
     expect(await screen.findByText(/committed\. its terms are read-only/i)).toBeInTheDocument();
     expect(onCommitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a routed approver cast a fresh vote even when the org's aggregate decision is already recorded", async () => {
+    setAccessToken(fakeJwt("me-1"));
+    const routedAgreement: AgreementVersion = {
+      ...AGREEMENT,
+      approvals: [
+        {
+          deal_id: DEAL_ID,
+          version_number: AGREEMENT.version_number,
+          organization_id: BUYER_ID,
+          user_id: "other-buyer-admin",
+          decision: "APPROVE",
+          terms_hash: AGREEMENT.terms_hash,
+          created_at: "2026-10-19T10:01:00Z",
+        },
+      ],
+      routing_status: {
+        [BUYER_ID]: {
+          organization_id: BUYER_ID,
+          mode: "PARALLEL",
+          policy_version: 1,
+          status: "REQUIRED",
+          required_approvers: 2,
+          completed_approvers: 0,
+          slots: [
+            { user_id: "me-1", status: "REQUIRED", decision: null, stale: false },
+            { user_id: "other-buyer-admin", status: "REQUIRED", decision: null, stale: false },
+          ],
+        },
+      },
+    };
+    mockedGetCurrent.mockResolvedValue(routedAgreement);
+
+    render(
+      <AgreementReview
+        dealId={DEAL_ID}
+        buyerOrganizationId={BUYER_ID}
+        sellerOrganizationId={SELLER_ID}
+        selectedOrganizationId={BUYER_ID}
+      />,
+    );
+
+    await screen.findByText("VERSION 3");
+    expect(screen.getByRole("button", { name: "Approve this version" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject this version" })).toBeEnabled();
   });
 
   it("shows an actionable error when approval cannot be saved", async () => {

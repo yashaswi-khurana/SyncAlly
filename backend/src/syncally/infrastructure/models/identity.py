@@ -116,3 +116,27 @@ class OrganizationProfile(TimestampMixin, Base):
     updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID_TYPE, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+class OrganizationApprovalRoutingPolicy(TimestampMixin, Base):
+    """An organization's explicit, opt-in approval routing configuration.
+
+    Absence of a row is the default: existing single-approver bilateral
+    approval behavior, unchanged.
+    """
+
+    __tablename__ = "organization_approval_routing_policies"
+    __table_args__ = (
+        CheckConstraint("mode IN ('SEQUENTIAL', 'PARALLEL')", name="ck_approval_routing_mode"),
+        CheckConstraint("version > 0", name="ck_approval_routing_version_positive"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    approver_user_ids: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID_TYPE, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

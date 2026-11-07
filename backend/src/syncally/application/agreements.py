@@ -26,6 +26,7 @@ from syncally.domain.agreements.obligations import (
 )
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.deals.deal import Deal
+from syncally.domain.organizations.approval_routing import RoutingEvaluation
 from syncally.domain.shared.errors import DomainError
 
 
@@ -102,6 +103,14 @@ class AgreementVersionConflict(DomainError):
     """The deal already has a current agreement version or cannot enter approval."""
 
 
+class NotEligibleApprover(DomainError):
+    """The actor is not one of the organization's configured routing approvers."""
+
+
+class OutOfSequenceApproval(DomainError):
+    """A SEQUENTIAL routing policy requires the next approver in order to act first."""
+
+
 @dataclass(frozen=True)
 class CreateAgreementDraftCommand:
     """Input for snapshotting a proposal into an approvable agreement version."""
@@ -156,6 +165,26 @@ class ProposeAmendmentCommand:
     terms: TradeTerms
     rationale: str | None = None
     replace_pending_draft: bool = False
+
+
+@dataclass(frozen=True)
+class RecordRoutingDecisionCommand:
+    """Input for one eligible approver's individual decision under a routing policy."""
+
+    deal_id: UUID
+    version_number: int
+    terms_hash: str
+    organization_id: UUID
+    user_id: UUID
+    decision: ApprovalDecision
+
+
+@dataclass(frozen=True)
+class RoutingDecisionOutcome:
+    """The individual decision just recorded plus the organization's routed state."""
+
+    evaluation: RoutingEvaluation
+    finalized_approval: Approval | None
 
 
 @dataclass(frozen=True)
@@ -220,6 +249,16 @@ class AgreementRepository(Protocol):
 
     def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> Approval:
         """Persist one organization's approval decision."""
+
+    def record_routing_decision(
+        self, command: RecordRoutingDecisionCommand, *, now: datetime
+    ) -> RoutingDecisionOutcome:
+        """Persist one eligible approver's decision and finalize the organization's
+        Approval once its configured routing policy is satisfied or rejected.
+
+        Only called when the organization has a configured policy; the caller
+        (api layer) takes the unrouted ``record_approval`` path otherwise.
+        """
 
     def commit(self, command: CommitAgreementCommand, *, now: datetime) -> tuple[Agreement, bool]:
         """Validate both approvals and commit the agreement version.
@@ -356,6 +395,16 @@ def record_approval(
 ) -> Approval:
     """Record one organization's approval of an agreement version."""
     return repository.record_approval(command, now=now or datetime.now(UTC))
+
+
+def record_routing_decision(
+    command: RecordRoutingDecisionCommand,
+    repository: AgreementRepository,
+    *,
+    now: datetime | None = None,
+) -> RoutingDecisionOutcome:
+    """Record one eligible approver's decision under an organization's routing policy."""
+    return repository.record_routing_decision(command, now=now or datetime.now(UTC))
 
 
 def commit_agreement(

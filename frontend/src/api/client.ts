@@ -14,6 +14,7 @@ import type {
   AgreementComparison,
   AgreementVersion,
   AmendmentImpact,
+  ApprovalRoutingPolicy,
   ProposeAmendmentRequest,
   CommercialDocumentDraft,
   CreateDealFactInput,
@@ -297,6 +298,34 @@ export function revokeOrganizationMember(
     {
       method: "DELETE",
     },
+  );
+}
+
+export function getApprovalRoutingPolicy(
+  organizationId: string,
+): Promise<ApprovalRoutingPolicy | null> {
+  return apiRequest<ApprovalRoutingPolicy | null>(
+    `/organizations/${encodeURIComponent(organizationId)}/approval-routing`,
+  );
+}
+
+export function putApprovalRoutingPolicy(
+  organizationId: string,
+  input: { mode: "SEQUENTIAL" | "PARALLEL"; approver_user_ids: string[]; expected_version: number | null },
+): Promise<ApprovalRoutingPolicy> {
+  return apiRequest<ApprovalRoutingPolicy>(
+    `/organizations/${encodeURIComponent(organizationId)}/approval-routing`,
+    { method: "PUT", body: JSON.stringify(input) },
+  );
+}
+
+export function deleteApprovalRoutingPolicy(
+  organizationId: string,
+  expectedVersion: number,
+): Promise<void> {
+  return apiRequest<void>(
+    `/organizations/${encodeURIComponent(organizationId)}/approval-routing?expected_version=${expectedVersion}`,
+    { method: "DELETE" },
   );
 }
 

@@ -195,6 +195,21 @@ Open the printed URL (typically [http://localhost:5173](http://localhost:5173)) 
 
 ---
 
+## Using the Real AI Provider
+
+AI suggestions use the deterministic offline provider by default. To call OpenAI, set these values in `backend/.env` and keep the API key private:
+
+```env
+AI_PROVIDER=openai
+AI_REMOTE_EGRESS_ENABLED=true
+OPENAI_MODEL=<model available to your account>
+OPENAI_API_KEY=<secret>
+```
+
+Remote AI requests send shareable deal messages and terms; private context is excluded unless an operator separately enables and allowlists it. Users request suggestions explicitly, then review the extracted facts and proposal. AI cannot approve an agreement, start a payment, or arrange shipment. Provider retention and data handling still need operator review. See [the AI provider boundary](docs/architecture/06-ai-provider-boundary.md) for the full limits and configuration rules.
+
+---
+
 ## Developer Role Switcher & Simulation CLI
 
 ### Dev Role Switcher

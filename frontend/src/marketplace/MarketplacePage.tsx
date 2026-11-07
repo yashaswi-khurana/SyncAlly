@@ -225,7 +225,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
       <header className="hero">
         <span className="eyebrow">Marketplace</span>
         <h1 className="display">Find your next <span className="gradient-text">trade.</span></h1>
-        <p className="hero__lede">Discover sellers by product, location, and capability. Product details come from each organization’s public profile.</p>
+        <p className="hero__lede">Browse active product listings and buyer requests, or find organizations by product, country, and capability.</p>
       </header>
 
       <form className="card marketplace-page__filters" onSubmit={search}>
@@ -379,7 +379,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
                 <h3>Products</h3>
                 <p>{item.products.join(" · ")}</p>
               </div>
-            ) : <p className="muted">No products listed yet.</p>}
+            ) : <p className="muted">No profile products shared yet.</p>}
             {item.capabilities?.length ? <p><strong>Capabilities:</strong> {item.capabilities.join(" · ")}</p> : null}
             {item.regions?.length ? <p><strong>Markets served:</strong> {item.regions.join(" · ")}</p> : null}
             {!ownOrganizationIds.has(item.id) && organizations.length > 0 ? (

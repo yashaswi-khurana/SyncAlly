@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ApiError, getNegotiation, negotiateDeal } from "../api/client";
 import type {
@@ -147,6 +147,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const [isDirty, setIsDirty] = useState(false);
 
   const loadContext = JSON.stringify([deal.id, deal.version, organizationId, reloadToken, reload]);
+  const loadContextRef = useRef(loadContext);
   const [observedContext, setObservedContext] = useState(loadContext);
   if (loadContext !== observedContext) {
     setObservedContext(loadContext);
@@ -226,24 +227,29 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const command = useRef<{ signature: string; id: string } | null>(null);
   const loadedCallback = useRef(onLoaded);
   useEffect(() => { loadedCallback.current = onLoaded; }, [onLoaded]);
+  useLayoutEffect(() => { loadContextRef.current = loadContext; }, [loadContext]);
 
   useEffect(() => {
+    const requestContext = loadContext;
     const controller = new AbortController();
     request.current?.abort();
     request.current = null;
     loadedCallback.current(null);
     void getNegotiation(deal.id, organizationId, { signal: controller.signal }).then((next) => {
-      if (controller.signal.aborted || next.deal_id !== deal.id || next.organization_id !== organizationId) return;
+      if (controller.signal.aborted || loadContextRef.current !== requestContext
+        || next.deal_id !== deal.id || next.organization_id !== organizationId) return;
       setView(next);
       loadedCallback.current(next);
       if (next?.latest?.terms && next.latest.terms.schema_version === 2) {
         populateEditorFromTerms(next.latest.terms);
       }
     }).catch((caught: unknown) => {
-      if (!controller.signal.aborted) setError(caught instanceof ApiError ? caught.message : "Unable to load negotiation rounds.");
+      if (!controller.signal.aborted && loadContextRef.current === requestContext) {
+        setError(caught instanceof ApiError ? caught.message : "Unable to load negotiation rounds.");
+      }
     });
     return () => { controller.abort(); request.current?.abort(); };
-  }, [deal.id, deal.version, organizationId, reloadToken, reload]);
+  }, [deal.id, deal.version, organizationId, reloadToken, reload, loadContext]);
 
   function validateCollections(): string | null {
     if (items.length === 0) return "At least one line item is required.";
@@ -532,14 +538,14 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
           {view.latest.expires_at ? <p>Respond by: <time dateTime={view.latest.expires_at}>{new Date(view.latest.expires_at).toLocaleString()}</time></p> : null}
           <ProposalComparison latest={view.latest} proposals={view.proposals} />
           <div className="agreement-terms" aria-label="Latest proposal terms">
-            {view.latest.terms.line_items.map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
+            {(view.latest.terms.line_items ?? []).map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Item ID</dt><dd>{item.id}</dd></div> : null}
               <div><dt>Item</dt><dd>{item.description}</dd></div>
               <div><dt>Quantity</dt><dd>{item.quantity} {item.unit}</dd></div>
               {item.sku ? <div><dt>SKU</dt><dd>{item.sku}</dd></div> : null}
               <div><dt>Unit price</dt><dd>{item.unit_price.amount} {item.unit_price.currency}</dd></div>
             </dl>)}
-            {view.latest.terms.shipments.map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
+            {(view.latest.terms.shipments ?? []).map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Shipment ID</dt><dd>{item.id}</dd></div> : null}
               <div><dt>Delivery</dt><dd>{item.quantity ?? "Not specified"} to {item.destination}</dd></div>
               <div><dt>Date</dt><dd>{item.target_date ?? "Not specified"}</dd></div>
@@ -547,7 +553,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                 <div><dt>Allocations</dt><dd>{item.allocations.map(a => `${a.quantity} ${a.unit} of item ${a.line_item_id}`).join(", ")}</dd></div>
               ) : null}
             </dl>)}
-            {view.latest.terms.payment_terms.map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
+            {(view.latest.terms.payment_terms ?? []).map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Payment Term ID</dt><dd>{item.id}</dd></div> : null}
               <div><dt>Payment</dt><dd>{item.amount.amount} {item.amount.currency}</dd></div>
               <div><dt>Due condition</dt><dd>{item.due_condition}</dd></div>

@@ -5,11 +5,15 @@ import type { NegotiationProposal } from "../api/types";
 
 type Terms = NegotiationProposal["terms"];
 type Field = readonly [label: string, value: string | null, identity?: string];
-type Entry = { label: string; fields: Field[] };
+type Entry = { id?: string; label: string; fields: Field[] };
 type Change = { before?: Entry; after?: Entry };
 
 function money(value: { amount: string; currency: string }) {
   return value.amount + " " + value.currency;
+}
+
+function normalizeLocation(value: string) {
+  return value.toLowerCase();
 }
 
 function allocations<T>(
@@ -25,10 +29,16 @@ function allocations<T>(
 }
 
 function entries(terms: Terms) {
-  const obligations = new Map<string, string>();
-  const items = terms.line_items.map((item, index) => {
+  const lineItems = terms.line_items ?? [];
+  const shipmentsTerms = terms.shipments ?? [];
+  const paymentTerms = terms.payment_terms ?? [];
+  const obligations = new Map<string, { label: string; comparisonKey: string }>();
+  const items = lineItems.map((item, index) => {
     const label = "Item " + (index + 1) + ": " + item.description;
-    if (item.id) obligations.set(item.id, label);
+    if (item.id) obligations.set(item.id, {
+      label,
+      comparisonKey: JSON.stringify([item.description.toLowerCase(), item.sku?.toLowerCase() ?? null]),
+    });
     return { id: item.id, label, fields: [
       ["Description", item.description],
       ["Quantity", item.quantity + " " + item.unit],
@@ -36,21 +46,26 @@ function entries(terms: Terms) {
       ["Unit price", money(item.unit_price)],
     ] satisfies Field[] };
   });
-  const shipments = terms.shipments.map((shipment, index) => {
+  const shipments = shipmentsTerms.map((shipment, index) => {
     const label = "Shipment " + (index + 1) + " to " + shipment.destination;
-    if (shipment.id) obligations.set(shipment.id, label);
+    if (shipment.id) obligations.set(shipment.id, {
+      label,
+      comparisonKey: JSON.stringify([
+        normalizeLocation(shipment.destination), shipment.target_date, shipment.quantity,
+      ]),
+    });
     return { id: shipment.id, label, fields: [
-      ["Destination", shipment.destination],
+      ["Destination", shipment.destination, normalizeLocation(shipment.destination)],
       ["Delivery date", shipment.target_date],
       ["Quantity", shipment.quantity],
       allocations(
         shipment.allocations ?? [],
-        (value) => value.quantity + " " + value.unit + " for " + (obligations.get(value.line_item_id) ?? "a line item"),
-        (value) => [value.line_item_id, value.quantity, value.unit],
+        (value) => value.quantity + " " + value.unit + " for " + (obligations.get(value.line_item_id)?.label ?? "a line item"),
+        (value) => [obligations.get(value.line_item_id)?.comparisonKey ?? value.line_item_id, value.quantity, value.unit],
       ),
     ] satisfies Field[] };
   });
-  const payments = terms.payment_terms.map((payment, index) => ({
+  const payments = paymentTerms.map((payment, index) => ({
     id: payment.id,
     label: "Payment " + (index + 1) + ": " + paymentTimingLabel(payment.trigger),
     fields: [
@@ -59,13 +74,13 @@ function entries(terms: Terms) {
       ["Due condition", payment.due_condition],
       allocations(
         payment.allocations ?? [],
-        (value) => money(value.amount) + " for " + (obligations.get(value.obligation_id) ?? "a trade obligation"),
-        (value) => [value.obligation_id, value.amount.amount, value.amount.currency],
+        (value) => money(value.amount) + " for " + (obligations.get(value.obligation_id)?.label ?? "a trade obligation"),
+        (value) => [obligations.get(value.obligation_id)?.comparisonKey ?? value.obligation_id, value.amount.amount, value.amount.currency],
       ),
     ] satisfies Field[],
   }));
   const trade = { label: "Other trade terms", fields: [
-    ["Delivery location", terms.delivery_location],
+    ["Delivery location", terms.delivery_location, normalizeLocation(terms.delivery_location)],
     ["Incoterm", terms.incoterm],
     ["Cancellation terms", terms.cancellation_terms],
   ] satisfies Field[] };
@@ -85,7 +100,11 @@ function compareEntries(before: Entry, after: Entry): Change[] {
   }];
 }
 
-function compareCollection(before: (Entry & { id?: string })[], after: (Entry & { id?: string })[]): Change[] {
+function sameTerms(before: Entry, after: Entry) {
+  return after.fields.every((field, index) => fieldValue(field) === fieldValue(before.fields[index]));
+}
+
+function compareCollection(before: Entry[], after: Entry[]): Change[] {
   // A legacy singleton can be compared with the only entry of its kind in the next round.
   if (before.length === 1 && after.length === 1 && (!before[0].id || !after[0].id)) {
     return compareEntries(before[0], after[0]);
@@ -93,9 +112,13 @@ function compareCollection(before: (Entry & { id?: string })[], after: (Entry & 
 
   const unmatched = [...before];
   const changes = after.flatMap((entry): Change[] => {
-    const match = unmatched.findIndex((previous) => entry.id
-      ? previous.id === entry.id
-      : !previous.id && entry.fields.every((field, index) => fieldValue(field) === fieldValue(previous.fields[index])));
+    const byId = entry.id ? unmatched.findIndex((previous) => previous.id === entry.id) : -1;
+    const byTerms = byId < 0 ? unmatched.findIndex((previous) => sameTerms(previous, entry)) : -1;
+    // ponytail: pair remaining ID-less legacy entries by order; schema v1 has no stable identity to disambiguate them.
+    const byLegacyPosition = byId < 0 && byTerms < 0 && !entry.id
+      ? unmatched.findIndex((previous) => !previous.id)
+      : -1;
+    const match = byId >= 0 ? byId : byTerms >= 0 ? byTerms : byLegacyPosition;
     if (match < 0) return [{ after: entry }];
     const [previous] = unmatched.splice(match, 1);
     return compareEntries(previous, entry);

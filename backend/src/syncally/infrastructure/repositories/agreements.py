@@ -31,10 +31,14 @@ from syncally.application.agreements import (
     CreateAgreementDraftCommand,
     CreateReviewedAgreementDraftCommand,
     DuplicateApproval,
+    NotEligibleApprover,
     OutboxEventDraft,
+    OutOfSequenceApproval,
     ProposalNotFound,
     ProposeAmendmentCommand,
     RecordApprovalCommand,
+    RecordRoutingDecisionCommand,
+    RoutingDecisionOutcome,
     StaleAgreementVersion,
     UnauthorizedApproval,
     WithdrawAmendmentCommand,
@@ -44,6 +48,7 @@ from syncally.application.agreements import (
     create_reviewed_agreement_draft,
     propose_amendment,
     record_approval,
+    record_routing_decision,
     withdraw_amendment,
 )
 from syncally.application.documents import export_display_terms
@@ -76,6 +81,13 @@ from syncally.domain.negotiation.proposal import (
 from syncally.domain.negotiation.proposal import (
     Proposal as DomainProposal,
 )
+from syncally.domain.organizations.approval_routing import (
+    RoutingDecisionRecord,
+    RoutingOutcomeStatus,
+    RoutingSlotStatus,
+    can_act,
+    evaluate_routing,
+)
 from syncally.domain.shared.errors import InvalidTransition
 from syncally.domain.shared.identifiers import (
     AgreementId,
@@ -88,6 +100,7 @@ from syncally.domain.shared.identifiers import (
 )
 from syncally.infrastructure.counterparty_onboarding import is_pending, lock_deal
 from syncally.infrastructure.models import (
+    AgreementRoutingDecision,
     AgreementVersion,
     Approval,
     AuditEvent,
@@ -107,6 +120,9 @@ from syncally.infrastructure.models import (
     User,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
+from syncally.infrastructure.repositories.approval_routing import (
+    SqlAlchemyApprovalRoutingPolicyRepository,
+)
 from syncally.infrastructure.workflow_notifications import queue_deal_workflow_notification
 
 _TERMINAL_PROPOSAL_STATUSES = frozenset({"REJECTED", "EXPIRED", "SUPERSEDED"})
@@ -201,6 +217,66 @@ class SqlAlchemyAgreementRepository:
                 "current_version_id": str(deal.current_agreement_version_id) if deal.current_agreement_version_id else None,
                 "versions": [self._read_projection(row, party, deal, commitment_only=commitment_only) for row in rows]}
 
+    def _routing_status_for_version(
+        self, version_row: AgreementVersion, deal: Deal, viewer_organization_id: UUID
+    ) -> dict[str, Any]:
+        """Each party organization's approval routing state, if it has a policy configured.
+
+        Full per-approver detail is only included for the viewer's own
+        organization; the counterparty's projection carries aggregate
+        counts only, never who its configured approvers are.
+        """
+        routing_policies = SqlAlchemyApprovalRoutingPolicyRepository(self._db)
+        result: dict[str, Any] = {}
+        for organization_id in (deal.buyer_organization_id, deal.seller_organization_id):
+            policy = routing_policies.get(organization_id)
+            if policy is None:
+                continue
+            decision_rows = list(
+                self._db.scalars(
+                    select(AgreementRoutingDecision).where(
+                        AgreementRoutingDecision.agreement_version_id == version_row.id,
+                        AgreementRoutingDecision.organization_id == organization_id,
+                    )
+                )
+            )
+            decisions = {
+                UserId(decision_row.user_id): RoutingDecisionRecord(
+                    user_id=UserId(decision_row.user_id),
+                    decision=ApprovalDecision(decision_row.decision),
+                    policy_version=decision_row.policy_version,
+                    created_at=as_utc(decision_row.updated_at),
+                )
+                for decision_row in decision_rows
+            }
+            eligible = routing_policies.eligible_approver_ids(organization_id, policy.approver_user_ids)
+            evaluation = evaluate_routing(policy, decisions, eligible)
+            reveal_detail = organization_id == viewer_organization_id
+            result[str(organization_id)] = {
+                "organization_id": str(organization_id),
+                "mode": policy.mode.value,
+                "policy_version": policy.version,
+                "status": evaluation.status.value,
+                "required_approvers": len(evaluation.slots),
+                "completed_approvers": sum(
+                    1 for slot in evaluation.slots if slot.status is RoutingSlotStatus.COMPLETED
+                ),
+                "slots": (
+                    [
+                        {
+                            "user_id": str(slot.user_id),
+                            "status": slot.status.value,
+                            "decision": slot.decision.value if slot.decision else None,
+                            "stale": slot.stale,
+                        }
+                        for slot in evaluation.slots
+                    ]
+                    if reveal_detail
+                    else None
+                ),
+            }
+        return result
+
     def _read_projection(self, row: AgreementVersion, party: UUID, deal: Deal, *,
                          commitment_only: bool = False) -> dict[str, Any]:
         display = export_display_terms(row.canonical_terms_json) if commitment_only else row.canonical_terms_json
@@ -246,7 +322,8 @@ class SqlAlchemyAgreementRepository:
                     "organization_id": str(approval.organization_id), "user_id": str(approval.user_id),
                     "decision": approval.decision, "terms_hash": approval.terms_hash,
                     "created_at": as_utc(approval.created_at)} for approval in approvals],
-                "evidence": evidence, "grounding": "UNMAPPED"}
+                "evidence": evidence, "grounding": "UNMAPPED",
+                "routing_status": self._routing_status_for_version(row, deal, party)}
 
     def _read_evidence(self, ref: Any, row: AgreementVersion, party: UUID) -> dict[str, Any]:
         import hashlib
@@ -593,17 +670,22 @@ class SqlAlchemyAgreementRepository:
             raise AgreementVersionConflict("Current agreement has an unsupported status")
         return agreement
 
-    def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> DomainApproval:
-        # Locking the deal row serializes this against a concurrent commit()
-        # (which locks the same row), so the staleness/party checks below see
-        # a consistent snapshot of which version is current.
-        deal_row = lock_deal(self._db, command.deal_id)
+    def _lock_pending_version_for_decision(
+        self, deal_id: UUID, version_number: int, terms_hash: str, organization_id: UUID
+    ) -> tuple[AgreementVersion, Deal, TradeTerms]:
+        """Shared preconditions for any per-organization decision on a version.
+
+        Locking the deal row serializes this against a concurrent commit()
+        (which locks the same row), so the staleness/party checks below see
+        a consistent snapshot of which version is current.
+        """
+        deal_row = lock_deal(self._db, deal_id)
         if deal_row is None:
             raise AgreementNotFound("Deal not found")
-        if is_pending(self._db, command.deal_id):
+        if is_pending(self._db, deal_id):
             raise AgreementVersionConflict("Awaiting counterparty acceptance")
 
-        version_row = self._get_version(command.deal_id, command.version_number)
+        version_row = self._get_version(deal_id, version_number)
         if version_row is None:
             raise AgreementNotFound("Agreement version not found")
         is_current_candidate = (
@@ -618,7 +700,7 @@ class SqlAlchemyAgreementRepository:
             or not is_current_candidate
         ):
             raise StaleAgreementVersion("Agreement version is no longer pending approval")
-        if version_row.terms_hash != command.terms_hash:
+        if version_row.terms_hash != terms_hash:
             raise WrongTermsHash("Terms hash does not match the current agreement version")
 
         terms = TradeTerms.from_canonical_json(version_row.canonical_terms_json)
@@ -626,36 +708,51 @@ class SqlAlchemyAgreementRepository:
             deal_row.seller_organization_id
         ):
             raise UnauthorizedApproval("Agreement version parties do not match the deal")
-        if OrganizationId(command.organization_id) not in (terms.buyer_id, terms.seller_id):
+        if OrganizationId(organization_id) not in (terms.buyer_id, terms.seller_id):
             raise UnauthorizedApproval("Organization is not a party to this agreement")
-        self._require_active_member(command.organization_id, command.user_id)
+        return version_row, deal_row, terms
 
+    def _write_approval_row(
+        self,
+        version_row: AgreementVersion,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        decision: ApprovalDecision,
+        terms_hash: str,
+        now: datetime,
+        auth_context: dict[str, Any] | None = None,
+    ) -> DomainApproval:
+        """Upsert the single organization-level Approval row and defensively
+        re-validate it through the domain aggregate, exactly as the unrouted
+        path always has. Used both directly and as the routing finalize step.
+        """
         approval = DomainApproval(
-            organization_id=OrganizationId(command.organization_id),
-            user_id=UserId(command.user_id),
-            decision=command.decision,
-            terms_hash=command.terms_hash,
+            organization_id=OrganizationId(organization_id),
+            user_id=UserId(user_id),
+            decision=decision,
+            terms_hash=terms_hash,
             created_at=now,
         )
-        # Defensive re-check through the domain aggregate before writing.
         _agreement_to_domain(version_row, []).record_approval(approval)
 
         existing_row = self._db.scalar(
             select(Approval).where(
                 Approval.agreement_version_id == version_row.id,
-                Approval.organization_id == command.organization_id,
+                Approval.organization_id == organization_id,
             )
         )
         if existing_row is not None:
-            if existing_row.decision == command.decision.value:
+            if existing_row.decision == decision.value:
                 raise DuplicateApproval(
                     "Organization already recorded this decision for this agreement version"
                 )
             # A party is revising a prior REJECT/APPROVE while still pending.
-            existing_row.decision = command.decision.value
-            existing_row.user_id = command.user_id
-            existing_row.terms_hash = command.terms_hash
+            existing_row.decision = decision.value
+            existing_row.user_id = user_id
+            existing_row.terms_hash = terms_hash
             existing_row.created_at = now
+            existing_row.auth_context = auth_context
             self._db.flush()
         else:
             try:
@@ -663,11 +760,12 @@ class SqlAlchemyAgreementRepository:
                     row = Approval(
                         deal_id=version_row.deal_id,
                         agreement_version_id=version_row.id,
-                        organization_id=command.organization_id,
-                        user_id=command.user_id,
-                        decision=command.decision.value,
-                        terms_hash=command.terms_hash,
+                        organization_id=organization_id,
+                        user_id=user_id,
+                        decision=decision.value,
+                        terms_hash=terms_hash,
                         created_at=now,
+                        auth_context=auth_context,
                     )
                     self._db.add(row)
                     self._db.flush()
@@ -683,6 +781,134 @@ class SqlAlchemyAgreementRepository:
             kind=NotificationKind.AGREEMENT_APPROVAL_RECORDED,
         )
         return approval
+
+    def record_approval(self, command: RecordApprovalCommand, *, now: datetime) -> DomainApproval:
+        version_row, _deal_row, _terms = self._lock_pending_version_for_decision(
+            command.deal_id, command.version_number, command.terms_hash, command.organization_id
+        )
+        self._require_active_member(command.organization_id, command.user_id)
+        return self._write_approval_row(
+            version_row,
+            organization_id=command.organization_id,
+            user_id=command.user_id,
+            decision=command.decision,
+            terms_hash=command.terms_hash,
+            now=now,
+        )
+
+    def record_routing_decision(
+        self, command: RecordRoutingDecisionCommand, *, now: datetime
+    ) -> RoutingDecisionOutcome:
+        version_row, _deal_row, _terms = self._lock_pending_version_for_decision(
+            command.deal_id, command.version_number, command.terms_hash, command.organization_id
+        )
+        self._require_active_member(command.organization_id, command.user_id)
+
+        routing_policies = SqlAlchemyApprovalRoutingPolicyRepository(self._db)
+        policy = routing_policies.get(command.organization_id, for_update=True)
+        if policy is None:
+            raise AgreementVersionConflict(
+                "Approval routing policy was removed; retry without routing"
+            )
+        actor_id = UserId(command.user_id)
+        if actor_id not in policy.approver_user_ids:
+            raise NotEligibleApprover(
+                "Actor is not one of this organization's configured routing approvers"
+            )
+
+        decision_rows = list(
+            self._db.scalars(
+                select(AgreementRoutingDecision).where(
+                    AgreementRoutingDecision.agreement_version_id == version_row.id,
+                    AgreementRoutingDecision.organization_id == command.organization_id,
+                )
+            )
+        )
+        decisions_before = {
+            UserId(row.user_id): RoutingDecisionRecord(
+                user_id=UserId(row.user_id),
+                decision=ApprovalDecision(row.decision),
+                policy_version=row.policy_version,
+                created_at=as_utc(row.updated_at),
+            )
+            for row in decision_rows
+        }
+        eligible_ids = routing_policies.eligible_approver_ids(
+            command.organization_id, policy.approver_user_ids
+        )
+        evaluation_before = evaluate_routing(policy, decisions_before, eligible_ids)
+        if not can_act(evaluation_before, actor_id, command.decision):
+            raise OutOfSequenceApproval(
+                "This approver cannot act yet under the organization's routing policy"
+            )
+
+        existing_row = self._db.scalar(
+            select(AgreementRoutingDecision).where(
+                AgreementRoutingDecision.agreement_version_id == version_row.id,
+                AgreementRoutingDecision.organization_id == command.organization_id,
+                AgreementRoutingDecision.user_id == command.user_id,
+            )
+        )
+        if (
+            existing_row is not None
+            and existing_row.policy_version == policy.version
+            and existing_row.decision == command.decision.value
+        ):
+            raise DuplicateApproval(
+                "Approver already recorded this decision for this agreement version"
+            )
+        if existing_row is not None:
+            existing_row.decision = command.decision.value
+            existing_row.terms_hash = command.terms_hash
+            existing_row.policy_version = policy.version
+            existing_row.updated_at = now
+            self._db.flush()
+        else:
+            try:
+                with self._db.begin_nested():
+                    self._db.add(
+                        AgreementRoutingDecision(
+                            agreement_version_id=version_row.id,
+                            organization_id=command.organization_id,
+                            user_id=command.user_id,
+                            decision=command.decision.value,
+                            terms_hash=command.terms_hash,
+                            policy_version=policy.version,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    self._db.flush()
+            except IntegrityError as error:
+                raise DuplicateApproval(
+                    "Approver already recorded a decision for this agreement version"
+                ) from error
+
+        decisions_after = dict(decisions_before)
+        decisions_after[actor_id] = RoutingDecisionRecord(
+            user_id=actor_id, decision=command.decision, policy_version=policy.version, created_at=now
+        )
+        evaluation_after = evaluate_routing(policy, decisions_after, eligible_ids)
+
+        finalized: DomainApproval | None = None
+        if evaluation_after.status is RoutingOutcomeStatus.COMPLETED and evaluation_after.finalize_decision is not None:
+            auth_context = {
+                "finalized_via": "approval_routing",
+                "routing_policy_version": policy.version,
+                "routing_mode": policy.mode.value,
+                "decided_by": [str(slot.user_id) for slot in evaluation_after.slots],
+            }
+            finalized = self._write_approval_row(
+                version_row,
+                organization_id=command.organization_id,
+                user_id=evaluation_after.finalize_user_id,
+                decision=evaluation_after.finalize_decision,
+                terms_hash=command.terms_hash,
+                now=now,
+                auth_context=auth_context,
+            )
+
+        return RoutingDecisionOutcome(evaluation=evaluation_after, finalized_approval=finalized)
 
     def commit(
         self, command: CommitAgreementCommand, *, now: datetime
@@ -1375,6 +1601,23 @@ def record_approval_in_transaction(
         approval = record_approval(command, SqlAlchemyAgreementRepository(db), now=now)
         db.commit()
         return approval
+    except Exception:
+        db.rollback()
+        raise
+
+
+def record_routing_decision_in_transaction(
+    db: Session,
+    command: RecordRoutingDecisionCommand,
+    *,
+    now: datetime | None = None,
+) -> RoutingDecisionOutcome:
+    """Run RecordRoutingDecision as its own transaction: commits on success, rolls back on failure."""
+    now = now or datetime.now(UTC)
+    try:
+        outcome = record_routing_decision(command, SqlAlchemyAgreementRepository(db), now=now)
+        db.commit()
+        return outcome
     except Exception:
         db.rollback()
         raise

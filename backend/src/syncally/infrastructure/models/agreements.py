@@ -70,6 +70,32 @@ class Approval(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class AgreementRoutingDecision(Base):
+    """One eligible approver's individual decision under an organization's approval routing policy.
+
+    Distinct from ``Approval``: this records one person's vote; ``Approval``
+    still records the single organization-level decision, written only once
+    the configured policy is satisfied (see ``domain.organizations.approval_routing``).
+    """
+
+    __tablename__ = "agreement_routing_decisions"
+    __table_args__ = (
+        UniqueConstraint("agreement_version_id", "organization_id", "user_id"),
+        Index("ix_agreement_routing_decisions_version_org", "agreement_version_id", "organization_id"),
+        CheckConstraint("policy_version > 0", name="ck_routing_decision_policy_version_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    agreement_version_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("agreement_versions.id", ondelete="CASCADE"), nullable=False)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("users.id"), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    terms_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class Obligation(TimestampMixin, Base):
     __tablename__ = "obligations"
     __table_args__ = (

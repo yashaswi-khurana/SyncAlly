@@ -4,7 +4,12 @@ Import every model here so Alembic sees one complete metadata registry.
 Keep model definitions in focused modules grouped by business capability.
 """
 
-from syncally.infrastructure.models.agreements import AgreementVersion, Approval, Obligation
+from syncally.infrastructure.models.agreements import (
+    AgreementRoutingDecision,
+    AgreementVersion,
+    Approval,
+    Obligation,
+)
 from syncally.infrastructure.models.base import Base
 from syncally.infrastructure.models.deal_cases import DealCaseEvidenceModel, DealCaseModel
 from syncally.infrastructure.models.deals import (
@@ -18,6 +23,7 @@ from syncally.infrastructure.models.demo import DemoFixture
 from syncally.infrastructure.models.fulfillment import FulfillmentEvent
 from syncally.infrastructure.models.identity import (
     Organization,
+    OrganizationApprovalRoutingPolicy,
     OrganizationMember,
     OrganizationProfile,
     RefreshToken,
@@ -32,6 +38,7 @@ from syncally.infrastructure.models.operations import AuditEvent, OutboxEvent
 from syncally.infrastructure.models.payments import PaymentIntent, PaymentMilestone, WebhookEvent
 
 __all__ = [
+    "AgreementRoutingDecision",
     "AgreementVersion",
     "Approval",
     "AuditEvent",
@@ -49,6 +56,7 @@ __all__ = [
     "NegotiationSession",
     "Obligation",
     "Organization",
+    "OrganizationApprovalRoutingPolicy",
     "OrganizationMember",
     "OrganizationProfile",
     "OutboxEvent",

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  getApprovalRoutingPolicy,
   listOrganizationMembers,
   revokeOrganizationMember,
   updateMemberPermissions,
@@ -18,12 +19,14 @@ vi.mock("../api/client", async (importOriginal) => {
     listOrganizationMembers: vi.fn(),
     updateMemberPermissions: vi.fn(),
     revokeOrganizationMember: vi.fn(),
+    getApprovalRoutingPolicy: vi.fn(),
   };
 });
 
 const mockedListMembers = vi.mocked(listOrganizationMembers);
 const mockedUpdatePermissions = vi.mocked(updateMemberPermissions);
 const mockedRevokeMember = vi.mocked(revokeOrganizationMember);
+const mockedGetApprovalRoutingPolicy = vi.mocked(getApprovalRoutingPolicy);
 
 const ORG_ID = "org-1111-1111";
 const CURRENT_USER_ID = "user-self-9999";
@@ -47,6 +50,7 @@ function testOrg(role: "ADMIN" | "MEMBER" = "ADMIN"): Organization {
 describe("OrganizationMembersSection", () => {
   beforeEach(() => {
     mockAuthToken(CURRENT_USER_ID);
+    mockedGetApprovalRoutingPolicy.mockResolvedValue(null);
   });
 
   afterEach(() => {

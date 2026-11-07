@@ -13,6 +13,7 @@ import type {
   OrganizationCapability,
   OrganizationMember,
 } from "../api/types";
+import ApprovalRoutingSection from "./ApprovalRoutingSection";
 
 interface Props {
   organization: Organization;
@@ -478,6 +479,8 @@ export default function OrganizationMembersSection({ organization }: Props) {
           })}
         </ul>
       )}
+
+      <ApprovalRoutingSection organization={organization} members={members} />
     </div>
   );
 }

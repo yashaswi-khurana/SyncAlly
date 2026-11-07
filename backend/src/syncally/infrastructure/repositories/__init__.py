@@ -11,7 +11,11 @@ from syncally.infrastructure.repositories.agreements import (
     create_reviewed_agreement_draft_in_transaction,
     propose_amendment_in_transaction,
     record_approval_in_transaction,
+    record_routing_decision_in_transaction,
     withdraw_amendment_in_transaction,
+)
+from syncally.infrastructure.repositories.approval_routing import (
+    SqlAlchemyApprovalRoutingPolicyRepository,
 )
 from syncally.infrastructure.repositories.communications import (
     CommunicationScopeError,
@@ -31,6 +35,7 @@ from syncally.infrastructure.repositories.payments import (
 __all__ = [
     "CommunicationScopeError",
     "SqlAlchemyAgreementRepository",
+    "SqlAlchemyApprovalRoutingPolicyRepository",
     "SqlAlchemyAuditRepository",
     "SqlAlchemyCommunicationRepository",
     "SqlAlchemyDealCaseRepository",
@@ -47,5 +52,6 @@ __all__ = [
     "create_reviewed_agreement_draft_in_transaction",
     "propose_amendment_in_transaction",
     "record_approval_in_transaction",
+    "record_routing_decision_in_transaction",
     "withdraw_amendment_in_transaction",
 ]

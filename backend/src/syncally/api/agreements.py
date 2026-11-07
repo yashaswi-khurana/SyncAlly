@@ -10,7 +10,7 @@ error contract.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, NoReturn
 from uuid import UUID
@@ -30,9 +30,12 @@ from syncally.application.agreements import (
     CreateAgreementDraftCommand,
     CreateReviewedAgreementDraftCommand,
     DuplicateApproval,
+    NotEligibleApprover,
+    OutOfSequenceApproval,
     ProposalNotFound,
     ProposeAmendmentCommand,
     RecordApprovalCommand,
+    RecordRoutingDecisionCommand,
     StaleAgreementVersion,
     UnauthorizedApproval,
     WithdrawAmendmentCommand,
@@ -76,12 +79,14 @@ from syncally.infrastructure.database import get_db
 from syncally.infrastructure.identity import verify_member_capability
 from syncally.infrastructure.repositories import (
     SqlAlchemyAgreementRepository,
+    SqlAlchemyApprovalRoutingPolicyRepository,
     SqlAlchemyDealRepository,
     commit_agreement_in_transaction,
     create_agreement_draft_in_transaction,
     create_reviewed_agreement_draft_in_transaction,
     propose_amendment_in_transaction,
     record_approval_in_transaction,
+    record_routing_decision_in_transaction,
     withdraw_amendment_in_transaction,
 )
 
@@ -394,6 +399,34 @@ class AmendmentImpactResponse(BaseModel):
     can_commit: bool
 
 
+class RoutingSlotResponse(BaseModel):
+    """One configured approver's current actionability. Omits the user id
+    for a viewer outside this organization - see ``RoutingStatusResponse``.
+    """
+
+    user_id: UUID | None
+    status: str
+    decision: str | None
+    stale: bool
+
+
+class RoutingStatusResponse(BaseModel):
+    """An organization's approval routing state for one agreement version.
+
+    ``slots`` carries full per-approver detail only for a viewer who belongs
+    to this organization; a counterparty sees aggregate counts only, never
+    who the configured approvers are.
+    """
+
+    organization_id: UUID
+    mode: str
+    policy_version: int
+    status: str
+    required_approvers: int
+    completed_approvers: int
+    slots: list[RoutingSlotResponse] | None = None
+
+
 class ApprovalResponse(BaseModel):
     """Public representation of one organization's recorded decision."""
 
@@ -406,6 +439,7 @@ class ApprovalResponse(BaseModel):
     created_at: datetime
     id: UUID | None = None
     agreement_version_id: UUID | None = None
+    routing: RoutingStatusResponse | None = None
 
 
 class AgreementVersionResponse(BaseModel):
@@ -433,6 +467,9 @@ class AgreementVersionResponse(BaseModel):
     is_current: bool | None = None
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     grounding: str = "UNMAPPED"
+    # Keyed by organization_id (string); only present for organizations that
+    # have an approval routing policy configured - absent entirely otherwise.
+    routing_status: dict[str, RoutingStatusResponse] = Field(default_factory=dict)
 
 
 def get_agreement_repository(db: Session = Depends(get_db)) -> SqlAlchemyAgreementRepository:
@@ -539,13 +576,19 @@ def read_current_agreement_route(
             deal_repository,
             agreement_repository,
         )
+        result = agreement_repository.read_versions(deal_id, actor.user_id, organization_id,
+                                                     (agreement.version_number,))
+        return AgreementVersionResponse.model_validate(result["versions"][0])
+    except AmbiguousAgreementOrganization:
         if organization_id is not None:
-            result = agreement_repository.read_versions(deal_id, actor.user_id, organization_id,
-                                                         (agreement.version_number,))
-            return AgreementVersionResponse.model_validate(result["versions"][0])
+            _raise_agreement_error(AmbiguousAgreementOrganization("Choose the acting organization"))
+        # The actor is an active member of both deal parties and did not
+        # disambiguate: fall back to the unscoped projection (no per-party
+        # routing detail) rather than failing a request that worked before
+        # organization-scoped routing status existed.
+        return _to_agreement_response(agreement)
     except Exception as exc:
         _raise_agreement_error(exc)
-    return _to_agreement_response(agreement)
 
 
 def _raise_agreement_error(error: Exception) -> NoReturn:
@@ -556,8 +599,13 @@ def _raise_agreement_error(error: Exception) -> NoReturn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     if isinstance(error, (AgreementNotFound, ProposalNotFound)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-    if isinstance(error, (UnauthorizedApproval, AgreementAccessDenied, DealAccessDenied)):
+    if isinstance(
+        error,
+        (UnauthorizedApproval, AgreementAccessDenied, DealAccessDenied, NotEligibleApprover),
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    if isinstance(error, OutOfSequenceApproval):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     if isinstance(error, StaleAgreementVersion):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -662,6 +710,32 @@ def create_reviewed_agreement_draft_route(
     return _to_agreement_response(agreement)
 
 
+def _to_routing_status_response(
+    organization_id: UUID, policy: Any, evaluation: Any, *, reveal_detail: bool
+) -> RoutingStatusResponse:
+    completed = sum(1 for slot in evaluation.slots if slot.status.value == "COMPLETED")
+    slots = None
+    if reveal_detail:
+        slots = [
+            RoutingSlotResponse(
+                user_id=slot.user_id,
+                status=slot.status.value,
+                decision=slot.decision.value if slot.decision else None,
+                stale=slot.stale,
+            )
+            for slot in evaluation.slots
+        ]
+    return RoutingStatusResponse(
+        organization_id=organization_id,
+        mode=policy.mode.value,
+        policy_version=policy.version,
+        status=evaluation.status.value,
+        required_approvers=len(evaluation.slots),
+        completed_approvers=completed,
+        slots=slots,
+    )
+
+
 def _record_decision(
     *,
     deal_id: UUID,
@@ -683,9 +757,25 @@ def _record_decision(
                 OrganizationCapability.AGREEMENT_APPROVAL,
                 for_update=True,
             )
-        approval = record_approval_in_transaction(
+        policy = SqlAlchemyApprovalRoutingPolicyRepository(db).get(organization_id)
+        if policy is None:
+            # Default: unchanged single-approver bilateral behavior.
+            approval = record_approval_in_transaction(
+                db,
+                RecordApprovalCommand(
+                    deal_id=deal_id,
+                    version_number=version_number,
+                    terms_hash=payload.terms_hash,
+                    organization_id=organization_id,
+                    user_id=actor.user_id,
+                    decision=decision,
+                ),
+            )
+            return _to_approval_response(deal_id, version_number, approval)
+
+        outcome = record_routing_decision_in_transaction(
             db,
-            RecordApprovalCommand(
+            RecordRoutingDecisionCommand(
                 deal_id=deal_id,
                 version_number=version_number,
                 terms_hash=payload.terms_hash,
@@ -696,7 +786,25 @@ def _record_decision(
         )
     except Exception as exc:
         _raise_agreement_error(exc)
-    return _to_approval_response(deal_id, version_number, approval)
+
+    reveal_detail = organization_id in actor.organization_ids
+    routing = _to_routing_status_response(
+        organization_id, policy, outcome.evaluation, reveal_detail=reveal_detail
+    )
+    if outcome.finalized_approval is not None:
+        response = _to_approval_response(deal_id, version_number, outcome.finalized_approval)
+        response.routing = routing
+        return response
+    return ApprovalResponse(
+        deal_id=deal_id,
+        version_number=version_number,
+        organization_id=organization_id,
+        user_id=actor.user_id,
+        decision=decision.value,
+        terms_hash=payload.terms_hash,
+        created_at=datetime.now(UTC),
+        routing=routing,
+    )
 
 
 @router.post("/{version_number}/approve", response_model=ApprovalResponse)

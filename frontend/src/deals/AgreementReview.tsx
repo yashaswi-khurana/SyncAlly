@@ -932,6 +932,50 @@ export default function AgreementReview({
               })}
             </div>
 
+            {[buyerOrganizationId, sellerOrganizationId].some(
+              (organizationId) => agreement.routing_status?.[organizationId],
+            ) ? (
+              <div className="agreement-review__routing" aria-label="Approval routing status by organization">
+                <h3>Approval routing</h3>
+                {[buyerOrganizationId, sellerOrganizationId].map((organizationId) => {
+                  const routing = agreement.routing_status?.[organizationId];
+                  if (!routing) return null;
+                  const orgName = organizationId === buyerOrganizationId
+                    ? buyerOrganizationName || partyName(state.organizations, organizationId)
+                    : sellerOrganizationName || partyName(state.organizations, organizationId);
+                  return (
+                    <div className="agreement-review__approval" key={`routing-${organizationId}`}>
+                      <span>{orgName} ({routing.mode.toLowerCase()})</span>
+                      <span
+                        className={`badge ${
+                          routing.status === "COMPLETED"
+                            ? "badge--status-confirmed"
+                            : routing.status === "ERROR"
+                              ? "badge--status-rejected"
+                              : "badge--status-extracted"
+                        }`}
+                      >
+                        {routing.status === "ERROR"
+                          ? "Blocked: reassign approver"
+                          : `${routing.status} (${routing.completed_approvers}/${routing.required_approvers})`}
+                      </span>
+                      {routing.slots ? (
+                        <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                          {routing.slots.map((slot, index) => (
+                            <li key={slot.user_id || index} style={{ fontSize: "0.8rem" }}>
+                              {slot.status}
+                              {slot.decision ? ` — ${decisionLabel(slot.decision)}` : ""}
+                              {slot.stale ? " (stale, needs re-decision)" : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
             {canDecide ? (
               <>
                 {myApproval ? (

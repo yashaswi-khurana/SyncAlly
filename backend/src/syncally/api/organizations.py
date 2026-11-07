@@ -23,6 +23,10 @@ from syncally.application.identity import ActorContext
 from syncally.application.passwords import hash_password, verify_password
 from syncally.config import settings
 from syncally.domain.deals.deal import Deal as DomainDeal
+from syncally.domain.organizations.approval_routing import ApprovalRoutingMode
+from syncally.domain.organizations.approval_routing import (
+    ApprovalRoutingPolicy as DomainApprovalRoutingPolicy,
+)
 from syncally.domain.organizations.organization import (
     ContactVisibility,
     OrganizationCapability,
@@ -56,6 +60,9 @@ from syncally.infrastructure.models import (
     User,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
+from syncally.infrastructure.repositories.approval_routing import (
+    SqlAlchemyApprovalRoutingPolicyRepository,
+)
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 from syncally.infrastructure.repositories.organizations import (
     SqlAlchemyOrganizationRepository,
@@ -339,6 +346,43 @@ class ProfileResponse(BaseModel):
     created_at: str | None = None
     updated_at: str | None = None
     updated_by_user_id: UUID | None = None
+
+
+class ApprovalRoutingPolicyRequest(BaseModel):
+    """An organization admin's explicit, opt-in approval routing configuration."""
+
+    mode: Literal["SEQUENTIAL", "PARALLEL"]
+    approver_user_ids: list[UUID] = Field(min_length=1, max_length=10)
+    expected_version: int | None = None
+
+    @field_validator("approver_user_ids")
+    @classmethod
+    def distinct_approvers(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("Approval routing approvers must be distinct")
+        return value
+
+
+class ApprovalRoutingPolicyResponse(BaseModel):
+    organization_id: UUID
+    mode: str
+    approver_user_ids: list[UUID]
+    version: int
+    updated_by_user_id: UUID | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+def _to_approval_routing_policy_response(policy: DomainApprovalRoutingPolicy) -> dict[str, Any]:
+    return {
+        "organization_id": policy.organization_id,
+        "mode": policy.mode.value,
+        "approver_user_ids": list(policy.approver_user_ids),
+        "version": policy.version,
+        "updated_by_user_id": policy.updated_by_user_id,
+        "created_at": policy.created_at.isoformat() if policy.created_at else None,
+        "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
+    }
 
 
 def _active_admin_membership(
@@ -1053,6 +1097,102 @@ def revoke_organization_member(
         )
     )
     db.commit()
+
+
+@org_router.get(
+    "/{organization_id}/approval-routing",
+    response_model=ApprovalRoutingPolicyResponse | None,
+)
+def get_approval_routing_policy_route(
+    organization_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, Any] | None:
+    """Read this organization's approval routing policy, if one is configured.
+
+    Absent (``null``) means the default: existing single-approver bilateral
+    approval behavior.
+    """
+    if organization_id not in actor.organization_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active organization membership required",
+        )
+    policy = SqlAlchemyApprovalRoutingPolicyRepository(db).get(organization_id)
+    return _to_approval_routing_policy_response(policy) if policy is not None else None
+
+
+@org_router.put(
+    "/{organization_id}/approval-routing",
+    response_model=ApprovalRoutingPolicyResponse,
+)
+def put_approval_routing_policy_route(
+    organization_id: UUID,
+    payload: ApprovalRoutingPolicyRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create or update this organization's approval routing policy.
+
+    Every listed approver must already be an active member of this
+    organization with AGREEMENT_APPROVAL capability - routing can only
+    sequence existing approval authority, never grant new authority.
+    """
+    _active_admin_membership(db, organization_id, actor.user_id)
+
+    domain_policy = DomainApprovalRoutingPolicy(
+        organization_id=OrganizationId(organization_id),
+        mode=ApprovalRoutingMode(payload.mode),
+        approver_user_ids=tuple(UserId(uid) for uid in payload.approver_user_ids),
+    )
+    repo = SqlAlchemyApprovalRoutingPolicyRepository(db)
+    try:
+        saved = repo.save(
+            domain_policy,
+            expected_version=payload.expected_version,
+            updated_by_user_id=actor.user_id,
+        )
+        db.commit()
+    except InvariantViolation as exc:
+        db.rollback()
+        if "version conflict" in str(exc).lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Approval routing policy version conflict; please refresh",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return _to_approval_routing_policy_response(saved)
+
+
+@org_router.delete(
+    "/{organization_id}/approval-routing",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_approval_routing_policy_route(
+    organization_id: UUID,
+    expected_version: int | None = Query(default=None),
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove this organization's approval routing policy.
+
+    Reverts the organization to the default: existing single-approver
+    bilateral approval behavior.
+    """
+    _active_admin_membership(db, organization_id, actor.user_id)
+    repo = SqlAlchemyApprovalRoutingPolicyRepository(db)
+    try:
+        repo.delete(organization_id, expected_version=expected_version)
+        db.commit()
+    except InvariantViolation as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Approval routing policy version conflict; please refresh",
+        ) from exc
 
 
 @org_router.post("/{organization_id}/repair-finance")

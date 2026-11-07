@@ -1099,7 +1099,7 @@ class AgreementRouteTests(unittest.TestCase):
             )
         )
         assert agreement is not None and obligation is not None
-        return {
+        payload = {
             "agreement_version_id": str(agreement.id),
             "terms_hash": agreement.terms_hash,
             "obligation_id": str(obligation.id),
@@ -1109,6 +1109,10 @@ class AgreementRouteTests(unittest.TestCase):
             "expected_version": version,
             "idempotency_key": key or str(uuid4()),
         }
+        if stage == "SHIPPED":
+            payload["carrier"] = "DHL"
+            payload["dispatch_date"] = "2026-11-07"
+        return payload
 
     def _record_fulfillment(self, payload: dict[str, Any]) -> httpx.Response:
         return self._request(

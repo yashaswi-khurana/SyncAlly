@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -22,9 +23,11 @@ from syncally.application.workflow_state import (
     load_deal_workflow_state,
     parse_workflow_uuid,
 )
+from syncally.domain.reminders.reminder import SuppressionReason
 from syncally.domain.shared.errors import DomainError
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
+from syncally.infrastructure.repositories.reminders import SqlAlchemyReminderRepository
 from syncally.operations import Operation, log_operation
 from syncally.workflows.deal import REFRESH_DEAL_STATE_ACTIVITY
 from syncally.workflows.errors import (
@@ -68,6 +71,11 @@ class RefreshDealStateActivity:
                     SqlAlchemyDealRepository(db),
                     SqlAlchemyAgreementRepository(db),
                 )
+                if state.is_terminal:
+                    SqlAlchemyReminderRepository(db).suppress_active_for_deal(
+                        deal_id, SuppressionReason.DEAL_TERMINAL, datetime.now(UTC)
+                    )
+                    db.commit()
                 log_operation(
                     logger,
                     Operation.ACTIVITY_COMPLETED,

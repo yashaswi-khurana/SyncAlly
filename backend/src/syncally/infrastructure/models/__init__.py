@@ -37,6 +37,7 @@ from syncally.infrastructure.models.negotiation import (
 )
 from syncally.infrastructure.models.operations import AuditEvent, OutboxEvent
 from syncally.infrastructure.models.payments import PaymentIntent, PaymentMilestone, WebhookEvent
+from syncally.infrastructure.models.reminders import DealReminderModel
 
 __all__ = [
     "AgreementRoutingDecision",
@@ -50,6 +51,7 @@ __all__ = [
     "Deal",
     "DealCaseEvidenceModel",
     "DealCaseModel",
+    "DealReminderModel",
     "DemoFixture",
     "FulfillmentEvent",
     "Message",

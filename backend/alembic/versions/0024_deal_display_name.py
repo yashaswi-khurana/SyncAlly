@@ -41,7 +41,9 @@ def upgrade() -> None:
           AND deal.seller_organization_id = seller.id
         """
     )
-    if sa.inspect(op.get_bind()).has_table(_ROLLBACK_BACKUP_TABLE):
+    from alembic import context
+
+    if not context.is_offline_mode() and sa.inspect(op.get_bind()).has_table(_ROLLBACK_BACKUP_TABLE):
         deals = _deal_names_table()
         backup = _rollback_backup_table()
         backup_name = (
@@ -59,35 +61,38 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Keep deal names in a durable table before removing the application column."""
-    bind = op.get_bind()
-    if not sa.inspect(bind).has_table(_ROLLBACK_BACKUP_TABLE):
-        op.create_table(
-            _ROLLBACK_BACKUP_TABLE,
-            sa.Column("deal_id", sa.Uuid(), primary_key=True),
-            sa.Column("display_name", sa.String(length=160), nullable=False),
+    from alembic import context
+
+    if not context.is_offline_mode():
+        bind = op.get_bind()
+        if not sa.inspect(bind).has_table(_ROLLBACK_BACKUP_TABLE):
+            op.create_table(
+                _ROLLBACK_BACKUP_TABLE,
+                sa.Column("deal_id", sa.Uuid(), primary_key=True),
+                sa.Column("display_name", sa.String(length=160), nullable=False),
+            )
+        deals = _deal_names_table()
+        backup = _rollback_backup_table()
+        current_name = (
+            sa.select(deals.c.display_name)
+            .where(deals.c.id == backup.c.deal_id)
+            .scalar_subquery()
         )
-    deals = _deal_names_table()
-    backup = _rollback_backup_table()
-    current_name = (
-        sa.select(deals.c.display_name)
-        .where(deals.c.id == backup.c.deal_id)
-        .scalar_subquery()
-    )
-    has_current_name = sa.exists(
-        sa.select(1)
-        .select_from(deals)
-        .where(deals.c.id == backup.c.deal_id, deals.c.display_name.is_not(None))
-    ).correlate(backup)
-    bind.execute(
-        sa.update(backup)
-        .where(has_current_name)
-        .values(display_name=current_name)
-    )
-    already_backed_up = sa.exists(
-        sa.select(1).select_from(backup).where(backup.c.deal_id == deals.c.id)
-    ).correlate(deals)
-    names_to_preserve = sa.select(deals.c.id, deals.c.display_name).where(
-        deals.c.display_name.is_not(None), ~already_backed_up
-    )
-    bind.execute(sa.insert(backup).from_select(["deal_id", "display_name"], names_to_preserve))
+        has_current_name = sa.exists(
+            sa.select(1)
+            .select_from(deals)
+            .where(deals.c.id == backup.c.deal_id, deals.c.display_name.is_not(None))
+        ).correlate(backup)
+        bind.execute(
+            sa.update(backup)
+            .where(has_current_name)
+            .values(display_name=current_name)
+        )
+        already_backed_up = sa.exists(
+            sa.select(1).select_from(backup).where(backup.c.deal_id == deals.c.id)
+        ).correlate(deals)
+        names_to_preserve = sa.select(deals.c.id, deals.c.display_name).where(
+            deals.c.display_name.is_not(None), ~already_backed_up
+        )
+        bind.execute(sa.insert(backup).from_select(["deal_id", "display_name"], names_to_preserve))
     op.drop_column("deals", "display_name")

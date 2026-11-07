@@ -108,9 +108,9 @@
     "semantic_hash": ""
   },
   "backend/src/syncally/api/deals.py": {
-    "mtime": 1793967784.075959,
-    "seen": 1793967848.2261333,
-    "ast_hash": "2fe6fe4e447bf1d661cfeb157b229305",
+    "mtime": 1794032361.5422552,
+    "seen": 1794034981.9374871,
+    "ast_hash": "41a5629678549b87a50a3930a911a097",
     "semantic_hash": ""
   },
   "backend/src/syncally/api/dev.py": {
@@ -126,9 +126,9 @@
     "semantic_hash": "99a8796a3313ed6129ade5a7a0980e41"
   },
   "backend/src/syncally/api/main.py": {
-    "mtime": 1794030912.600373,
-    "seen": 1794030979.5529332,
-    "ast_hash": "2ab27abd1595b067e64be939bed71d34",
+    "mtime": 1794033713.5234754,
+    "seen": 1794034981.937501,
+    "ast_hash": "3f3ed8645b26e021580939feb5579c6d",
     "semantic_hash": ""
   },
   "backend/src/syncally/api/operations.py": {
@@ -324,10 +324,10 @@
     "semantic_hash": "23b95cb98f87fe93eb38609fe7ecac58"
   },
   "backend/src/syncally/domain/deals/__init__.py": {
-    "mtime": 1792729557.6298273,
-    "seen": 1793433921.8350751,
-    "ast_hash": "ba416f436e213ab520af16826fafcf62",
-    "semantic_hash": "ba416f436e213ab520af16826fafcf62"
+    "mtime": 1794031963.516934,
+    "seen": 1794034981.937689,
+    "ast_hash": "efd8677513d0400b0e8d7bea6edbdde0",
+    "semantic_hash": ""
   },
   "backend/src/syncally/domain/deals/communications.py": {
     "mtime": 1792729557.6298273,
@@ -336,9 +336,9 @@
     "semantic_hash": "b6f395f89064b7f4258183a5ec73ccd1"
   },
   "backend/src/syncally/domain/deals/deal.py": {
-    "mtime": 1793798981.6687686,
-    "seen": 1793799041.4338846,
-    "ast_hash": "11f8431d268826567f328596b1d05fbc",
+    "mtime": 1794031953.6229494,
+    "seen": 1794034981.9377024,
+    "ast_hash": "ca11b8dc25e6b9cfe5445abbe3e67b0b",
     "semantic_hash": ""
   },
   "backend/src/syncally/domain/negotiation/__init__.py": {
@@ -456,9 +456,9 @@
     "semantic_hash": "0357708e25b07336a6f1775cb6700376"
   },
   "backend/src/syncally/infrastructure/models/__init__.py": {
-    "mtime": 1793798981.6687686,
-    "seen": 1793799041.4339929,
-    "ast_hash": "2000ef07f2a42d17ad017b89c49bf6d4",
+    "mtime": 1794032027.6687956,
+    "seen": 1794034981.937794,
+    "ast_hash": "f658cecdb176cbc8d6eac9738425ce0b",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/models/agreements.py": {
@@ -528,9 +528,9 @@
     "semantic_hash": "e9586a4bbf2f6c68df3fbd5424d84aa8"
   },
   "backend/src/syncally/infrastructure/repositories/__init__.py": {
-    "mtime": 1793969606.311256,
-    "seen": 1793971494.332592,
-    "ast_hash": "e4e2c648c1f014272b3f36cf6dafbf02",
+    "mtime": 1794032174.0152674,
+    "seen": 1794034981.9378455,
+    "ast_hash": "6d42c807bfa8af1babe7d0e55de1c562",
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/repositories/_timestamps.py": {
@@ -924,9 +924,9 @@
     "semantic_hash": ""
   },
   "frontend/src/api/client.ts": {
-    "mtime": 1794030912.603373,
-    "seen": 1794030979.553413,
-    "ast_hash": "6aaa83b37945ebb5e1d9dc49523cf926",
+    "mtime": 1794034838.6321507,
+    "seen": 1794034981.9380996,
+    "ast_hash": "8a11b2ac730af0726dbb45bde1f2c204",
     "semantic_hash": ""
   },
   "frontend/src/api/tokenStore.ts": {
@@ -936,9 +936,9 @@
     "semantic_hash": "1cce6ab7110d0e744e181f984cd8b8c1"
   },
   "frontend/src/api/types.ts": {
-    "mtime": 1794030912.603373,
-    "seen": 1794030979.5534182,
-    "ast_hash": "9417b76d5fbf202dea00cf2c517693dc",
+    "mtime": 1794034845.592189,
+    "seen": 1794034981.9381053,
+    "ast_hash": "416794112c4b46b72b37f6169fdfa47c",
     "semantic_hash": ""
   },
   "frontend/src/app/useHashRoute.ts": {
@@ -984,9 +984,9 @@
     "semantic_hash": ""
   },
   "frontend/src/deals/AgreementReview.tsx": {
-    "mtime": 1793973860.3225791,
-    "seen": 1793974550.0985346,
-    "ast_hash": "33c44ed93f1f3ff8f8809b4fab1ff37b",
+    "mtime": 1794033024.2740202,
+    "seen": 1794034981.9381309,
+    "ast_hash": "717e1f83b9603746c7a2ede54e2815a8",
     "semantic_hash": ""
   },
   "frontend/src/deals/CommercialDocumentPanel.test.tsx": {
@@ -1032,15 +1032,15 @@
     "semantic_hash": ""
   },
   "frontend/src/deals/DealDetailPage.test.tsx": {
-    "mtime": 1793967784.0859587,
-    "seen": 1793967848.2267568,
-    "ast_hash": "a4928328f5baadc2cbeb9c26891079df",
+    "mtime": 1794033619.6244974,
+    "seen": 1794034981.9381623,
+    "ast_hash": "c6ebdaf62ae8abf1a7ecec056f054555",
     "semantic_hash": ""
   },
   "frontend/src/deals/DealDetailPage.tsx": {
-    "mtime": 1793967784.0859587,
-    "seen": 1793967848.2267597,
-    "ast_hash": "bf72db6ccd97ada97f32efc00fa59efa",
+    "mtime": 1794033261.1418364,
+    "seen": 1794034981.9381652,
+    "ast_hash": "4c4fc0fecf37057ee012c340dd7cf125",
     "semantic_hash": ""
   },
   "frontend/src/deals/DealsPage.test.tsx": {
@@ -1584,10 +1584,10 @@
     "semantic_hash": ""
   },
   "docs/remaining-tasks/08-cancel-disputes.md": {
-    "mtime": 1793505734.1811805,
-    "seen": 1793506638.5265636,
-    "ast_hash": "cc19f28d46ba8e0ecb344c0f2f72b554",
-    "semantic_hash": "cc19f28d46ba8e0ecb344c0f2f72b554"
+    "mtime": 1794035014.420948,
+    "seen": 1794035230.9426732,
+    "ast_hash": "b590b85beb8086ec958442201f2b1bc6",
+    "semantic_hash": ""
   },
   "docs/remaining-tasks/09-approval-routing.md": {
     "mtime": 1793505734.1811805,
@@ -1638,9 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1793974411.4581761,
-    "seen": 1793974550.0988805,
-    "ast_hash": "d0e9406ec5c7bf760753c48cd2b90fab",
+    "mtime": 1794035037.4670296,
+    "seen": 1794035230.942699,
+    "ast_hash": "230a3964fb3dc26fa87404c4436e181c",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -1878,15 +1878,15 @@
     "semantic_hash": ""
   },
   "backend/src/syncally/infrastructure/ai/graph.py": {
-    "mtime": 1794030912.6013732,
-    "seen": 1794030979.553098,
-    "ast_hash": "9e764a8f7ca8af741e0eaba55b3073de",
+    "mtime": 1794034832.0041137,
+    "seen": 1794034981.937764,
+    "ast_hash": "0239cd664928ecb5c3864c7d9ea7dd9a",
     "semantic_hash": ""
   },
   "frontend/src/platform/PlatformOrganizationsPage.tsx": {
-    "mtime": 1794030912.6043732,
-    "seen": 1794030979.5535436,
-    "ast_hash": "02b801226162fca0b2f08a7c262d6d11",
+    "mtime": 1794034763.7686985,
+    "seen": 1794034981.9382417,
+    "ast_hash": "3d83c18374cc1708e195d68eeb600892",
     "semantic_hash": ""
   },
   "hostless.yaml": {
@@ -1899,6 +1899,108 @@
     "mtime": 1794030912.6045778,
     "seen": 1794030979.5535898,
     "ast_hash": "4ef9c70af2e6b84f62f41ed1eeb2e123",
+    "semantic_hash": ""
+  },
+  ".orchestrator/index/capabilities.json": {
+    "mtime": 1794034027.9689996,
+    "seen": 1794034981.9373162,
+    "ast_hash": "f0d0dd221d2a51de36b98a63f117ef0a",
+    "semantic_hash": ""
+  },
+  ".orchestrator/plan.json": {
+    "mtime": 1794031691.5382948,
+    "seen": 1794034981.9373314,
+    "ast_hash": "4179a75863676b40c593e65e269a6113",
+    "semantic_hash": ""
+  },
+  "backend/alembic/versions/0025_cancel_disputes.py": {
+    "mtime": 1794034628.9236658,
+    "seen": 1794034981.9374425,
+    "ast_hash": "982df3217b80bd18fa14774b346f1585",
+    "semantic_hash": ""
+  },
+  "backend/src/syncally/application/deal_cases.py": {
+    "mtime": 1794033713.5224752,
+    "seen": 1794034981.93754,
+    "ast_hash": "635999853d44c1aa1f2f051d70ccf9d1",
+    "semantic_hash": ""
+  },
+  "backend/src/syncally/domain/deals/cases.py": {
+    "mtime": 1794031943.253964,
+    "seen": 1794034981.9376943,
+    "ast_hash": "9b396b2e9e39e756ddd29f01e7939368",
+    "semantic_hash": ""
+  },
+  "backend/src/syncally/infrastructure/models/deal_cases.py": {
+    "mtime": 1794032009.4908412,
+    "seen": 1794034981.9378037,
+    "ast_hash": "9df212e9fe4a6904b2535fbd76dd4445",
+    "semantic_hash": ""
+  },
+  "backend/src/syncally/infrastructure/repositories/deal_cases.py": {
+    "mtime": 1794033713.5224752,
+    "seen": 1794034981.9378564,
+    "ast_hash": "5f78c1f834dda5090736ec640e31047a",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_deal_cases.py": {
+    "mtime": 1794033713.5284755,
+    "seen": 1794034981.9379554,
+    "ast_hash": "4913108abe59df5d01b0fe8693d048c0",
+    "semantic_hash": ""
+  },
+  "frontend/src/deals/DealCasesPanel.tsx": {
+    "mtime": 1794033516.062404,
+    "seen": 1794034981.9381468,
+    "ast_hash": "56cafa787a2b69aa0a8a2bf8c383cca1",
+    "semantic_hash": ""
+  },
+  ".orchestrator/contracts/cancel-disputes-contract.md": {
+    "mtime": 1794031230.9413538,
+    "seen": 1794034981.9383426,
+    "ast_hash": "9643f469aade3ee5b0d6e97628c61572",
+    "semantic_hash": ""
+  },
+  ".orchestrator/done.txt": {
+    "mtime": 1794035056.6840942,
+    "seen": 1794035230.9425862,
+    "ast_hash": "21de600b6d6e4ac50672f06762405930",
+    "semantic_hash": ""
+  },
+  ".orchestrator/logs/developer.state.md": {
+    "mtime": 1794033992.0038483,
+    "seen": 1794034981.9383485,
+    "ast_hash": "777bd944d5316f80835cc85bb9ded428",
+    "semantic_hash": ""
+  },
+  ".orchestrator/logs/planner.state.md": {
+    "mtime": 1794031660.220923,
+    "seen": 1794034981.9383514,
+    "ast_hash": "56b9491b69ceeb71d0c70a18f0d9b757",
+    "semantic_hash": ""
+  },
+  ".orchestrator/logs/reviewer.state.md": {
+    "mtime": 1794034548.7758913,
+    "seen": 1794034981.9383543,
+    "ast_hash": "516ec40aeb0c7200e2e847ed078e6cd1",
+    "semantic_hash": ""
+  },
+  ".orchestrator/master-board.md": {
+    "mtime": 1794035053.3360832,
+    "seen": 1794035230.9425995,
+    "ast_hash": "e7a64361f488195603fe09a50aeff9fd",
+    "semantic_hash": ""
+  },
+  ".orchestrator/plans/cancel_disputes_plan.md": {
+    "mtime": 1794031648.778442,
+    "seen": 1794034981.93836,
+    "ast_hash": "5aaf8ee2614f470664f5633d5aa84a84",
+    "semantic_hash": ""
+  },
+  ".orchestrator/reviews/RV1/review.md": {
+    "mtime": 1794034537.4187706,
+    "seen": 1794034981.9383626,
+    "ast_hash": "b3610c8f7dc45936a7eb229e6cb5fa70",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

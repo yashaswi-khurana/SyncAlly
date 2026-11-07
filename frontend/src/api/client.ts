@@ -59,6 +59,7 @@ import type {
   Visibility,
   DealCase,
   DealCaseEvidence,
+  DealReminder,
   RaiseCaseInput,
   RespondCaseInput,
   AddCaseEvidenceInput,
@@ -876,6 +877,41 @@ export function addCaseEvidence(
     {
       method: "POST",
       body: JSON.stringify(input),
+    },
+  );
+}
+
+export function listDealReminders(
+  dealId: string,
+  organizationId?: string,
+  options?: { signal?: AbortSignal },
+): Promise<DealReminder[]> {
+  const query = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+  return apiRequest<DealReminder[]>(`/deals/${encodeURIComponent(dealId)}/reminders${query}`, {
+    signal: options?.signal,
+  });
+}
+
+export function syncDealReminders(
+  dealId: string,
+  organizationId?: string,
+): Promise<DealReminder[]> {
+  const query = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+  return apiRequest<DealReminder[]>(`/deals/${encodeURIComponent(dealId)}/reminders/sync${query}`, {
+    method: "POST",
+  });
+}
+
+export function suppressDealReminder(
+  dealId: string,
+  reminderId: string,
+  organizationId?: string,
+): Promise<DealReminder> {
+  const query = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+  return apiRequest<DealReminder>(
+    `/deals/${encodeURIComponent(dealId)}/reminders/${encodeURIComponent(reminderId)}/suppress${query}`,
+    {
+      method: "POST",
     },
   );
 }

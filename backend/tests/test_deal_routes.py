@@ -98,6 +98,7 @@ class DealRouteTests(unittest.TestCase):
                 "status",
                 "version",
                 "pending_counterparty",
+                "display_name",
             },
         )
         self.assertEqual(body["buyer_organization_id"], str(buyer.id))
@@ -270,6 +271,7 @@ class DealRouteTests(unittest.TestCase):
                 "status": "DRAFT",
                 "version": 0,
                 "pending_counterparty": False,
+                "display_name": None,
             },
         )
 
@@ -339,6 +341,7 @@ class DealRouteTests(unittest.TestCase):
                     "status": "DRAFT",
                     "version": 0,
                     "pending_counterparty": False,
+                    "display_name": None,
                     "viewer_role": "SELLER",
                 }
             ],

@@ -419,11 +419,47 @@ def create_organization(
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
-    """Prevent existing organization accounts from creating another workspace."""
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Organization creation is only available during owner account onboarding.",
+    """Create an organization and make its creator the first active admin."""
+    # Serialize organization creation for this account so concurrent requests
+    # cannot both pass the quota check.
+    db.scalar(select(User.id).where(User.id == actor.user_id).with_for_update())
+    active_organization_count = db.scalar(
+        select(func.count(OrganizationMember.id))
+        .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .where(
+            OrganizationMember.user_id == actor.user_id,
+            OrganizationMember.status == "ACTIVE",
+            Organization.status == "ACTIVE",
+        )
     )
+    if active_organization_count >= settings.max_organizations_per_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organization limit reached for this account",
+        )
+
+    organization = Organization(
+        legal_name=payload.legal_name,
+        country_code=payload.country_code,
+    )
+    db.add(organization)
+    db.flush()
+    db.add(
+        OrganizationMember(
+            organization_id=organization.id,
+            user_id=actor.user_id,
+            role="ADMIN",
+            status="ACTIVE",
+            capabilities=["FINANCE"],
+        )
+    )
+    db.commit()
+    return {
+        "id": str(organization.id),
+        "legal_name": organization.legal_name,
+        "country_code": organization.country_code,
+        "role": "ADMIN",
+    }
 
 
 def _compute_effective_capabilities(role: str, assigned: list[str] | None) -> list[str]:

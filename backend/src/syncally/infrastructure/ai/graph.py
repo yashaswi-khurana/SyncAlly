@@ -24,7 +24,7 @@ class _ProposalState(TypedDict, total=False):
 
 
 def _check_readiness(state: _ProposalState) -> dict[str, object]:
-    missing = missing_trade_fields(state["context"].constraints)
+    missing = missing_trade_fields(state["context"].constraints) if state["context"].constraints else []
     if not missing:
         return {"missing_fields": []}
     issue = ValidationIssue(

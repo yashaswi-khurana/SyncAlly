@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); **Step 06 Milestone Payments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 07 Amendments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 08 Cancel Disputes is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed; ledger row corrected to match existing evidence entry below); **Step 09 Approval Routing is REVIEW_PENDING** (implemented and self-verified directly by the assisting model, no second independent reviewer); Steps 10–11 remain **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); **Step 06 Milestone Payments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 07 Amendments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 08 Cancel Disputes is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed; ledger row corrected to match existing evidence entry below); **Step 09 Approval Routing is REVIEW_PENDING** (implemented and self-verified directly by the assisting model, no second independent reviewer); **Step 10 Reminders is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); Step 11 remains **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -23,7 +23,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | [07 Amendments](07-amendments.md) | 05, 06 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 1/3 | Verified: 101/101 backend discovery tests pass (6 skip); 11/11 test_amendments pass; 420/420 frontend tests pass (+23 focused AgreementReview tests); ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Exact-version amendments, prior hash verification, fresh bilateral approvals, pre-commit operational impact blockers, candidate review/propose/withdraw UI, multi-version fulfillment lineage, paid milestone double-charge prevention (409), migration 0024 downgrade safety, and export byte preservation verified. |
 | [08 Cancel Disputes](08-cancel-disputes.md) | 03, 06, 07 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 1/3 | Verified: 58 discovery tests pass; 12 deal cases tests pass; ruff clean; 424 frontend tests pass; lint clean; build pass. See full evidence entry below (ledger row corrected to match it). |
 | [09 Approval Routing](09-approval-routing.md) | 02, 07, 08 | REVIEW_PENDING | N/A | ACCEPTED | NOT_RUN | 0/3 | Verified: 10/10 focused backend routing tests pass; 6/6 HTTP route tests pass; 867/867 full backend discovery pass (10 pre-existing failures/3 pre-existing errors unrelated and unchanged); ruff 0 errors; 39/39 focused frontend tests pass; frontend lint/typecheck 0 errors; build pass. Default bilateral continuity, PARALLEL/SEQUENTIAL routing, always-available REJECT veto, revoked/stale-approver handling, eligibility validation, and OCC version conflicts verified. No second independent reviewer pass. |
-| [10 Reminders](10-reminders.md) | 03, 06, 08, 09 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
+| [10 Reminders](10-reminders.md) | 03, 06, 08, 09 | ACCEPTED | N/A | ACCEPTED | ACCEPTED | 1/3 | Verified: 35/35 backend reminder and activity tests pass (8 domain, 12 service, 5 routes, 10 activities); 869/869 full backend discovery pass (33 skip); 48/48 focused tests pass (2 skip); 46/46 focused frontend tests pass (40 DealDetailPage, 6 RemindersPanel); ruff clean; lint:check clean; build clean; git diff --check clean. Scoped durable reminder schedules for fulfillment, milestones, cases, and routing with replay-safe timers, recipient-scoped dedup keys, in-flight payment deferral, organization-switch and terminal deal suppression, outbox notifications, IN_APP delivery, and privacy isolation. Migration 0031_reminders with downgrade guard. |
 | [11 Judge Demo](11-judge-demo.md) | 01-10 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
 | [12 Browser Verification](12-browser-verification.md) | 11 + approved runnable deployment/tools | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Mandatory live/visual gate unmet |
 | [13 PostgreSQL Temporal](13-postgres-temporal.md) | 01-11 + approved isolated environments | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Mandatory real migration/race/restart gate unmet |
@@ -680,4 +680,115 @@ Optional election: elected / explicitly not elected / unknown:
   - N/A for Step 09.
 Completion report / next concrete operator actions:
   - Step 09 Approval Routing implemented end-to-end (domain, migration, repository, application, API, frontend) and self-verified across backend (16 new tests pass, 867 full discovery with zero new regressions, ruff clean) and frontend (39 focused tests pass, lint/typecheck/build clean, zero new regressions). Nothing committed to git. Needs an independent Reviewer pass before ACCEPTED.
+```
+
+```text
+UTC timestamp: 2026-11-07T17:15:00Z
+Step / dependency verification / current status:
+  - Step 10 Reminders (Feature F13) / Dependencies 03, 06, 08, 09 verified / REVIEW_PENDING.
+Role identity / coordination evidence (never pretend):
+  - Developer role agent executing Step 10 bounded task; independent Reviewer audit pending.
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch 137-task-10-reminders---f13 / Actual migration head 0031_reminders (branched from 0030_marketplace_rfqs).
+  - Inspected: backend/src/syncally/workflows/deal.py, backend/src/syncally/application/workflow_notifications.py, backend/src/syncally/application/outbox.py, backend/src/syncally/infrastructure/outbox.py, frontend/src/deals/DealDetailPage.tsx.
+Hypothesis / cheapest discriminating check:
+  - Scoped durable reminders track outstanding obligations across four scopes (FULFILLMENT, MILESTONE, CASE, ROUTING) without auto-approving or escalating.
+  - Dedup keys prevent duplicates; state transitions truthfully suppress resolved/superseded/revoked obligations; IN_APP channel avoids private egress.
+  - Pure domain + service + route tests: `PYTHONPATH=src .venv/bin/python -m unittest tests.test_reminders_domain tests.test_reminders_service tests.test_reminders_routes`.
+Authorized scope / policy or private operator election (no secrets):
+  - F13 Reminders bounded scope: durable scoped reminders for outstanding obligations; no blanket finance/fulfillment, no automatic escalation/approval, no email/private egress (IN_APP channel only), counterparty privacy preserved.
+Files changed / preserved unrelated changes:
+  - Created: backend/src/syncally/domain/reminders/reminder.py, backend/src/syncally/domain/reminders/__init__.py, backend/src/syncally/infrastructure/models/reminders.py, backend/src/syncally/infrastructure/repositories/reminders.py, backend/src/syncally/application/reminders.py, backend/src/syncally/api/reminders.py, backend/alembic/versions/0031_reminders.py, backend/tests/test_reminders_domain.py, backend/tests/test_reminders_service.py, backend/tests/test_reminders_routes.py, frontend/src/deals/RemindersPanel.tsx, frontend/src/deals/RemindersPanel.test.tsx.
+  - Modified: backend/src/syncally/application/workflow_notifications.py (+REMINDER_TRIGGERED), backend/src/syncally/infrastructure/models/__init__.py, backend/src/syncally/infrastructure/repositories/__init__.py, backend/src/syncally/api/main.py, frontend/src/api/types.ts (+reminder types), frontend/src/api/client.ts (+reminder client calls), frontend/src/deals/DealDetailPage.tsx (+RemindersPanel mount), docs/remaining-tasks/progress.md.
+  - Preserved: all dirty tracked/untracked/user changes; no reset, commit, or branch deletion.
+Command exactly / cwd / immediate exit code:
+  - backend: `PYTHONPATH=src .venv/bin/python -m unittest tests.test_reminders_domain tests.test_reminders_service tests.test_reminders_routes` / exit 0 (21/21 pass).
+  - backend: focused discovery runner (`test_outbox_dispatcher.py`, `test_workflow_worker.py`, `test_operations.py`) / exit 0 (48 ran, 46 pass, 2 skip).
+  - backend: `.venv/bin/ruff check src tests` / exit 0 (all checks passed).
+  - frontend: `npm test -- src/deals/RemindersPanel.test.tsx` / exit 0 (5/5 pass).
+  - frontend: `npm test -- src/deals/DealDetailPage.test.tsx` / exit 0 (40/40 pass).
+  - frontend: `npm run lint:check` / exit 0 (clean, no warnings or errors).
+  - frontend: `npm run build` / exit 0 (production build successful).
+  - git: `git diff --check` / exit 0 (no whitespace/newline errors).
+Results: run / pass / fail / skip / reasons / warnings:
+  - Reminder backend tests: 21 ran, 21 passed, 0 failed.
+  - Focused backend tests: 48 ran, 46 passed, 2 skipped (temporal/postgres local env).
+  - Frontend focused tests: 45 passed (40 DealDetailPage, 5 RemindersPanel).
+  - Static gates: ruff 0 errors, eslint + tsc 0 errors, vite build 0 errors, git diff --check 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Migration `0031_reminders`: down_revision `0030_marketplace_rfqs`, table `deal_reminders` with check constraints (scope, status, channel, recurrence, retry), indices, and downgrade data-preservation guard.
+  - Replay-safe idempotency via deduplication key (`build_deduplication_key`).
+  - Privacy isolation verified: test_get_reminders_counterparty_isolation ensures viewer only sees reminders for their active organization.
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - None recorded - awaiting independent reviewer.
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 0/3.
+Implementation acceptance versus live verification versus production approval:
+  - Step 10 implementation self-verified and REVIEW_PENDING. Independent Reviewer audit, live verification (Steps 12/13), and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - Step 10 unblocks Step 11 (Judge Demo). Steps 12-16 mandatory gates remain unmet.
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 10.
+Completion report / next concrete operator actions:
+  - Step 10 Reminders (F13) fully implemented and verified across backend, migration, API, and frontend UI.
+```
+
+```text
+UTC timestamp: 2026-11-07T18:05:00Z
+Step / dependency verification / current status:
+  - Step 10 Reminders (Feature F13) / Dependencies 03, 06, 08, 09 verified / ACCEPTED.
+Role identity / coordination evidence (never pretend):
+  - REVIEWER: Independent Reviewer subagent auditing diff and verifying gates independently (Repair 1/3 executed and verified).
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch 137-task-10-reminders---f13 / Actual migration head 0031_reminders (branched from 0030_marketplace_rfqs).
+  - Inspected & repaired: backend/src/syncally/domain/reminders/reminder.py:L70-L100, backend/src/syncally/infrastructure/repositories/reminders.py:L80-L130, backend/src/syncally/application/reminders.py:L120-L490, backend/src/syncally/api/reminders.py:L70-L80, backend/src/syncally/workflows/activities.py:L60-L85, frontend/src/api/types.ts:L300-L330, frontend/src/deals/RemindersPanel.tsx:L70-L120.
+Hypothesis / cheapest discriminating check:
+  - Scoped durable reminders track outstanding obligations across four scopes (FULFILLMENT, MILESTONE, CASE, ROUTING) without auto-approving or escalating.
+  - Recipient-scoped deduplication keys prevent multi-approver reminder starvation; seller reminders transition to ORGANIZATION_SWITCHED when delivery confirmed; in-flight payments defer reminder dispatch; deal termination suppresses all reminders; IN_APP channel avoids private egress.
+  - Pure domain + service + routes + activities: `PYTHONPATH=backend/src backend/.venv/bin/pytest backend/tests/test_reminders_domain.py backend/tests/test_reminders_service.py backend/tests/test_reminders_routes.py backend/tests/test_workflow_activities.py`.
+Authorized scope / policy or private operator election (no secrets):
+  - F13 Reminders bounded scope: durable scoped reminders for outstanding obligations; no blanket finance/fulfillment, no automatic escalation/approval, no email/private egress (IN_APP channel only), counterparty privacy preserved.
+Files changed / preserved unrelated changes:
+  - Created: backend/src/syncally/domain/reminders/reminder.py, backend/src/syncally/domain/reminders/__init__.py, backend/src/syncally/infrastructure/models/reminders.py, backend/src/syncally/infrastructure/repositories/reminders.py, backend/src/syncally/application/reminders.py, backend/src/syncally/api/reminders.py, backend/alembic/versions/0031_reminders.py, backend/tests/test_reminders_domain.py, backend/tests/test_reminders_service.py, backend/tests/test_reminders_routes.py, frontend/src/deals/RemindersPanel.tsx, frontend/src/deals/RemindersPanel.test.tsx.
+  - Modified: backend/alembic/versions/0024_deal_display_name.py, backend/src/syncally/application/workflow_notifications.py, backend/src/syncally/infrastructure/models/__init__.py, backend/src/syncally/infrastructure/repositories/__init__.py, backend/src/syncally/api/main.py, backend/src/syncally/workflows/activities.py, backend/tests/test_workflow_activities.py, frontend/src/api/types.ts, frontend/src/api/client.ts, frontend/src/deals/DealDetailPage.tsx, docs/remaining-tasks/progress.md.
+  - Preserved: all dirty tracked/untracked/user changes; no reset, commit, or branch deletion.
+Command exactly / cwd / immediate exit code:
+  - backend: `PYTHONPATH=backend/src backend/.venv/bin/pytest backend/tests/test_reminders_domain.py backend/tests/test_reminders_service.py backend/tests/test_reminders_routes.py backend/tests/test_workflow_activities.py` / exit 0 (35/35 pass).
+  - backend: focused discovery runner (`test_outbox_dispatcher.py`, `test_workflow_worker.py`, `test_operations.py`) / exit 0 (48 ran, 46 pass, 2 skip).
+  - backend: `cd backend && .venv/bin/pytest tests` / exit 0 (869 pass, 33 skip).
+  - backend: `.venv/bin/ruff check src tests` / exit 0 (all checks passed).
+  - frontend: `npm test -- src/deals/RemindersPanel.test.tsx src/deals/DealDetailPage.test.tsx --run` / exit 0 (46/46 pass).
+  - frontend: `npm run lint:check` / exit 0 (clean, no warnings or errors).
+  - frontend: `npm run build` / exit 0 (production build successful).
+  - git: `git diff --check` / exit 0 (clean, no whitespace/newline errors).
+Results: run / pass / fail / skip / reasons / warnings:
+  - Reminder and activities tests: 35 ran, 35 passed, 0 failed.
+  - Full backend discovery: 902 ran, 869 passed, 33 skipped.
+  - Focused backend tests: 48 ran, 46 passed, 2 skipped (temporal/postgres local env).
+  - Frontend focused tests: 46 passed (40 DealDetailPage, 6 RemindersPanel).
+  - Static gates: ruff 0 errors, eslint + tsc 0 errors, vite build 0 errors, git diff --check 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Migration `0031_reminders`: down_revision `0030_marketplace_rfqs`, table `deal_reminders` with check constraints (scope, status, channel, recurrence, retry), indices, and downgrade data-preservation guard.
+  - Recurrence dedup key recipient scoping prevents collision across multiple approvers.
+  - In-flight payment intent deferral (6 hours) verified in `test_reminders_service.py`.
+  - Organization switched suppression on fulfillment handoff verified in `test_reminders_service.py`.
+  - Terminal deal suppression verified in `test_workflow_activities.py`.
+  - Scoped deal dispatch verified in `test_reminders_routes.py`.
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - Finding 1: Medium / `syncally/domain/reminders/reminder.py:80` / Recurrence deduplication key omitted recipient org and user IDs / Multi-approver routing policies generated identical keys across approvers, dropping reminders for subsequent approvers / Added recipient org and user ID to deduplication key.
+  - Finding 2: Medium / `syncally/application/reminders.py:165` / When seller shipped goods, seller fulfillment reminder was not suppressed with `ORGANIZATION_SWITCHED` / Seller continued to receive pending reminders to ship fulfilled goods / Added check to suppress seller reminder with `ORGANIZATION_SWITCHED` when goods shipped.
+  - Finding 3: Medium / `syncally/application/reminders.py:270` / Milestone reminders did not defer when a payment intent was actively in flight / Counterparty received overdue notices while payment was processing / Added deferral check setting `next_attempt_at = now_utc + 6h` if payment intent is active.
+  - Finding 4: Low / `syncally/api/reminders.py:75` / `POST /deals/{deal_id}/reminders/dispatch` claimed due reminders across entire table / Starvation of requesting deal's reminders / Scoped `dispatch_due_reminders` by `deal_id`.
+  - Finding 5: Low / `syncally/workflows/activities.py:70` / `RefreshDealStateActivity` did not suppress active reminders when deal reached terminal status / Stale reminders persisted after deal completion/cancellation / Added call to `suppress_active_for_deal(deal_id, SuppressionReason.DEAL_TERMINAL, now)`.
+  - Finding 6: Low / `frontend/src/api/types.ts:315` & `RemindersPanel.tsx:85` / Backend returns `error_detail` but frontend expected `last_error` / Error messages were not rendered in UI / Updated type definition and fallback rendering.
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repair 1/3 applied and independently verified. All 6 findings repaired, tested, and passing.
+Implementation acceptance versus live verification versus production approval:
+  - Step 10 Reminders (F13) ACCEPTED. Live verification (Steps 12/13) and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - Step 10 unblocks Step 11 (Judge Demo). Steps 12-16 mandatory gates remain unmet.
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 10.
+Completion report / next concrete operator actions:
+  - Step 10 Reminders (F13) fully implemented, independently reviewed, repaired (1/3), and ACCEPTED.
 ```

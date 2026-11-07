@@ -507,7 +507,7 @@ export default function AISuggestionReview({
         <span className="communication-index" aria-hidden="true">03 / REVIEW</span>
       </div>
       <p className="muted">
-        AI suggestions are unreviewed. Draft edits never approve an agreement or start a payment.
+        AI suggestions are unreviewed. If OpenAI is enabled, requesting them sends this organization’s shareable deal messages and terms to OpenAI; private context is excluded unless an operator enables it for this organization. AI cannot approve an agreement, request payment, or arrange shipment.
       </p>
       {hasFactSuggestionRun ? <p className="hint" aria-label="Fact invocation provenance">Last fact invocation: {invocationLabel(factProvenance)}</p>
         : knownFactsById.size > 0 ? <p className="hint">Stored fact provenance: Unknown (legacy)</p> : null}

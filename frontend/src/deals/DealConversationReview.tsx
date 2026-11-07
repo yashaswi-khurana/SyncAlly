@@ -142,7 +142,7 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
   onOpeningMessageDraftComplete?: (dealId: string, organizationId: string) => void;
 }) {
   const [body, setBody] = useState(openingMessageDraft?.body ?? "");
-  const [visibility, setVisibility] = useState<Visibility>("SHAREABLE");
+  const [visibility, setVisibility] = useState<Visibility>(openingMessageDraft?.visibility ?? "SHAREABLE");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
@@ -152,6 +152,17 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
   const inputId = composerId ?? `deal-message-composer-${deal.id}`;
   const sendButtonText = buttonLabel ?? "Send Message";
   useEffect(() => () => { request.current?.abort(); }, []);
+
+  function updateOpeningDraft(nextBody: string, nextVisibility: Visibility, idempotencyKey: string | null) {
+    if (!openingDraftLoaded) return;
+    onOpeningMessageDraftChange?.({
+      dealId: deal.id,
+      organizationId: organization.id,
+      body: nextBody,
+      visibility: nextVisibility,
+      idempotencyKey,
+    });
+  }
 
   async function send() {
     if (request.current || deal.pending_counterparty) return;
@@ -164,8 +175,13 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
     const controller = new AbortController();
     const signature = JSON.stringify([deal.id, organization.id, text, visibility]);
     if (draftRequest.current?.signature !== signature) {
-      draftRequest.current = { key: crypto.randomUUID(), signature };
+      const persistedKey = openingDraftLoaded && openingMessageDraft?.body.trim() === text &&
+        openingMessageDraft.visibility === visibility
+        ? openingMessageDraft.idempotencyKey
+        : null;
+      draftRequest.current = { key: persistedKey ?? crypto.randomUUID(), signature };
     }
+    updateOpeningDraft(text, visibility, draftRequest.current.key);
     request.current = controller;
     setSubmitting(true);
     setError(null);
@@ -208,15 +224,14 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
           aria-describedby={`message-help-${deal.id}${error ? ` message-error-${deal.id}` : ""}`}
           aria-invalid={error ? true : undefined}
           onChange={(event) => {
-            if (event.target.value.trim() !== body.trim()) draftRequest.current = null;
+            const effectiveBodyChanged = event.target.value.trim() !== body.trim();
+            if (effectiveBodyChanged) draftRequest.current = null;
             setBody(event.target.value); setSent(false); setError(null);
-            if (openingDraftLoaded) {
-              onOpeningMessageDraftChange?.({
-                dealId: deal.id,
-                organizationId: organization.id,
-                body: event.target.value,
-              });
-            }
+            updateOpeningDraft(
+              event.target.value,
+              visibility,
+              effectiveBodyChanged ? null : draftRequest.current?.key ?? openingMessageDraft?.idempotencyKey ?? null,
+            );
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
@@ -230,6 +245,7 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
           checked={visibility === "SHAREABLE"} onChange={() => {
             if (visibility !== "SHAREABLE") draftRequest.current = null;
             setVisibility("SHAREABLE");
+            updateOpeningDraft(body, "SHAREABLE", null);
           }} />
           <span><span aria-hidden="true">{"\u{1F310}"} </span>Shareable <small>Visible to both buyer and seller</small></span>
         </label>
@@ -237,6 +253,7 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
           checked={visibility === "PRIVATE"} onChange={() => {
             if (visibility !== "PRIVATE") draftRequest.current = null;
             setVisibility("PRIVATE");
+            updateOpeningDraft(body, "PRIVATE", null);
           }} />
           <span><span aria-hidden="true">{"\u{1F512}"} </span>Private <small>Visible only to members of your organization</small></span>
         </label>

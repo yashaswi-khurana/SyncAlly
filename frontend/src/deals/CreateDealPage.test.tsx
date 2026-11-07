@@ -83,6 +83,33 @@ describe("CreateDealPage", () => {
     expect(onCreated).toHaveBeenCalledWith("pending-deal");
   });
 
+  it("carries an opening request into the invited deal after the counterparty joins", async () => {
+    mockedListOrganizations.mockResolvedValue([organization()]);
+    vi.mocked(createCounterpartyInvitation).mockResolvedValue({ token: "bound-token", invite_url: "https://app.example/invite", organization_id: BUYER_ID, organization_legal_name: "Buyer Co", deal_id: "pending-deal", role: "ADMIN", expires_at: "2026-11-07T12:00:00Z", kind: "COUNTERPARTY", pending_counterparty: true });
+    const onCreated = vi.fn();
+    const onOpeningMessageDraftReady = vi.fn();
+    render(<CreateDealPage onCreated={onCreated} onOpeningMessageDraftReady={onOpeningMessageDraftReady} />);
+    await screen.findByLabelText("Buyer organization");
+    fireEvent.click(screen.getByRole("radio", { name: "Invite counterparty" }));
+    fireEvent.change(screen.getByLabelText("Counterparty email"), { target: { value: "seller@example.com" } });
+    fireEvent.change(screen.getByLabelText("Counterparty company legal name"), { target: { value: "Seller Ltd" } });
+    fireEvent.change(screen.getByLabelText("Opening request or quote (optional)"), {
+      target: { value: "Please quote 100 boxes for delivery to Tokyo." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+
+    expect(await screen.findByRole("heading", { name: "Awaiting counterparty" })).toBeInTheDocument();
+    expect(screen.getByText(/carried into the pending deal/i)).toBeInTheDocument();
+    expect(onOpeningMessageDraftReady).toHaveBeenCalledWith("pending-deal", {
+      organizationId: BUYER_ID,
+      body: "Please quote 100 boxes for delivery to Tokyo.",
+      visibility: "SHAREABLE",
+      idempotencyKey: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open pending deal" }));
+    expect(onCreated).toHaveBeenCalledWith("pending-deal");
+  });
+
   it("keeps the invitation link available when copying fails", async () => {
     mockedListOrganizations.mockResolvedValue([organization()]);
     vi.mocked(createCounterpartyInvitation).mockResolvedValue({ token: "bound-token", invite_url: "https://app.example/invite", organization_id: BUYER_ID, organization_legal_name: "Buyer Co", deal_id: "pending-deal", role: "ADMIN", expires_at: "2026-11-07T12:00:00Z" });
@@ -219,6 +246,10 @@ describe("CreateDealPage", () => {
     await screen.findByLabelText("Buyer organization");
 
     if (role === "Seller") fireEvent.click(screen.getByRole("radio", { name: "Seller" }));
+    expect(screen.getByLabelText("Opening request or quote (optional)")).toHaveAttribute(
+      "placeholder",
+      expect.stringContaining("delivered to [destination]"),
+    );
     fireEvent.change(screen.getByLabelText(role === "Buyer" ? "Seller organization" : "Buyer organization"), {
       target: { value: "Andean" },
     });
@@ -231,6 +262,8 @@ describe("CreateDealPage", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith("deal-1", {
       organizationId: BUYER_ID,
       body: "Please quote 100 units.",
+      visibility: "SHAREABLE",
+      idempotencyKey: null,
     }));
     expect(mockedCreateDeal).toHaveBeenCalledWith(role === "Buyer" ? {
       buyer_organization_id: BUYER_ID,

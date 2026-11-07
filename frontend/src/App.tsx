@@ -26,13 +26,22 @@ export default function App() {
   const { accessToken, signIn, signOut } = useSession();
   const route = useHashRoute();
   const [sessionVersion, setSessionVersion] = useState(0);
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const sessionGenerationRef = useRef(0);
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [isSystemAdmin, setIsSystemAdmin] = useState<boolean | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [openingMessageDrafts, setOpeningMessageDrafts] = useState<OpeningMessageDraft[]>([]);
 
-  const currentSessionKey = accessToken ? `${accessToken}:${sessionVersion}` : null;
+  const currentSessionKey = accessToken ? `${accessToken}:${sessionGeneration}` : null;
   const sessionRef = useRef(currentSessionKey);
+
+  const advanceSessionGeneration = useCallback(() => {
+    const nextGeneration = sessionGenerationRef.current + 1;
+    sessionGenerationRef.current = nextGeneration;
+    setSessionGeneration(nextGeneration);
+    return nextGeneration;
+  }, []);
 
   useEffect(() => {
     sessionRef.current = currentSessionKey;
@@ -40,6 +49,7 @@ export default function App() {
 
   useEffect(() => {
     function clearCurrentSession() {
+      advanceSessionGeneration();
       sessionRef.current = null;
       setOpeningMessageDrafts([]);
       setOrganizations(null);
@@ -49,7 +59,7 @@ export default function App() {
     function handleExpiredSession(failedToken?: string) {
       if (!failedToken || (
         getAccessToken() !== failedToken ||
-        sessionRef.current !== `${failedToken}:${sessionVersion}`
+        sessionRef.current !== `${failedToken}:${sessionGeneration}`
       )) {
         return;
       }
@@ -61,7 +71,7 @@ export default function App() {
     }
     function handleStorageChange(event: StorageEvent) {
       if (event.key === "syncally.accessToken" && event.newValue === null && accessToken && getAccessToken() === null) {
-        if (sessionRef.current === `${accessToken}:${sessionVersion}`) {
+        if (sessionRef.current === `${accessToken}:${sessionGeneration}`) {
           clearCurrentSession();
         }
       }
@@ -72,7 +82,7 @@ export default function App() {
       window.removeEventListener("syncally:session-expired", handleSessionExpired);
       window.removeEventListener("storage", handleStorageChange);
     };
-  }, [accessToken, sessionVersion, signOut]);
+  }, [accessToken, advanceSessionGeneration, sessionGeneration, sessionVersion, signOut]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -110,6 +120,7 @@ export default function App() {
   }, [accessToken, route.name]);
 
   function refreshSessionView() {
+    advanceSessionGeneration();
     sessionRef.current = null;
     setOpeningMessageDrafts([]);
     navigateToDeals();
@@ -117,6 +128,7 @@ export default function App() {
   }
 
   function handleSignOut() {
+    advanceSessionGeneration();
     sessionRef.current = null;
     setOpeningMessageDrafts([]);
     setOrganizations(null);
@@ -126,7 +138,8 @@ export default function App() {
   }
 
   function handleSignIn(tokens: TokenResponse) {
-    sessionRef.current = `${tokens.access_token}:${sessionVersion}`;
+    const nextGeneration = advanceSessionGeneration();
+    sessionRef.current = `${tokens.access_token}:${nextGeneration}`;
     setOpeningMessageDrafts([]);
     setOrganizations(null);
     setIsSystemAdmin(null);
@@ -143,6 +156,15 @@ export default function App() {
       ]);
     }
     navigateToDeal(dealId);
+  }
+
+  function handleOpeningMessageDraftReady(dealId: string, draft: OpeningMessageDraftInput) {
+    if (!currentSessionKey || sessionRef.current !== currentSessionKey || getAccessToken() !== accessToken) return;
+    const openingMessageDraft = { ...draft, dealId };
+    setOpeningMessageDrafts((current) => [
+      ...current.filter((item) => item.dealId !== dealId || item.organizationId !== draft.organizationId),
+      openingMessageDraft,
+    ]);
   }
 
   const handleOpeningMessageDraftChange = useCallback((draft: OpeningMessageDraft) => {
@@ -263,7 +285,10 @@ export default function App() {
             onOpeningMessageDraftComplete={handleOpeningMessageDraftComplete}
           />
         ) : route.name === "create" ? (
-          <CreateDealPage onCreated={handleDealCreated} />
+          <CreateDealPage
+            onCreated={handleDealCreated}
+            onOpeningMessageDraftReady={handleOpeningMessageDraftReady}
+          />
         ) : route.name === "organizations" ? (
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : route.name === "platform" ? (

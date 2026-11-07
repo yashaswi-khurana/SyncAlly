@@ -816,6 +816,8 @@ describe("message composer", () => {
       dealId: DEAL.id,
       organizationId: BUYER_ID,
       body: "Opening buyer request",
+      visibility: "SHAREABLE",
+      idempotencyKey: null,
     };
     function DraftHarness() {
       const [draft, setDraft] = useState<OpeningMessageDraft | null>(initialDraft);
@@ -849,6 +851,55 @@ describe("message composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
     expect(restoredBuyerComposer).toHaveValue("");
     expect(screen.queryByText(/Local draft only/)).not.toBeInTheDocument();
+  });
+
+  it("preserves opening draft visibility and idempotency across composer remounts", async () => {
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"),
+      organization(SELLER_ID, "Seller Co"),
+    ]);
+    createMessage.mockRejectedValueOnce(new TypeError("Lost response"));
+    const initialDraft: OpeningMessageDraft = {
+      dealId: DEAL.id,
+      organizationId: BUYER_ID,
+      body: "Opening buyer request",
+      visibility: "SHAREABLE",
+      idempotencyKey: null,
+    };
+    function DraftHarness() {
+      const [draft, setDraft] = useState<OpeningMessageDraft | null>(initialDraft);
+      return <DealConversationReview
+        deal={DEAL}
+        openingMessageDraft={draft ?? undefined}
+        onOpeningMessageDraftChange={setDraft}
+        onOpeningMessageDraftComplete={() => setDraft(null)}
+        revalidateIntervalMs={0}
+      />;
+    }
+
+    render(<DraftHarness />);
+    const organizationSelect = await screen.findByLabelText("Viewing as");
+    fireEvent.change(organizationSelect, { target: { value: BUYER_ID } });
+    const buyerComposer = await screen.findByLabelText("Message");
+    fireEvent.click(screen.getByRole("radio", { name: /^Private/ }));
+    expect(screen.getByRole("radio", { name: /^Private/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    await screen.findByRole("alert");
+    const firstKey = createMessage.mock.calls[0][1].idempotency_key;
+
+    fireEvent.change(organizationSelect, { target: { value: SELLER_ID } });
+    expect(await screen.findByLabelText("Message")).toHaveValue("");
+    fireEvent.change(organizationSelect, { target: { value: BUYER_ID } });
+    const restoredComposer = await screen.findByLabelText("Message");
+    expect(restoredComposer).toHaveValue("Opening buyer request");
+    expect(screen.getByRole("radio", { name: /^Private/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Send Message" }));
+    await screen.findByText("Message sent.");
+
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage.mock.calls[0][1]).toMatchObject({ visibility: "PRIVATE" });
+    expect(createMessage.mock.calls[1][1]).toMatchObject({ visibility: "PRIVATE", idempotency_key: firstKey });
+    expect(buyerComposer).not.toBeInTheDocument();
   });
 
   it.each(["ctrlKey", "metaKey"])("submits once with %s+Enter and locks the pending composer", async (modifier) => {

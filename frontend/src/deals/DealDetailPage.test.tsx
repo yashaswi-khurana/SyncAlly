@@ -235,6 +235,9 @@ describe("DealDetailPage", () => {
   });
 
   it("loads an opening draft for the initiating organization without posting it", async () => {
+    mockedGetDeal
+      .mockResolvedValueOnce({ ...DEAL, pending_counterparty: true })
+      .mockResolvedValueOnce({ ...DEAL, pending_counterparty: false, version: 1 });
     mockedListOrganizations.mockResolvedValue([
       { id: DEAL.buyer_organization_id, legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
       { id: DEAL.seller_organization_id, legal_name: "Seller Co", country_code: "US", role: "ADMIN" },
@@ -254,6 +257,8 @@ describe("DealDetailPage", () => {
       dealId: DEAL.id,
       organizationId: DEAL.seller_organization_id,
       body: "Please quote 100 units.",
+      visibility: "SHAREABLE" as const,
+      idempotencyKey: null,
     };
     const onOpeningMessageDraftComplete = vi.fn();
     render(<DealDetailPage
@@ -268,8 +273,14 @@ describe("DealDetailPage", () => {
     expect(await screen.findByLabelText("Viewing as")).toHaveValue(DEAL.seller_organization_id);
     expect(composer).toHaveValue("Please quote 100 units.");
     expect(screen.getByText(/Local draft only\. It has not been shared/)).toBeInTheDocument();
+    expect(screen.getByText(/can be sent after the other party joins/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     expect(mockedCreateDealMessage).not.toHaveBeenCalled();
     expect(onOpeningMessageDraftComplete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Refresh room/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+    expect(composer).toHaveValue("Please quote 100 units.");
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await screen.findByText("Message sent.");
@@ -294,6 +305,8 @@ describe("DealDetailPage", () => {
         dealId: DEAL.id,
         organizationId: DEAL.seller_organization_id,
         body: "Seller quote draft",
+        visibility: "SHAREABLE",
+        idempotencyKey: null,
       }}
       onOpeningMessageDraftComplete={onOpeningMessageDraftComplete}
       freshnessIntervalMs={0}

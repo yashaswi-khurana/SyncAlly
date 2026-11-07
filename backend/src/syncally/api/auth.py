@@ -3,25 +3,27 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 from uuid import UUID, uuid4
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext
+from syncally.application.passwords import hash_password
 from syncally.application.passwords import verify_password as _verify_password
 from syncally.cli.seed_demo import DEMO_IDENTITIES
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.identity import resolve_actor
-from syncally.infrastructure.models import RefreshToken, User
+from syncally.infrastructure.models import AuditEvent, RefreshToken, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -145,6 +147,135 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class SystemAdminBootstrapRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    display_name: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def normalize_display_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class CurrentUserResponse(BaseModel):
+    email: str
+    display_name: str
+    system_role: str
+
+
+def get_current_actor(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> ActorContext:
+    """Authenticate a request and resolve its active memberships."""
+    user_id = _development_actor(request)
+    if user_id is None:
+        if credentials is None or credentials.scheme.lower() != "bearer":
+            raise _unauthorized()
+        user_id = _decode_token(credentials.credentials)
+
+    actor = resolve_actor(db, user_id)
+    if actor is None:
+        raise _unauthorized("User is inactive or does not exist")
+    return actor
+
+
+@router.get("/me", response_model=CurrentUserResponse)
+def current_user(
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> CurrentUserResponse:
+    user = db.get(User, actor.user_id)
+    if user is None or user.status != "ACTIVE":
+        raise _unauthorized("User is inactive or does not exist")
+    return CurrentUserResponse(
+        email=user.email,
+        display_name=user.display_name,
+        system_role=user.system_role,
+    )
+
+
+def require_system_admin(actor: ActorContext = Depends(get_current_actor)) -> ActorContext:
+    if not actor.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System administrator required")
+    return actor
+
+
+@router.post("/bootstrap-system-admin", status_code=status.HTTP_201_CREATED)
+def bootstrap_system_admin(
+    payload: SystemAdminBootstrapRequest,
+    bootstrap_token: str = Header(default="", alias="X-System-Admin-Bootstrap-Token"),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Create or promote the first system admin using a short-lived deployment secret."""
+    configured_token = settings.system_admin_bootstrap_token.get_secret_value()
+    if (
+        not configured_token
+        or settings.app_env.strip().lower() != "production"
+        or not secrets.compare_digest(bootstrap_token, configured_token)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    email = payload.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid email")
+    if not payload.display_name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Display name is required")
+
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("LOCK TABLE users IN EXCLUSIVE MODE"))
+
+    if db.scalar(select(User.id).where(User.system_role == "SYSTEM_ADMIN").limit(1)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Bootstrap is closed")
+
+    user = db.scalar(select(User).where(User.email == email).with_for_update())
+    if user is None:
+        user = User(
+            email=email,
+            display_name=payload.display_name,
+            password_hash=hash_password(payload.password),
+            status="ACTIVE",
+            system_role="SYSTEM_ADMIN",
+        )
+        db.add(user)
+    else:
+        # Possession of the deployment-only token authorizes this one-time
+        # initial identity, including replacing an older password at that email.
+        user.display_name = payload.display_name
+        user.password_hash = hash_password(payload.password)
+        user.status = "ACTIVE"
+        user.system_role = "SYSTEM_ADMIN"
+
+    db.flush()
+    db.add(
+        AuditEvent(
+            id=uuid4(),
+            aggregate_type="user",
+            aggregate_id=user.id,
+            event_type="user.system_admin_bootstrapped",
+            actor_type="SYSTEM",
+            actor_id="system_admin_bootstrap",
+            occurred_at=datetime.now(UTC),
+            payload={},
+        )
+    )
+    db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    db.commit()
+
+    return {"status": "created", "message": "System administrator is ready to sign in."}
+
+
 def _issue_tokens(db: Session, user_id: UUID, now: datetime) -> TokenResponse:
     return TokenResponse(
         access_token=_encode_access_token(user_id, now),
@@ -256,21 +387,3 @@ def _development_actor(request: Request) -> UUID | None:
         return UUID(settings.dev_auth_user_id)
     except ValueError as exc:
         raise _unauthorized("Invalid development authentication identity") from exc
-
-
-def get_current_actor(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
-) -> ActorContext:
-    """Authenticate a request and resolve its active memberships."""
-    user_id = _development_actor(request)
-    if user_id is None:
-        if credentials is None or credentials.scheme.lower() != "bearer":
-            raise _unauthorized()
-        user_id = _decode_token(credentials.credentials)
-
-    actor = resolve_actor(db, user_id)
-    if actor is None:
-        raise _unauthorized("User is inactive or does not exist")
-    return actor

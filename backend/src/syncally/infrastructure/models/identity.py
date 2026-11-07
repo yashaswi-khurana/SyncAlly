@@ -53,6 +53,9 @@ class User(TimestampMixin, Base):
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    system_role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="USER", server_default="USER"
+    )
 
 
 class OrganizationMember(TimestampMixin, Base):

@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
+    system_admin_bootstrap_token: SecretStr = SecretStr("")
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
     max_organizations_per_user: int = 5
@@ -111,6 +112,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":
         local_environment = self.app_env.lower() in {"development", "test"}
+        bootstrap_token = self.system_admin_bootstrap_token.get_secret_value()
+        if bootstrap_token and len(bootstrap_token) < 32:
+            raise ValueError("SYSTEM_ADMIN_BOOTSTRAP_TOKEN must contain at least 32 characters")
         if self.payment_mode == "OFFLINE_DEMO" and not local_environment:
             raise ValueError("OFFLINE_DEMO payments are only allowed in development/test")
         if not self.database_url.strip():

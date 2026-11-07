@@ -20,6 +20,7 @@ from syncally.api.operations import OperationalFastAPI
 from syncally.api.organizations import router as organizations_router
 from syncally.api.payments import router as payments_router
 from syncally.api.paypal_webhooks import router as paypal_webhooks_router
+from syncally.api.platform import router as platform_router
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.operations import configure_logging
@@ -115,6 +116,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(dev_router)
 app.include_router(organizations_router)
+app.include_router(platform_router)
 app.include_router(deals_router)
 app.include_router(conversations_router)
 app.include_router(agreements_router)

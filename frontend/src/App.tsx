@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import SignInPage from "./auth/SignInPage";
 import { useSession } from "./auth/useSession";
 import { useHashRoute } from "./app/useHashRoute";
-import { listOrganizations } from "./api/client";
+import { getCurrentUser, listOrganizations } from "./api/client";
 import { getAccessToken } from "./api/tokenStore";
 import type { InvitationAcceptance, Organization, TokenResponse } from "./api/types";
 import CreateDealPage from "./deals/CreateDealPage";
@@ -11,11 +11,13 @@ import DealDetailPage from "./deals/DealDetailPage";
 import DealsPage from "./deals/DealsPage";
 import OnboardingWizard from "./organizations/OnboardingWizard";
 import OrganizationsSettingsPage from "./organizations/OrganizationsSettingsPage";
+import PlatformOrganizationsPage from "./platform/PlatformOrganizationsPage";
 import {
   navigateToCreateDeal,
   navigateToDeal,
   navigateToDeals,
   navigateToOrganizations,
+  navigateToPlatform,
 } from "./router";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
 
@@ -24,6 +26,7 @@ export default function App() {
   const route = useHashRoute();
   const [sessionVersion, setSessionVersion] = useState(0);
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
+  const [isSystemAdmin, setIsSystemAdmin] = useState<boolean | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const currentSessionKey = accessToken ? `${accessToken}:${sessionVersion}` : null;
@@ -38,14 +41,13 @@ export default function App() {
     let cancelled = false;
     void (async () => {
       try {
-        const orgs = await listOrganizations();
+        const [orgResult, userResult] = await Promise.allSettled([listOrganizations(), getCurrentUser()]);
         if (!cancelled) {
-          setOrganizations(orgs);
+          setOrganizations(orgResult.status === "fulfilled" ? orgResult.value : null);
+          setIsSystemAdmin(userResult.status === "fulfilled" && userResult.value.system_role === "SYSTEM_ADMIN");
         }
       } catch {
-        if (!cancelled) {
-          setOrganizations(null);
-        }
+        if (!cancelled) setOrganizations(null);
       }
     })();
     return () => {
@@ -60,6 +62,10 @@ export default function App() {
     }, 6000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (route.name === "platform" && isSystemAdmin === false) navigateToDeals();
+  }, [route.name, isSystemAdmin]);
 
   function handleOrganizationCreated(created: Organization, sessionAtStart: string | null) {
     if (!sessionRef.current || sessionRef.current !== sessionAtStart) {
@@ -79,6 +85,7 @@ export default function App() {
   function handleSignOut() {
     sessionRef.current = null;
     setOrganizations(null);
+    setIsSystemAdmin(null);
     setToast(null);
     signOut();
   }
@@ -86,6 +93,7 @@ export default function App() {
   function handleSignIn(tokens: TokenResponse) {
     sessionRef.current = `${tokens.access_token}:${sessionVersion}`;
     setOrganizations(null);
+    setIsSystemAdmin(null);
     signIn(tokens);
   }
 
@@ -117,6 +125,7 @@ export default function App() {
 
   const isCreate = route.name === "create";
   const isOrganizations = route.name === "organizations";
+  const isPlatform = route.name === "platform";
   const isWorkspace = route.name === "deals" || route.name === "deal";
   const hasPendingInvitation =
     route.name === "organizations" && Boolean(route.inviteToken);
@@ -159,6 +168,15 @@ export default function App() {
           >
             Organizations
           </button>
+          {isSystemAdmin ? (
+            <button
+              type="button"
+              className={`nav-link${isPlatform ? " is-active" : ""}`}
+              onClick={navigateToPlatform}
+            >
+              Platform admin
+            </button>
+          ) : null}
         </nav>
         <div className="site-nav__meta">
           <span className="site-nav__environment">LOCAL DEMO</span>
@@ -179,6 +197,8 @@ export default function App() {
           <CreateDealPage onCreated={navigateToDeal} />
         ) : route.name === "organizations" ? (
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
+        ) : route.name === "platform" ? (
+          isSystemAdmin ? <PlatformOrganizationsPage /> : <p role="status">Loading platform access…</p>
         ) : (
           <DealsPage onOpenDeal={navigateToDeal} onCreateDeal={navigateToCreateDeal} />
         )}
@@ -194,7 +214,7 @@ export default function App() {
       </footer>
       <DevRoleSwitcher onSessionChanged={refreshSessionView} />
 
-      {hasZeroOrganizations && !hasPendingInvitation && (
+      {hasZeroOrganizations && !hasPendingInvitation && !isPlatform && (
         <OnboardingWizard
           key={currentSessionKey ?? "none"}
           onComplete={(created) => handleOrganizationCreated(created, currentSessionKey)}

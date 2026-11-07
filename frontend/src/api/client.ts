@@ -7,6 +7,7 @@ import type {
   InvitationAcceptanceInput,
   CreateMessageInput,
   CreateOrganizationInput,
+  CurrentUser,
   AgreementApproval,
   AgreementHistory,
   AgreementComparison,
@@ -33,6 +34,7 @@ import type {
   OrganizationDirectoryItem,
   OrganizationMember,
   OrganizationProfile,
+  PlatformOrganization,
   PaymentAuthorization,
   PaymentMode,
   PaymentMilestoneSummary,
@@ -178,6 +180,24 @@ export function login(email: string, password: string): Promise<TokenResponse> {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
+}
+
+export function getCurrentUser(): Promise<CurrentUser> {
+  return apiRequest<CurrentUser>("/auth/me");
+}
+
+export function listPlatformOrganizations(): Promise<PlatformOrganization[]> {
+  return apiRequest<PlatformOrganization[]>("/platform/organizations");
+}
+
+export function updatePlatformOrganizationStatus(
+  organizationId: string,
+  status: "ACTIVE" | "SUSPENDED",
+): Promise<PlatformOrganization> {
+  return apiRequest<PlatformOrganization>(
+    `/platform/organizations/${encodeURIComponent(organizationId)}`,
+    { method: "PATCH", body: JSON.stringify({ status }) },
+  );
 }
 
 export function listOrganizations(): Promise<Organization[]> {

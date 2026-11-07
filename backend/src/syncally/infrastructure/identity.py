@@ -52,6 +52,7 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
     return ActorContext(
         user_id=user_id,
         organization_ids=frozenset(roles_by_organization.keys()),
+        system_role=user.system_role,
         roles_by_organization=roles_by_organization,
         capabilities_by_organization=capabilities_by_organization,
     )

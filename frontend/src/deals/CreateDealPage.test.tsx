@@ -72,7 +72,7 @@ describe("CreateDealPage", () => {
     expect(await screen.findByRole("heading", { name: "Awaiting counterparty" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("invitation has not been sent");
     expect(screen.getByRole("status")).toHaveTextContent("seller@example.com");
-    expect(screen.getByText(/single-use link/)).toHaveTextContent("Copy it before leaving this page");
+    expect(screen.getByText(/single-use link/)).toHaveTextContent("intended recipient");
     expect(screen.getByText(/Expires/)).toBeInTheDocument();
     expect(createCounterpartyInvitation).toHaveBeenCalledWith({ buyer_organization_id: BUYER_ID, recipient_email: "seller@example.com", legal_name: "Seller Ltd", country_code: "JP" });
     expect(onCreated).not.toHaveBeenCalled();
@@ -202,6 +202,43 @@ describe("CreateDealPage", () => {
     expect(mockedCreateDeal).toHaveBeenCalledWith({
       buyer_organization_id: BUYER_ID,
       seller_organization_id: SELLER_ID,
+    });
+  });
+
+  it.each(["Buyer", "Seller"])("hands the opening message draft to the initiating organization when started by %s", async (role) => {
+    mockedListOrganizations.mockResolvedValue([organization()]);
+    mockedCreateDeal.mockResolvedValue({
+      id: "deal-1",
+      buyer_organization_id: role === "Buyer" ? BUYER_ID : SELLER_ID,
+      seller_organization_id: role === "Seller" ? BUYER_ID : SELLER_ID,
+      status: "DRAFT",
+      version: 0,
+    });
+    const onCreated = vi.fn();
+    render(<CreateDealPage onCreated={onCreated} />);
+    await screen.findByLabelText("Buyer organization");
+
+    if (role === "Seller") fireEvent.click(screen.getByRole("radio", { name: "Seller" }));
+    fireEvent.change(screen.getByLabelText(role === "Buyer" ? "Seller organization" : "Buyer organization"), {
+      target: { value: "Andean" },
+    });
+    fireEvent.click(await screen.findByRole("option", { name: "Andean Coffee Exporters CO" }));
+    fireEvent.change(screen.getByLabelText("Opening request or quote (optional)"), {
+      target: { value: "  Please quote 100 units.  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("deal-1", {
+      organizationId: BUYER_ID,
+      body: "Please quote 100 units.",
+    }));
+    expect(mockedCreateDeal).toHaveBeenCalledWith(role === "Buyer" ? {
+      buyer_organization_id: BUYER_ID,
+      seller_organization_id: SELLER_ID,
+    } : {
+      buyer_organization_id: SELLER_ID,
+      seller_organization_id: BUYER_ID,
+      initiator_party: "SELLER",
     });
   });
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import SignInPage from "./auth/SignInPage";
 import { useSession } from "./auth/useSession";
@@ -20,6 +20,7 @@ import {
   navigateToPlatform,
 } from "./router";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
+import type { OpeningMessageDraft, OpeningMessageDraftInput } from "./deals/openingMessageDraft";
 
 export default function App() {
   const { accessToken, signIn, signOut } = useSession();
@@ -28,6 +29,7 @@ export default function App() {
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [isSystemAdmin, setIsSystemAdmin] = useState<boolean | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [openingMessageDrafts, setOpeningMessageDrafts] = useState<OpeningMessageDraft[]>([]);
 
   const currentSessionKey = accessToken ? `${accessToken}:${sessionVersion}` : null;
   const sessionRef = useRef(currentSessionKey);
@@ -39,6 +41,7 @@ export default function App() {
   useEffect(() => {
     function clearCurrentSession() {
       sessionRef.current = null;
+      setOpeningMessageDrafts([]);
       setOrganizations(null);
       setToast(null);
       signOut();
@@ -108,12 +111,14 @@ export default function App() {
 
   function refreshSessionView() {
     sessionRef.current = null;
+    setOpeningMessageDrafts([]);
     navigateToDeals();
     setSessionVersion((version) => version + 1);
   }
 
   function handleSignOut() {
     sessionRef.current = null;
+    setOpeningMessageDrafts([]);
     setOrganizations(null);
     setIsSystemAdmin(null);
     setToast(null);
@@ -122,10 +127,37 @@ export default function App() {
 
   function handleSignIn(tokens: TokenResponse) {
     sessionRef.current = `${tokens.access_token}:${sessionVersion}`;
+    setOpeningMessageDrafts([]);
     setOrganizations(null);
     setIsSystemAdmin(null);
     signIn(tokens);
   }
+
+  function handleDealCreated(dealId: string, draft?: OpeningMessageDraftInput) {
+    if (!currentSessionKey || sessionRef.current !== currentSessionKey || getAccessToken() !== accessToken) return;
+    if (draft?.body.trim()) {
+      const openingMessageDraft = { ...draft, dealId };
+      setOpeningMessageDrafts((current) => [
+        ...current.filter((item) => item.dealId !== dealId || item.organizationId !== draft.organizationId),
+        openingMessageDraft,
+      ]);
+    }
+    navigateToDeal(dealId);
+  }
+
+  const handleOpeningMessageDraftChange = useCallback((draft: OpeningMessageDraft) => {
+    setOpeningMessageDrafts((current) => current.map((item) =>
+      item.dealId === draft.dealId && item.organizationId === draft.organizationId
+        ? draft
+        : item,
+    ));
+  }, []);
+
+  const handleOpeningMessageDraftComplete = useCallback((dealId: string, organizationId: string) => {
+    setOpeningMessageDrafts((current) => current.filter((item) =>
+      item.dealId !== dealId || item.organizationId !== organizationId,
+    ));
+  }, []);
 
   async function handleInvitationAccepted(
     result: InvitationAcceptance,
@@ -226,9 +258,12 @@ export default function App() {
             key={route.dealId}
             dealId={route.dealId}
             onBackToDeals={navigateToDeals}
+            openingMessageDraft={openingMessageDrafts.find((draft) => draft.dealId === route.dealId)}
+            onOpeningMessageDraftChange={handleOpeningMessageDraftChange}
+            onOpeningMessageDraftComplete={handleOpeningMessageDraftComplete}
           />
         ) : route.name === "create" ? (
-          <CreateDealPage onCreated={navigateToDeal} />
+          <CreateDealPage onCreated={handleDealCreated} />
         ) : route.name === "organizations" ? (
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : route.name === "platform" ? (

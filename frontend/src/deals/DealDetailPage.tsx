@@ -20,6 +20,7 @@ import NegotiationReview from "./NegotiationReview";
 import FulfillmentPanel from "./FulfillmentPanel";
 import DealOverview from "./DealOverview";
 import type { OverviewSnapshot } from "./DealOverview";
+import type { OpeningMessageDraft } from "./openingMessageDraft";
 
 type DealState =
   | { status: "loading" }
@@ -52,12 +53,18 @@ interface DealDetailPageProps {
   dealId: string;
   onBackToDeals: () => void;
   freshnessIntervalMs?: number;
+  openingMessageDraft?: OpeningMessageDraft;
+  onOpeningMessageDraftChange?: (draft: OpeningMessageDraft) => void;
+  onOpeningMessageDraftComplete?: (dealId: string, organizationId: string) => void;
 }
 
 export default function DealDetailPage({
   dealId,
   onBackToDeals,
   freshnessIntervalMs = 2500,
+  openingMessageDraft,
+  onOpeningMessageDraftChange,
+  onOpeningMessageDraftComplete,
 }: DealDetailPageProps) {
   const [state, setState] = useState<DealState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
@@ -66,7 +73,7 @@ export default function DealDetailPage({
   const [freshnessError, setFreshnessError] = useState<string | null>(null);
   const [freshnessReloadToken, setFreshnessReloadToken] = useState(0);
   const [freshnessChecked, setFreshnessChecked] = useState(false);
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState(openingMessageDraft?.organizationId ?? "");
   const [counterpartyName, setCounterpartyName] = useState("Counterparty");
   const [partyNames, setPartyNames] = useState<{ buyer: string; seller: string }>({ buyer: "", seller: "" });
   const [negotiation, setNegotiation] = useState<NegotiationView | null>(null);
@@ -176,9 +183,13 @@ export default function DealDetailPage({
             (org) => org.id === deal.buyer_organization_id || org.id === deal.seller_organization_id,
           );
           const selectedPartyIsActive = partyOrganizations.some((org) => org.id === selectedOrganizationId);
-          if (selectedOrganizationId && !selectedPartyIsActive) setSelectedOrganizationId("");
-          if (partyOrganizations.length === 1 && !selectedPartyIsActive) {
-            setSelectedOrganizationId(partyOrganizations[0].id);
+          const draftOrganization = openingMessageDraft?.dealId === deal.id
+            ? partyOrganizations.find((org) => org.id === openingMessageDraft.organizationId)
+            : undefined;
+          if (!selectedPartyIsActive) {
+            if (draftOrganization) setSelectedOrganizationId(draftOrganization.id);
+            else if (partyOrganizations.length === 1) setSelectedOrganizationId(partyOrganizations[0].id);
+            else if (selectedOrganizationId) setSelectedOrganizationId("");
           }
         }
 
@@ -276,7 +287,8 @@ export default function DealDetailPage({
     return () => {
       cancelled = true;
     };
-  }, [state, agreementReloadToken, reloadCount, freshnessReloadToken, selectedOrganizationId]);
+  }, [state, agreementReloadToken, reloadCount, freshnessReloadToken, selectedOrganizationId,
+    openingMessageDraft?.dealId, openingMessageDraft?.organizationId]);
 
   // Retry failed freshness checks periodically so onboarding recovers automatically
   // once network requests or services are restored.
@@ -782,6 +794,9 @@ export default function DealDetailPage({
         <DealConversationReview
           negotiation={negotiation?.organization_id === selectedOrganizationId && negotiation.deal_id === deal.id ? negotiation : null}
           deal={deal}
+          openingMessageDraft={openingMessageDraft?.dealId === deal.id ? openingMessageDraft : undefined}
+          onOpeningMessageDraftChange={onOpeningMessageDraftChange}
+          onOpeningMessageDraftComplete={onOpeningMessageDraftComplete}
           composerId="deal-message-input"
           buttonLabel="Send message"
           selectedOrganizationId={selectedOrganizationId}

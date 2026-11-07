@@ -4,6 +4,7 @@ import type { FormEvent } from "react";
 import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, listOrganizations } from "../api/client";
 import type { Invitation, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
+import type { OpeningMessageDraftInput } from "./openingMessageDraft";
 
 type DirectoryItem = Pick<Organization, "id" | "legal_name" | "country_code">;
 type SearchState =
@@ -23,7 +24,7 @@ interface FieldErrors {
 }
 
 interface CreateDealPageProps {
-  onCreated: (dealId: string) => void;
+  onCreated: (dealId: string, openingMessageDraft?: OpeningMessageDraftInput) => void;
 }
 
 function describeError(caught: unknown): string {
@@ -101,6 +102,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   const [copied, setCopied] = useState(false);
   const [showFullInvitationLink, setShowFullInvitationLink] = useState(false);
   const [displayName, setDisplayName] = useState("");
+  const [openingMessage, setOpeningMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -212,6 +214,10 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
 
     setSubmitting(true);
     try {
+      const openingMessageText = openingMessage.trim();
+      const openingMessageDraft = mode === "directory" && openingMessageText
+        ? { organizationId: buyerOrganizationId, body: openingMessageText }
+        : undefined;
       if (mode === "invite") {
         const result = await createCounterpartyInvitation({ ...(initiatorParty === "BUYER"
           ? { buyer_organization_id: buyerOrganizationId }
@@ -231,7 +237,8 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
         ...(displayName.trim() ? { display_name: displayName.trim() } : {}),
         ...(initiatorParty === "SELLER" ? { initiator_party: "SELLER" as const } : {}),
       });
-      onCreated(deal.id);
+      if (openingMessageDraft) onCreated(deal.id, openingMessageDraft);
+      else onCreated(deal.id);
     } catch (caught) {
       setSubmitError(describeCreateError(caught, initiatorParty));
     } finally {
@@ -390,6 +397,25 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 onChange={(event) => setDisplayName(event.target.value)} />
               <p className="hint">A short name helps both sides find this deal later.</p>
             </div>
+            {mode === "directory" ? (
+              <div className="field">
+                <label htmlFor="deal-opening-message">Opening request or quote (optional)</label>
+                <textarea
+                  id="deal-opening-message"
+                  value={openingMessage}
+                  maxLength={8000}
+                  rows={4}
+                  disabled={submitting}
+                  placeholder={initiatorParty === "BUYER"
+                    ? "We need [product/specification], [quantity and unit], delivered to [destination] by [date]. Please quote in [currency] and include your payment terms."
+                    : "We can offer [product/specification], [available quantity and unit] at [price and currency], with delivery by [date]. Our payment terms are [terms]."}
+                  onChange={(event) => setOpeningMessage(event.target.value)}
+                />
+                <p className="hint">The message opens as a draft and is not shared until you send it. It will be shareable by default; add only details you are ready to share.</p>
+              </div>
+            ) : (
+              <p className="hint">After the invited counterparty joins, open the deal and send your request or quote in the conversation.</p>
+            )}
             <fieldset disabled={submitting}>
               <legend>Counterparty</legend>
               <label><input type="radio" name="counterparty-mode" checked={mode === "directory"} onChange={() => { setMode("directory"); setFieldErrors({}); }} /> Existing organization</label>

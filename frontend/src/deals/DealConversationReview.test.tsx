@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +20,7 @@ import {
   updateFactVisibility,
 } from "../api/client";
 import type { Deal, DealFact, DealMessage, Organization } from "../api/types";
+import type { OpeningMessageDraft } from "./openingMessageDraft";
 import DealConversationReview from "./DealConversationReview";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -803,6 +805,50 @@ describe("message composer", () => {
     expect(item.querySelector(".badge--private")).toHaveTextContent("\u{1F512} Private");
     expect(item).toHaveTextContent("Deal participant");
     expect(screen.getByRole("radio", { name: /^Private/ })).toBeChecked();
+  });
+
+  it("keeps an opening draft with its deal and organization when switching away and back", async () => {
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"),
+      organization(SELLER_ID, "Seller Co"),
+    ]);
+    const initialDraft: OpeningMessageDraft = {
+      dealId: DEAL.id,
+      organizationId: BUYER_ID,
+      body: "Opening buyer request",
+    };
+    function DraftHarness() {
+      const [draft, setDraft] = useState<OpeningMessageDraft | null>(initialDraft);
+      return <DealConversationReview
+        deal={DEAL}
+        openingMessageDraft={draft ?? undefined}
+        onOpeningMessageDraftChange={setDraft}
+        onOpeningMessageDraftComplete={() => setDraft(null)}
+        revalidateIntervalMs={0}
+      />;
+    }
+
+    render(<DraftHarness />);
+    const organizationSelect = await screen.findByLabelText("Viewing as");
+    fireEvent.change(organizationSelect, { target: { value: BUYER_ID } });
+    const buyerComposer = await screen.findByLabelText("Message");
+    expect(buyerComposer).toHaveValue("Opening buyer request");
+    fireEvent.change(buyerComposer, { target: { value: "Edited buyer request" } });
+
+    fireEvent.change(organizationSelect, { target: { value: SELLER_ID } });
+    const sellerComposer = await screen.findByLabelText("Message");
+    expect(sellerComposer).toHaveValue("");
+    expect(screen.queryByText(/Local draft only/)).not.toBeInTheDocument();
+
+    fireEvent.change(organizationSelect, { target: { value: BUYER_ID } });
+    const restoredBuyerComposer = await screen.findByLabelText("Message");
+    expect(restoredBuyerComposer).toHaveValue("Edited buyer request");
+    expect(screen.getByText(/Local draft only/)).toBeInTheDocument();
+    expect(createMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(restoredBuyerComposer).toHaveValue("");
+    expect(screen.queryByText(/Local draft only/)).not.toBeInTheDocument();
   });
 
   it.each(["ctrlKey", "metaKey"])("submits once with %s+Enter and locks the pending composer", async (modifier) => {

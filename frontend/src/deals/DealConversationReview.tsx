@@ -22,6 +22,7 @@ import type {
   Visibility,
 } from "../api/types";
 import AISuggestionReview from "./AISuggestionReview";
+import type { OpeningMessageDraft } from "./openingMessageDraft";
 
 type OrganizationState =
   | { status: "loading" }
@@ -49,6 +50,9 @@ interface DealConversationReviewProps {
   composerId?: string;
   buttonLabel?: string;
   negotiation?: NegotiationView | null;
+  openingMessageDraft?: OpeningMessageDraft;
+  onOpeningMessageDraftChange?: (draft: OpeningMessageDraft) => void;
+  onOpeningMessageDraftComplete?: (dealId: string, organizationId: string) => void;
 }
 
 type FactFilter = "all" | "needs-review" | "confirmed" | "private";
@@ -127,18 +131,22 @@ function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }: {
+function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, openingMessageDraft, onOpeningMessageDraftChange, onOpeningMessageDraftComplete }: {
   deal: Deal;
   organization: Organization;
   onSent: (message: DealMessage) => void;
   composerId?: string;
   buttonLabel?: string;
+  openingMessageDraft?: OpeningMessageDraft;
+  onOpeningMessageDraftChange?: (draft: OpeningMessageDraft) => void;
+  onOpeningMessageDraftComplete?: (dealId: string, organizationId: string) => void;
 }) {
-  const [body, setBody] = useState("");
+  const [body, setBody] = useState(openingMessageDraft?.body ?? "");
   const [visibility, setVisibility] = useState<Visibility>("SHAREABLE");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [openingDraftLoaded, setOpeningDraftLoaded] = useState(Boolean(openingMessageDraft));
   const request = useRef<AbortController | null>(null);
   const draftRequest = useRef<{ key: string; signature: string } | null>(null);
   const inputId = composerId ?? `deal-message-composer-${deal.id}`;
@@ -169,8 +177,10 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
       if (controller.signal.aborted) return;
       draftRequest.current = null;
       onSent(message);
+      if (openingDraftLoaded) onOpeningMessageDraftComplete?.(deal.id, organization.id);
       setBody("");
       setSent(true);
+      setOpeningDraftLoaded(false);
     } catch (caught) {
       if (!controller.signal.aborted) setError(describeError(caught));
     } finally {
@@ -184,6 +194,11 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
   return (
     <form className="message-composer" noValidate onSubmit={(event) => { event.preventDefault(); void send(); }}>
       <p className="hint">Sending as {organization.legal_name} ({organizationRole(deal, organization.id)})</p>
+      {openingDraftLoaded ? <p className="hint" role="status">
+        Local draft only. It has not been shared{deal.pending_counterparty
+          ? " and can be sent after the other party joins."
+          : "; review it and choose Send message when ready."}
+      </p> : null}
       <div className="field">
         <label htmlFor={inputId}>Message</label>
         <textarea id={inputId} rows={4} maxLength={8000}
@@ -195,6 +210,13 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
           onChange={(event) => {
             if (event.target.value.trim() !== body.trim()) draftRequest.current = null;
             setBody(event.target.value); setSent(false); setError(null);
+            if (openingDraftLoaded) {
+              onOpeningMessageDraftChange?.({
+                dealId: deal.id,
+                organizationId: organization.id,
+                body: event.target.value,
+              });
+            }
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
@@ -221,6 +243,13 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel }
       </fieldset>
       <div className="message-composer__actions">
         <button type="submit" className="button" disabled={submitting || deal.pending_counterparty}>{submitting ? "Sending..." : sendButtonText}</button>
+        {openingDraftLoaded ? <button type="button" className="button secondary" disabled={submitting}
+          onClick={() => {
+            onOpeningMessageDraftComplete?.(deal.id, organization.id);
+            setBody("");
+            setOpeningDraftLoaded(false);
+            setError(null);
+          }}>Discard draft</button> : null}
         <p id={`message-help-${deal.id}`} className="hint">Cmd/Ctrl + Enter to send</p>
       </div>
       {error ? <p id={`message-error-${deal.id}`} className="form-error" role="alert">{error} Your draft is saved here; you can try sending again.</p> : null}
@@ -380,6 +409,9 @@ export default function DealConversationReview({
   revalidateIntervalMs = 4000,
   composerId,
   buttonLabel,
+  openingMessageDraft,
+  onOpeningMessageDraftChange,
+  onOpeningMessageDraftComplete,
 }: DealConversationReviewProps) {
   const [organizationState, setOrganizationState] = useState<OrganizationState>({
     status: "loading",
@@ -834,7 +866,12 @@ export default function DealConversationReview({
               <>
                 <MessageComposer key={`${deal.id}:${activeOrganizationId}`}
                   deal={deal} organization={selectedOrganization} onSent={appendMessage}
-                  composerId={composerId} buttonLabel={buttonLabel} />
+                  composerId={composerId} buttonLabel={buttonLabel}
+                  openingMessageDraft={openingMessageDraft?.dealId === deal.id && openingMessageDraft.organizationId === activeOrganizationId
+                    ? openingMessageDraft
+                    : undefined}
+                  onOpeningMessageDraftChange={onOpeningMessageDraftChange}
+                  onOpeningMessageDraftComplete={onOpeningMessageDraftComplete} />
                 {!deal.pending_counterparty ? <ThreadImporter key={`import:${deal.id}:${activeOrganizationId}`}
                   deal={deal} organization={selectedOrganization} onImported={appendMessage} /> : null}
               </>

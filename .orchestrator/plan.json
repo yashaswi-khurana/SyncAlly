@@ -1,0 +1,149 @@
+{
+  "objective": "Implement Step 08 Cancel Disputes (F8): Scoped auditable cancellation and dispute cases with bilateral decisions, privacy-aware evidence, conflict serialization, actual-head migration, UI case history, and empirical test gates.",
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Persist scoped cancellation and dispute case requests with type, reason, agreement version/hash, obligation references, actor, timestamp, evidence visibility, and atomic audit/outbox events.",
+      "acceptance": "Domain model, database tables, and repository persist cases with audit and outbox integration."
+    },
+    {
+      "id": "R2",
+      "text": "Preserve existing pre-commit cancellation behavior without regression.",
+      "acceptance": "Pre-commit deals in DRAFT/NEGOTIATING cancel directly via existing cancel route/use-case; tests pass."
+    },
+    {
+      "id": "R3",
+      "text": "Distinguish case creation from effective cancellation, liability, refund, or settlement; surface operational impact blockers for paid or in-flight consequences.",
+      "acceptance": "Case creation does not modify payment status or delivery obligations; blockers remain visible."
+    },
+    {
+      "id": "R4",
+      "text": "Enforce authorized bilateral decisions for mutual cancellation on matching agreement version/hash with zero AI authority.",
+      "acceptance": "POST /cases/{id}/respond enforces bilateral counterparty authorization and version hash consistency."
+    },
+    {
+      "id": "R5",
+      "text": "Serialize concurrent conflicts with payments, amendments, and fulfillment using optimistic checks and no network calls inside DB locks.",
+      "acceptance": "Concurrent cases and stale versions return HTTP 409 Conflict; no network inside DB transactions."
+    },
+    {
+      "id": "R6",
+      "text": "Support private and scoped evidence states with strict tenant boundary checks.",
+      "acceptance": "Counterparty-restricted or private evidence is filtered out for unauthorized tenants."
+    },
+    {
+      "id": "R7",
+      "text": "Actual-head additive database migration 0025 with downgrade preservation and history-loss block.",
+      "acceptance": "Alembic migration 0025_cancel_disputes applies cleanly on top of 0024; downgrade blocks history loss."
+    },
+    {
+      "id": "R8",
+      "text": "Frontend UI case history and bilateral decision controls in DealDetailPage.",
+      "acceptance": "DealDetailPage renders case history, dispute/cancellation requests, evidence visibility, and bilateral actions; frontend tests pass."
+    },
+    {
+      "id": "R9",
+      "text": "Independent review verification, focused test gates, full static/test gates green, and progress report updated.",
+      "acceptance": "Reviewer verifies diff, focused test discovery script passes, DealDetailPage.test.tsx passes, lint/build green, progress.md and 08-cancel-disputes.md updated."
+    }
+  ],
+  "packages": [
+    {
+      "id": "WP0",
+      "kind": "contract",
+      "title": "Cancel Disputes Contract",
+      "owner": "orchestrator",
+      "skill": "project-orchestrator",
+      "depends_on": [],
+      "write_scope": [
+        ".orchestrator/contracts/**"
+      ],
+      "covers": [],
+      "acceptance": "cancel-disputes-contract frozen at v1"
+    },
+    {
+      "id": "WP1",
+      "kind": "contract",
+      "title": "Planner Analysis and Architecture Spec",
+      "owner": "planner",
+      "skill": "lazy-senior-engineer",
+      "depends_on": [
+        "WP0"
+      ],
+      "write_scope": [
+        ".orchestrator/plans/**"
+      ],
+      "covers": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6"
+      ],
+      "acceptance": "Detailed architectural plan, risk assessment, and verification check specification logged in .orchestrator/plans/cancel_disputes_plan.md"
+    },
+    {
+      "id": "WP2",
+      "kind": "build",
+      "title": "Backend and Frontend Implementation with Migration and Tests",
+      "owner": "developer",
+      "skill": "lazy-senior-engineer",
+      "depends_on": [
+        "WP1"
+      ],
+      "write_scope": [
+        "backend/**",
+        "frontend/**",
+        "docs/**"
+      ],
+      "covers": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8"
+      ],
+      "acceptance": "All domain models, migrations, repositories, APIs, frontend UI components and tests implemented and passing."
+    },
+    {
+      "id": "RV1",
+      "kind": "review",
+      "title": "Independent Review of WP1 and WP2",
+      "owner": "reviewer",
+      "skill": "precision-code-reviewer",
+      "reviews": [
+        "WP2"
+      ],
+      "depends_on": [
+        "WP2"
+      ],
+      "write_scope": [
+        ".orchestrator/reviews/RV1/**"
+      ],
+      "covers": [],
+      "acceptance": "VERDICT logged; every P0/P1 finding resolved; independent verification confirmed."
+    },
+    {
+      "id": "WP9",
+      "kind": "integration",
+      "title": "Integration, Gate Verification, and Completion Documentation",
+      "owner": "orchestrator",
+      "skill": "project-orchestrator",
+      "depends_on": [
+        "RV1"
+      ],
+      "write_scope": [
+        ".orchestrator/master-board.md",
+        "docs/remaining-tasks/**"
+      ],
+      "covers": [
+        "R9"
+      ],
+      "acceptance": "Focused runner passes, frontend tests pass, ruff passes, lint passes, progress.md and 08-cancel-disputes.md updated."
+    }
+  ]
+}

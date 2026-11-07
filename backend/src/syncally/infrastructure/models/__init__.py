@@ -6,6 +6,7 @@ Keep model definitions in focused modules grouped by business capability.
 
 from syncally.infrastructure.models.agreements import AgreementVersion, Approval, Obligation
 from syncally.infrastructure.models.base import Base
+from syncally.infrastructure.models.deal_cases import DealCaseEvidenceModel, DealCaseModel
 from syncally.infrastructure.models.deals import (
     Constraint,
     Conversation,
@@ -39,6 +40,8 @@ __all__ = [
     "Conversation",
     "CounterpartyOnboarding",
     "Deal",
+    "DealCaseEvidenceModel",
+    "DealCaseModel",
     "DemoFixture",
     "FulfillmentEvent",
     "Message",

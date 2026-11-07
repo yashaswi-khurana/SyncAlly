@@ -1,0 +1,180 @@
+{
+ "version": 1,
+ "entries": [
+  {
+   "kind": "skill",
+   "name": "dsa-logic-builder",
+   "path": ".agents/skills/dsa-logic-builder/SKILL.md",
+   "description": "A DSA mentor that teaches HOW TO THINK about data structures and algorithms problems instead of just dumping code. Walks through real-world context, prerequisites, problem decomposition, layered hints, brute-force to optimal reasoning, edge cases, line-by-line why/how/when explanations, bug diagnosis, complexity analysis, and industry use. Use this skill whenever the user shares a coding problem, LeetCode/Codeforces/GFG/HackerRank/interview question, asks \"how do I solve this\", \"how to approach\", \"give me a hint\", \"explain this algorithm\", \"why is my code failing / TLE / wrong answer\", \"optimize this\", or mentions arrays, strings, hashing, two pointers, sliding window, recursion, backtracking, trees, graphs, DP, greedy, heaps, stacks, queues, tries, binary search, sorting, time/space complexity, or Big-O. Trigger even when the user just pastes a problem statement or buggy code with no instructions, and even when they only say \"logic building\" or \"DSA help\".",
+   "mtime_ns": 1792730120201399720,
+   "size": 15053,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "competitor-edge-strategist",
+   "path": ".agents/skills/competitor-edge-strategist/SKILL.md",
+   "description": "Deep competitive and customer research for the product in the current repo. Reads the whole codebase to understand what is being built, researches the internet in depth to find competitors, why and how they offer what they offer, what real customers complain about and need, researches which open-source projects and libraries we can adopt to make the product flourish (with license, health and security checks), generates many ideas and then argues them out in a structured internal debate (proposer vs skeptic vs customer vs engineer, with an evidence ledger and a verdict for each idea), designs a \"competitors but better\" strategy built on small solutions to big problems, and writes a full strategy report, a debate log, plus a ready-to-paste prompt for a Manager agent to turn into a complete execution plan. Use this skill whenever the user asks about competitors, market research, differentiation, positioning, \"how do we beat X\", \"what should we build next\", product strategy, customer pain points, feature ideas, roadmap ideas, open-source tools to use, wants ideas stress-tested or debated, or wants a plan/prompt for a manager agent, even if they never say \"competitor\" explicitly.",
+   "mtime_ns": 1792770023063896853,
+   "size": 29301,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "devils-advocate-reviewer",
+   "path": ".agents/skills/devils-advocate-reviewer/SKILL.md",
+   "description": "Adversarial, devil's-advocate code review that challenges how and why code was written, audits it against SOLID, DRY, KISS, YAGNI, worst-case design, scalability, performance, async processing, fault tolerance, graceful degradation and CAP trade-offs, and recommends the smallest-blast-radius change. Use this skill whenever the user asks to review, critique, audit, challenge, sanity-check or \"poke holes in\" code, a diff, a PR, a design or an architecture, or asks \"is there a better way to write this\", \"what could go wrong\", \"is this over-engineered\", or \"will this scale\", even if they never say \"devil's advocate\".",
+   "mtime_ns": 1792729801425664494,
+   "size": 19084,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "lazy-senior-engineer",
+   "path": ".agents/skills/lazy-senior-engineer/SKILL.md",
+   "description": "Acts as a \"smart-lazy\" senior software engineer who masters the repo before touching it and ships zero-regression, maintainable solutions with the minimum necessary code. Enforces strict upfront planning, root-cause analysis, SOLID/DRY/KISS/YAGNI balance, worst-case and resilience design (scalability, performance, async, fault tolerance, graceful degradation, CAP awareness), incremental task execution, edge-case matrices, behavioural unit tests, and audit logs. Trigger this skill for ANY software engineering task - new features, bug fixes, refactors, migrations, architecture, or code reviews (\"implement X\", \"add Y\", \"fix Z\", \"clean this up\", \"review this\") - even when the user does not explicitly mention planning, tests, or design principles.",
+   "mtime_ns": 1792729807442472606,
+   "size": 26696,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "project-manager",
+   "path": ".agents/skills/project-manager/SKILL.md",
+   "description": "Acts as a Manager / Chief Architect who takes a big project or idea and breaks it into small independent projects and tiny tasks, each with a ready-to-run AI prompt. Decides the tech stack, architecture, engineering principles to follow, and which role or agent is best suited for each task. Brainstorms new ideas, thinks from real people's point of view, explains every decision with real-world analogies, and pitches the idea. Use this skill whenever the user describes a large project, app, product, startup idea, system, migration or feature set and asks to plan it, break it down, divide it into tasks, assign work, choose a stack or architecture, create a roadmap, delegate to agents, or pitch it, even if they never say \"manager\" or \"project plan\".",
+   "mtime_ns": 1792729837736588044,
+   "size": 18536,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "run-workflow",
+   "path": "skills/system/run-workflow/SKILL.md",
+   "description": "How to write and run a dynamic workflow script with the `run_workflow` tool: a Python script that orchestrates many agents with `agent`, `parallel`, `pipeline`, and `phase`. Use when a task splits into many independent or staged pieces of agent work (fan out over files, modules, bugs, or review angles, then aggregate), or when the user asks for a workflow. Don''t use for a single delegated task (use a subagent) or for legacy workflow files (see migrate-workflows).",
+   "mtime_ns": 1792863240631322779,
+   "size": 10331,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "product-ui",
+   "path": "/home/yashaswi/.gemini/config/skills/product-ui/SKILL.md",
+   "description": "Redesigns and improves a product's user interface so it looks like an Awwwards-calibre site, grounded in real product knowledge, built on 10 core UI principles, and always animated with Three.js (3D) and Anime.js (UI motion). Use whenever the user wants to improve, redesign, polish, or \"make more professional\" a website, landing page, dashboard, product page, or app UI AND product context is available (a product brief, README, docs, feature list, pricing, copy, existing codebase, or the user describing the product). Trigger on phrases like \"improve the UI\", \"redesign the site\", \"make it look premium\", \"make it animated\", \"Awwwards style\", \"3D website\", \"Three.js hero\", \"anime.js\", \"animated UI\", or \"my UI looks generic / AI-made\". Do NOT use for backend work, non-UI code, or when there is no product context and the user will not provide any.",
+   "mtime_ns": 1793027037205889578,
+   "size": 8967,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "master-frontend-engineer",
+   "path": "/home/yashaswi/.gemini/config/skills/master-frontend-engineer/SKILL.md",
+   "description": "Architect, build, refactor, and audit production-grade frontend applications and UI components using clean architecture, user-first design, Core Web Vitals optimization, and WCAG accessibility. Use whenever the user asks to design frontend architecture, write or review UI components (React, Vue, Svelte, Angular, or vanilla HTML/CSS/JS), structure frontend directories, optimize web performance (LCP, INP, CLS, bundle size), improve accessibility (a11y), or build scalable design systems.",
+   "mtime_ns": 1793379782000000000,
+   "size": 6736,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "project-orchestrator",
+   "path": "/home/yashaswi/.gemini/config/skills/project-orchestrator/SKILL.md",
+   "description": "Turns a complex multi-component project into a validated execution plan: capability inventory with gap detection, task DAG with parallel waves, interface contracts, per-agent write-scope ownership, and an Orchestrator-owned .orchestrator/master-board.md. Use when a request spans several specialties or components (frontend + backend + infra, multi-service builds, cross-repo migrations) and could be split across sub-agents, or the user says \"plan and parallelize\", \"split this across agents\", \"coordinate sub-agents\", \"break this project into work packages\". Do NOT use for single-file or single-skill tasks, one-agent refactors, executing one work package, or for keeping a worker's own state log (use swmr-agent-log).",
+   "mtime_ns": 1793875398000000000,
+   "size": 11795,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "dsa-logic-builder",
+   "path": "/home/yashaswi/.gemini/config/skills/dsa-logic-builder/SKILL.md",
+   "description": "A DSA mentor that teaches HOW TO THINK about data structures and algorithms problems instead of just dumping code. Walks through real-world context, prerequisites, problem decomposition, layered hints, brute-force to optimal reasoning, edge cases, line-by-line why/how/when explanations, bug diagnosis, complexity analysis, and industry use. Use this skill whenever the user shares a coding problem, LeetCode/Codeforces/GFG/HackerRank/interview question, asks \"how do I solve this\", \"how to approach\", \"give me a hint\", \"explain this algorithm\", \"why is my code failing / TLE / wrong answer\", \"optimize this\", or mentions arrays, strings, hashing, two pointers, sliding window, recursion, backtracking, trees, graphs, DP, greedy, heaps, stacks, queues, tries, binary search, sorting, time/space complexity, or Big-O. Trigger even when the user just pastes a problem statement or buggy code with no instructions, and even when they only say \"logic building\" or \"DSA help\".",
+   "mtime_ns": 1792730120201399720,
+   "size": 15053,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "pessimistic-minimalist-backend",
+   "path": "/home/yashaswi/.gemini/config/skills/pessimistic-minimalist-backend/SKILL.md",
+   "description": "Apply a Pessimistic Minimalist Backend Engineer persona to backend engineering tasks. Use when building, reviewing, planning, or hardening backend services, APIs, databases, CLI tools, data pipelines, or infrastructure code \u2014 especially when the user asks for production-hardened code, a rigorous code review, adversarial test coverage, \"what could go wrong\" analysis, explicit trade-off documentation, or uses terms like \"bulletproof\", \"harden this\", \"production-ready\", \"exhaustive tests\", \"no magic\", \"critique my design\", \"clean backend\", \"ADRs\". Do NOT use for frontend, UI, or CSS work; documentation tasks with no code output; or one-off throwaway scripts where no production deployment or test suite is expected.",
+   "mtime_ns": 1793420950000000000,
+   "size": 12700,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "graphify",
+   "path": "/home/yashaswi/.gemini/config/skills/graphify/SKILL.md",
+   "description": "Use for any question about a codebase, its architecture, file relationships, or project content \u2014 especially when graphify-out/ exists, where the question should be treated as a graphify query first. Turns any input (code, docs, papers, images, videos) into a persistent knowledge graph with god nodes, community detection, and query/path/explain tools.",
+   "mtime_ns": 1793437551309611174,
+   "size": 47560,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "competitor-edge-strategist",
+   "path": "/home/yashaswi/.gemini/config/skills/competitor-edge-strategist/SKILL.md",
+   "description": "Deep competitive and customer research for the product in the current repo. Reads the whole codebase to understand what is being built, researches the internet in depth to find competitors, why and how they offer what they offer, what real customers complain about and need, researches which open-source projects and libraries we can adopt to make the product flourish (with license, health and security checks), generates many ideas and then argues them out in a structured internal debate (proposer vs skeptic vs customer vs engineer, with an evidence ledger and a verdict for each idea), designs a \"competitors but better\" strategy built on small solutions to big problems, and writes a full strategy report, a debate log, plus a ready-to-paste prompt for a Manager agent to turn into a complete execution plan. Use this skill whenever the user asks about competitors, market research, differentiation, positioning, \"how do we beat X\", \"what should we build next\", product strategy, customer pain points, feature ideas, roadmap ideas, open-source tools to use, wants ideas stress-tested or debated, or wants a plan/prompt for a manager agent, even if they never say \"competitor\" explicitly.",
+   "mtime_ns": 1792770023063896853,
+   "size": 29301,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "swmr-agent-log",
+   "path": "/home/yashaswi/.gemini/config/skills/swmr-agent-log/SKILL.md",
+   "description": "Defines the Single-Writer/Multi-Reader state log a worker agent keeps at .orchestrator/logs/<agent-id>.state.md: six required sections, lifecycle states, update cadence, rules for reading peer logs, and a verification gate before COMPLETED. Use when you are a sub-agent dispatched with an agent ID and write scope, when a brief says \"maintain your state log\" or \"load swmr-agent-log\", when you need a peer agent's exported interfaces or ENV, or when auditing logs for conflicts. Do NOT use for planning or dispatching work (use project-orchestrator), or for changelogs and project docs.",
+   "mtime_ns": 1793874918000000000,
+   "size": 7079,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "devils-advocate-reviewer",
+   "path": "/home/yashaswi/.gemini/config/skills/devils-advocate-reviewer/SKILL.md",
+   "description": "Adversarial, devil's-advocate code review that challenges how and why code was written, audits it against SOLID, DRY, KISS, YAGNI, worst-case design, scalability, performance, async processing, fault tolerance, graceful degradation and CAP trade-offs, and recommends the smallest-blast-radius change. Use this skill whenever the user asks to review, critique, audit, challenge, sanity-check or \"poke holes in\" code, a diff, a PR, a design or an architecture, or asks \"is there a better way to write this\", \"what could go wrong\", \"is this over-engineered\", or \"will this scale\", even if they never say \"devil's advocate\".",
+   "mtime_ns": 1792729801425664494,
+   "size": 19084,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "precision-code-reviewer",
+   "path": "/home/yashaswi/.gemini/config/skills/precision-code-reviewer/SKILL.md",
+   "description": "Autonomous high-precision code reviewer that runs a mandatory 5-pass funnel (diff triage, dependency blast-radius tracing, AST complexity metrics, bug and security audit, adversarial false-positive filtering) and emits only verified, committable findings with tests. Use whenever the user asks to review a PR, pull request or merge request, audit a git diff or staged changes, inspect a file or module for bugs, run a pre-commit or pre-merge quality gate, check code for security issues or regressions, find missing tests for a change, or refactor high-complexity functions. Trigger even on casual phrasing like \"look over my changes\", \"is this safe to merge\", \"anything wrong with this code\", or \"why is this function so gnarly\". Supports /review, /blast-radius, /metrics, /security, /test-gaps.",
+   "mtime_ns": 1793754692000000000,
+   "size": 21544,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "lazy-senior-engineer",
+   "path": "/home/yashaswi/.gemini/config/skills/lazy-senior-engineer/SKILL.md",
+   "description": "Acts as a \"smart-lazy\" senior software engineer who masters the repo before touching it and ships zero-regression, maintainable solutions with the minimum necessary code. Enforces strict upfront planning, root-cause analysis, SOLID/DRY/KISS/YAGNI balance, worst-case and resilience design (scalability, performance, async, fault tolerance, graceful degradation, CAP awareness), incremental task execution, edge-case matrices, behavioural unit tests, and audit logs. Convenes a council of read-only specialist subagents (Pragmatist, Architect, Breaker, Operator, Maintainer) that debate whether there is a better way to implement the work, then acts on the outcome. Trigger this skill for ANY software engineering task - new features, bug fixes, refactors, migrations, architecture, or code reviews (\"implement X\", \"add Y\", \"fix Z\", \"clean this up\", \"review this\") - even when the user does not explicitly mention planning, tests, or design principles.",
+   "mtime_ns": 1793283440726960502,
+   "size": 40512,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "pessimistic-minimalist-frontend-engineer",
+   "path": "/home/yashaswi/.gemini/config/skills/pessimistic-minimalist-frontend-engineer/SKILL.md",
+   "description": "Disciplined frontend engineering workflow that inspects the repo, writes and checksum-locks a plan, implements minimally, verifies adversarially, and records decisions in docs/engineering. Use whenever the user asks for any change to frontend code, even a small one: React, Next.js, TypeScript, JavaScript, HTML or CSS, components, hooks, pages, forms, styling, accessibility, performance, UI bug fixes, or refactors of UI code. Do NOT use for backend-only or infra work, native mobile apps, standalone chat mockups or throwaway prototypes, read-only questions about code, or writing other skills.",
+   "mtime_ns": 1793419544000000000,
+   "size": 13985,
+   "source": "disk"
+  },
+  {
+   "kind": "skill",
+   "name": "project-manager",
+   "path": "/home/yashaswi/.gemini/config/skills/project-manager/SKILL.md",
+   "description": "Acts as a Manager / Chief Architect who takes a big project or idea and breaks it into small independent projects and tiny tasks, each with a ready-to-run AI prompt. Decides the tech stack, architecture, engineering principles to follow, and which role or agent is best suited for each task. Brainstorms new ideas, thinks from real people's point of view, explains every decision with real-world analogies, and pitches the idea. Use this skill whenever the user describes a large project, app, product, startup idea, system, migration or feature set and asks to plan it, break it down, divide it into tasks, assign work, choose a stack or architecture, create a roadmap, delegate to agents, or pitch it, even if they never say \"manager\" or \"project plan\".",
+   "mtime_ns": 1792729837736588044,
+   "size": 18536,
+   "source": "disk"
+  }
+ ],
+ "host_entries": [],
+ "skipped": {},
+ "extra_roots": [],
+ "discover": false
+}

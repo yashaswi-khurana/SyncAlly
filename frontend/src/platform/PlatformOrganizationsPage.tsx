@@ -10,9 +10,10 @@ export default function PlatformOrganizationsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setError(null);
     try {
-      setOrganizations(await listPlatformOrganizations());
+      const result = await listPlatformOrganizations();
+      setOrganizations(result);
+      setError(null);
     } catch (caught) {
       setError(caught instanceof ApiError && caught.status === 403
         ? "This account does not have platform administrator access."
@@ -23,8 +24,30 @@ export default function PlatformOrganizationsPage() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await listPlatformOrganizations();
+        if (!cancelled) {
+          setOrganizations(result);
+          setError(null);
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          setError(caught instanceof ApiError && caught.status === 403
+            ? "This account does not have platform administrator access."
+            : "Could not load organizations. Please try again.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function changeStatus(organization: PlatformOrganization) {
     const nextStatus = organization.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE";

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext
@@ -23,7 +24,7 @@ from syncally.cli.seed_demo import DEMO_IDENTITIES
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.identity import resolve_actor
-from syncally.infrastructure.models import AuditEvent, RefreshToken, User
+from syncally.infrastructure.models import AuditEvent, Organization, OrganizationMember, RefreshToken, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -139,6 +140,29 @@ class RefreshRequest(BaseModel):
 class CredentialsRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=12, max_length=128)
+
+
+class OrganizationRegistrationRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    display_name: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=12, max_length=128)
+    legal_name: str = Field(min_length=1, max_length=200)
+    country_code: str = Field(pattern=r"^[A-Z]{2}$")
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("display_name", "legal_name", mode="before")
+    @classmethod
+    def trim_names(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("country_code", mode="before")
+    @classmethod
+    def normalize_country_code(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
 
 
 class TokenResponse(BaseModel):
@@ -281,6 +305,72 @@ def _issue_tokens(db: Session, user_id: UUID, now: datetime) -> TokenResponse:
         access_token=_encode_access_token(user_id, now),
         refresh_token=create_refresh_token(db, user_id, now),
     )
+
+
+@router.post("/register-organization", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def register_organization(
+    payload: OrganizationRegistrationRequest,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    """Create the first owner account and organization as one public onboarding operation."""
+    if credentials is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sign out before starting a new organization account.",
+        )
+    if db.scalar(select(User.id).where(User.email == payload.email)) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists. Sign in or accept an organization invitation.",
+        )
+
+    user = User(
+        email=payload.email,
+        display_name=payload.display_name,
+        password_hash=hash_password(payload.password),
+        status="ACTIVE",
+        system_role="USER",
+    )
+    organization = Organization(
+        legal_name=payload.legal_name,
+        country_code=payload.country_code,
+        status="ACTIVE",
+    )
+    db.add_all([user, organization])
+    db.flush()
+    db.add(OrganizationMember(
+        organization_id=organization.id,
+        user_id=user.id,
+        role="ADMIN",
+        status="ACTIVE",
+        capabilities=["FINANCE"],
+    ))
+    now = datetime.now(UTC)
+    db.add(AuditEvent(
+        id=uuid4(),
+        aggregate_type="organization",
+        aggregate_id=organization.id,
+        event_type="organization.owner_registered",
+        actor_type="USER",
+        actor_id=str(user.id),
+        occurred_at=now,
+        payload={"user_id": str(user.id)},
+    ))
+    try:
+        db.flush()
+        response = TokenResponse(
+            access_token=_encode_access_token(user.id, now),
+            refresh_token=create_refresh_token(db, user.id, now, commit=False),
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists. Sign in or accept an organization invitation.",
+        ) from exc
+    return response
 
 
 @router.post("/login", response_model=TokenResponse)

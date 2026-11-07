@@ -7,6 +7,7 @@ import type {
   InvitationAcceptanceInput,
   CreateMessageInput,
   CreateOrganizationInput,
+  RegisterOrganizationInput,
   CurrentUser,
   AgreementApproval,
   AgreementHistory,
@@ -193,6 +194,13 @@ export function login(email: string, password: string): Promise<TokenResponse> {
   return apiRequest<TokenResponse>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  }, "json", false);
+}
+
+export function registerOrganization(input: RegisterOrganizationInput): Promise<TokenResponse> {
+  return apiRequest<TokenResponse>("/auth/register-organization", {
+    method: "POST",
+    body: JSON.stringify(input),
   }, "json", false);
 }
 

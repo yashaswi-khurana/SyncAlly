@@ -751,6 +751,12 @@ export interface CreateOrganizationInput {
   country_code: string;
 }
 
+export interface RegisterOrganizationInput extends CreateOrganizationInput {
+  email: string;
+  display_name: string;
+  password: string;
+}
+
 export interface OrganizationMember {
   user_id: string;
   email: string;

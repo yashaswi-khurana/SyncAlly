@@ -1,41 +1,37 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { addOrganizationMember, ApiError, createOrganization, listOrganizations } from "../api/client";
+import { addOrganizationMember, ApiError, listOrganizations } from "../api/client";
 import type { Organization } from "../api/types";
 import OrganizationMembersSection from "./OrganizationMembersSection";
 import OrganizationProfileSection from "./OrganizationProfileSection";
-import Reveal from "../ui/Reveal";
 
 type OrganizationsState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; organizations: Organization[] };
 
-const COUNTRY_PATTERN = /^[A-Z]{2}$/;
+type OrganizationTab = "overview" | "team";
 
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
-    if (caught.status === 401) {
-      return "Your session has expired. Sign in again.";
-    }
+    if (caught.status === 401) return "Your session has expired. Sign in again.";
     return caught.message;
   }
   return "Something went wrong. Please try again.";
 }
 
-export default function OrganizationsPanel() {
+export default function OrganizationsPanel({
+  onInviteTeamMember,
+}: {
+  onInviteTeamMember?: (organizationId: string) => void;
+}) {
   const [state, setState] = useState<OrganizationsState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
+  const [selectedOrgId, setSelectedOrgId] = useState("");
+  const [activeTab, setActiveTab] = useState<OrganizationTab>("overview");
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const [legalName, setLegalName] = useState("");
-  const [countryCode, setCountryCode] = useState("");
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [createNotice, setCreateNotice] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-
-  const [inviteOrgId, setInviteOrgId] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
@@ -48,18 +44,21 @@ export default function OrganizationsPanel() {
         const organizations = await listOrganizations();
         if (!cancelled) {
           setState({ status: "ready", organizations });
-          setInviteOrgId((current) => current || organizations[0]?.id || "");
+          setSelectedOrgId((current) =>
+            organizations.some((organization) => organization.id === current)
+              ? current
+              : organizations[0]?.id ?? "",
+          );
         }
       } catch (caught) {
-        if (!cancelled) {
-          setState({ status: "error", message: describeError(caught) });
-        }
+        if (!cancelled) setState({ status: "error", message: describeError(caught) });
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [reloadCount]);
+
+  const organizations = state.status === "ready" ? state.organizations : [];
+  const selectedOrganization = organizations.find((organization) => organization.id === selectedOrgId);
 
   function retryOrganizations() {
     setState({ status: "loading" });
@@ -75,50 +74,22 @@ export default function OrganizationsPanel() {
     }
   }
 
-  async function handleCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const name = legalName.trim();
-    const country = countryCode.trim().toUpperCase();
-    setCreateNotice(null);
-    if (name === "") {
-      setCreateError("Enter the legal name of the organization.");
-      return;
-    }
-    if (!COUNTRY_PATTERN.test(country)) {
-      setCreateError("Enter a two-letter country code, for example US.");
-      return;
-    }
-    setCreateError(null);
-    setCreating(true);
-    try {
-      const created = await createOrganization({ legal_name: name, country_code: country });
-      setCreateNotice(`Created ${created.legal_name} (${created.country_code}).`);
-      setLegalName("");
-      setCountryCode("");
-      setReloadCount((count) => count + 1);
-    } catch (caught) {
-      setCreateError(describeError(caught));
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function handleInvite(event: FormEvent<HTMLFormElement>) {
+  async function handleAddExistingMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const email = inviteEmail.trim();
     setInviteNotice(null);
-    if (inviteOrgId === "") {
-      setInviteError("Choose an organization to invite the member to.");
+    if (!selectedOrganization) {
+      setInviteError("Choose an organization first.");
       return;
     }
-    if (email === "") {
-      setInviteError("Enter the email of an existing account.");
+    if (!email) {
+      setInviteError("Enter the email address for an existing account.");
       return;
     }
     setInviteError(null);
     setInviting(true);
     try {
-      const member = await addOrganizationMember(inviteOrgId, email);
+      const member = await addOrganizationMember(selectedOrganization.id, email);
       setInviteNotice(`Added ${member.email} as ${member.role}.`);
       setInviteEmail("");
     } catch (caught) {
@@ -129,172 +100,155 @@ export default function OrganizationsPanel() {
   }
 
   if (state.status === "loading") {
-    return (
-      <section className="card" aria-live="polite">
-        <p role="status">Loading your organizations…</p>
-      </section>
-    );
+    return <section className="card"><p role="status">Loading your organizations…</p></section>;
   }
 
   if (state.status === "error") {
     return (
-      <section className="card" role="alert">
-        <h2>We could not load your organizations</h2>
-        <p className="muted" style={{ marginTop: 10 }}>
-          {state.message}
-        </p>
-        <div className="actions">
-          <button type="button" className="button" onClick={retryOrganizations}>
-            Try again
-          </button>
+      <section className="card org-console" role="alert">
+        <div className="org-empty-state">
+          <span className="eyebrow">Organization workspace</span>
+          <h2>We could not load your organizations</h2>
+          <p className="muted">{state.message}</p>
+          <button type="button" className="button" onClick={retryOrganizations}>Try again</button>
         </div>
       </section>
     );
   }
 
   return (
-    <section className="card" aria-labelledby="organizations-heading">
-      <div className="panel-head">
-        <span className="eyebrow">Your organizations</span>
-        <h2 id="organizations-heading">Your organizations</h2>
-      </div>
-      <p className="muted">
-        View your organizations and their reference IDs. Trading partners can search for your
-        organization when creating a deal.
-      </p>
-      {state.organizations.length === 0 ? (
-        <p className="empty-state">
-          Your account is not an active member of any organization yet.
-        </p>
+    <section className="card org-console" aria-labelledby="organizations-heading">
+      <header className="org-console__header">
+        <div>
+          <span className="eyebrow">Company workspace · {organizations.length} {organizations.length === 1 ? "organization" : "organizations"}</span>
+          <h2 id="organizations-heading">Manage organizations</h2>
+          <p className="muted">Company details, team access, and invitations live together here.</p>
+        </div>
+      </header>
+
+      {organizations.length === 0 ? (
+        <div className="org-empty-state">
+          <span className="eyebrow">Organization access</span>
+          <h3>No organization is connected to this account</h3>
+          <p className="muted">Ask an organization administrator for an invitation. New organizations are set up during owner account onboarding.</p>
+        </div>
       ) : (
-        <ul className="org-list">
-          {state.organizations.map((organization) => (
-            <li key={organization.id}>
-              <div className="deal-meta">
-                <span>
-                  {organization.legal_name} ({organization.country_code})
-                </span>
-                <span className="mono">{organization.id}</span>
+        <div className="org-console__layout">
+          <aside className="org-switcher" aria-label="Your organizations">
+            <div className="org-switcher__heading">
+              <span className="eyebrow">Your organizations</span>
+              <span className="org-count">{organizations.length}</span>
+            </div>
+            <div className="org-switcher__list">
+              {organizations.map((organization) => (
+                <button
+                  type="button"
+                  key={organization.id}
+                  className={`org-switcher__item${organization.id === selectedOrgId ? " is-selected" : ""}`}
+                  onClick={() => { setSelectedOrgId(organization.id); setActiveTab("overview"); }}
+                  aria-current={organization.id === selectedOrgId ? "true" : undefined}
+                >
+                  <span className="org-switcher__avatar" aria-hidden="true">{organization.legal_name.trim().charAt(0).toUpperCase()}</span>
+                  <span className="org-switcher__copy">
+                    <strong>{organization.legal_name} ({organization.country_code})</strong>
+                    <small>{organization.role === "ADMIN" ? "Administrator" : "Member"}</small>
+                  </span>
+                  <span className="org-switcher__arrow" aria-hidden="true">›</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          {selectedOrganization ? (
+            <div className="org-detail">
+              <header className="org-detail__header">
+                <div className="org-detail__title">
+                  <span className="org-detail__avatar" aria-hidden="true">{selectedOrganization.legal_name.trim().charAt(0).toUpperCase()}</span>
+                  <div>
+                    <span className="eyebrow">Organization profile</span>
+                    <h3>{selectedOrganization.legal_name}</h3>
+                    <p>{selectedOrganization.country_code} · {selectedOrganization.role === "ADMIN" ? "Administrator access" : "Member access"}</p>
+                  </div>
+                </div>
+                <div className="org-detail__reference">
+                  <span>Organization ID</span>
+                  <code title={selectedOrganization.id}>{selectedOrganization.id}</code>
+                  <button type="button" className="button secondary" onClick={() => void copyOrganizationId(selectedOrganization.id)}>
+                    {copiedId === selectedOrganization.id ? "Copied" : "Copy ID"}
+                  </button>
+                </div>
+              </header>
+
+              <div className="org-tabs" role="tablist" aria-label="Organization sections">
+                <button type="button" id="org-overview-tab" role="tab" aria-selected={activeTab === "overview"} aria-controls="org-overview-panel" onClick={() => setActiveTab("overview")}>
+                  Overview
+                </button>
+                <button type="button" id="org-team-tab" role="tab" aria-selected={activeTab === "team"} aria-controls="org-team-panel" onClick={() => setActiveTab("team")}>
+                  Team &amp; access
+                </button>
               </div>
-              <button
-                type="button"
-                className="button secondary"
-                onClick={() => void copyOrganizationId(organization.id)}
-              >
-                {copiedId === organization.id ? "Copied" : "Copy ID"}
-              </button>
-              <OrganizationProfileSection organization={organization} />
-              <OrganizationMembersSection organization={organization} />
-            </li>
-          ))}
-        </ul>
+
+              {activeTab === "overview" ? (
+                <section className="org-tab-panel" id="org-overview-panel" role="tabpanel" aria-labelledby="org-overview-tab">
+                  <div className="org-section-heading">
+                    <div>
+                      <span className="eyebrow">Company details</span>
+                      <h4>Business profile</h4>
+                      <p className="muted">Help trading partners understand what your organization offers.</p>
+                    </div>
+                  </div>
+                  <OrganizationProfileSection organization={selectedOrganization} />
+                </section>
+              ) : (
+                <section className="org-tab-panel" id="org-team-panel" role="tabpanel" aria-labelledby="org-team-tab">
+                  <div className="org-team-actions">
+                    <div>
+                      <span className="eyebrow">People &amp; permissions</span>
+                      <h4>Team access</h4>
+                      <p className="muted">Invite a new teammate with a sign-up link, or add an account that already exists.</p>
+                    </div>
+                    {selectedOrganization.role === "ADMIN" && onInviteTeamMember ? (
+                      <button type="button" className="button" onClick={() => onInviteTeamMember(selectedOrganization.id)}>Invite a new teammate</button>
+                    ) : null}
+                  </div>
+
+                  {selectedOrganization.role === "ADMIN" ? (
+                    <form className="org-add-member" onSubmit={handleAddExistingMember} noValidate>
+                      <div className="org-add-member__intro">
+                        <span className="org-add-member__icon" aria-hidden="true">＋</span>
+                        <div>
+                          <h5>Add an existing account</h5>
+                          <p className="muted">Use this for someone who already has a SyncAlly account.</p>
+                        </div>
+                      </div>
+                      <div className="org-add-member__controls">
+                        <div className="field">
+                          <label htmlFor="invite-email">Account email</label>
+                          <input
+                            id="invite-email"
+                            name="invite-email"
+                            type="email"
+                            placeholder="colleague@example.com"
+                            value={inviteEmail}
+                            onChange={(event) => setInviteEmail(event.target.value)}
+                            disabled={inviting}
+                          />
+                        </div>
+                        <button type="submit" className="button secondary" disabled={inviting}>
+                          {inviting ? "Adding…" : "Add account"}
+                        </button>
+                      </div>
+                      {inviteError ? <p className="form-error" role="alert">{inviteError}</p> : null}
+                      {inviteNotice ? <p className="success" role="status">{inviteNotice}</p> : null}
+                    </form>
+                  ) : null}
+                  <OrganizationMembersSection organization={selectedOrganization} />
+                </section>
+              )}
+            </div>
+          ) : null}
+        </div>
       )}
-
-      <div className="grid-2" style={{ marginTop: 34 }}>
-        <Reveal>
-          <form className="form" onSubmit={handleCreate} noValidate>
-            <div className="panel-head" style={{ marginBottom: 0 }}>
-              <span className="eyebrow">New organization</span>
-              <h3 className="display" style={{ fontSize: "1.25rem" }}>
-                Create an organization
-              </h3>
-            </div>
-            <div className="field">
-              <label htmlFor="organization-legal-name">Legal name</label>
-              <input
-                id="organization-legal-name"
-                name="organization-legal-name"
-                type="text"
-                placeholder="Northwind Trading Ltd."
-                value={legalName}
-                onChange={(event) => setLegalName(event.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="organization-country">Country code</label>
-              <input
-                id="organization-country"
-                name="organization-country"
-                type="text"
-                placeholder="US"
-                maxLength={2}
-                value={countryCode}
-                onChange={(event) => setCountryCode(event.target.value.toUpperCase())}
-              />
-              <p className="hint">Two-letter ISO country code.</p>
-            </div>
-            {createError ? (
-              <p className="form-error" role="alert">
-                {createError}
-              </p>
-            ) : null}
-            {createNotice ? (
-              <p className="success" role="status">
-                {createNotice}
-              </p>
-            ) : null}
-            <button type="submit" className="button" disabled={creating}>
-              {creating ? "Creating…" : "Create organization"}
-            </button>
-          </form>
-        </Reveal>
-
-        <Reveal delay={80}>
-          <form className="form" onSubmit={handleInvite} noValidate>
-            <div className="panel-head" style={{ marginBottom: 0 }}>
-              <span className="eyebrow">Members</span>
-              <h3 className="display" style={{ fontSize: "1.25rem" }}>
-                Add an existing member
-              </h3>
-            </div>
-            <div className="field">
-              <label htmlFor="invite-organization">Organization</label>
-              <select
-                id="invite-organization"
-                name="invite-organization"
-                value={inviteOrgId}
-                onChange={(event) => setInviteOrgId(event.target.value)}
-                disabled={state.organizations.length === 0}
-              >
-                {state.organizations.map((organization) => (
-                  <option key={organization.id} value={organization.id}>
-                    {organization.legal_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="invite-email">Member email</label>
-              <input
-                id="invite-email"
-                name="invite-email"
-                type="email"
-                placeholder="colleague@example.com"
-                value={inviteEmail}
-                onChange={(event) => setInviteEmail(event.target.value)}
-              />
-              <p className="hint">The account must already exist. You must be an admin.</p>
-            </div>
-            {inviteError ? (
-              <p className="form-error" role="alert">
-                {inviteError}
-              </p>
-            ) : null}
-            {inviteNotice ? (
-              <p className="success" role="status">
-                {inviteNotice}
-              </p>
-            ) : null}
-            <button
-              type="submit"
-              className="button"
-              disabled={inviting || state.organizations.length === 0}
-            >
-              {inviting ? "Adding…" : "Add member"}
-            </button>
-          </form>
-        </Reveal>
-      </div>
     </section>
   );
 }

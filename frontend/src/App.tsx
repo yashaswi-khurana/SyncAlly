@@ -9,7 +9,7 @@ import type { InvitationAcceptance, Organization, TokenResponse } from "./api/ty
 import CreateDealPage from "./deals/CreateDealPage";
 import DealDetailPage from "./deals/DealDetailPage";
 import DealsPage from "./deals/DealsPage";
-import OnboardingWizard from "./organizations/OnboardingWizard";
+import OrganizationSignupPage from "./organizations/OrganizationSignupPage";
 import OrganizationsSettingsPage from "./organizations/OrganizationsSettingsPage";
 import PlatformOrganizationsPage from "./platform/PlatformOrganizationsPage";
 import {
@@ -102,14 +102,9 @@ export default function App() {
     if (route.name === "platform" && isSystemAdmin === false) navigateToDeals();
   }, [route.name, isSystemAdmin]);
 
-  function handleOrganizationCreated(created: Organization, sessionAtStart: string | null) {
-    if (!sessionRef.current || sessionRef.current !== sessionAtStart) {
-      return;
-    }
-    setOrganizations((prev) => (prev ? [...prev, created] : [created]));
-    navigateToDeals();
-    setToast(`Created ${created.legal_name} (${created.country_code}). Welcome to the Deal Register!`);
-  }
+  useEffect(() => {
+    if (accessToken && route.name === "organizationSignup") navigateToOrganizations();
+  }, [accessToken, route.name]);
 
   function refreshSessionView() {
     sessionRef.current = null;
@@ -155,6 +150,9 @@ export default function App() {
   }
 
   if (!accessToken) {
+    if (route.name === "organizationSignup") {
+      return <OrganizationSignupPage onSignIn={handleSignIn} />;
+    }
     return <SignInPage onSignIn={handleSignIn} />;
   }
 
@@ -164,7 +162,8 @@ export default function App() {
   const isWorkspace = route.name === "deals" || route.name === "deal";
   const hasPendingInvitation =
     route.name === "organizations" && Boolean(route.inviteToken);
-  const hasZeroOrganizations = Boolean(organizations !== null && organizations.length === 0);
+  const needsOrganizationInvitation = organizations !== null && organizations.length === 0 &&
+    !hasPendingInvitation && !isPlatform && route.name !== "organizations";
 
   return (
     <div className="app-shell">
@@ -234,6 +233,15 @@ export default function App() {
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : route.name === "platform" ? (
           isSystemAdmin ? <PlatformOrganizationsPage /> : <p role="status">Loading platform access…</p>
+        ) : needsOrganizationInvitation ? (
+          <section className="card org-access-required" role="status">
+            <span className="eyebrow">Organization access</span>
+            <h1>Your workspace is waiting for an invitation.</h1>
+            <p>Your account is not a member of an organization yet. Ask an organization administrator to invite you.</p>
+            <div className="org-access-required__actions">
+              <button type="button" className="button" onClick={handleSignOut}>Sign out</button>
+            </div>
+          </section>
         ) : (
           <DealsPage onOpenDeal={navigateToDeal} onCreateDeal={navigateToCreateDeal} />
         )}
@@ -248,14 +256,6 @@ export default function App() {
         </div>
       </footer>
       <DevRoleSwitcher onSessionChanged={refreshSessionView} />
-
-      {hasZeroOrganizations && !hasPendingInvitation && !isPlatform && (
-        <OnboardingWizard
-          key={currentSessionKey ?? "none"}
-          onComplete={(created) => handleOrganizationCreated(created, currentSessionKey)}
-          onSignOut={handleSignOut}
-        />
-      )}
 
       {toast && (
         <aside

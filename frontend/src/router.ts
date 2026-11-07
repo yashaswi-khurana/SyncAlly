@@ -4,12 +4,14 @@ export type Route =
   | { name: "deal"; dealId: string }
   | { name: "organizations"; inviteToken?: string; dealId?: string }
   | { name: "platform" }
+  | { name: "organizationSignup" }
   | { name: "invite"; token: string; dealId?: string };
 
 const DEAL_ROUTE = /^\/deals\/([^/]+)$/;
 const CREATE_DEAL_PATH = "/deals/new";
 const ORGANIZATIONS_PATH = "/settings/organizations";
 const PLATFORM_PATH = "/platform/organizations";
+const ORGANIZATION_SIGNUP_PATH = "/create-organization";
 const INVITE_PATH = "/invite";
 
 export function parseRoute(hash: string): Route {
@@ -25,6 +27,9 @@ export function parseRoute(hash: string): Route {
   }
   if (path === PLATFORM_PATH || path === `${PLATFORM_PATH}/`) {
     return { name: "platform" };
+  }
+  if (path === ORGANIZATION_SIGNUP_PATH || path === `${ORGANIZATION_SIGNUP_PATH}/`) {
+    return { name: "organizationSignup" };
   }
   if (path === ORGANIZATIONS_PATH || path === `${ORGANIZATIONS_PATH}/`) {
     const params = new URLSearchParams(queryString || "");
@@ -67,6 +72,10 @@ export function navigateToOrganizations(): void {
 
 export function navigateToPlatform(): void {
   window.location.hash = `#${PLATFORM_PATH}`;
+}
+
+export function navigateToOrganizationSignup(): void {
+  window.location.hash = `#${ORGANIZATION_SIGNUP_PATH}`;
 }
 
 export function invitePath(token: string, dealId?: string): string {

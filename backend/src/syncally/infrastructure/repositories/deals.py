@@ -26,6 +26,7 @@ def _to_domain(row: Deal) -> DomainDeal:
         buyer_organization_id=OrganizationId(row.buyer_organization_id),
         seller_organization_id=OrganizationId(row.seller_organization_id),
         created_at=as_utc(row.created_at),
+        display_name=row.display_name,
         status=DealStatus(row.status),
         current_agreement_version_id=(
             AgreementVersionId(row.current_agreement_version_id)
@@ -85,6 +86,7 @@ class SqlAlchemyDealRepository:
             buyer_organization_id=deal.buyer_organization_id,
             seller_organization_id=deal.seller_organization_id,
             created_at=as_utc(deal.created_at),
+            display_name=deal.display_name,
             status=deal.status.value,
             current_agreement_version_id=deal.current_agreement_version_id,
             version=deal.version,

@@ -67,6 +67,7 @@ export default function DealDetailPage({
   const [freshnessChecked, setFreshnessChecked] = useState(false);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [counterpartyName, setCounterpartyName] = useState("Counterparty");
+  const [partyNames, setPartyNames] = useState<{ buyer: string; seller: string }>({ buyer: "", seller: "" });
   const [negotiation, setNegotiation] = useState<NegotiationView | null>(null);
   const [overview, setOverview] = useState<OverviewSnapshot | null>(null);
   function commercialChanged() {
@@ -115,6 +116,23 @@ export default function DealDetailPage({
       cancelled = true;
     };
   }, [dealId, reloadCount]);
+
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    let cancelled = false;
+    const { deal } = state;
+    void Promise.allSettled([
+      getOrganization(deal.buyer_organization_id),
+      getOrganization(deal.seller_organization_id),
+    ]).then(([buyerResult, sellerResult]) => {
+      if (cancelled) return;
+      setPartyNames({
+        buyer: buyerResult.status === "fulfilled" ? buyerResult.value.legal_name : "",
+        seller: sellerResult.status === "fulfilled" ? sellerResult.value.legal_name : "",
+      });
+    });
+    return () => { cancelled = true; };
+  }, [state]);
 
   const pendingCounterparty = state.status === "ready" && state.deal.pending_counterparty;
   useEffect(() => {
@@ -538,7 +556,6 @@ export default function DealDetailPage({
   return (
     <Reveal>
       <div className="workspace deal-workspace">
-        {deal.pending_counterparty ? <aside className="deal-onboarding-banner" role="status"><h2>Awaiting counterparty</h2></aside> : null}
         {freshnessError && freshness === "unknown" ? (
           <aside className="deal-onboarding-error" role="status" aria-live="polite">
             <span>Unable to verify deal onboarding status: {freshnessError}</span>
@@ -652,8 +669,7 @@ export default function DealDetailPage({
                 <span className="deal-room__version">DEAL VERSION {String(deal.version).padStart(2, "0")}</span>
               </div>
               <h1 id="deal-detail-heading">
-                One deal.<br />
-                <span>Two perspectives.</span>
+                {deal.display_name?.trim() || `Trade with ${counterpartyName}`}
               </h1>
               <p className="deal-room__lede">
                 Discuss the deal, review the details and agree on the terms together. Reviewing a
@@ -692,11 +708,11 @@ export default function DealDetailPage({
             </div>
             <div className="deal-room__ledger-item">
               <dt>Buyer organization</dt>
-              <dd className="mono">{deal.buyer_organization_id}</dd>
+              <dd title={deal.buyer_organization_id}>{partyNames.buyer || `Organization ${deal.buyer_organization_id.slice(0, 8)}`}</dd>
             </div>
             <div className="deal-room__ledger-item">
               <dt>Seller organization</dt>
-              <dd className="mono">{deal.seller_organization_id}</dd>
+              <dd title={deal.seller_organization_id}>{partyNames.seller || `Organization ${deal.seller_organization_id.slice(0, 8)}`}</dd>
             </div>
             <div className="deal-room__ledger-item deal-room__ledger-item--version">
               <dt>Deal version</dt>
@@ -728,6 +744,8 @@ export default function DealDetailPage({
           dealId={deal.id}
           buyerOrganizationId={deal.buyer_organization_id}
           sellerOrganizationId={deal.seller_organization_id}
+          buyerOrganizationName={partyNames.buyer}
+          sellerOrganizationName={partyNames.seller}
           reloadToken={agreementReloadToken}
           selectedOrganizationId={selectedOrganizationId}
           onOrganizationChange={handleOrganizationChange}

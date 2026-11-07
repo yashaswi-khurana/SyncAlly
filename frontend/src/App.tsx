@@ -37,6 +37,41 @@ export default function App() {
   }, [currentSessionKey]);
 
   useEffect(() => {
+    function clearCurrentSession() {
+      sessionRef.current = null;
+      setOrganizations(null);
+      setToast(null);
+      signOut();
+    }
+    function handleExpiredSession(failedToken?: string) {
+      if (!failedToken || (
+        getAccessToken() !== failedToken ||
+        sessionRef.current !== `${failedToken}:${sessionVersion}`
+      )) {
+        return;
+      }
+      clearCurrentSession();
+    }
+    function handleSessionExpired(event: Event) {
+      const failedToken = (event as CustomEvent<{ token?: string }>).detail?.token;
+      handleExpiredSession(failedToken);
+    }
+    function handleStorageChange(event: StorageEvent) {
+      if (event.key === "syncally.accessToken" && event.newValue === null && accessToken && getAccessToken() === null) {
+        if (sessionRef.current === `${accessToken}:${sessionVersion}`) {
+          clearCurrentSession();
+        }
+      }
+    }
+    window.addEventListener("syncally:session-expired", handleSessionExpired);
+    window.addEventListener("storage", handleStorageChange);
+    return () => {
+      window.removeEventListener("syncally:session-expired", handleSessionExpired);
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [accessToken, sessionVersion, signOut]);
+
+  useEffect(() => {
     if (!accessToken) return;
     let cancelled = false;
     void (async () => {

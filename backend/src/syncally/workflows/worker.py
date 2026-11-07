@@ -36,6 +36,7 @@ async def _connect_with_retry(
     address: str,
     namespace: str,
     tls: bool = False,
+    api_key: str | None = None,
 ) -> temporalio.client.Client:
     """Connect to Temporal, retrying transient startup failures indefinitely."""
     while True:
@@ -44,6 +45,7 @@ async def _connect_with_retry(
                 address,
                 namespace=namespace,
                 tls=tls,
+                api_key=api_key or None,
             )
         except temporalio.service.RPCError as error:
             if is_permanent_rpc_error(error):
@@ -127,12 +129,14 @@ async def run_worker(
     namespace: str,
     task_queue: str,
     tls: bool = False,
+    api_key: str | None = None,
     session_factory: SessionFactory | None = None,
 ) -> None:
     client = await _connect_with_retry(
         address=address,
         namespace=namespace,
         tls=tls,
+        api_key=api_key,
     )
     activity_executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=ACTIVITY_EXECUTOR_MAX_WORKERS
@@ -164,6 +168,7 @@ def main() -> None:
                 namespace=settings.temporal_namespace,
                 task_queue=settings.temporal_task_queue,
                 tls=settings.temporal_tls,
+                api_key=settings.temporal_api_key.get_secret_value() or None,
             )
         )
     except Exception:

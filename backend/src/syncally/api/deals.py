@@ -9,7 +9,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
@@ -37,6 +37,7 @@ class CreateDealRequest(BaseModel):
 
     buyer_organization_id: UUID
     seller_organization_id: UUID
+    display_name: str | None = Field(default=None, max_length=160)
     initiator_party: Literal["BUYER", "SELLER"] = "BUYER"
 
 
@@ -49,6 +50,7 @@ class DealResponse(BaseModel):
     status: str
     version: int
     pending_counterparty: bool = False
+    display_name: str | None = None
 
 
 class DealSummaryResponse(DealResponse):
@@ -70,6 +72,7 @@ def _to_response(deal: Deal) -> DealResponse:
         status=deal.status.value,
         version=deal.version,
         pending_counterparty=deal.pending_counterparty,
+        display_name=deal.display_name,
     )
 
 
@@ -114,6 +117,7 @@ def create_deal_route(
             CreateDealCommand(
                 buyer_organization_id=payload.buyer_organization_id,
                 seller_organization_id=payload.seller_organization_id,
+                display_name=payload.display_name,
                 initiator_party=payload.initiator_party,
             ),
             repository,

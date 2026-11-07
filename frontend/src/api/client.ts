@@ -116,7 +116,12 @@ async function readErrorDetail(response: Response): Promise<unknown> {
   }
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}, responseType: "json" | "blob" = "json"): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  responseType: "json" | "blob" = "json",
+  authRequired = true,
+): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", responseType === "blob" ? "application/zip, text/html" : "application/json");
   if (init.body !== undefined) {
@@ -149,7 +154,11 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, respon
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new ApiError(response.status, await readErrorDetail(response));
+      const detail = await readErrorDetail(response);
+      if (response.status === 401 && authRequired && token && token === getAccessToken() && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("syncally:session-expired", { detail: { token } }));
+      }
+      throw new ApiError(response.status, detail);
     }
     if (response.status === 204) {
       return undefined as T;
@@ -179,7 +188,7 @@ export function login(email: string, password: string): Promise<TokenResponse> {
   return apiRequest<TokenResponse>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
-  });
+  }, "json", false);
 }
 
 export function getCurrentUser(): Promise<CurrentUser> {
@@ -298,7 +307,7 @@ export function createCounterpartyInvitation(input: CounterpartyInvitationInput)
 export function acceptInvitation(input: InvitationAcceptanceInput): Promise<InvitationAcceptance> {
   return apiRequest<InvitationAcceptance>("/invitations/accept", {
     method: "POST", body: JSON.stringify(input),
-  });
+  }, "json", false);
 }
 
 export function getDeal(dealId: string): Promise<Deal> {

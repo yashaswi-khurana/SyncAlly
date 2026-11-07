@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     debug: bool = False
     database_url: str = ""
     jwt_secret: str = ""
+    jwt_secret_required: bool = True
     jwt_algorithm: str = "HS256"
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
@@ -99,6 +100,7 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     temporal_task_queue: str = "syncally-deals"
     temporal_tls: bool = False
+    temporal_api_key: SecretStr = SecretStr("")
     outbox_poll_interval_seconds: float = 2.0
     outbox_batch_size: int = 25
     ai_provider: Literal["offline", "openai", "openai_with_offline_fallback"] = "offline"
@@ -123,7 +125,7 @@ class Settings(BaseSettings):
             else:
                 raise ValueError("DATABASE_URL must be configured outside development/test")
         if not local_environment:
-            if (
+            if self.jwt_secret_required and (
                 len(self.jwt_secret) < _MIN_JWT_SECRET_LENGTH
                 or _is_weak_jwt_secret(self.jwt_secret)
             ):

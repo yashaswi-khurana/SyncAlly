@@ -11,6 +11,7 @@ x-app-environment: &app-environment
   TEMPORAL_NAMESPACE: default
   TEMPORAL_TASK_QUEUE: syncally-deals
   TEMPORAL_TLS: "true"
+  TEMPORAL_API_KEY: ${TEMPORAL_API_KEY:-}
   AI_PROVIDER: ${AI_PROVIDER:-offline}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   OPENAI_MODEL: ${OPENAI_MODEL:-}

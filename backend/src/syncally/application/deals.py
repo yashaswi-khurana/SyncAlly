@@ -54,6 +54,7 @@ class CreateDealCommand:
     buyer_organization_id: UUID
     seller_organization_id: UUID
     initiator_party: str = "BUYER"
+    display_name: str | None = None
 
 
 def create_deal(
@@ -76,6 +77,7 @@ def create_deal(
         buyer_organization_id=OrganizationId(command.buyer_organization_id),
         seller_organization_id=OrganizationId(command.seller_organization_id),
         created_at=now or datetime.now(UTC),
+        display_name=command.display_name,
     )
     return repository.add(deal)
 

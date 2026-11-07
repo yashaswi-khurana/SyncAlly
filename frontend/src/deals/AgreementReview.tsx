@@ -32,6 +32,8 @@ interface AgreementReviewProps {
   dealId: string;
   buyerOrganizationId: string;
   sellerOrganizationId: string;
+  buyerOrganizationName?: string;
+  sellerOrganizationName?: string;
   reloadToken?: number;
   onCommitted?: () => void;
   selectedOrganizationId?: string;
@@ -121,6 +123,8 @@ export default function AgreementReview({
   selectedOrganizationId: sharedOrganizationId,
   onOrganizationChange,
   onOverviewChange,
+  buyerOrganizationName,
+  sellerOrganizationName,
 }: AgreementReviewProps) {
   const [state, setState] = useState<AgreementState>({ status: "loading" });
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
@@ -842,7 +846,9 @@ export default function AgreementReview({
                   </dl>
                 ))}
                 <p className="hint">
-                  Both organizations review and decide on these saved terms before the agreement can be committed.
+                  {agreement.status === "COMMITTED"
+                    ? "Both organizations approved this version before it was committed. Payment and delivery are tracked separately."
+                    : "Both organizations review and decide on these saved terms before the agreement can be committed."}
                 </p>
               </div>
             ) : null}
@@ -914,7 +920,9 @@ export default function AgreementReview({
                 const displayedDecision = matchesVersion ? approval?.decision : undefined;
                 return (
                   <div className="agreement-review__approval" key={organizationId}>
-                    <span>{partyName(state.organizations, organizationId)}</span>
+                    <span>{organizationId === buyerOrganizationId
+                      ? buyerOrganizationName || partyName(state.organizations, organizationId)
+                      : sellerOrganizationName || partyName(state.organizations, organizationId)}</span>
                     <span className={`badge ${displayedDecision === "APPROVE" ? "badge--status-confirmed" : displayedDecision === "REJECT" ? "badge--status-rejected" : "badge--status-extracted"}`}>
                       {approval && !matchesVersion ? "Needs review" : decisionLabel(displayedDecision)}
                     </span>

@@ -54,37 +54,30 @@ function hasVerifiedCurrentAgreement(agreement: AgreementVersion, deal: Deal): b
   return agreement.status === "PENDING_APPROVAL" && deal.status === "PENDING_APPROVALS";
 }
 
-function nextRequiredAction(deal: Deal, organizationId: string, current: OverviewSnapshot | null): string {
-  if (deal.pending_counterparty) return "Inviting party: share the invitation link manually and wait for the counterparty to join.";
+function nextRequiredAction(deal: Deal, organizationId: string): string {
+  const refreshTip = " If the other party has acted since this page loaded, refresh before continuing.";
   if (["COMPLETED", "CANCELLED", "EXPIRED"].includes(deal.status)) return "No action is pending for this deal.";
+  if (deal.pending_counterparty) return "Inviting party: share the invitation link manually and wait for the counterparty to join.";
   if (deal.status === "DISPUTED") return "Buyer and seller: review the open case and respond to any requested evidence.";
   if (!organizationId) return "Choose the buyer or seller organization above to see its next action.";
-  if (!current || current.status === "loading") return "SyncAlly is checking the current agreement.";
-  if (current.status === "error") return "Refresh the deal to check the next action.";
-  if (!current.partyVerified) return "Choose a buyer or seller organization that belongs to this deal.";
-  if (current.status === "empty") {
-    return ["DRAFT", "NEGOTIATING"].includes(deal.status)
-      ? "Buyer or seller: discuss the remaining terms, then send or counter a proposal."
-      : "Refresh the deal to verify its current agreement.";
+  const role = organizationId === deal.buyer_organization_id
+    ? "Buyer"
+    : organizationId === deal.seller_organization_id ? "Seller" : null;
+  if (!role) return "Choose a buyer or seller organization that belongs to this deal.";
+  if (["DRAFT", "NEGOTIATING"].includes(deal.status)) {
+    return role === "Buyer"
+      ? "Buyer: share your requirements, then review any incoming proposal and its available response actions in the conversation." + refreshTip
+      : "Seller: share availability and pricing, then review any incoming proposal and its available response actions in the conversation." + refreshTip;
   }
-
-  const agreement = current.agreement;
-  if (!agreement || !hasVerifiedCurrentAgreement(agreement, deal)) {
-    return "Buyer and seller: refresh and verify the current agreement before acting.";
+  if (deal.status === "PENDING_APPROVALS") {
+    return "Buyer and seller: refresh, then review the current agreement panel and use the approval or commit action it shows.";
   }
-  if (agreement.status === "PENDING_APPROVAL") {
-    if (agreement.approvals.some((approval) => approval.decision === "REJECT")) {
-      return "Buyer or seller: resolve the requested changes, then submit a revised proposal.";
-    }
-    const awaitingOrganization = [deal.buyer_organization_id, deal.seller_organization_id].find(
-      (partyId) => !agreement.approvals.some((approval) => approval.organization_id === partyId && approval.decision === "APPROVE"),
-    );
-    if (awaitingOrganization) {
-      return `${awaitingOrganization === deal.buyer_organization_id ? "Buyer" : "Seller"}: review and approve or reject this agreement version.`;
-    }
-    return "Buyer or seller agreement approver: commit the version both parties approved.";
+  if (["AGREED", "EXECUTING"].includes(deal.status)) {
+    return role === "Seller"
+      ? "Seller: review the agreement for amendments, check payment for outstanding invoice actions, and use delivery to report shipment when available." + refreshTip
+      : "Buyer: review the agreement for amendments, follow the payment panel's current Sandbox or Offline Demo steps, and use delivery to record receipt when available." + refreshTip;
   }
-  return "Seller: request due payment and report shipped quantities. Buyer: pay invoices and confirm received quantities.";
+  return "Refresh the deal to check its current stage and available actions.";
 }
 
 export default function DealOverview({ deal, organizationId, reloadToken, snapshot }: Props) {
@@ -143,7 +136,7 @@ export default function DealOverview({ deal, organizationId, reloadToken, snapsh
   return <section className="card" aria-labelledby="deal-overview-heading">
     <h2 id="deal-overview-heading">Deal overview</h2>
     <p>Current stage: {DEAL_STAGE_LABELS[deal.status] ?? "Stage unavailable"}</p>
-    <p><strong>Next action:</strong> {nextRequiredAction(deal, organizationId, current)}</p>
+    <p><strong>Next action:</strong> {nextRequiredAction(deal, organizationId)}</p>
     {organizationId && current?.partyVerified ? <p>Viewing as {organizationId === deal.buyer_organization_id ? "buyer" : "seller"}.</p> : null}
     {agreementLink && current?.agreement && Array.isArray(current.agreement.terms?.line_items)
       ? <ul aria-label="Items in current agreement">{current.agreement.terms.line_items.map((item, index) =>

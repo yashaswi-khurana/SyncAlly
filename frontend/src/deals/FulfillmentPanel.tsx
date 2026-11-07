@@ -76,6 +76,7 @@ export default function FulfillmentPanel({
   const [dispatchDate, setDispatchDate] = useState(today);
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState("");
   const [showExceptionForm, setShowExceptionForm] = useState(false);
+  const [selectedShipmentId, setSelectedShipmentId] = useState("");
   const [exceptionType, setExceptionType] = useState<DeliveryExceptionType>("SHORTAGE");
   const [exceptionQuantity, setExceptionQuantity] = useState("");
   const [exceptionDetails, setExceptionDetails] = useState("");
@@ -84,6 +85,7 @@ export default function FulfillmentPanel({
   const [saving, setSaving] = useState(false);
   const [writeError, setWriteError] = useState("");
   const idempotency = useRef<{ request: string; key: string } | null>(null);
+  const exceptionIdempotency = useRef<{ request: string; key: string } | null>(null);
   const requestKey = `${dealId}:${reloadToken}:${reloadCount}`;
 
   useEffect(() => {
@@ -114,6 +116,11 @@ export default function FulfillmentPanel({
   const isBuyer = selectedOrganizationId === buyerOrganizationId;
   const allowedStages: readonly FulfillmentStage[] = isSeller ? ["SHIPPED"] : isBuyer ? ["OBSERVED", "CONFIRMED"] : [];
   const currentStage = allowedStages.includes(stage) ? stage : allowedStages[0] ?? stage;
+  const currentShipments = snapshot?.events.filter(
+    (item) => item.event_type === "SHIPPED" && item.agreement_version_id === snapshot.agreement_version_id,
+  ) ?? [];
+  const selectedShipment = currentShipments.find((item) => item.id === selectedShipmentId)
+    ?? currentShipments[currentShipments.length - 1];
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -193,6 +200,7 @@ export default function FulfillmentPanel({
       !snapshot?.agreement_version_id ||
       !snapshot.terms_hash ||
       !snapshot.obligation_id ||
+      !selectedShipment ||
       selectedOrganizationId !== buyerOrganizationId ||
       savingException
     ) return;
@@ -209,22 +217,45 @@ export default function FulfillmentPanel({
       return;
     }
 
+    const request = JSON.stringify([
+      dealId,
+      snapshot.agreement_version_id,
+      snapshot.terms_hash,
+      selectedOrganizationId,
+      selectedShipment.id,
+      exceptionType,
+      affectedQuantity,
+      details,
+    ]);
+    if (exceptionIdempotency.current?.request !== request) {
+      exceptionIdempotency.current = { request, key: crypto.randomUUID() };
+    }
+
     setSavingException(true);
     setExceptionError("");
     try {
       await raiseDealCase(dealId, {
         case_type: "DISPUTE",
+        case_id: exceptionIdempotency.current.key,
         reason: `Delivery exception: ${DELIVERY_EXCEPTION_LABELS[exceptionType]}`,
         agreement_version_id: snapshot.agreement_version_id,
         agreement_terms_hash: snapshot.terms_hash,
         obligation_references: snapshot.obligation_reference ? [snapshot.obligation_reference] : [],
+        delivery_exception: {
+          kind: "DELIVERY_EXCEPTION",
+          exception_type: exceptionType,
+          affected_quantity: affectedQuantity || null,
+          unit: selectedShipment.unit,
+          fulfillment_event_id: selectedShipment.id,
+        },
         evidence_visibility: "MUTUAL_VISIBLE",
         evidence_notes: [
-          affectedQuantity ? `Affected quantity: ${affectedQuantity} ${snapshot.unit ?? "units"}` : null,
+          affectedQuantity ? `Affected quantity: ${affectedQuantity} ${selectedShipment.unit}` : null,
           details,
         ].filter(Boolean).join("\n\n"),
         acting_organization_id: selectedOrganizationId,
       });
+      exceptionIdempotency.current = null;
       setShowExceptionForm(false);
       setExceptionQuantity("");
       setExceptionDetails("");
@@ -375,7 +406,7 @@ export default function FulfillmentPanel({
           {snapshot.events.some((item) => item.event_type === "SHIPPED" && item.tracking_number) ? (
             <p className="payment-status__footnote">SyncAlly records the seller’s tracking details; check the carrier’s site for live tracking updates.</p>
           ) : null}
-          {isBuyer && snapshot.events.some((item) => item.event_type === "SHIPPED") ? (
+          {isBuyer && currentShipments.length > 0 ? (
             <div className="payment-status__message">
               {!showExceptionForm ? (
                 <>
@@ -386,6 +417,19 @@ export default function FulfillmentPanel({
                 </>
               ) : (
                 <form className="fulfillment-panel__form" onSubmit={(event) => void reportException(event)}>
+                  {currentShipments.length > 1 ? (
+                    <label>
+                      Shipment
+                      <select value={selectedShipment?.id ?? ""} onChange={(event) => setSelectedShipmentId(event.target.value)} disabled={savingException}>
+                        {currentShipments.map((item, index) => (
+                          <option key={item.id} value={item.id}>
+                            Shipment {index + 1} · {item.quantity} {item.unit} · {item.dispatch_date ?? new Date(item.recorded_at).toLocaleDateString()}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  {selectedShipment ? <p>{shipmentDetails(selectedShipment)}</p> : null}
                   <label>
                     Issue type
                     <select value={exceptionType} onChange={(event) => setExceptionType(event.target.value as DeliveryExceptionType)} disabled={savingException}>
@@ -395,7 +439,7 @@ export default function FulfillmentPanel({
                     </select>
                   </label>
                   <label>
-                    Affected quantity ({snapshot.unit}) <span className="hint">Optional</span>
+                    Affected quantity ({selectedShipment?.unit ?? snapshot.unit}) <span className="hint">Optional</span>
                     <input inputMode="decimal" value={exceptionQuantity} onChange={(event) => setExceptionQuantity(event.target.value)} disabled={savingException} placeholder="Enter affected quantity" />
                   </label>
                   <label>

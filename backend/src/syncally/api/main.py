@@ -23,6 +23,7 @@ from syncally.api.organizations import router as organizations_router
 from syncally.api.payments import router as payments_router
 from syncally.api.paypal_webhooks import router as paypal_webhooks_router
 from syncally.api.platform import router as platform_router
+from syncally.api.reminders import router as reminders_router
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.operations import configure_logging
@@ -129,6 +130,7 @@ app.include_router(negotiation_router)
 app.include_router(payments_router)
 app.include_router(documents_router)
 app.include_router(paypal_webhooks_router)
+app.include_router(reminders_router)
 
 
 @app.get("/health", tags=["operations"])

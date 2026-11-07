@@ -39,6 +39,7 @@ from syncally.domain.shared.identifiers import (
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.models import Base, Organization
 from syncally.infrastructure.models import Deal as DealRow
+from syncally.infrastructure.models.reminders import DealReminderModel
 from syncally.workflows.activities import RefreshDealStateActivity
 from syncally.workflows.deal import DealWorkflowInput
 
@@ -258,6 +259,49 @@ class RefreshDealStateActivityTests(unittest.TestCase):
             RefreshDealStateActivity(factory).refresh_deal_state(
                 self._input(), self.notification
             )
+
+    def test_terminal_deal_suppresses_active_reminders(self) -> None:
+        with Session(self.engine) as session:
+            # Mark the deal terminal
+            session.execute(
+                update(DealRow)
+                .where(DealRow.id == self.deal_id)
+                .values(status="COMPLETED")
+            )
+            # Add an active reminder for this deal
+            reminder_id = uuid4()
+            reminder = DealReminderModel(
+                id=reminder_id,
+                deal_id=self.deal_id,
+                scope="CASE",
+                reference_id=uuid4(),
+                recipient_organization_id=self.buyer_id,
+                recipient_user_id=None,
+                status="SCHEDULED",
+                scheduled_for=datetime.now(UTC),
+                due_at=datetime.now(UTC),
+                recurrence_cap=3,
+                recurrence_count=0,
+                deduplication_key=f"{self.deal_id}:CASE:term:0",
+                channel="IN_APP",
+                retry_count=0,
+                version=1,
+            )
+            session.add(reminder)
+            session.commit()
+
+        # Run refresh_deal_state
+        is_terminal = self.activity.refresh_deal_state(
+            self._input(), self.notification
+        )
+        self.assertTrue(is_terminal)
+
+        # Verify active reminder was suppressed with DEAL_TERMINAL
+        with Session(self.engine) as session:
+            refreshed = session.get(DealReminderModel, reminder_id)
+            self.assertIsNotNone(refreshed)
+            self.assertEqual(refreshed.status, "SUPPRESSED")
+            self.assertEqual(refreshed.suppression_reason, "DEAL_TERMINAL")
 
 
 if __name__ == "__main__":

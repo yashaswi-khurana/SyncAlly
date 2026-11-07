@@ -62,6 +62,7 @@ class RecordFulfillmentRequest(BaseModel):
         default=None,
         description="Required with carrier on new SHIPPED requests; both may be omitted by legacy clients.",
     )
+    expected_delivery_date: date | None = Field(default=None)
     expected_version: int = Field(ge=0, strict=True)
     idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"\S")
 
@@ -88,8 +89,8 @@ class RecordFulfillmentRequest(BaseModel):
     def validate_shipping_details(self) -> RecordFulfillmentRequest:
         has_shipping_details = any((self.carrier, self.tracking_number, self.dispatch_date, self.expected_delivery_date))
         if self.event_type == FulfillmentStage.SHIPPED:
-            if has_shipping_details and (not self.carrier or self.dispatch_date is None):
-                raise ValueError("A carrier and dispatch date are required when shipping details are provided")
+            if not self.carrier or self.dispatch_date is None:
+                raise ValueError("A carrier and dispatch date are required for a shipped event")
             if self.expected_delivery_date and self.expected_delivery_date < self.dispatch_date:
                 raise ValueError("Expected delivery date cannot be before dispatch date")
         elif has_shipping_details:

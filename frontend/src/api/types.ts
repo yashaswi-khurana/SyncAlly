@@ -957,3 +957,45 @@ export interface AddCaseEvidenceInput {
   metadata?: Record<string, unknown>;
   acting_organization_id?: string | null;
 }
+
+export type ReminderScope = "FULFILLMENT" | "MILESTONE" | "CASE" | "ROUTING";
+
+export type ReminderStatus =
+  | "SCHEDULED"
+  | "PENDING"
+  | "DELIVERED"
+  | "SUPPRESSED"
+  | "FAILED";
+
+export type ReminderChannel = "IN_APP";
+
+export type SuppressionReason =
+  | "RESOLVED"
+  | "SUPERSEDED"
+  | "ORGANIZATION_SWITCHED"
+  | "RECIPIENT_REVOKED"
+  | "DEAL_TERMINAL"
+  | "RECURRENCE_EXHAUSTED";
+
+export interface DealReminder {
+  id: string;
+  deal_id: string;
+  scope: ReminderScope;
+  reference_id: string;
+  recipient_organization_id: string;
+  recipient_user_id?: string | null;
+  status: ReminderStatus;
+  scheduled_for: string;
+  due_at: string;
+  recurrence_cap: number;
+  recurrence_count: number;
+  deduplication_key: string;
+  channel: ReminderChannel;
+  suppression_reason?: SuppressionReason | string | null;
+  delivered_at?: string | null;
+  suppressed_at?: string | null;
+  error_detail?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+}

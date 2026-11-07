@@ -24,7 +24,13 @@ from syncally.cli.seed_demo import DEMO_IDENTITIES
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.identity import resolve_actor
-from syncally.infrastructure.models import AuditEvent, Organization, OrganizationMember, RefreshToken, User
+from syncally.infrastructure.models import (
+    AuditEvent,
+    Organization,
+    OrganizationMember,
+    RefreshToken,
+    User,
+)
 
 bearer_scheme = HTTPBearer(auto_error=False)
 router = APIRouter(prefix="/auth", tags=["authentication"])

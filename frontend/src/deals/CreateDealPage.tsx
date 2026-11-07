@@ -203,7 +203,6 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
   useEffect(() => {
     if (!initialListingId) return;
     let cancelled = false;
-    setLoadingListingContext(true);
     void getMarketplaceListing(initialListingId).then(
       (listing) => {
         if (cancelled) return;

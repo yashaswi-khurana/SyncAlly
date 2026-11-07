@@ -31,6 +31,7 @@ from syncally.infrastructure.repositories.payments import (
     SqlAlchemyPaymentIntentRepository,
     authorize_payment_intent_in_transaction,
 )
+from syncally.infrastructure.repositories.reminders import SqlAlchemyReminderRepository
 
 __all__ = [
     "CommunicationScopeError",
@@ -46,6 +47,7 @@ __all__ = [
     "SqlAlchemyOutboxRepository",
     "SqlAlchemyPaymentIntentRepository",
     "SqlAlchemyPaymentMilestoneRepository",
+    "SqlAlchemyReminderRepository",
     "authorize_payment_intent_in_transaction",
     "commit_agreement_in_transaction",
     "create_agreement_draft_in_transaction",

@@ -16,6 +16,7 @@ import DealConversationReview from "./DealConversationReview";
 import AgreementReview from "./AgreementReview";
 import PaymentStatusPanel from "./PaymentStatusPanel";
 import DealCasesPanel from "./DealCasesPanel";
+import RemindersPanel from "./RemindersPanel";
 import NegotiationReview from "./NegotiationReview";
 import FulfillmentPanel from "./FulfillmentPanel";
 import DealOverview from "./DealOverview";
@@ -572,6 +573,11 @@ export default function DealDetailPage({
   return (
     <Reveal>
       <div className="workspace deal-workspace">
+        {deal.pending_counterparty ? (
+          <aside className="deal-onboarding-banner" role="status">
+            <h2>Awaiting counterparty</h2>
+          </aside>
+        ) : null}
         {freshnessError && freshness === "unknown" ? (
           <aside className="deal-onboarding-error" role="status" aria-live="polite">
             <span>Unable to verify deal onboarding status: {freshnessError}</span>
@@ -777,11 +783,11 @@ export default function DealDetailPage({
             </div>
             <div className="deal-room__ledger-item">
               <dt>Buyer organization</dt>
-              <dd title={deal.buyer_organization_id}>{partyNames.buyer || `Organization ${deal.buyer_organization_id.slice(0, 8)}`}</dd>
+              <dd className="mono" title={partyNames.buyer || undefined}>{deal.buyer_organization_id}</dd>
             </div>
             <div className="deal-room__ledger-item">
               <dt>Seller organization</dt>
-              <dd title={deal.seller_organization_id}>{partyNames.seller || `Organization ${deal.seller_organization_id.slice(0, 8)}`}</dd>
+              <dd className="mono" title={partyNames.seller || undefined}>{deal.seller_organization_id}</dd>
             </div>
             <div className="deal-room__ledger-item deal-room__ledger-item--version">
               <dt>Deal version</dt>
@@ -846,6 +852,12 @@ export default function DealDetailPage({
           selectedOrganizationId={selectedOrganizationId}
           reloadToken={agreementReloadToken}
           onCaseChanged={commercialChanged}
+        />
+        <RemindersPanel
+          key={`reminders:${deal.id}:${selectedOrganizationId}`}
+          deal={deal}
+          selectedOrganizationId={selectedOrganizationId}
+          reloadToken={agreementReloadToken}
         />
 
         {showInviteModal ? (

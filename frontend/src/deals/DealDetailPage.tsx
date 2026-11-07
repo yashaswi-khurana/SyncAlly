@@ -553,6 +553,9 @@ export default function DealDetailPage({
 
   const { deal } = state;
   const showBanner = !deal.pending_counterparty && freshness === "fresh" && agreementReloadToken === 0;
+  const viewingRole = selectedOrganizationId === deal.buyer_organization_id
+    ? "BUYER"
+    : selectedOrganizationId === deal.seller_organization_id ? "SELLER" : null;
 
   return (
     <Reveal>
@@ -585,12 +588,38 @@ export default function DealDetailPage({
                 Deal created with {counterpartyName}!
               </h2>
               <p className="deal-onboarding-banner__desc">
-                Follow this 3-step roadmap to propose terms, review AI facts, and approve your
-                agreement.
+                Use this guide to move from the first request or quote to agreed terms, payment, and delivery.
               </p>
             </div>
 
-            <ol className="deal-onboarding-steps" aria-label="Deal progression steps">
+            <section className="deal-onboarding-prep" aria-labelledby="deal-onboarding-prep-heading">
+              <div className="deal-onboarding-prep__header">
+                <h3 id="deal-onboarding-prep-heading">Information to agree</h3>
+                <span className="badge">{viewingRole ? `${viewingRole === "BUYER" ? "Buyer" : "Seller"} checklist` : "Shared checklist"}</span>
+              </div>
+              <ul className="deal-onboarding-prep__list">
+                {viewingRole === "BUYER" ? <>
+                  <li>Product or specification, quantity and unit, plus any acceptable alternatives.</li>
+                  <li>Your target price and currency, or the price quote you need from the seller.</li>
+                  <li>Delivery destination and required date, plus preferred payment amount and timing.</li>
+                </> : viewingRole === "SELLER" ? <>
+                  <li>Product or specification offered, available quantity and unit, and any limits.</li>
+                  <li>Your quoted unit price and currency, plus minimum quantities or other limits.</li>
+                  <li>Delivery timing and destination, plus payment amounts and triggers you accept.</li>
+                </> : <>
+                  <li>The product or specification, quantity, and unit.</li>
+                  <li>Price and currency, delivery destination and date.</li>
+                  <li>Payment amount, trigger, and due condition.</li>
+                </>}
+              </ul>
+              <p className="deal-onboarding-prep__note">
+                Clarify open points in the conversation before proposing terms. The proposal does not
+                record taxes, freight, customs classification, or other fees, so agree those separately.
+              </p>
+            </section>
+
+            <h3 className="deal-onboarding-guide-heading">How the trade moves through SyncAlly</h3>
+            <ol className="deal-onboarding-steps" aria-label="How to complete the trade">
               <li className="deal-onboarding-step deal-onboarding-step--active" aria-current="step">
                 <div className="deal-onboarding-step__indicator">
                   <span className="deal-onboarding-step__number">1</span>
@@ -598,10 +627,12 @@ export default function DealDetailPage({
                 </div>
                 <div className="deal-onboarding-step__content">
                   <strong className="deal-onboarding-step__label">
-                    Step 1 · Introduce terms
+                    Step 1 · Start with a request or quote
                   </strong>
                   <p className="deal-onboarding-step__text">
-                    Introduce trade terms in the conversation below (e.g. quantity, price, delivery port).
+                    The buyer describes what they need or asks for a quote. The seller replies with
+                    availability and pricing. Keep internal notes private; mark only agreed details
+                    shareable with both organizations.
                   </p>
                 </div>
               </li>
@@ -613,10 +644,12 @@ export default function DealDetailPage({
                 </div>
                 <div className="deal-onboarding-step__content">
                   <strong className="deal-onboarding-step__label">
-                    Step 2 · Review facts
+                    Step 2 · Confirm the trade details
                   </strong>
                   <p className="deal-onboarding-step__text">
-                    Review suggested details and share only those you want the other party to see.
+                    Review, correct, or reject suggested facts. Fill gaps manually, then submit a
+                    structured proposal with the item, quantities, price, delivery, and payment terms.
+                    The other party can accept it for agreement review or send a counterproposal.
                   </p>
                 </div>
               </li>
@@ -627,14 +660,37 @@ export default function DealDetailPage({
                 </div>
                 <div className="deal-onboarding-step__content">
                   <strong className="deal-onboarding-step__label">
-                    Step 3 · Bilateral agreement
+                    Step 3 · Approve and commit
                   </strong>
                   <p className="deal-onboarding-step__text">
-                    Both parties review and approve the same agreement. After it is committed, the seller can request payment.
+                    Both organizations review and approve the same agreement version. If anyone
+                    changes the terms, review and approve the new version. An authorized member then
+                    commits it; proposals and approvals alone do not finalize the agreement.
+                  </p>
+                </div>
+              </li>
+
+              <li className="deal-onboarding-step">
+                <div className="deal-onboarding-step__indicator">
+                  <span className="deal-onboarding-step__number">4</span>
+                </div>
+                <div className="deal-onboarding-step__content">
+                  <strong className="deal-onboarding-step__label">
+                    Step 4 · Record payment and delivery
+                  </strong>
+                  <p className="deal-onboarding-step__text">
+                    After commitment, the seller requests payment and confirms the invoice recipient.
+                    The seller reports shipped quantity; the buyer records and confirms received
+                    quantity. SyncAlly marks the deal complete only after all required payments are
+                    reconciled and the full quantity is confirmed.
                   </p>
                 </div>
               </li>
             </ol>
+            <p className="deal-onboarding-prep__note">
+              Payment mode matters: PayPal Sandbox is for testing; Offline Demo payment is simulated
+              and transfers no money. Check the payment panel before acting.
+            </p>
 
             <div className="deal-onboarding-banner__actions">
               <button

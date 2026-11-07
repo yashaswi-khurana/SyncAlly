@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -65,6 +66,10 @@ class FulfillmentEvent(Base):
     event_type: Mapped[str] = mapped_column(String(16), nullable=False)
     quantity: Mapped[str] = mapped_column(Text, nullable=False)
     unit: Mapped[str] = mapped_column(String(100), nullable=False)
+    carrier: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tracking_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    dispatch_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    expected_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="USER_ATTESTATION")
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)

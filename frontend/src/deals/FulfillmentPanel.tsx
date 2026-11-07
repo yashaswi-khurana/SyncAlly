@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApiError, getDealFulfillment, recordDealFulfillment } from "../api/client";
-import type { FulfillmentSnapshot, FulfillmentStage } from "../api/types";
+import type { FulfillmentEvent, FulfillmentSnapshot, FulfillmentStage } from "../api/types";
 
 type FulfillmentState =
   | { status: "loading" }
@@ -37,6 +37,20 @@ function eventReporter(organizationId: string, buyerOrganizationId: string, sell
   return "Reported by a deal participant";
 }
 
+function shipmentDetails(event: FulfillmentEvent): string {
+  return [
+    event.carrier ?? "Carrier not recorded",
+    event.tracking_number ? `Tracking ${event.tracking_number}` : "No tracking number",
+    event.dispatch_date ? `Dispatched ${event.dispatch_date}` : null,
+    event.expected_delivery_date ? `Expected ${event.expected_delivery_date}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+function today(): string {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
 export default function FulfillmentPanel({
   dealId,
   buyerOrganizationId,
@@ -49,6 +63,10 @@ export default function FulfillmentPanel({
   const [reloadCount, setReloadCount] = useState(0);
   const [stage, setStage] = useState<FulfillmentStage>("SHIPPED");
   const [quantity, setQuantity] = useState("");
+  const [carrier, setCarrier] = useState("");
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [dispatchDate, setDispatchDate] = useState(today);
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [writeError, setWriteError] = useState("");
   const idempotency = useRef<{ request: string; key: string } | null>(null);
@@ -102,6 +120,10 @@ export default function FulfillmentPanel({
       selectedOrganizationId,
       currentStage,
       quantity,
+      currentStage === "SHIPPED" ? carrier.trim() : null,
+      currentStage === "SHIPPED" ? trackingNumber.trim() : null,
+      currentStage === "SHIPPED" ? dispatchDate : null,
+      currentStage === "SHIPPED" ? expectedDeliveryDate || null : null,
     ]);
     if (idempotency.current?.request !== request) {
       idempotency.current = { request, key: crypto.randomUUID() };
@@ -110,18 +132,32 @@ export default function FulfillmentPanel({
     setSaving(true);
     setWriteError("");
     try {
-      await recordDealFulfillment(dealId, {
+      const common = {
         agreement_version_id: snapshot.agreement_version_id,
         terms_hash: snapshot.terms_hash,
         obligation_id: snapshot.obligation_id,
         organization_id: selectedOrganizationId,
-        event_type: currentStage,
         quantity,
         expected_version: snapshot.fulfillment_version,
         idempotency_key: idempotencyKey,
-      });
+      };
+      const input = currentStage === "SHIPPED"
+        ? {
+            ...common,
+            event_type: "SHIPPED" as const,
+            carrier: carrier.trim(),
+            tracking_number: trackingNumber.trim() || null,
+            dispatch_date: dispatchDate,
+            expected_delivery_date: expectedDeliveryDate || null,
+          }
+        : { ...common, event_type: currentStage };
+      await recordDealFulfillment(dealId, input);
       idempotency.current = null;
       setQuantity("");
+      setCarrier("");
+      setTrackingNumber("");
+      setDispatchDate(today());
+      setExpectedDeliveryDate("");
       setReloadCount((count) => count + 1);
       onChanged?.();
     } catch (error: unknown) {
@@ -181,6 +217,7 @@ export default function FulfillmentPanel({
                   <span>Earlier terms</span>
                 </div>
                 <p>{new Date(item.recorded_at).toLocaleString()} · {eventReporter(item.organization_id, buyerOrganizationId, sellerOrganizationId)}</p>
+                {item.event_type === "SHIPPED" ? <p>{shipmentDetails(item)}</p> : null}
               </article>
             )) : <p>No delivery facts recorded yet.</p>}
           </div>
@@ -225,6 +262,26 @@ export default function FulfillmentPanel({
                   disabled={saving}
                 />
               </label>
+              {currentStage === "SHIPPED" ? (
+                <>
+                  <label>
+                    Carrier
+                    <input value={carrier} onChange={(event) => setCarrier(event.target.value)} maxLength={120} required disabled={saving} placeholder="Carrier or delivery service" />
+                  </label>
+                  <label>
+                    Tracking number <span className="hint">Optional if the carrier does not provide one</span>
+                    <input value={trackingNumber} onChange={(event) => setTrackingNumber(event.target.value)} maxLength={128} disabled={saving} placeholder="Enter tracking number" />
+                  </label>
+                  <label>
+                    Dispatch date
+                    <input type="date" value={dispatchDate} onChange={(event) => setDispatchDate(event.target.value)} required disabled={saving} />
+                  </label>
+                  <label>
+                    Expected delivery date <span className="hint">Optional if not yet known</span>
+                    <input type="date" value={expectedDeliveryDate} min={dispatchDate || undefined} onChange={(event) => setExpectedDeliveryDate(event.target.value)} disabled={saving} />
+                  </label>
+                </>
+              ) : null}
               <button type="submit" className="button" disabled={saving || !quantity.trim()}>
                 {saving ? "Saving…" : currentStage === "SHIPPED" ? "Report shipment" : currentStage === "OBSERVED" ? "Record received quantity" : "Confirm received quantity"}
               </button>
@@ -246,9 +303,15 @@ export default function FulfillmentPanel({
                   <span>{item.agreement_version_id === snapshot.agreement_version_id ? "Current terms" : "Earlier terms"}</span>
                 </div>
                 <p>{new Date(item.recorded_at).toLocaleString()} · {eventReporter(item.organization_id, buyerOrganizationId, sellerOrganizationId)}</p>
+                {item.event_type === "SHIPPED" ? (
+                  <p>{shipmentDetails(item)}</p>
+                ) : null}
               </article>
             )) : <p>No delivery facts recorded yet.</p>}
           </div>
+          {snapshot.events.some((item) => item.event_type === "SHIPPED" && item.tracking_number) ? (
+            <p className="payment-status__footnote">SyncAlly records the seller’s tracking details; check the carrier’s site for live tracking updates.</p>
+          ) : null}
         </>
       ) : null}
     </section>

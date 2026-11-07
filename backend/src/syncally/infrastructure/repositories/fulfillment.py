@@ -54,6 +54,10 @@ def _record(row: FulfillmentEvent) -> FulfillmentEventRecord:
         stage=FulfillmentStage(row.event_type),
         quantity=bounded_quantity(Decimal(row.quantity)),
         unit=row.unit,
+        carrier=row.carrier,
+        tracking_number=row.tracking_number,
+        dispatch_date=row.dispatch_date,
+        expected_delivery_date=row.expected_delivery_date,
         source_type=row.source_type,
         recorded_at=as_utc(row.recorded_at),
         version=row.version,
@@ -79,6 +83,19 @@ def _request_hash(command: RecordFulfillmentCommand) -> str:
         "stage": command.stage.value,
         "quantity": quantity_text(command.quantity),
     }
+    if any((command.carrier, command.tracking_number, command.dispatch_date, command.expected_delivery_date)):
+        payload.update(
+            {
+                "carrier": command.carrier,
+                "tracking_number": command.tracking_number,
+                "dispatch_date": command.dispatch_date.isoformat() if command.dispatch_date else None,
+                "expected_delivery_date": (
+                    command.expected_delivery_date.isoformat()
+                    if command.expected_delivery_date
+                    else None
+                ),
+            }
+        )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -300,6 +317,10 @@ class SqlAlchemyFulfillmentRepository:
                 event_type=command.stage.value,
                 quantity=quantity_text(command.quantity),
                 unit=terms.line_items[0].unit,
+                carrier=command.carrier,
+                tracking_number=command.tracking_number,
+                dispatch_date=command.dispatch_date,
+                expected_delivery_date=command.expected_delivery_date,
                 source_type="USER_ATTESTATION",
                 idempotency_key=command.idempotency_key,
                 request_hash=request_hash,
@@ -323,6 +344,10 @@ class SqlAlchemyFulfillmentRepository:
                         "obligation_id": str(obligation.id),
                         "quantity": row.quantity,
                         "unit": row.unit,
+                        "carrier": row.carrier,
+                        "tracking_number": row.tracking_number,
+                        "dispatch_date": row.dispatch_date.isoformat() if row.dispatch_date else None,
+                        "expected_delivery_date": row.expected_delivery_date.isoformat() if row.expected_delivery_date else None,
                         "source_type": row.source_type,
                     },
                 )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
@@ -35,6 +35,10 @@ class RecordFulfillmentCommand:
     organization_id: UUID
     stage: FulfillmentStage
     quantity: Decimal
+    carrier: str | None
+    tracking_number: str | None
+    dispatch_date: date | None
+    expected_delivery_date: date | None
     expected_version: int
     idempotency_key: str
 
@@ -42,6 +46,14 @@ class RecordFulfillmentCommand:
         if not isinstance(self.stage, FulfillmentStage):
             raise InvariantViolation("Unsupported fulfillment stage")
         bounded_quantity(self.quantity)
+        has_shipping_details = any((self.carrier, self.tracking_number, self.dispatch_date, self.expected_delivery_date))
+        if self.stage is FulfillmentStage.SHIPPED:
+            if has_shipping_details and (not self.carrier or self.dispatch_date is None):
+                raise InvariantViolation("A carrier and dispatch date are required with shipment details")
+            if self.expected_delivery_date and self.expected_delivery_date < self.dispatch_date:
+                raise InvariantViolation("Expected delivery date cannot be before dispatch date")
+        elif has_shipping_details:
+            raise InvariantViolation("Shipping details can only be added to a shipped event")
         if type(self.expected_version) is not int or self.expected_version < 0:
             raise InvariantViolation("Expected fulfillment version must be nonnegative")
         if not self.idempotency_key.strip() or len(self.idempotency_key) > 128:
@@ -62,6 +74,10 @@ class FulfillmentEventRecord:
     stage: FulfillmentStage
     quantity: Decimal
     unit: str
+    carrier: str | None
+    tracking_number: str | None
+    dispatch_date: date | None
+    expected_delivery_date: date | None
     source_type: str
     recorded_at: datetime
     version: int

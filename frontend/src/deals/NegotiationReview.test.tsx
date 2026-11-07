@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, getNegotiation, negotiateDeal } from "../api/client";
@@ -45,6 +45,117 @@ describe("NegotiationReview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset draft" }));
     expect(description).toHaveValue("");
     expect(screen.getByLabelText("Authoring draft status")).toHaveTextContent("draft");
+  });
+
+  it("compares the linked round and shows changed, added and removed terms without technical IDs", async () => {
+    const base = view.latest!;
+    const desk = { ...base.terms.line_items[0], id: "private-desk-id" };
+    const lamp = { ...desk, id: "private-lamp-id", description: "Lamp" };
+    const chair = { ...desk, id: "private-chair-id", description: "Chair" };
+    const previous = {
+      ...base,
+      id: "linked-round",
+      status: "SUPERSEDED",
+      terms: {
+        ...base.terms, schema_version: 2, line_items: [desk, lamp],
+        shipments: [{ ...base.terms.shipments[0], id: "private-shipment-id", allocations: [
+          { line_item_id: desk.id, quantity: "1", unit: "each" },
+        ] }],
+        payment_terms: [{ ...base.terms.payment_terms[0], id: "private-payment-id", allocations: [
+          { obligation_id: desk.id, amount: { amount: "10", currency: "USD" } },
+        ] }],
+        incoterm: "FOB",
+      },
+    };
+    const latest = {
+      ...base,
+      proposal_number: 3,
+      based_on_proposal_id: previous.id,
+      terms: {
+        ...previous.terms,
+        line_items: [chair, { ...desk, unit_price: { amount: "15", currency: "USD" } }],
+        shipments: [{ ...previous.terms.shipments[0], allocations: [
+          { line_item_id: chair.id, quantity: "1", unit: "each" },
+        ] }],
+        payment_terms: [{ ...previous.terms.payment_terms[0], due_condition: "Net 30", allocations: [
+          { obligation_id: chair.id, amount: { amount: "15", currency: "USD" } },
+        ] }],
+        incoterm: "CIF",
+      },
+    };
+    const unrelated = { ...base, id: "unrelated-round", proposal_number: 2 };
+    vi.mocked(getNegotiation).mockResolvedValue({ ...view, latest, proposals: [latest, unrelated, previous] });
+
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+
+    const comparison = within(await screen.findByRole("region", { name: "Changes from the previous proposal" }));
+    const rows = comparison.getAllByRole("listitem");
+    const deskChange = within(rows.find((row) => within(row).queryByRole("heading", { name: /Desk.*Changed/ }))!);
+    expect(deskChange.getByText("Previous · Round 1")).toBeVisible();
+    expect(deskChange.getByText("Current · Round 3")).toBeVisible();
+    expect(deskChange.getByText("10 USD")).toBeVisible();
+    expect(deskChange.getByText("15 USD")).toBeVisible();
+    expect(deskChange.queryByText("Quantity")).not.toBeInTheDocument();
+    expect(comparison.getByRole("heading", { name: /Chair.*Added/ })).toBeVisible();
+    expect(comparison.getByRole("heading", { name: /Lamp.*Removed/ })).toBeVisible();
+    expect(comparison.getAllByText("Not included")).toHaveLength(2);
+    expect(comparison.getByText(/1 each for Item 1: Desk/)).toBeVisible();
+    expect(comparison.getByText(/1 each for Item 1: Chair/)).toBeVisible();
+    const paymentChange = within(rows.find((row) => within(row).queryByRole("heading", { name: /Payment 1.*Changed/ }))!);
+    expect(paymentChange.getByText("10 USD for Item 1: Desk")).toBeVisible();
+    expect(paymentChange.getByText("15 USD for Item 1: Chair")).toBeVisible();
+    expect(comparison.getByText("Net 30")).toBeVisible();
+    expect(comparison.getByText("FOB")).toBeVisible();
+    expect(comparison.getByText("CIF")).toBeVisible();
+    expect(comparison.queryByText(/private-|linked-round|unrelated-round/)).not.toBeInTheDocument();
+  });
+
+  it("shows no changes when the same terms are reordered", async () => {
+    const base = view.latest!;
+    const first = { ...base.terms.line_items[0], id: "first" };
+    const second = { ...first, id: "second", description: "Chair" };
+    const allocations = [{ line_item_id: first.id, quantity: "1", unit: "each" },
+      { line_item_id: second.id, quantity: "1", unit: "each" }];
+    const previous = { ...base, terms: {
+      ...base.terms, schema_version: 2, line_items: [first, second],
+      shipments: [{ ...base.terms.shipments[0], id: "shipment", allocations }],
+      payment_terms: [{ ...base.terms.payment_terms[0], id: "payment" }],
+    } };
+    const latest = { ...previous, id: "counter", based_on_proposal_id: previous.id, proposal_number: 2, terms: {
+      ...previous.terms, line_items: [second, first],
+      shipments: [{ ...previous.terms.shipments[0], allocations: [...allocations].reverse() }],
+    } };
+    vi.mocked(getNegotiation).mockResolvedValue({ ...view, latest, proposals: [latest, previous] });
+
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+
+    expect(await screen.findByText("No commercial terms changed since round 1.")).toBeVisible();
+  });
+
+  it("compares single legacy terms when collection IDs are absent", async () => {
+    const previous = view.latest!;
+    const latest = {
+      ...previous, id: "legacy-counter", proposal_number: 2, based_on_proposal_id: previous.id,
+      terms: { ...previous.terms, shipments: [{ ...previous.terms.shipments[0], target_date: "2030-02-01" }] },
+    };
+    vi.mocked(getNegotiation).mockResolvedValue({ ...view, latest, proposals: [previous, latest] });
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+
+    const comparison = within(await screen.findByRole("region", { name: "Changes from the previous proposal" }));
+    expect(comparison.getByRole("heading", { name: /Shipment 1 to Toronto.*Changed/ })).toBeVisible();
+    expect(comparison.getByText("2030-01-01")).toBeVisible();
+    expect(comparison.getByText("2030-02-01")).toBeVisible();
+  });
+
+  it.each([
+    [null, "This proposal has no linked previous round to compare."],
+    ["missing-round", "The previous proposal is unavailable for comparison."],
+  ])("handles an absent or unavailable predecessor link (%s)", async (based_on_proposal_id, message) => {
+    const latest = { ...view.latest!, based_on_proposal_id };
+    const unrelated = { ...latest, id: "different-round" };
+    vi.mocked(getNegotiation).mockResolvedValue({ ...view, latest, proposals: [unrelated] });
+    render(<NegotiationReview deal={deal} organizationId="seller" reloadToken={0} onLoaded={vi.fn()} onChanged={vi.fn()} />);
+    expect(await screen.findByText(message)).toBeVisible();
   });
 
   it("accepts the exact latest proposal without recording agreement approval", async () => {

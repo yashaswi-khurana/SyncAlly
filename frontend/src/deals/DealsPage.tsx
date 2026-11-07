@@ -133,15 +133,24 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
           <ul className="deal-list">
             {state.deals.map((deal) => (
               <li key={deal.id}>
+                <h3 className="deal-list__title">
+                  {deal.display_name?.trim()
+                    ? `${deal.display_name.trim()} · ${deal.id.slice(0, 8)}`
+                    : (deal.pending_counterparty
+                    ? `New counterparty deal · ${deal.id.slice(0, 8)}`
+                    : deal.viewer_role === "BOTH"
+                      ? `${organizationNames[deal.buyer_organization_id] ?? "Buyer"} ↔ ${organizationNames[deal.seller_organization_id] ?? "Seller"} · ${deal.id.slice(0, 8)}`
+                      : `Trade with ${organizationNames[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id] ?? "counterparty"} · ${deal.id.slice(0, 8)}`)}
+                </h3>
                 <div className="deal-meta">
                   <span className="badge">{deal.status}</span>
                   <span className="deal-role">{ROLE_LABELS[deal.viewer_role]}</span>
                   {deal.pending_counterparty ? <span>Waiting for trading partner to join</span> : (
-                    <span>
-                      {deal.viewer_role === "BOTH"
-                        ? `${organizationNames[deal.buyer_organization_id] ?? "Buyer"} ↔ ${organizationNames[deal.seller_organization_id] ?? "Seller"}`
-                        : `Trading partner: ${organizationNames[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id] ?? "Name unavailable"}`}
-                    </span>
+                    deal.viewer_role === "BOTH"
+                      ? <span>{organizationNames[deal.buyer_organization_id] ?? "Buyer"} ↔ {organizationNames[deal.seller_organization_id] ?? "Seller"}</span>
+                      : organizationNames[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id]
+                        ? <span>Trading partner: {organizationNames[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id]}</span>
+                        : null
                   )}
                   <span className="mono">Reference: {deal.id}</span>
                 </div>

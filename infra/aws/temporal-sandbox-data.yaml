@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Minimal sandbox networking and PostgreSQL resources for SyncAlly ECS workers.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC for the worker and database security groups.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two subnets in different Availability Zones for the RDS subnet group.
+  AwsServiceEndpointSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Dedicated security group attached to the required private AWS interface endpoints.
+  ApprovedHttpsEgressPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[0-9a-f]+$'
+    Description: Customer-managed IPv4 prefix list for firewall-approved HTTPS destinations, including AWS endpoints if reached outside the VPC.
+  TemporalEgressPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[0-9a-f]+$'
+    Description: Customer-managed IPv4 prefix list for current Temporal Cloud endpoint ranges.
+  S3GatewayPrefixListId:
+    Type: String
+    AllowedPattern: '^pl-[0-9a-f]+$'
+    Description: AWS-managed regional S3 prefix list ID used by the ECR image-layer gateway endpoint.
+
+Resources:
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SyncAlly sandbox worker egress; no inbound access.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref S3GatewayPrefixListId
+          Description: S3 gateway endpoint used to download ECS image layers from ECR.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationPrefixListId: !Ref ApprovedHttpsEgressPrefixListId
+          Description: Approved HTTPS egress only; route through the egress inspection firewall.
+        - IpProtocol: tcp
+          FromPort: 7233
+          ToPort: 7233
+          DestinationPrefixListId: !Ref TemporalEgressPrefixListId
+          Description: Temporal Cloud TLS/gRPC egress only.
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL access only from SyncAlly worker tasks.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref WorkerSecurityGroup
+          Description: PostgreSQL from SyncAlly ECS tasks only.
+
+  WorkerDatabaseEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref WorkerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      Description: PostgreSQL egress only to the SyncAlly database security group.
+
+  WorkerAwsEndpointEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref WorkerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref AwsServiceEndpointSecurityGroupId
+      Description: HTTPS egress only to the approved private AWS interface endpoints.
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: SyncAlly sandbox PostgreSQL subnets.
+      SubnetIds: !Ref SubnetIds
+
+  DatabasePasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}/database-password'
+      Description: Generated PostgreSQL master password for the SyncAlly sandbox database.
+      GenerateSecretString:
+        PasswordLength: 36
+        ExcludePunctuation: true
+        RequireEachIncludedType: true
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-db'
+      Engine: postgres
+      DBName: syncally
+      MasterUsername: syncally
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabasePasswordSecret}:SecretString}}'
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      BackupRetentionPeriod: 1
+      AutoMinorVersionUpgrade: true
+      PubliclyAccessible: false
+      DeletionProtection: false
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt DatabaseSecurityGroup.GroupId
+
+  DatabaseUrlSecret:
+    Type: AWS::SecretsManager::Secret
+    DependsOn: Database
+    Properties:
+      Name: !Sub '${AWS::StackName}/database-url'
+      Description: SQLAlchemy PostgreSQL URL for SyncAlly ECS tasks.
+      SecretString: !Sub 'postgresql+psycopg://syncally:{{resolve:secretsmanager:${DatabasePasswordSecret}:SecretString}}@${Database.Endpoint.Address}:${Database.Endpoint.Port}/syncally?sslmode=require'
+
+  JwtSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}/jwt-secret'
+      Description: Generated JWT signing secret for the SyncAlly API only. Do not inject this secret into workers.
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+        RequireEachIncludedType: true
+
+Outputs:
+  WorkerSecurityGroupId:
+    Value: !Ref WorkerSecurityGroup
+  DatabaseSecurityGroupId:
+    Value: !GetAtt DatabaseSecurityGroup.GroupId
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseUrlSecretArn:
+    Value: !Ref DatabaseUrlSecret
+  JwtSecretArn:
+    Value: !Ref JwtSecret
+  DatabasePasswordSecretArn:
+    Value: !Ref DatabasePasswordSecret

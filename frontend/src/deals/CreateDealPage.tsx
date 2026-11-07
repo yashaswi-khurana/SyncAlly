@@ -49,6 +49,34 @@ function describeCreateError(caught: unknown, initiatorParty: "BUYER" | "SELLER"
   return "Unable to create the deal. Please try again.";
 }
 
+function counterpartyInviteUrl(invitation: Invitation): string {
+  if (import.meta.env.DEV) {
+    try {
+      const configuredUrl = new URL(invitation.invite_url);
+      const localHosts = new Set(["localhost", "127.0.0.1"]);
+      if (localHosts.has(configuredUrl.hostname) && localHosts.has(window.location.hostname)) {
+        const appPath = window.location.pathname.endsWith("/")
+          ? window.location.pathname
+          : `${window.location.pathname}/`;
+        return `${window.location.origin}${appPath}#/invite?token=${encodeURIComponent(invitation.token)}`;
+      }
+    } catch {
+      // Preserve the trusted server URL when it cannot be parsed locally.
+    }
+  }
+  return invitation.invite_url;
+}
+
+function counterpartyInvitePreview(inviteUrl: string): string {
+  try {
+    const url = new URL(inviteUrl);
+    const route = url.hash.split("?")[0] || "#/invite";
+    return `${url.origin}${url.pathname}${route}?token=••••••••`;
+  } catch {
+    return "Single-use invitation link";
+  }
+}
+
 export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   const [organizationsState, setOrganizationsState] = useState<OrganizationsState>({
     status: "loading",
@@ -71,6 +99,8 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   const [countryCode, setCountryCode] = useState("US");
   const [invitation, setInvitation] = useState<Invitation | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showFullInvitationLink, setShowFullInvitationLink] = useState(false);
+  const [displayName, setDisplayName] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +168,23 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     setReloadCount((count) => count + 1);
   }
 
+  function copyInvitationLink(url: string) {
+    setCopied(false);
+    setSubmitError(null);
+    if (!navigator.clipboard?.writeText) {
+      setShowFullInvitationLink(true);
+      setSubmitError("Could not copy the link. Open the full link below and copy it manually.");
+      return;
+    }
+    void navigator.clipboard.writeText(url).then(
+      () => setCopied(true),
+      () => {
+        setShowFullInvitationLink(true);
+        setSubmitError("Could not copy the link. Open the full link below and copy it manually.");
+      },
+    );
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -170,7 +217,10 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
           ? { buyer_organization_id: buyerOrganizationId }
           : { inviting_organization_id: buyerOrganizationId, inviter_party: "SELLER" as const }),
           recipient_email: recipientEmail.trim().toLowerCase(), legal_name: counterpartyName.trim(),
-          country_code: countryCode.trim().toUpperCase() });
+          country_code: countryCode.trim().toUpperCase(),
+          ...(displayName.trim() ? { display_name: displayName.trim() } : {}) });
+        setCopied(false);
+        setShowFullInvitationLink(false);
         setInvitation(result);
         return;
       }
@@ -178,6 +228,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
       const deal = await createDeal({
         buyer_organization_id: initiatorParty === "BUYER" ? buyerOrganizationId : seller.id,
         seller_organization_id: initiatorParty === "SELLER" ? buyerOrganizationId : seller.id,
+        ...(displayName.trim() ? { display_name: displayName.trim() } : {}),
         ...(initiatorParty === "SELLER" ? { initiator_party: "SELLER" as const } : {}),
       });
       onCreated(deal.id);
@@ -246,6 +297,74 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
     );
   }
 
+  if (invitation) {
+    const invitationUrl = counterpartyInviteUrl(invitation);
+    return (
+      <div className="workspace counterparty-invitation-page">
+        <Reveal>
+          <section className="card counterparty-invitation" aria-labelledby="counterparty-invitation-heading">
+            <div className="counterparty-invitation__eyebrow-row">
+              <span className="eyebrow">Counterparty invitation</span>
+              <span className="badge">Single use</span>
+            </div>
+            <h1 id="counterparty-invitation-heading" className="display">Awaiting counterparty</h1>
+            <p className="counterparty-invitation__summary" role="status">
+              Your deal is ready, but the invitation has not been sent. Copy the link and send it securely to {recipientEmail.trim().toLowerCase()}.
+            </p>
+
+            <div className="counterparty-invitation__recipient">
+              <span className="counterparty-invitation__label">INVITED EMAIL</span>
+              <strong>{recipientEmail.trim().toLowerCase()}</strong>
+            </div>
+
+            <div className="counterparty-invitation__link-card">
+              <div>
+                <span className="counterparty-invitation__label">INVITATION LINK</span>
+                <code className="counterparty-invitation__preview">
+                  {counterpartyInvitePreview(invitationUrl)}
+                </code>
+                <p className="hint">Only share this single-use link with the intended recipient.</p>
+              </div>
+              <button type="button" className="button" onClick={() => copyInvitationLink(invitationUrl)}>
+                {copied ? "Copied!" : "Copy Link"}
+              </button>
+            </div>
+
+            <details
+              className="counterparty-invitation__full-link"
+              open={showFullInvitationLink}
+              onToggle={(event) => setShowFullInvitationLink(event.currentTarget.open)}
+            >
+              <summary>Show full link for manual copy</summary>
+              <label htmlFor="counterparty-link">Counterparty invitation link</label>
+              <textarea id="counterparty-link" readOnly rows={3} value={invitationUrl} />
+            </details>
+
+            <div className="counterparty-invitation__expiry">
+              <span>Expires</span>
+              <time dateTime={invitation.expires_at}>
+                {new Date(invitation.expires_at).toLocaleString()}
+              </time>
+            </div>
+
+            {submitError ? <p className="form-error" role="alert">{submitError}</p> : null}
+
+            <div className="actions counterparty-invitation__actions">
+              <button
+                type="button"
+                className="button secondary"
+                disabled={!invitation.deal_id}
+                onClick={() => invitation.deal_id && onCreated(invitation.deal_id)}
+              >
+                Open pending deal
+              </button>
+            </div>
+          </section>
+        </Reveal>
+      </div>
+    );
+  }
+
   return (
     <div className="workspace">
       {header}
@@ -258,31 +377,19 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
           <p className="muted">
             Choose your role and the other organization for this deal.
           </p>
-          {invitation ? (
-            <div className="form" style={{ marginTop: 22 }}>
-              <h3>Awaiting counterparty</h3>
-              <p role="status">Your deal is ready, but the invitation has not been sent. Copy the link and send it securely to {recipientEmail.trim().toLowerCase()}.</p>
-              <p className="hint">Only share this single-use link with the intended recipient. Copy it before leaving this page.</p>
-              <label htmlFor="counterparty-link">Counterparty invitation link</label>
-              <input id="counterparty-link" readOnly value={invitation.invite_url} />
-              <p className="muted">Expires {new Date(invitation.expires_at).toLocaleString()}</p>
-              <div className="actions">
-                <button type="button" className="button" onClick={() => {
-                  setCopied(false);
-                  setSubmitError(null);
-                  if (!navigator.clipboard?.writeText) { setSubmitError("Could not copy the link. Select it above and copy it manually."); return; }
-                  void navigator.clipboard.writeText(invitation.invite_url).then(() => setCopied(true), () => setSubmitError("Could not copy the link. Select it above and copy it manually."));
-                }}>{copied ? "Copied!" : "Copy Link"}</button>
-                <button type="button" className="button secondary" disabled={!invitation.deal_id} onClick={() => invitation.deal_id && onCreated(invitation.deal_id)}>Open pending deal</button>
-              </div>
-              {submitError ? <p role="alert">{submitError}</p> : null}
-            </div>
-          ) : <form className="form" onSubmit={handleSubmit} noValidate style={{ marginTop: 22 }}>
+          <form className="form" onSubmit={handleSubmit} noValidate style={{ marginTop: 22 }}>
             <fieldset disabled={submitting}>
               <legend>Your role</legend>
               <label><input type="radio" name="initiator-party" checked={initiatorParty === "BUYER"} onChange={() => { setInitiatorParty("BUYER"); setFieldErrors({}); }} /> Buyer</label>
               <label><input type="radio" name="initiator-party" checked={initiatorParty === "SELLER"} onChange={() => { setInitiatorParty("SELLER"); setFieldErrors({}); }} /> Seller</label>
             </fieldset>
+            <div className="field">
+              <label htmlFor="deal-display-name">Deal name (optional)</label>
+              <input id="deal-display-name" type="text" maxLength={160} value={displayName}
+                placeholder="e.g. Toronto office furniture order" disabled={submitting}
+                onChange={(event) => setDisplayName(event.target.value)} />
+              <p className="hint">A short name helps both sides find this deal later.</p>
+            </div>
             <fieldset disabled={submitting}>
               <legend>Counterparty</legend>
               <label><input type="radio" name="counterparty-mode" checked={mode === "directory"} onChange={() => { setMode("directory"); setFieldErrors({}); }} /> Existing organization</label>
@@ -412,7 +519,7 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
             <button type="submit" className="button" disabled={submitting}>
               {submitting ? "Creating deal…" : "Create deal"}
             </button>
-          </form>}
+          </form>
         </section>
       </Reveal>
     </div>

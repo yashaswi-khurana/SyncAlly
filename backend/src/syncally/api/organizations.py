@@ -133,6 +133,7 @@ class CreateCounterpartyInvitationRequest(CreateOrganizationRequest):
     inviting_organization_id: UUID | None = None
     inviter_party: Literal["BUYER", "SELLER"] = "BUYER"
     recipient_email: str = Field(max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    display_name: str | None = Field(default=None, max_length=160)
 
     @field_validator("recipient_email", mode="before")
     @classmethod
@@ -1259,7 +1260,8 @@ def create_counterparty_invitation(
         lock_demo_deal_creation(db, buyer_id, seller_id)
         now = datetime.now(UTC)
         deal = DomainDeal(id=DealId(uuid4()), buyer_organization_id=OrganizationId(buyer_id),
-                          seller_organization_id=OrganizationId(seller_id), created_at=now, version=1)
+                          seller_organization_id=OrganizationId(seller_id), created_at=now,
+                          display_name=payload.display_name, version=1)
         SqlAlchemyDealRepository(db).stage(deal)
         token, expires_at, jti = _create_invitation_token(
             inviter, actor.user_id, deal.id, recipient_email=payload.recipient_email, shell_id=shell.id,

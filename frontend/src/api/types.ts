@@ -82,6 +82,7 @@ export interface UpdateOrganizationProfileInput {
 
 export interface Deal {
   id: string;
+  display_name?: string | null;
   buyer_organization_id: string;
   seller_organization_id: string;
   status: string;
@@ -96,6 +97,7 @@ export interface CounterpartyInvitationInput {
   recipient_email: string;
   legal_name: string;
   country_code: string;
+  display_name?: string;
 }
 
 export interface Invitation {
@@ -721,6 +723,7 @@ export interface NegotiationResult {
 export interface CreateDealInput {
   buyer_organization_id: string;
   seller_organization_id: string;
+  display_name?: string;
   initiator_party?: "BUYER" | "SELLER";
 }
 

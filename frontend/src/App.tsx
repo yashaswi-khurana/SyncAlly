@@ -12,11 +12,13 @@ import DealsPage from "./deals/DealsPage";
 import OrganizationSignupPage from "./organizations/OrganizationSignupPage";
 import OrganizationsSettingsPage from "./organizations/OrganizationsSettingsPage";
 import PlatformOrganizationsPage from "./platform/PlatformOrganizationsPage";
+import MarketplacePage from "./marketplace/MarketplacePage";
 import {
   navigateToCreateDeal,
   navigateToDeal,
   navigateToDeals,
   navigateToOrganizations,
+  navigateToMarketplace,
   navigateToPlatform,
 } from "./router";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
@@ -212,12 +214,13 @@ export default function App() {
 
   const isCreate = route.name === "create";
   const isOrganizations = route.name === "organizations";
+  const isMarketplace = route.name === "marketplace";
   const isPlatform = route.name === "platform";
   const isWorkspace = route.name === "deals" || route.name === "deal";
   const hasPendingInvitation =
     route.name === "organizations" && Boolean(route.inviteToken);
   const needsOrganizationInvitation = organizations !== null && organizations.length === 0 &&
-    !hasPendingInvitation && !isPlatform && route.name !== "organizations";
+    !hasPendingInvitation && !isPlatform && route.name !== "organizations" && !isMarketplace;
 
   return (
     <div className="app-shell">
@@ -244,8 +247,15 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={`nav-link${isMarketplace ? " is-active" : ""}`}
+            onClick={navigateToMarketplace}
+          >
+            Marketplace
+          </button>
+          <button
+            type="button"
             className={`nav-link${isCreate ? " is-active" : ""}`}
-            onClick={navigateToCreateDeal}
+            onClick={() => navigateToCreateDeal()}
           >
             New deal
           </button>
@@ -288,7 +298,10 @@ export default function App() {
           <CreateDealPage
             onCreated={handleDealCreated}
             onOpeningMessageDraftReady={handleOpeningMessageDraftReady}
+            initialCounterpartyId={route.sellerOrganizationId}
           />
+        ) : route.name === "marketplace" ? (
+          <MarketplacePage organizations={organizations ?? []} />
         ) : route.name === "organizations" ? (
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : route.name === "platform" ? (

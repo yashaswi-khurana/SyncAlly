@@ -34,6 +34,7 @@ import type {
   NegotiationView,
   Organization,
   OrganizationDirectoryItem,
+  OrganizationDirectorySearch,
   OrganizationMember,
   OrganizationProfile,
   PlatformOrganization,
@@ -229,6 +230,17 @@ export function listOrganizations(): Promise<Organization[]> {
 
 export function getOrganization(organizationId: string, options?: { signal?: AbortSignal }): Promise<OrganizationDirectoryItem> {
   return apiRequest<OrganizationDirectoryItem>(`/organizations/${encodeURIComponent(organizationId)}`, { signal: options?.signal });
+}
+
+export function searchOrganizationDirectory(
+  filters: OrganizationDirectorySearch = {},
+  options?: { signal?: AbortSignal },
+): Promise<OrganizationDirectoryItem[]> {
+  const params = new URLSearchParams({ limit: "100" });
+  for (const [key, value] of Object.entries(filters)) {
+    if (value?.trim()) params.set(key, value.trim());
+  }
+  return apiRequest<OrganizationDirectoryItem[]>(`/organizations/directory?${params.toString()}`, { signal: options?.signal });
 }
 
 export function getOrganizationProfile(organizationId: string): Promise<OrganizationProfile> {

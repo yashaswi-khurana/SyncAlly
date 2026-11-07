@@ -37,6 +37,8 @@ import type {
   OrganizationDirectorySearch,
   MarketplaceListing,
   CreateMarketplaceListingInput,
+  MarketplaceRFQ,
+  CreateMarketplaceRFQInput,
   OrganizationMember,
   OrganizationProfile,
   PlatformOrganization,
@@ -265,6 +267,34 @@ export function createMarketplaceListing(input: CreateMarketplaceListingInput): 
 
 export function deactivateMarketplaceListing(listingId: string): Promise<{ status: string }> {
   return apiRequest<{ status: string }>(`/marketplace/listings/${encodeURIComponent(listingId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function searchMarketplaceRFQs(
+  filters: { q?: string; destination_country_code?: string; category?: string } = {},
+  options?: { signal?: AbortSignal },
+): Promise<MarketplaceRFQ[]> {
+  const params = new URLSearchParams({ limit: "100" });
+  for (const [key, value] of Object.entries(filters)) {
+    if (value?.trim()) params.set(key, value.trim());
+  }
+  return apiRequest<MarketplaceRFQ[]>(`/marketplace/rfqs?${params.toString()}`, { signal: options?.signal });
+}
+
+export function createMarketplaceRFQ(input: CreateMarketplaceRFQInput): Promise<MarketplaceRFQ> {
+  return apiRequest<MarketplaceRFQ>("/marketplace/rfqs", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getMarketplaceRFQ(rfqId: string): Promise<MarketplaceRFQ> {
+  return apiRequest<MarketplaceRFQ>(`/marketplace/rfqs/${encodeURIComponent(rfqId)}`);
+}
+
+export function closeMarketplaceRFQ(rfqId: string): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/marketplace/rfqs/${encodeURIComponent(rfqId)}`, {
     method: "DELETE",
   });
 }

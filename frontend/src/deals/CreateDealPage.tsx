@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, getOrganization, listOrganizations } from "../api/client";
+import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, getMarketplaceRFQ, getOrganization, listOrganizations } from "../api/client";
 import type { Invitation, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 import type { OpeningMessageDraftInput } from "./openingMessageDraft";
@@ -27,6 +27,8 @@ interface CreateDealPageProps {
   onCreated: (dealId: string, openingMessageDraft?: OpeningMessageDraftInput) => void;
   onOpeningMessageDraftReady?: (dealId: string, draft: OpeningMessageDraftInput) => void;
   initialCounterpartyId?: string;
+  initialInitiatorParty?: "BUYER" | "SELLER";
+  initialRfqId?: string;
 }
 
 function describeError(caught: unknown): string {
@@ -80,12 +82,12 @@ function counterpartyInvitePreview(inviteUrl: string): string {
   }
 }
 
-export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, initialCounterpartyId }: CreateDealPageProps) {
+export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, initialCounterpartyId, initialInitiatorParty = "BUYER", initialRfqId }: CreateDealPageProps) {
   const [organizationsState, setOrganizationsState] = useState<OrganizationsState>({
     status: "loading",
   });
   const [buyerOrganizationId, setBuyerOrganizationId] = useState("");
-  const [initiatorParty, setInitiatorParty] = useState<"BUYER" | "SELLER">("BUYER");
+  const [initiatorParty, setInitiatorParty] = useState<"BUYER" | "SELLER">(initialInitiatorParty);
   const [query, setQuery] = useState("");
   const [seller, setSeller] = useState<DirectoryItem | null>(null);
   const [searchState, setSearchState] = useState<SearchState>({ status: "idle" });
@@ -172,6 +174,29 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
     );
     return () => { cancelled = true; };
   }, [initialCounterpartyId]);
+
+  useEffect(() => {
+    if (!initialRfqId) return;
+    let cancelled = false;
+    void getMarketplaceRFQ(initialRfqId).then(
+      (rfq) => {
+        if (cancelled) return;
+        const requestedTerms = [
+          `We're responding to your request for ${rfq.title} (${rfq.category}).`,
+          `Requested quantity: ${rfq.quantity} ${rfq.unit}.`,
+          `Delivery destination: ${rfq.destination_country_code}${rfq.target_delivery_date ? ` by ${rfq.target_delivery_date}` : ""}.`,
+          rfq.target_unit_price && rfq.currency ? `Target price: ${rfq.target_unit_price} ${rfq.currency} per ${rfq.unit}.` : "",
+          rfq.description ? `Requirements: ${rfq.description}` : "",
+          "Please review our quote and proposed trade terms.",
+        ].filter(Boolean);
+        setOpeningMessage(`Hello ${rfq.organization_name},\n\n${requestedTerms.join("\n")}`);
+      },
+      (caught: unknown) => {
+        if (!cancelled) setSubmitError(describeError(caught));
+      },
+    );
+    return () => { cancelled = true; };
+  }, [initialRfqId]);
 
   const results = searchState.status === "ready" ? searchState.items : [];
   const listOpen = searchOpen && results.length > 0;

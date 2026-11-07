@@ -44,6 +44,54 @@ DEFAULT_MAX_ATTEMPTS = 2
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_BACKOFF_SECONDS = 0.5
 
+_REQUIRED_PROPOSAL_FIELDS = (
+    ("description", frozenset({"description", "item_description"})),
+    ("quantity", frozenset({"quantity"})),
+    ("unit", frozenset({"unit"})),
+    ("unit_price", frozenset({"unit_price"})),
+    ("delivery_destination", frozenset({"delivery_destination"})),
+    ("delivery_date", frozenset({"delivery_date"})),
+)
+
+
+def missing_trade_fields(constraints: Iterable[Constraint]) -> list[str]:
+    """List required proposal fields not represented by visible deal facts."""
+    ignored_statuses = {
+        ConstraintStatus.NEEDS_CLARIFICATION,
+        ConstraintStatus.REJECTED,
+        ConstraintStatus.SUPERSEDED,
+    }
+    present = {
+        constraint.field.casefold().replace(" ", "_")
+        for constraint in constraints
+        if constraint.status not in ignored_statuses
+    }
+    return [
+        proposal_field
+        for proposal_field, aliases in _REQUIRED_PROPOSAL_FIELDS
+        if not present.intersection(aliases)
+    ]
+
+
+def fact_suggestion_guidance(missing_fields: list[str]) -> str:
+    """Give the user a deterministic prompt for missing trade details."""
+    if not missing_fields:
+        return "All required trade details were found. Review each fact before using a draft."
+    labels = {
+        "description": "item description",
+        "quantity": "quantity",
+        "unit": "unit",
+        "unit_price": "unit price",
+        "delivery_destination": "delivery destination",
+        "delivery_date": "delivery date",
+    }
+    missing = ", ".join(labels[field] for field in missing_fields)
+    return (
+        f"Add the missing details: {missing}. Suggested format: "
+        "‘Order of [item], [quantity] [unit] at USD [price] each, "
+        "ship to [city or port] by YYYY-MM-DD.’"
+    )
+
 
 class AIProviderError(Exception):
     """Base class for a failed AI provider call."""

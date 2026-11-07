@@ -18,9 +18,11 @@ live output quality, and provider retention configuration are not verified.
   and arbitrary endpoint configuration are disabled.
 - Business and domain code never import a provider SDK. Adapters translate
   provider output into the versioned S4-01 contracts.
-- Do **not** add LangGraph yet. The selected flow is a single bounded, typed
-  call per request; a graph is introduced only when a flow needs multi-step
-  branching or state that typed functions cannot express.
+- A small LangGraph proposal flow checks required trade fields before routing
+  to the existing bounded provider call. Incomplete context returns deterministic
+  clarification guidance without egress. The graph has no checkpointer: each
+  request reloads authorized context from PostgreSQL, which remains the source
+  of truth.
 
 ## Contract
 
@@ -148,9 +150,13 @@ backfilled. Provenance never enters reviewed terms or approval payloads. No
 migration or durable provenance was added; B1-B4, Q1, F1a/F3 and migrations 0012-0014
 are outside F2 and preserved.
 
+The LangGraph graph only controls readiness and routing; grounding, retries,
+provider selection, and validation remain in the existing application/provider
+boundary. It cannot confirm facts, approve terms, or create agreements.
+
 Evaluation uses `httpx.MockTransport`, existing AI/context/conversation tests and
 frontend review/client tests for privacy gates, grounding, strict parsing, size
 limits, error classification, attempt counts, elapsed cancellation, revocation,
 safe errors, provenance and unchanged human review. This is a mocked boundary
-evaluation, not a real-provider quality benchmark. No onboarding or negotiation
-features, LangGraph, new providers, credentials, or live availability claims are added.
+evaluation, not a real-provider quality benchmark. No new provider, credentials,
+or live availability claims are added.

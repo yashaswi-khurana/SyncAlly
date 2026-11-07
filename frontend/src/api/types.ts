@@ -497,6 +497,7 @@ export interface FulfillmentSnapshot {
   agreement_version_number: number | null;
   terms_hash: string | null;
   obligation_id: string | null;
+  obligation_reference?: string | null;
   planned_quantity: string | null;
   unit: string | null;
   destination: string | null;

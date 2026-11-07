@@ -132,6 +132,7 @@ class FulfillmentSnapshotResponse(BaseModel):
     agreement_version_number: int | None
     terms_hash: str | None
     obligation_id: UUID | None
+    obligation_reference: str | None
     planned_quantity: str | None
     unit: str | None
     destination: str | None
@@ -179,6 +180,7 @@ def _snapshot_response(snapshot: FulfillmentSnapshot) -> FulfillmentSnapshotResp
         agreement_version_number=snapshot.agreement_version_number,
         terms_hash=snapshot.terms_hash,
         obligation_id=snapshot.obligation_id,
+        obligation_reference=snapshot.obligation_reference,
         planned_quantity=(canonical_decimal(snapshot.planned_quantity) if snapshot.planned_quantity is not None else None),
         unit=snapshot.unit,
         destination=snapshot.destination,

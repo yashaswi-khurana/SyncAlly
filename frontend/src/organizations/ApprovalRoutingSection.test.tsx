@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, getApprovalRoutingPolicy, putApprovalRoutingPolicy } from "../api/client";
-import type { Organization, OrganizationMember } from "../api/types";
+import type { ApprovalRoutingPolicy, Organization, OrganizationMember } from "../api/types";
 import ApprovalRoutingSection from "./ApprovalRoutingSection";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -79,6 +79,34 @@ describe("ApprovalRoutingSection", () => {
       mode: "PARALLEL",
       approver_user_ids: ["user-approver"],
       expected_version: null,
+    });
+  });
+
+  it("lets admins remove a configured approver who is no longer eligible", async () => {
+    const policy: ApprovalRoutingPolicy = {
+      organization_id: "org-1",
+      mode: "PARALLEL",
+      approver_user_ids: ["user-approver", "user-revoked"],
+      version: 3,
+    };
+    mockedGet.mockResolvedValue(policy);
+    mockedPut.mockResolvedValue({ ...policy, approver_user_ids: ["user-approver"], version: 4 });
+    render(<ApprovalRoutingSection organization={ORG} members={[APPROVER]} />);
+
+    await screen.findByText("PARALLEL");
+    fireEvent.click(screen.getByRole("button", { name: /edit routing/i }));
+
+    expect(screen.getByText(/no longer eligible/i)).toBeInTheDocument();
+    const removeButtons = screen.getAllByRole("button", { name: /remove/i });
+    fireEvent.click(removeButtons[removeButtons.length - 1]);
+
+    expect(screen.queryByText(/no longer eligible/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /save routing/i }));
+
+    expect(mockedPut).toHaveBeenCalledWith("org-1", {
+      mode: "PARALLEL",
+      approver_user_ids: ["user-approver"],
+      expected_version: 3,
     });
   });
 });

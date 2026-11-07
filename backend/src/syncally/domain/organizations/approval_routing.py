@@ -154,16 +154,10 @@ def evaluate_routing(
             )
         )
 
-    if any_revoked:
-        return RoutingEvaluation(
-            status=RoutingOutcomeStatus.ERROR,
-            satisfied=False,
-            rejected=False,
-            finalize_decision=None,
-            finalize_user_id=None,
-            slots=tuple(slots),
-        )
-
+    # A reject is always from an eligible, current slot (the REVOKED branch
+    # above takes priority over it per-slot), so it finalizes as the veto it
+    # is even if some other configured seat is separately revoked - a
+    # revocation elsewhere must not suppress a vote that already landed.
     if any_reject:
         return RoutingEvaluation(
             status=RoutingOutcomeStatus.COMPLETED,
@@ -171,6 +165,16 @@ def evaluate_routing(
             rejected=True,
             finalize_decision=ApprovalDecision.REJECT,
             finalize_user_id=reject_user,
+            slots=tuple(slots),
+        )
+
+    if any_revoked:
+        return RoutingEvaluation(
+            status=RoutingOutcomeStatus.ERROR,
+            satisfied=False,
+            rejected=False,
+            finalize_decision=None,
+            finalize_user_id=None,
             slots=tuple(slots),
         )
 

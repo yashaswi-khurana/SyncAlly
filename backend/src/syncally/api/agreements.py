@@ -433,7 +433,7 @@ class ApprovalResponse(BaseModel):
     deal_id: UUID
     version_number: int
     organization_id: UUID
-    user_id: UUID
+    user_id: UUID | None
     decision: str
     terms_hash: str
     created_at: datetime

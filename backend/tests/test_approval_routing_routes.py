@@ -221,6 +221,10 @@ class ApprovalRoutingRouteTests(unittest.TestCase):
         routing_status = current.json()["routing_status"][str(self.buyer.id)]
         self.assertEqual(routing_status["status"], "COMPLETED")
         self.assertIsNone(routing_status["slots"])
+        buyer_approval = next(
+            a for a in current.json()["approvals"] if a["organization_id"] == str(self.buyer.id)
+        )
+        self.assertIsNone(buyer_approval["user_id"])
 
         self._authenticate(self._actor(self.buyer_user, self.buyer))
         own_view = self._request("GET", f"/deals/{self.deal.id}/agreements/current")

@@ -46,6 +46,13 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        # DROP TABLE itself needs ACCESS EXCLUSIVE; taking it up front blocks
+        # any concurrent insert from the moment we start counting, so a
+        # request can't sneak a new row in between the "empty" check below
+        # and the drops.
+        bind.execute(sa.text("LOCK TABLE organization_approval_routing_policies IN ACCESS EXCLUSIVE MODE"))
+        bind.execute(sa.text("LOCK TABLE agreement_routing_decisions IN ACCESS EXCLUSIVE MODE"))
     policy_count = bind.execute(sa.text("SELECT COUNT(*) FROM organization_approval_routing_policies")).scalar_one()
     decision_count = bind.execute(sa.text("SELECT COUNT(*) FROM agreement_routing_decisions")).scalar_one()
     if policy_count or decision_count:

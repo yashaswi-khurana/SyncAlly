@@ -238,33 +238,54 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
             <div className="field" style={{ marginBottom: 12 }}>
               <label>Order{draftMode === "SEQUENTIAL" ? " (turn order)" : ""}</label>
               <ol style={{ margin: 0, paddingLeft: 20 }}>
-                {draftOrder.map((userId, index) => (
-                  <li key={userId} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span>{labelFor(userId)}</span>
-                    {draftMode === "SEQUENTIAL" && (
+                {draftOrder.map((userId, index) => {
+                  const stale = !eligibleApprovers.some((m) => m.user_id === userId);
+                  return (
+                    <li key={userId} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span>
+                        {labelFor(userId)}
+                        {stale && (
+                          <span className="muted" style={{ fontSize: "0.75rem" }}>
+                            {" "}(no longer eligible - remove to save)
+                          </span>
+                        )}
+                      </span>
                       <span style={{ display: "flex", gap: 4 }}>
+                        {draftMode === "SEQUENTIAL" && (
+                          <>
+                            <button
+                              type="button"
+                              className="button ghost"
+                              style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                              onClick={() => moveApprover(userId, -1)}
+                              disabled={saving || index === 0}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="button ghost"
+                              style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                              onClick={() => moveApprover(userId, 1)}
+                              disabled={saving || index === draftOrder.length - 1}
+                            >
+                              ↓
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           className="button ghost"
                           style={{ fontSize: "0.7rem", padding: "2px 6px" }}
-                          onClick={() => moveApprover(userId, -1)}
-                          disabled={saving || index === 0}
+                          onClick={() => toggleApprover(userId)}
+                          disabled={saving}
                         >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="button ghost"
-                          style={{ fontSize: "0.7rem", padding: "2px 6px" }}
-                          onClick={() => moveApprover(userId, 1)}
-                          disabled={saving || index === draftOrder.length - 1}
-                        >
-                          ↓
+                          Remove
                         </button>
                       </span>
-                    )}
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ol>
             </div>
           )}

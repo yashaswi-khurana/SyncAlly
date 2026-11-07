@@ -59,12 +59,19 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
         return routing_policy_to_domain(row) if row is not None else None
 
     def eligible_approver_ids(
-        self, organization_id: UUID, user_ids: tuple[UserId, ...]
+        self, organization_id: UUID, user_ids: tuple[UserId, ...], *, for_update: bool = False
     ) -> frozenset[UserId]:
-        """Fresh check: still an active member of this organization with AGREEMENT_APPROVAL."""
+        """Fresh check: still an active member of this organization with AGREEMENT_APPROVAL.
+
+        ``for_update`` takes a FOR SHARE lock on the matching membership rows,
+        held for the rest of this transaction - use it right before a decision
+        that must not be undercut by a revocation racing the read (an admin's
+        revoke issues an UPDATE on that same row, which then blocks until this
+        transaction commits or rolls back).
+        """
         if not user_ids:
             return frozenset()
-        rows = self._db.execute(
+        stmt = (
             select(OrganizationMember.user_id, OrganizationMember.role, OrganizationMember.capabilities)
             .join(Organization, Organization.id == OrganizationMember.organization_id)
             .join(User, User.id == OrganizationMember.user_id)
@@ -75,7 +82,10 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
                 Organization.status == "ACTIVE",
                 User.status == "ACTIVE",
             )
-        ).all()
+        )
+        if for_update:
+            stmt = stmt.with_for_update(read=True, of=OrganizationMember)
+        rows = self._db.execute(stmt).all()
         eligible: set[UserId] = set()
         for user_id, role, capabilities in rows:
             if OrganizationCapability.AGREEMENT_APPROVAL in resolve_effective_capabilities(role, capabilities):
@@ -135,7 +145,10 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
                 ) from error
             return routing_policy_to_domain(row)
 
-        if expected_version is not None and row.version != expected_version:
+        # Updating an existing policy always requires the caller's last-seen
+        # version - unlike the create-without-version path above, skipping
+        # this check here would let a stale edit silently clobber a newer one.
+        if expected_version is None or row.version != expected_version:
             raise InvariantViolation("Approval routing policy version conflict; stale write rejected")
 
         row.mode = policy.mode.value

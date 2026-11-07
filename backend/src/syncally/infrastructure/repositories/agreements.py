@@ -251,6 +251,39 @@ class SqlAlchemyAgreementRepository:
         eligible = routing_policies.eligible_approver_ids(organization_id, policy.approver_user_ids)
         return policy, evaluate_routing(policy, decisions, eligible)
 
+    def _finalized_routing_status(
+        self, organization_id: UUID, version_row: AgreementVersion
+    ) -> dict[str, Any] | None:
+        """The recorded routing outcome for a version that's no longer pending.
+
+        Once a version is committed, superseded, or voided, its approvals
+        can never be redone, so its routing status must stay exactly what
+        was recorded when it finalized - never recomputed against the
+        organization's current policy, which may have since changed,
+        bumped versions, or been removed entirely.
+        """
+        if version_row.status == AgreementStatus.PENDING_APPROVAL:
+            return None
+        approval = self._db.scalar(
+            select(Approval).where(
+                Approval.agreement_version_id == version_row.id,
+                Approval.organization_id == organization_id,
+            )
+        )
+        auth_context = approval.auth_context if approval is not None else None
+        if not auth_context or auth_context.get("finalized_via") != "approval_routing":
+            return None
+        decided_by = auth_context.get("decided_by", [])
+        return {
+            "organization_id": str(organization_id),
+            "mode": auth_context.get("routing_mode"),
+            "policy_version": auth_context.get("routing_policy_version"),
+            "status": RoutingOutcomeStatus.COMPLETED.value,
+            "required_approvers": len(decided_by),
+            "completed_approvers": len(decided_by),
+            "slots": None,
+        }
+
     def _routing_status_for_version(
         self, version_row: AgreementVersion, deal: Deal, viewer_organization_id: UUID
     ) -> dict[str, Any]:
@@ -262,6 +295,10 @@ class SqlAlchemyAgreementRepository:
         """
         result: dict[str, Any] = {}
         for organization_id in (deal.buyer_organization_id, deal.seller_organization_id):
+            finalized_entry = self._finalized_routing_status(organization_id, version_row)
+            if finalized_entry is not None:
+                result[str(organization_id)] = finalized_entry
+                continue
             evaluated = self._evaluate_org_routing(organization_id, version_row)
             if evaluated is None:
                 continue
@@ -334,7 +371,14 @@ class SqlAlchemyAgreementRepository:
                 "payment_due_condition": payment.due_condition if payment else None,
                 "approvals": [{"id": str(approval.id), "agreement_version_id": str(row.id),
                     "deal_id": str(row.deal_id), "version_number": row.version_number,
-                    "organization_id": str(approval.organization_id), "user_id": str(approval.user_id),
+                    "organization_id": str(approval.organization_id),
+                    "user_id": (
+                        None
+                        if approval.organization_id != party
+                        and approval.auth_context
+                        and approval.auth_context.get("finalized_via") == "approval_routing"
+                        else str(approval.user_id)
+                    ),
                     "decision": approval.decision, "terms_hash": approval.terms_hash,
                     "created_at": as_utc(approval.created_at)} for approval in approvals],
                 "evidence": evidence, "grounding": "UNMAPPED",
@@ -837,6 +881,17 @@ class SqlAlchemyAgreementRepository:
         if actor_id not in policy.approver_user_ids:
             raise NotEligibleApprover(
                 "Actor is not one of this organization's configured routing approvers"
+            )
+        # Lock the actor's own membership row for the rest of this transaction -
+        # otherwise an admin's concurrent revoke can commit after this check but
+        # before ours, letting a decision (including a REJECT veto) go through
+        # on authority that's already gone by the time we commit.
+        locked_actor = routing_policies.eligible_approver_ids(
+            command.organization_id, (actor_id,), for_update=True
+        )
+        if actor_id not in locked_actor:
+            raise NotEligibleApprover(
+                "Actor is no longer an eligible organization approver"
             )
 
         decision_rows = list(

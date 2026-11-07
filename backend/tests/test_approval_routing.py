@@ -49,6 +49,7 @@ from syncally.infrastructure.models import (
     User,
 )
 from syncally.infrastructure.repositories.agreements import (
+    SqlAlchemyAgreementRepository,
     commit_agreement_in_transaction,
     record_approval_in_transaction,
     record_routing_decision_in_transaction,
@@ -254,6 +255,67 @@ class ApprovalRoutingTestCase(unittest.TestCase):
         )
         self.assertEqual(agreement.status, AgreementStatus.COMMITTED)
 
+    def test_committed_version_routing_status_survives_a_later_policy_change(self) -> None:
+        """Once committed, a version's routing outcome can never be redone, so
+        it must keep reporting what actually finalized it - not get re-evaluated
+        (and appear incomplete/blocked) against a policy that changed afterward.
+        """
+        a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        a2 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        policies = SqlAlchemyApprovalRoutingPolicyRepository(self.session)
+        policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id), UserId(a2.id)),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+
+        self._approve(self.buyer_org.id, a1.id)
+        outcome = self._approve(self.buyer_org.id, a2.id)
+        self.assertIsNotNone(outcome.finalized_approval)
+        record_approval_in_transaction(
+            self.session,
+            RecordApprovalCommand(
+                deal_id=self.deal.id, version_number=1, terms_hash=self.version_1.terms_hash,
+                organization_id=self.seller_org.id, user_id=self.seller_user.id,
+                decision=ApprovalDecision.APPROVE,
+            ),
+        )
+        commit_agreement_in_transaction(
+            self.session,
+            CommitAgreementCommand(
+                deal_id=self.deal.id, expected_version=1,
+                expected_terms_hash=self.version_1.terms_hash,
+                user_id=self.buyer_user.id, organization_id=self.buyer_org.id,
+            ),
+        )
+        self.session.commit()
+
+        # Reassigning the policy bumps its version - the committed version's
+        # routing decisions are now stale against the live policy.
+        a3 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id), UserId(a2.id), UserId(a3.id)),
+            ),
+            expected_version=1,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+
+        repository = SqlAlchemyAgreementRepository(self.session)
+        result = repository.read_versions(self.deal.id, self.buyer_user.id, self.buyer_org.id, (1,))
+        routing_status = result["versions"][0]["routing_status"][str(self.buyer_org.id)]
+        self.assertEqual(routing_status["status"], RoutingOutcomeStatus.COMPLETED.value)
+        self.assertEqual(routing_status["policy_version"], 1)
+        self.assertIsNone(routing_status["slots"])
+
     # -- SEQUENTIAL routing: turn order enforced, reject is always a veto --
 
     def test_sequential_blocks_out_of_order_approval(self) -> None:
@@ -322,6 +384,33 @@ class ApprovalRoutingTestCase(unittest.TestCase):
         with self.assertRaises(NotEligibleApprover):
             self._approve(self.buyer_org.id, outsider.id)
 
+    def test_configured_approver_who_lost_capability_cannot_reject(self) -> None:
+        """A configured approver who stays ACTIVE but loses AGREEMENT_APPROVAL
+        is permanently ineligible, not merely out of turn - this must surface
+        as NotEligibleApprover (403), not OutOfSequenceApproval (409), even
+        for a REJECT veto that would otherwise always be actionable.
+        """
+        a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        SqlAlchemyApprovalRoutingPolicyRepository(self.session).save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id),),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+
+        membership = self.session.query(OrganizationMember).filter_by(
+            organization_id=self.buyer_org.id, user_id=a1.id
+        ).one()
+        membership.capabilities = []
+        self.session.commit()
+
+        with self.assertRaises(NotEligibleApprover):
+            self._reject(self.buyer_org.id, a1.id)
+
     def test_revoked_approver_blocks_completion(self) -> None:
         a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
         a2 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
@@ -342,12 +431,17 @@ class ApprovalRoutingTestCase(unittest.TestCase):
         a2.status = "REVOKED"
         self.session.commit()
 
-        # a1 revising their own decision still surfaces the blocked route.
+        # a1 revising their own decision to APPROVE again still surfaces the
+        # blocked route, but a1's REJECT is a veto that finalizes regardless
+        # of a2's separately revoked seat - a revocation elsewhere must not
+        # suppress a vote that already landed.
         with self.assertRaises(DuplicateApproval):
             self._approve(self.buyer_org.id, a1.id)
         outcome_2 = self._reject(self.buyer_org.id, a1.id)
-        self.assertEqual(outcome_2.evaluation.status, RoutingOutcomeStatus.ERROR)
-        self.assertIsNone(outcome_2.finalized_approval)
+        self.assertEqual(outcome_2.evaluation.status, RoutingOutcomeStatus.COMPLETED)
+        self.assertTrue(outcome_2.evaluation.rejected)
+        self.assertIsNotNone(outcome_2.finalized_approval)
+        self.assertEqual(outcome_2.finalized_approval.decision, ApprovalDecision.REJECT)
 
     def test_stale_decision_after_policy_version_bump_must_be_redone(self) -> None:
         a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
@@ -421,6 +515,35 @@ class ApprovalRoutingTestCase(unittest.TestCase):
                     approver_user_ids=(UserId(a1.id),),
                 ),
                 expected_version=99,
+                updated_by_user_id=self.buyer_user.id,
+            )
+
+    def test_save_requires_expected_version_to_update_an_existing_policy(self) -> None:
+        """Omitting expected_version must not silently bypass optimistic
+        concurrency once a policy already exists - two concurrent updates
+        that both omit it would otherwise let the later write clobber the
+        earlier one with no conflict ever raised.
+        """
+        a1 = self._add_member(self.buyer_org.id, capabilities=["AGREEMENT_APPROVAL"])
+        policies = SqlAlchemyApprovalRoutingPolicyRepository(self.session)
+        policies.save(
+            ApprovalRoutingPolicy(
+                organization_id=OrganizationId(self.buyer_org.id),
+                mode=ApprovalRoutingMode.PARALLEL,
+                approver_user_ids=(UserId(a1.id),),
+            ),
+            expected_version=None,
+            updated_by_user_id=self.buyer_user.id,
+        )
+        self.session.commit()
+        with self.assertRaises(InvariantViolation):
+            policies.save(
+                ApprovalRoutingPolicy(
+                    organization_id=OrganizationId(self.buyer_org.id),
+                    mode=ApprovalRoutingMode.SEQUENTIAL,
+                    approver_user_ids=(UserId(a1.id),),
+                ),
+                expected_version=None,
                 updated_by_user_id=self.buyer_user.id,
             )
 

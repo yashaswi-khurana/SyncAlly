@@ -4814,4 +4814,36 @@ body::after {
   }
 }
 
+.marketplace-page__filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  align-items: end;
+  gap: 16px;
+}
+
+.marketplace-page__filters label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.marketplace-page__results {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.marketplace-page__item {
+  display: grid;
+  gap: 12px;
+}
+
+.marketplace-page__item-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 

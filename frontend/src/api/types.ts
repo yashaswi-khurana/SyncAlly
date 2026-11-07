@@ -44,6 +44,14 @@ export interface OrganizationDirectoryItem {
   regions?: string[];
 }
 
+export interface OrganizationDirectorySearch {
+  q?: string;
+  product?: string;
+  capability?: string;
+  region?: string;
+  country_code?: string;
+}
+
 export type ContactVisibility = "PRIVATE" | "PARTICIPANTS";
 
 export interface OrganizationContact {

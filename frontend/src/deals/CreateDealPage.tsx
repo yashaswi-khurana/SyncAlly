@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, listOrganizations } from "../api/client";
+import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, getOrganization, listOrganizations } from "../api/client";
 import type { Invitation, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 import type { OpeningMessageDraftInput } from "./openingMessageDraft";
@@ -26,6 +26,7 @@ interface FieldErrors {
 interface CreateDealPageProps {
   onCreated: (dealId: string, openingMessageDraft?: OpeningMessageDraftInput) => void;
   onOpeningMessageDraftReady?: (dealId: string, draft: OpeningMessageDraftInput) => void;
+  initialCounterpartyId?: string;
 }
 
 function describeError(caught: unknown): string {
@@ -79,7 +80,7 @@ function counterpartyInvitePreview(inviteUrl: string): string {
   }
 }
 
-export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady }: CreateDealPageProps) {
+export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, initialCounterpartyId }: CreateDealPageProps) {
   const [organizationsState, setOrganizationsState] = useState<OrganizationsState>({
     status: "loading",
   });
@@ -154,6 +155,23 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady }
       controller.abort();
     };
   }, [query, seller, searchRetry, mode]);
+
+  useEffect(() => {
+    if (!initialCounterpartyId) return;
+    let cancelled = false;
+    void getOrganization(initialCounterpartyId).then(
+      (item) => {
+        if (cancelled) return;
+        setSeller(item);
+        setQuery(item.legal_name);
+        setMode("directory");
+      },
+      (caught: unknown) => {
+        if (!cancelled) setSubmitError(describeError(caught));
+      },
+    );
+    return () => { cancelled = true; };
+  }, [initialCounterpartyId]);
 
   const results = searchState.status === "ready" ? searchState.items : [];
   const listOpen = searchOpen && results.length > 0;

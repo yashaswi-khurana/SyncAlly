@@ -9,7 +9,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, String, cast, func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -502,6 +502,10 @@ def _case_insensitive_prefix(
 )
 def list_organization_directory(
     q: str | None = Query(default=None, max_length=100),
+    product: str | None = Query(default=None, max_length=100),
+    capability: str | None = Query(default=None, max_length=100),
+    region: str | None = Query(default=None, max_length=100),
+    country_code: str | None = Query(default=None, min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$"),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=10000),
     db: Session = Depends(get_db),
@@ -532,6 +536,17 @@ def list_organization_directory(
         clean_q = q.strip()
         if clean_q:
             stmt = stmt.where(_case_insensitive_prefix(db, Organization.legal_name, clean_q))
+    if country_code:
+        stmt = stmt.where(Organization.country_code == country_code.upper())
+    # ponytail: scan profile JSON for the MVP; use indexed listings when catalogs grow.
+    for value, column in (
+        (product, OrganizationProfile.products),
+        (capability, OrganizationProfile.capabilities),
+        (region, OrganizationProfile.regions),
+    ):
+        if value and value.strip():
+            pattern = f"%{_escape_like(value.strip())}%"
+            stmt = stmt.where(cast(column, String).ilike(pattern, escape="\\"))
 
     rows = db.execute(stmt).all()
     return [

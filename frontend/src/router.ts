@@ -1,14 +1,16 @@
 export type Route =
   | { name: "deals" }
-  | { name: "create" }
+  | { name: "create"; sellerOrganizationId?: string }
   | { name: "deal"; dealId: string }
   | { name: "organizations"; inviteToken?: string; dealId?: string }
+  | { name: "marketplace" }
   | { name: "platform" }
   | { name: "organizationSignup" }
   | { name: "invite"; token: string; dealId?: string };
 
 const DEAL_ROUTE = /^\/deals\/([^/]+)$/;
 const CREATE_DEAL_PATH = "/deals/new";
+const MARKETPLACE_PATH = "/marketplace";
 const ORGANIZATIONS_PATH = "/settings/organizations";
 const PLATFORM_PATH = "/platform/organizations";
 const ORGANIZATION_SIGNUP_PATH = "/create-organization";
@@ -23,7 +25,11 @@ export function parseRoute(hash: string): Route {
     return { name: "deal", dealId: decodeURIComponent(dealId) };
   }
   if (path === CREATE_DEAL_PATH) {
-    return { name: "create" };
+    const params = new URLSearchParams(queryString || "");
+    return { name: "create", sellerOrganizationId: params.get("sellerId") || undefined };
+  }
+  if (path === MARKETPLACE_PATH || path === `${MARKETPLACE_PATH}/`) {
+    return { name: "marketplace" };
   }
   if (path === PLATFORM_PATH || path === `${PLATFORM_PATH}/`) {
     return { name: "platform" };
@@ -58,8 +64,14 @@ export function navigateToDeals(): void {
   window.location.hash = "#/deals";
 }
 
-export function navigateToCreateDeal(): void {
-  window.location.hash = `#${CREATE_DEAL_PATH}`;
+export function navigateToCreateDeal(sellerOrganizationId?: string): void {
+  const params = new URLSearchParams();
+  if (sellerOrganizationId) params.set("sellerId", sellerOrganizationId);
+  window.location.hash = `#${CREATE_DEAL_PATH}${params.size ? `?${params.toString()}` : ""}`;
+}
+
+export function navigateToMarketplace(): void {
+  window.location.hash = `#${MARKETPLACE_PATH}`;
 }
 
 export function organizationsPath(): string {

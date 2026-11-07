@@ -52,6 +52,11 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
   const [savingRfq, setSavingRfq] = useState(false);
   const [rfqRefresh, setRfqRefresh] = useState(0);
   const [closingRfqId, setClosingRfqId] = useState("");
+  const ownOrganizationIds = new Set(organizations.map((organization) => organization.id));
+  const adminOrganizations = organizations.filter((organization) => organization.role === "ADMIN");
+  const adminOrganizationIds = new Set(adminOrganizations.map((organization) => organization.id));
+  const selectedSellerOrganizationId = sellerOrganizationId || adminOrganizations[0]?.id || "";
+  const selectedBuyerOrganizationId = buyerOrganizationId || adminOrganizations[0]?.id || "";
 
   useEffect(() => {
     const controller = new AbortController();
@@ -122,12 +127,12 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
 
   async function publishRfq(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!buyerOrganizationId || savingRfq) return;
+    if (!selectedBuyerOrganizationId || savingRfq) return;
     setSavingRfq(true);
     setRfqError("");
     try {
       const request: CreateMarketplaceRFQInput = {
-        organization_id: buyerOrganizationId,
+        organization_id: selectedBuyerOrganizationId,
         title: rfqTitle.trim(),
         description: rfqDescription.trim(),
         category: rfqCategory.trim(),
@@ -171,12 +176,12 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
 
   async function publishListing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!sellerOrganizationId || savingListing) return;
+    if (!selectedSellerOrganizationId || savingListing) return;
     setSavingListing(true);
     setListingError("");
     try {
       const listing: CreateMarketplaceListingInput = {
-        organization_id: sellerOrganizationId,
+        organization_id: selectedSellerOrganizationId,
         title: listingTitle.trim(),
         description: listingDescription.trim(),
         category: listingCategory.trim(),
@@ -214,12 +219,6 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
       setDeactivatingId("");
     }
   }
-
-  const ownOrganizationIds = new Set(organizations.map((organization) => organization.id));
-  const adminOrganizations = organizations.filter((organization) => organization.role === "ADMIN");
-  const adminOrganizationIds = new Set(adminOrganizations.map((organization) => organization.id));
-  const selectedSellerOrganizationId = sellerOrganizationId || adminOrganizations[0]?.id || "";
-  const selectedBuyerOrganizationId = buyerOrganizationId || adminOrganizations[0]?.id || "";
 
   return (
     <div className="workspace marketplace-page">

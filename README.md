@@ -191,7 +191,7 @@ npm run dev
 Open the printed URL (typically [http://localhost:5173](http://localhost:5173)) in your browser.
 
 - Sign in with `buyer@syncally.demo` or `seller@syncally.demo` using the password configured in Step 3.
-- The Vite dev server automatically proxies API requests (`/auth`, `/dev`, `/organizations`, `/deals`) to `http://127.0.0.1:8000`.
+- The Vite dev server automatically proxies API requests (`/auth`, `/dev`, `/organizations`, `/deals`, `/invitations`, `/marketplace`) to `http://127.0.0.1:8000`.
 
 ---
 

@@ -26,8 +26,10 @@ commercial domain, Temporal orchestration, and PayPal payment execution.
 -   **Frontend:** React + TypeScript.
 -   **API:** Python + FastAPI.
 -   **Domain:** framework-independent Python services and domain models.
--   **AI:** LangGraph + Pydantic, used for bounded extraction and
-    negotiation proposals.
+-   **AI (current):** Pydantic contracts and a LangGraph readiness branch
+    before proposal drafting; bounded provider calls remain behind the
+    existing adapter, with offline mode as the default and OpenAI opt-in.
+    Broader agent workflows remain proposed.
 -   **Durable orchestration:** Temporal.
 -   **Source of truth:** PostgreSQL.
 -   **Payments:** PayPal Invoicing API through a merchant-aware adapter.

@@ -3,11 +3,13 @@ export type Route =
   | { name: "create" }
   | { name: "deal"; dealId: string }
   | { name: "organizations"; inviteToken?: string; dealId?: string }
+  | { name: "platform" }
   | { name: "invite"; token: string; dealId?: string };
 
 const DEAL_ROUTE = /^\/deals\/([^/]+)$/;
 const CREATE_DEAL_PATH = "/deals/new";
 const ORGANIZATIONS_PATH = "/settings/organizations";
+const PLATFORM_PATH = "/platform/organizations";
 const INVITE_PATH = "/invite";
 
 export function parseRoute(hash: string): Route {
@@ -20,6 +22,9 @@ export function parseRoute(hash: string): Route {
   }
   if (path === CREATE_DEAL_PATH) {
     return { name: "create" };
+  }
+  if (path === PLATFORM_PATH || path === `${PLATFORM_PATH}/`) {
+    return { name: "platform" };
   }
   if (path === ORGANIZATIONS_PATH || path === `${ORGANIZATIONS_PATH}/`) {
     const params = new URLSearchParams(queryString || "");
@@ -58,6 +63,10 @@ export function organizationsPath(): string {
 
 export function navigateToOrganizations(): void {
   window.location.hash = organizationsPath();
+}
+
+export function navigateToPlatform(): void {
+  window.location.hash = `#${PLATFORM_PATH}`;
 }
 
 export function invitePath(token: string, dealId?: string): string {

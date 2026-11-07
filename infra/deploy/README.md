@@ -1,4 +1,58 @@
-# Free single-VM deployment
+# SyncAlly deployment
+
+## Current $0 demo: Render + Hostless
+
+Reuse the existing Render static site and `syncally-db` PostgreSQL instance. Deploy
+one Hostless App from this repository using the root `hostless.yaml`; it runs the
+API, Temporal CLI development server, workflow worker, outbox worker, and payment
+worker together. Do not create another database, worker, or persistent volume for
+this layout. `hostless.yaml` caps the app at 0.5 vCPU and 1 GiB RAM, matching the
+published shared free pool; check the account's own billing page before creating
+the resource and stop if the UI says it needs a paid plan or billing method.
+
+The Temporal server listens only on `127.0.0.1:7233`, so its plaintext gRPC
+connection never leaves the Hostless app. Its state file is under `/tmp`; Hostless
+does not preserve that directory across restarts. This is a demo/staging layout,
+not a durable production Temporal deployment. Render's free Postgres also expires
+after its free lifetime. See the [Render free instance limits](https://render.com/docs/free)
+and [Hostless free limits](https://docs.hostless.cloud/plans/free-tier).
+
+### Configure the Hostless App
+
+Create an App from `yashaswi-khurana/SyncAlly` on branch
+`codex/free-demo-deployment`. Use the repository root and the checked-in
+`hostless.yaml`; do not attach storage. Add these runtime variables in Hostless:
+
+```text
+APP_ENV=production
+DATABASE_URL=<External Database URL from the existing Render syncally-db>
+JWT_SECRET=<new random secret of at least 32 random bytes>
+PUBLIC_FRONTEND_URL=https://syncally-frontend.onrender.com
+TEMPORAL_ADDRESS=127.0.0.1:7233
+TEMPORAL_TLS=false
+TEMPORAL_NAMESPACE=default
+TEMPORAL_TASK_QUEUE=syncally-deals
+AI_PROVIDER=offline
+PAYMENT_MODE=PAYPAL_SANDBOX
+```
+
+Use Render's external database URL, including its TLS query parameter. Treat it
+and `JWT_SECRET` as secrets. The backend permits plaintext Temporal only for a
+loopback address; remote Temporal endpoints still require TLS. The container runs
+the migrations before serving the API.
+
+### Connect the Render frontend
+
+After Hostless reports the app as healthy, copy its HTTPS URL into the Render
+static site's `VITE_API_BASE_URL` environment variable and redeploy the site. The
+backend's CORS allowlist is restricted to `PUBLIC_FRONTEND_URL`.
+
+Verify `GET /health`, `GET /health/database`, and the Hostless logs for all three
+worker start messages. Do not seed demo data into the shared database. PayPal
+actions need PayPal Sandbox credentials; invitations currently return a link for
+manual sharing rather than sending email.
+
+## OCI single-VM deployment
 
 This stack runs SyncAlly's frontend, API, PostgreSQL, Temporal Server, workflow
 worker, outbox worker, and payment worker on one OCI Ampere VM. Caddy serves the

@@ -1,0 +1,23 @@
+build:
+  system: docker
+  min_cpu: 0.1
+  max_cpu: 0.5
+  min_memory: 256
+  max_memory: 1024
+
+dockerfile_path: infra/deploy/hostless.Dockerfile
+working_directory: /
+build_context_directory: /
+
+scaling:
+  min_replicas: 1
+  max_replicas: 1
+  min_cpu: 0.1
+  max_cpu: 0.5
+  min_memory: 256
+  max_memory: 1024
+
+health_check:
+  type: http
+  http_path: /health
+  interval_in_seconds: 30

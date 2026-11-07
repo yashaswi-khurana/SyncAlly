@@ -29,6 +29,7 @@ class ActorContext:
     capabilities_by_organization: dict[UUID, frozenset[OrganizationCapability]] = field(
         default_factory=dict
     )
+    system_role: str = "USER"
 
     def can_access_deal(self, deal: DealParticipation) -> bool:
         """Return whether the actor belongs to either party of the deal."""
@@ -36,6 +37,11 @@ class ActorContext:
             {deal.buyer_organization_id, deal.seller_organization_id}
             & self.organization_ids
         )
+
+    @property
+    def is_system_admin(self) -> bool:
+        """System administration never implies organization data membership."""
+        return self.system_role == "SYSTEM_ADMIN"
 
     def has_capability(
         self, organization_id: UUID, capability: OrganizationCapability | str

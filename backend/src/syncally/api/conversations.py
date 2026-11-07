@@ -24,8 +24,9 @@ from syncally.application.ai import (
     AIProvenance,
     AISuggestionProvider,
     AITransientError,
-    draft_proposal_from_context,
     extract_facts_from_context,
+    fact_suggestion_guidance,
+    missing_trade_fields,
     persist_fact_candidates,
 )
 from syncally.application.conversations import (
@@ -68,11 +69,11 @@ from syncally.domain.ai.contracts import (
 from syncally.domain.conversations import (
     Constraint,
     ConstraintKind,
-    ConstraintStatus,
     Message,
     Visibility,
 )
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
+from syncally.infrastructure.ai.graph import draft_proposal_with_graph
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
@@ -309,52 +310,13 @@ def _validation_issue_responses(result: ValidationResult) -> list[ValidationIssu
     ]
 
 
-_REQUIRED_PROPOSAL_FIELDS = (
-    ("description", frozenset({"description", "item_description"})),
-    ("quantity", frozenset({"quantity"})),
-    ("unit", frozenset({"unit"})),
-    ("unit_price", frozenset({"unit_price"})),
-    ("delivery_destination", frozenset({"delivery_destination"})),
-    ("delivery_date", frozenset({"delivery_date"})),
-)
-
-
 def _missing_trade_fields(constraints: tuple[Constraint, ...] | list[Constraint]) -> list[str]:
     """List required draft fields that are not represented by known deal facts."""
-    ignored_statuses = {
-        ConstraintStatus.NEEDS_CLARIFICATION,
-        ConstraintStatus.REJECTED,
-        ConstraintStatus.SUPERSEDED,
-    }
-    present = {
-        constraint.field.casefold().replace(" ", "_")
-        for constraint in constraints
-        if constraint.status not in ignored_statuses
-    }
-    return [
-        proposal_field
-        for proposal_field, aliases in _REQUIRED_PROPOSAL_FIELDS
-        if not present.intersection(aliases)
-    ]
+    return missing_trade_fields(constraints)
 
 
 def _fact_suggestion_guidance(missing_fields: list[str]) -> str:
-    if not missing_fields:
-        return "All required trade details were found. Review each fact before using a draft."
-    labels = {
-        "description": "item description",
-        "quantity": "quantity",
-        "unit": "unit",
-        "unit_price": "unit price",
-        "delivery_destination": "delivery destination",
-        "delivery_date": "delivery date",
-    }
-    missing = ", ".join(labels[field] for field in missing_fields)
-    return (
-        f"Add the missing details: {missing}. Suggested format: "
-        "‘Order of [item], [quantity] [unit] at USD [price] each, "
-        "ship to [city or port] by YYYY-MM-DD.’"
-    )
+    return fact_suggestion_guidance(missing_fields)
 
 
 def _list_all_visible_constraints(
@@ -445,7 +407,7 @@ def suggest_proposal_route(
         context = select_ai_context(actor, deal_id, payload.organization_id, repository)
         repository.require_participant_membership(deal_id, context.organization_id, actor.user_id)
         db.rollback()
-        result = draft_proposal_from_context(context, provider)
+        result = draft_proposal_with_graph(context, provider)
         repository.require_participant_membership(deal_id, context.organization_id, actor.user_id)
     except AITransientError as exc:
         raise HTTPException(

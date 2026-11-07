@@ -4,6 +4,20 @@ export interface TokenResponse {
   token_type: string;
 }
 
+export interface CurrentUser {
+  email: string;
+  display_name: string;
+  system_role: string;
+}
+
+export interface PlatformOrganization {
+  id: string;
+  legal_name: string;
+  country_code: string;
+  status: string;
+  created_at: string;
+}
+
 export type OrganizationCapability =
   | "ADMINISTRATION"
   | "DRAFTING"

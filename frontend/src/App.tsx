@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import SignInPage from "./auth/SignInPage";
 import { useSession } from "./auth/useSession";
@@ -20,17 +20,28 @@ import {
   navigateToPlatform,
 } from "./router";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
+import type { OpeningMessageDraft, OpeningMessageDraftInput } from "./deals/openingMessageDraft";
 
 export default function App() {
   const { accessToken, signIn, signOut } = useSession();
   const route = useHashRoute();
   const [sessionVersion, setSessionVersion] = useState(0);
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const sessionGenerationRef = useRef(0);
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [isSystemAdmin, setIsSystemAdmin] = useState<boolean | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [openingMessageDrafts, setOpeningMessageDrafts] = useState<OpeningMessageDraft[]>([]);
 
-  const currentSessionKey = accessToken ? `${accessToken}:${sessionVersion}` : null;
+  const currentSessionKey = accessToken ? `${accessToken}:${sessionGeneration}` : null;
   const sessionRef = useRef(currentSessionKey);
+
+  const advanceSessionGeneration = useCallback(() => {
+    const nextGeneration = sessionGenerationRef.current + 1;
+    sessionGenerationRef.current = nextGeneration;
+    setSessionGeneration(nextGeneration);
+    return nextGeneration;
+  }, []);
 
   useEffect(() => {
     sessionRef.current = currentSessionKey;
@@ -38,7 +49,9 @@ export default function App() {
 
   useEffect(() => {
     function clearCurrentSession() {
+      advanceSessionGeneration();
       sessionRef.current = null;
+      setOpeningMessageDrafts([]);
       setOrganizations(null);
       setToast(null);
       signOut();
@@ -46,7 +59,7 @@ export default function App() {
     function handleExpiredSession(failedToken?: string) {
       if (!failedToken || (
         getAccessToken() !== failedToken ||
-        sessionRef.current !== `${failedToken}:${sessionVersion}`
+        sessionRef.current !== `${failedToken}:${sessionGeneration}`
       )) {
         return;
       }
@@ -58,7 +71,7 @@ export default function App() {
     }
     function handleStorageChange(event: StorageEvent) {
       if (event.key === "syncally.accessToken" && event.newValue === null && accessToken && getAccessToken() === null) {
-        if (sessionRef.current === `${accessToken}:${sessionVersion}`) {
+        if (sessionRef.current === `${accessToken}:${sessionGeneration}`) {
           clearCurrentSession();
         }
       }
@@ -69,7 +82,7 @@ export default function App() {
       window.removeEventListener("syncally:session-expired", handleSessionExpired);
       window.removeEventListener("storage", handleStorageChange);
     };
-  }, [accessToken, sessionVersion, signOut]);
+  }, [accessToken, advanceSessionGeneration, sessionGeneration, sessionVersion, signOut]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -107,13 +120,17 @@ export default function App() {
   }, [accessToken, route.name]);
 
   function refreshSessionView() {
+    advanceSessionGeneration();
     sessionRef.current = null;
+    setOpeningMessageDrafts([]);
     navigateToDeals();
     setSessionVersion((version) => version + 1);
   }
 
   function handleSignOut() {
+    advanceSessionGeneration();
     sessionRef.current = null;
+    setOpeningMessageDrafts([]);
     setOrganizations(null);
     setIsSystemAdmin(null);
     setToast(null);
@@ -121,11 +138,48 @@ export default function App() {
   }
 
   function handleSignIn(tokens: TokenResponse) {
-    sessionRef.current = `${tokens.access_token}:${sessionVersion}`;
+    const nextGeneration = advanceSessionGeneration();
+    sessionRef.current = `${tokens.access_token}:${nextGeneration}`;
+    setOpeningMessageDrafts([]);
     setOrganizations(null);
     setIsSystemAdmin(null);
     signIn(tokens);
   }
+
+  function handleDealCreated(dealId: string, draft?: OpeningMessageDraftInput) {
+    if (!currentSessionKey || sessionRef.current !== currentSessionKey || getAccessToken() !== accessToken) return;
+    if (draft?.body.trim()) {
+      const openingMessageDraft = { ...draft, dealId };
+      setOpeningMessageDrafts((current) => [
+        ...current.filter((item) => item.dealId !== dealId || item.organizationId !== draft.organizationId),
+        openingMessageDraft,
+      ]);
+    }
+    navigateToDeal(dealId);
+  }
+
+  function handleOpeningMessageDraftReady(dealId: string, draft: OpeningMessageDraftInput) {
+    if (!currentSessionKey || sessionRef.current !== currentSessionKey || getAccessToken() !== accessToken) return;
+    const openingMessageDraft = { ...draft, dealId };
+    setOpeningMessageDrafts((current) => [
+      ...current.filter((item) => item.dealId !== dealId || item.organizationId !== draft.organizationId),
+      openingMessageDraft,
+    ]);
+  }
+
+  const handleOpeningMessageDraftChange = useCallback((draft: OpeningMessageDraft) => {
+    setOpeningMessageDrafts((current) => current.map((item) =>
+      item.dealId === draft.dealId && item.organizationId === draft.organizationId
+        ? draft
+        : item,
+    ));
+  }, []);
+
+  const handleOpeningMessageDraftComplete = useCallback((dealId: string, organizationId: string) => {
+    setOpeningMessageDrafts((current) => current.filter((item) =>
+      item.dealId !== dealId || item.organizationId !== organizationId,
+    ));
+  }, []);
 
   async function handleInvitationAccepted(
     result: InvitationAcceptance,
@@ -226,9 +280,15 @@ export default function App() {
             key={route.dealId}
             dealId={route.dealId}
             onBackToDeals={navigateToDeals}
+            openingMessageDraft={openingMessageDrafts.find((draft) => draft.dealId === route.dealId)}
+            onOpeningMessageDraftChange={handleOpeningMessageDraftChange}
+            onOpeningMessageDraftComplete={handleOpeningMessageDraftComplete}
           />
         ) : route.name === "create" ? (
-          <CreateDealPage onCreated={navigateToDeal} />
+          <CreateDealPage
+            onCreated={handleDealCreated}
+            onOpeningMessageDraftReady={handleOpeningMessageDraftReady}
+          />
         ) : route.name === "organizations" ? (
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : route.name === "platform" ? (

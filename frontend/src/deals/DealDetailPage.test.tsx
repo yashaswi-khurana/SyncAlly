@@ -234,6 +234,90 @@ describe("DealDetailPage", () => {
     expect(composer).toHaveValue("Human draft terms");
   });
 
+  it("loads an opening draft for the initiating organization without posting it", async () => {
+    mockedGetDeal
+      .mockResolvedValueOnce({ ...DEAL, pending_counterparty: true })
+      .mockResolvedValueOnce({ ...DEAL, pending_counterparty: false, version: 1 });
+    mockedListOrganizations.mockResolvedValue([
+      { id: DEAL.buyer_organization_id, legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
+      { id: DEAL.seller_organization_id, legal_name: "Seller Co", country_code: "US", role: "ADMIN" },
+    ]);
+    mockedCreateDealMessage.mockResolvedValue({
+      id: "opening-message",
+      conversation_id: "conversation-1",
+      author_user_id: "user-1",
+      author_agent_id: null,
+      body: "Please quote 100 units.",
+      visibility: "SHAREABLE",
+      source_type: "USER",
+      source_reference: null,
+      created_at: "2026-11-07T00:00:00Z",
+    });
+    const openingMessageDraft = {
+      dealId: DEAL.id,
+      organizationId: DEAL.seller_organization_id,
+      body: "Please quote 100 units.",
+      visibility: "SHAREABLE" as const,
+      idempotencyKey: null,
+    };
+    const onOpeningMessageDraftComplete = vi.fn();
+    render(<DealDetailPage
+      dealId={DEAL.id}
+      onBackToDeals={vi.fn()}
+      openingMessageDraft={openingMessageDraft}
+      onOpeningMessageDraftComplete={onOpeningMessageDraftComplete}
+      freshnessIntervalMs={0}
+    />);
+
+    const composer = await screen.findByRole("textbox", { name: /message/i });
+    expect(await screen.findByLabelText("Viewing as")).toHaveValue(DEAL.seller_organization_id);
+    expect(composer).toHaveValue("Please quote 100 units.");
+    expect(screen.getByText(/Local draft only\. It has not been shared/)).toBeInTheDocument();
+    expect(screen.getByText(/can be sent after the other party joins/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(mockedCreateDealMessage).not.toHaveBeenCalled();
+    expect(onOpeningMessageDraftComplete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Refresh room/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+    expect(composer).toHaveValue("Please quote 100 units.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await screen.findByText("Message sent.");
+    expect(mockedCreateDealMessage).toHaveBeenCalledWith(DEAL.id, {
+      body: "Please quote 100 units.",
+      visibility: "SHAREABLE",
+      organization_id: DEAL.seller_organization_id,
+      idempotency_key: expect.any(String),
+    }, { signal: expect.any(AbortSignal) });
+    expect(onOpeningMessageDraftComplete).toHaveBeenCalledWith(DEAL.id, DEAL.seller_organization_id);
+  });
+
+  it("does not place an opening draft into a different active organization", async () => {
+    mockedListOrganizations.mockResolvedValue([
+      { id: DEAL.buyer_organization_id, legal_name: "Buyer Co", country_code: "US", role: "ADMIN" },
+    ]);
+    const onOpeningMessageDraftComplete = vi.fn();
+    render(<DealDetailPage
+      dealId={DEAL.id}
+      onBackToDeals={vi.fn()}
+      openingMessageDraft={{
+        dealId: DEAL.id,
+        organizationId: DEAL.seller_organization_id,
+        body: "Seller quote draft",
+        visibility: "SHAREABLE",
+        idempotencyKey: null,
+      }}
+      onOpeningMessageDraftComplete={onOpeningMessageDraftComplete}
+      freshnessIntervalMs={0}
+    />);
+
+    expect(await screen.findByRole("textbox", { name: /message/i })).toHaveValue("");
+    expect(screen.queryByText("Seller quote draft")).not.toBeInTheDocument();
+    expect(onOpeningMessageDraftComplete).not.toHaveBeenCalled();
+    expect(mockedCreateDealMessage).not.toHaveBeenCalled();
+  });
+
   it("shows an error state that can be retried", async () => {
     mockedGetDeal.mockRejectedValueOnce(new ApiError(500, "Server error"));
 

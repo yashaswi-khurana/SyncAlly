@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -12,6 +12,8 @@ vi.mock("./api/client", async (importOriginal) => {
     listOrganizations: vi.fn(),
     createOrganization: vi.fn(),
     listPaymentStatuses: vi.fn(),
+    createCounterpartyInvitation: vi.fn(),
+    createDealMessage: vi.fn(),
     getCommercialDocumentDraft: vi.fn(),
     getTradePack: vi.fn(),
     listDeals: vi.fn(),
@@ -35,11 +37,15 @@ import {
   ApiError,
   apiRequest,
   createOrganization,
+  createDeal,
+  createCounterpartyInvitation,
+  createDealMessage,
   getCommercialDocumentDraft,
   getCurrentAgreement,
   getAgreementVersion,
   getTradePack,
   getDeal,
+  getOrganization,
   getDealMessageExistence,
   listDealFacts,
   listDealMessages,
@@ -52,12 +58,16 @@ import { clearAccessToken, getAccessToken, setAccessToken } from "./api/tokenSto
 import type { AgreementVersion } from "./api/types";
 
 const mockedGetDeal = vi.mocked(getDeal);
+const mockedGetOrganization = vi.mocked(getOrganization);
 const mockedApiRequest = vi.mocked(apiRequest);
 const mockedGetCurrentAgreement = vi.mocked(getCurrentAgreement);
 const mockedGetDealMessageExistence = vi.mocked(getDealMessageExistence);
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedCreateOrganization = vi.mocked(createOrganization);
+const mockedCreateDeal = vi.mocked(createDeal);
+const mockedCreateCounterpartyInvitation = vi.mocked(createCounterpartyInvitation);
+const mockedCreateDealMessage = vi.mocked(createDealMessage);
 const mockedLogin = vi.mocked(login);
 const mockedListDealFacts = vi.mocked(listDealFacts);
 const mockedListDealMessages = vi.mocked(listDealMessages);
@@ -183,6 +193,230 @@ describe("App", () => {
 
     expect(await screen.findByLabelText("Buyer organization")).toBeInTheDocument();
     expect(mockedListOrganizations).toHaveBeenCalled();
+  });
+
+  it("hands an opening request to the deal composer without sending it automatically", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/deals/new";
+    const buyerId = "11111111-1111-1111-1111-111111111111";
+    const sellerId = "22222222-2222-2222-2222-222222222222";
+    const body = "Please quote 500 units at USD 45.";
+    const editedBody = "Please quote 400 units at USD 48 instead.";
+    mockedApiRequest.mockResolvedValueOnce([{ id: sellerId, legal_name: "Andean Coffee Exporters", country_code: "CO" }]);
+    mockedCreateDeal.mockResolvedValue({
+      id: "new-deal",
+      buyer_organization_id: buyerId,
+      seller_organization_id: sellerId,
+      status: "DRAFT",
+      version: 0,
+    });
+    mockedGetDeal.mockImplementation(async (id) => ({
+      id,
+      buyer_organization_id: buyerId,
+      seller_organization_id: sellerId,
+      status: "DRAFT",
+      version: 0,
+    }));
+    mockedGetOrganization.mockImplementation(async (id) => ({
+      id,
+      legal_name: id === buyerId ? "Demo Buyer Co" : "Andean Coffee Exporters",
+      country_code: id === buyerId ? "US" : "CO",
+    }));
+    mockedListDealMessages.mockResolvedValue([]);
+    mockedCreateDealMessage.mockResolvedValue({
+      id: "opening-message",
+      conversation_id: "conversation-1",
+      author_user_id: "user-1",
+      author_agent_id: null,
+      body,
+      visibility: "SHAREABLE",
+      source_type: "USER",
+      source_reference: null,
+      created_at: "2026-11-07T10:00:00Z",
+    });
+
+    render(<App />);
+    const sellerInput = await screen.findByRole("combobox", { name: "Seller organization" });
+    fireEvent.change(sellerInput, { target: { value: "Andean" } });
+    fireEvent.click(await screen.findByRole("option", { name: "Andean Coffee Exporters CO" }));
+    fireEvent.change(screen.getByLabelText("Opening request or quote (optional)"), { target: { value: body } });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+
+    const composer = await screen.findByRole("textbox", { name: "Post a message" });
+    expect(await screen.findByText(/Local draft only/i)).toBeInTheDocument();
+    expect(composer).toHaveValue(body);
+    expect(mockedCreateDeal).toHaveBeenCalledWith({ buyer_organization_id: buyerId, seller_organization_id: sellerId });
+    expect(mockedCreateDealMessage).not.toHaveBeenCalled();
+    expect(mockedListDealMessages).toHaveBeenCalledWith("new-deal", buyerId);
+
+    fireEvent.change(composer, { target: { value: editedBody } });
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    expect(await screen.findByRole("heading", { name: "Deals shared with you" })).toBeInTheDocument();
+    await act(async () => {
+      window.location.hash = "#/deals/other-deal";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    const otherDealComposer = await screen.findByRole("textbox", { name: "Post a message" });
+    expect(otherDealComposer).toHaveValue("");
+    expect(screen.queryByText(/Local draft only/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    await screen.findByRole("heading", { name: "Deals shared with you" });
+    await act(async () => {
+      window.location.hash = "#/deals/new-deal";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    const returnedComposer = await screen.findByRole("textbox", { name: "Post a message" });
+    expect(returnedComposer).toHaveValue(editedBody);
+    expect(screen.getByText(/Local draft only/i)).toBeInTheDocument();
+    expect(mockedCreateDealMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(mockedCreateDealMessage).toHaveBeenCalledWith(
+      "new-deal",
+      expect.objectContaining({ body: editedBody, organization_id: buyerId, visibility: "SHAREABLE" }),
+      expect.anything(),
+    ));
+    await waitFor(() => expect(screen.queryByText(/Local draft only/i)).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    await screen.findByRole("heading", { name: "Deals shared with you" });
+    await act(async () => {
+      window.location.hash = "#/deals/new-deal";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(await screen.findByRole("textbox", { name: "Post a message" })).toHaveValue("");
+    expect(screen.queryByText(/Local draft only/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps an invite-mode opening request on the pending deal until the counterparty joins", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/deals/new";
+    const buyerId = "11111111-1111-1111-1111-111111111111";
+    const sellerId = "22222222-2222-2222-2222-222222222222";
+    mockedCreateCounterpartyInvitation.mockResolvedValue({
+      token: "invite-token",
+      invite_url: "https://app.example/invite",
+      organization_id: buyerId,
+      organization_legal_name: "Demo Buyer Co",
+      deal_id: "pending-deal",
+      role: "ADMIN",
+      expires_at: "2026-11-07T12:00:00Z",
+      kind: "COUNTERPARTY",
+      pending_counterparty: true,
+    });
+    mockedGetDeal
+      .mockResolvedValueOnce({
+        id: "pending-deal",
+        buyer_organization_id: buyerId,
+        seller_organization_id: sellerId,
+        status: "DRAFT",
+        version: 0,
+        pending_counterparty: true,
+      })
+      .mockResolvedValueOnce({
+        id: "pending-deal",
+        buyer_organization_id: buyerId,
+        seller_organization_id: sellerId,
+        status: "DRAFT",
+        version: 1,
+        pending_counterparty: false,
+      });
+    mockedGetOrganization.mockImplementation(async (id) => ({
+      id,
+      legal_name: id === buyerId ? "Demo Buyer Co" : "Seller Ltd",
+      country_code: id === buyerId ? "US" : "JP",
+    }));
+    mockedListDealMessages.mockResolvedValue([]);
+    mockedCreateDealMessage.mockResolvedValue({
+      id: "opening-message",
+      conversation_id: "conversation-1",
+      author_user_id: "user-1",
+      author_agent_id: null,
+      body: "Please quote 100 boxes for delivery to Tokyo.",
+      visibility: "SHAREABLE",
+      source_type: "USER",
+      source_reference: null,
+      created_at: "2026-11-07T10:00:00Z",
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("radio", { name: "Invite counterparty" }));
+    fireEvent.change(screen.getByLabelText("Counterparty email"), { target: { value: "seller@example.com" } });
+    fireEvent.change(screen.getByLabelText("Counterparty company legal name"), { target: { value: "Seller Ltd" } });
+    fireEvent.change(screen.getByLabelText("Country code"), { target: { value: "JP" } });
+    fireEvent.change(screen.getByLabelText("Opening request or quote (optional)"), {
+      target: { value: "Please quote 100 boxes for delivery to Tokyo." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+    expect(await screen.findByRole("heading", { name: "Awaiting counterparty" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open pending deal" }));
+
+    const composer = await screen.findByRole("textbox", { name: "Post a message" });
+    expect(composer).toHaveValue("Please quote 100 boxes for delivery to Tokyo.");
+    expect(screen.getByText(/can be sent after the other party joins/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(mockedCreateDealMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Refresh room/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await screen.findByText("Message sent.");
+    expect(mockedCreateDealMessage).toHaveBeenCalledWith(
+      "pending-deal",
+      expect.objectContaining({
+        body: "Please quote 100 boxes for delivery to Tokyo.",
+        visibility: "SHAREABLE",
+        organization_id: buyerId,
+      }),
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("ignores deal creation that finishes after sign out and re-sign-in with the same token", async () => {
+    setAccessToken("access-token");
+    window.location.hash = "#/deals/new";
+    mockedLogin.mockResolvedValue({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      token_type: "bearer",
+    });
+    const buyerId = "11111111-1111-1111-1111-111111111111";
+    const sellerId = "22222222-2222-2222-2222-222222222222";
+    mockedApiRequest.mockResolvedValueOnce([{ id: sellerId, legal_name: "Andean Coffee Exporters", country_code: "CO" }]);
+
+    let resolveCreate!: (deal: Awaited<ReturnType<typeof createDeal>>) => void;
+    mockedCreateDeal.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+
+    render(<App />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Seller organization" }), {
+      target: { value: "Andean" },
+    });
+    fireEvent.click(await screen.findByRole("option", { name: "Andean Coffee Exporters CO" }));
+    fireEvent.change(screen.getByLabelText("Opening request or quote (optional)"), {
+      target: { value: "Please quote 500 units." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
+    await waitFor(() => expect(mockedCreateDeal).toHaveBeenCalledOnce());
+
+    fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("heading", { name: "Open your trade desk." })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "buyer@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "password" } });
+    fireEvent.click(screen.getByRole("button", { name: /enter workspace/i }));
+    expect(await screen.findByLabelText("Buyer organization")).toBeInTheDocument();
+
+    await act(async () => resolveCreate({
+        id: "late-deal",
+        buyer_organization_id: buyerId,
+        seller_organization_id: sellerId,
+        status: "DRAFT",
+        version: 0,
+      }));
+
+    await waitFor(() => expect(window.location.hash).toBe("#/deals/new"));
+    expect(mockedGetDeal).not.toHaveBeenCalledWith("late-deal");
+    expect(mockedCreateDealMessage).not.toHaveBeenCalled();
   });
 
   it("navigates to the organizations settings page when clicking Organizations in the nav", async () => {

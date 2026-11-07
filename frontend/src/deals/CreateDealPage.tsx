@@ -4,6 +4,7 @@ import type { FormEvent } from "react";
 import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, listOrganizations } from "../api/client";
 import type { Invitation, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
+import type { OpeningMessageDraftInput } from "./openingMessageDraft";
 
 type DirectoryItem = Pick<Organization, "id" | "legal_name" | "country_code">;
 type SearchState =
@@ -23,7 +24,8 @@ interface FieldErrors {
 }
 
 interface CreateDealPageProps {
-  onCreated: (dealId: string) => void;
+  onCreated: (dealId: string, openingMessageDraft?: OpeningMessageDraftInput) => void;
+  onOpeningMessageDraftReady?: (dealId: string, draft: OpeningMessageDraftInput) => void;
 }
 
 function describeError(caught: unknown): string {
@@ -77,7 +79,7 @@ function counterpartyInvitePreview(inviteUrl: string): string {
   }
 }
 
-export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
+export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady }: CreateDealPageProps) {
   const [organizationsState, setOrganizationsState] = useState<OrganizationsState>({
     status: "loading",
   });
@@ -98,9 +100,11 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
   const [counterpartyName, setCounterpartyName] = useState("");
   const [countryCode, setCountryCode] = useState("US");
   const [invitation, setInvitation] = useState<Invitation | null>(null);
+  const [invitationOpeningDraft, setInvitationOpeningDraft] = useState<OpeningMessageDraftInput | null>(null);
   const [copied, setCopied] = useState(false);
   const [showFullInvitationLink, setShowFullInvitationLink] = useState(false);
   const [displayName, setDisplayName] = useState("");
+  const [openingMessage, setOpeningMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -212,6 +216,15 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
 
     setSubmitting(true);
     try {
+      const openingMessageText = openingMessage.trim();
+      const openingMessageDraft = openingMessageText
+        ? {
+            organizationId: buyerOrganizationId,
+            body: openingMessageText,
+            visibility: "SHAREABLE" as const,
+            idempotencyKey: null,
+          }
+        : undefined;
       if (mode === "invite") {
         const result = await createCounterpartyInvitation({ ...(initiatorParty === "BUYER"
           ? { buyer_organization_id: buyerOrganizationId }
@@ -221,6 +234,10 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
           ...(displayName.trim() ? { display_name: displayName.trim() } : {}) });
         setCopied(false);
         setShowFullInvitationLink(false);
+        setInvitationOpeningDraft(result.deal_id && openingMessageDraft ? openingMessageDraft : null);
+        if (result.deal_id && openingMessageDraft) {
+          onOpeningMessageDraftReady?.(result.deal_id, openingMessageDraft);
+        }
         setInvitation(result);
         return;
       }
@@ -231,7 +248,8 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
         ...(displayName.trim() ? { display_name: displayName.trim() } : {}),
         ...(initiatorParty === "SELLER" ? { initiator_party: "SELLER" as const } : {}),
       });
-      onCreated(deal.id);
+      if (openingMessageDraft) onCreated(deal.id, openingMessageDraft);
+      else onCreated(deal.id);
     } catch (caught) {
       setSubmitError(describeCreateError(caught, initiatorParty));
     } finally {
@@ -311,6 +329,9 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
             <p className="counterparty-invitation__summary" role="status">
               Your deal is ready, but the invitation has not been sent. Copy the link and send it securely to {recipientEmail.trim().toLowerCase()}.
             </p>
+            {invitationOpeningDraft ? <p className="hint">
+              Your opening request is carried into the pending deal. You can review and send it after the counterparty joins.
+            </p> : null}
 
             <div className="counterparty-invitation__recipient">
               <span className="counterparty-invitation__label">INVITED EMAIL</span>
@@ -389,6 +410,21 @@ export default function CreateDealPage({ onCreated }: CreateDealPageProps) {
                 placeholder="e.g. Toronto office furniture order" disabled={submitting}
                 onChange={(event) => setDisplayName(event.target.value)} />
               <p className="hint">A short name helps both sides find this deal later.</p>
+            </div>
+            <div className="field">
+              <label htmlFor="deal-opening-message">Opening request or quote (optional)</label>
+              <textarea
+                id="deal-opening-message"
+                value={openingMessage}
+                maxLength={8000}
+                rows={4}
+                disabled={submitting}
+                placeholder={initiatorParty === "BUYER"
+                  ? "We need [product/specification], [quantity and unit], delivered to [destination] by [date]. Please quote in [currency] and include your payment terms."
+                  : "We can offer [product/specification], [available quantity and unit] at [price and currency], delivered to [destination] by [date]. Our payment terms are [terms]."}
+                onChange={(event) => setOpeningMessage(event.target.value)}
+              />
+              <p className="hint">It remains a draft until you choose Send. If you invite a counterparty, it will be ready after they join.</p>
             </div>
             <fieldset disabled={submitting}>
               <legend>Counterparty</legend>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ApiError, getNegotiation, negotiateDeal } from "../api/client";
 import type {
@@ -147,8 +147,10 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const [isDirty, setIsDirty] = useState(false);
 
   const loadContext = JSON.stringify([deal.id, deal.version, organizationId, reloadToken, reload]);
+  const loadContextRef = useRef(loadContext);
   const [observedContext, setObservedContext] = useState(loadContext);
   if (loadContext !== observedContext) {
+    const draft = defaultDraft();
     setObservedContext(loadContext);
     setView(null);
     setPending(false);
@@ -156,51 +158,51 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     setAuthorError("");
     setStale(false);
     setReplacementConfirmed(false);
+    setItems(draft.items);
+    setShipments(draft.shipments);
+    setPayments(draft.payments);
+    setDeliveryLocation(draft.deliveryLocation);
+    setIncoterm(draft.incoterm);
+    setCancellationTerms(draft.cancellationTerms);
     setIsDirty(false);
   }
 
   function populateEditorFromTerms(terms: ReviewedProposalTerms) {
     if (terms.schema_version === 2) {
-      if (terms.line_items && terms.line_items.length > 0) {
-        setItems(terms.line_items.map((it, idx) => ({
-          id: it.id || `item-${idx + 1}`,
-          description: it.description,
-          quantity: it.quantity,
-          unit: it.unit,
-          unitPrice: it.unit_price.amount,
-          currency: it.unit_price.currency,
-          sku: it.sku || "",
-        })));
-      }
-      if (terms.shipments && terms.shipments.length > 0) {
-        setShipments(terms.shipments.map((s, idx) => ({
-          id: s.id || `ship-${idx + 1}`,
-          destination: s.destination,
-          targetDate: s.target_date || "",
-          allocations: (s.allocations || []).map(a => ({
-            line_item_id: a.line_item_id,
-            quantity: a.quantity,
-            unit: a.unit,
-          })),
-        })));
-      }
-      if (terms.payment_terms && terms.payment_terms.length > 0) {
-        setPayments(terms.payment_terms.map((p, idx) => ({
-          id: p.id || `pay-${idx + 1}`,
-          amount: p.amount.amount,
-          currency: p.amount.currency,
-          trigger: p.trigger,
-          dueCondition: p.due_condition,
-          allocations: (p.allocations || []).map(a => ({
-            obligation_id: a.obligation_id,
-            amount: a.amount.amount,
-            currency: a.amount.currency,
-          })),
-        })));
-      }
-      if (terms.delivery_location) setDeliveryLocation(terms.delivery_location);
-      if (terms.incoterm) setIncoterm(terms.incoterm);
-      if (terms.cancellation_terms) setCancellationTerms(terms.cancellation_terms);
+      setItems((terms.line_items ?? []).map((it, idx) => ({
+        id: it.id || `item-${idx + 1}`,
+        description: it.description,
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unit_price.amount,
+        currency: it.unit_price.currency,
+        sku: it.sku || "",
+      })));
+      setShipments((terms.shipments ?? []).map((s, idx) => ({
+        id: s.id || `ship-${idx + 1}`,
+        destination: s.destination,
+        targetDate: s.target_date || "",
+        allocations: (s.allocations || []).map(a => ({
+          line_item_id: a.line_item_id,
+          quantity: a.quantity,
+          unit: a.unit,
+        })),
+      })));
+      setPayments((terms.payment_terms ?? []).map((p, idx) => ({
+        id: p.id || `pay-${idx + 1}`,
+        amount: p.amount.amount,
+        currency: p.amount.currency,
+        trigger: p.trigger,
+        dueCondition: p.due_condition,
+        allocations: (p.allocations || []).map(a => ({
+          obligation_id: a.obligation_id,
+          amount: a.amount.amount,
+          currency: a.amount.currency,
+        })),
+      })));
+      setDeliveryLocation(terms.delivery_location ?? "");
+      setIncoterm(terms.incoterm ?? "");
+      setCancellationTerms(terms.cancellation_terms ?? "");
     }
   }
 
@@ -226,24 +228,29 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const command = useRef<{ signature: string; id: string } | null>(null);
   const loadedCallback = useRef(onLoaded);
   useEffect(() => { loadedCallback.current = onLoaded; }, [onLoaded]);
+  useLayoutEffect(() => { loadContextRef.current = loadContext; }, [loadContext]);
 
   useEffect(() => {
+    const requestContext = loadContext;
     const controller = new AbortController();
     request.current?.abort();
     request.current = null;
     loadedCallback.current(null);
     void getNegotiation(deal.id, organizationId, { signal: controller.signal }).then((next) => {
-      if (controller.signal.aborted || next.deal_id !== deal.id || next.organization_id !== organizationId) return;
+      if (controller.signal.aborted || loadContextRef.current !== requestContext
+        || next.deal_id !== deal.id || next.organization_id !== organizationId) return;
       setView(next);
       loadedCallback.current(next);
       if (next?.latest?.terms && next.latest.terms.schema_version === 2) {
         populateEditorFromTerms(next.latest.terms);
       }
     }).catch((caught: unknown) => {
-      if (!controller.signal.aborted) setError(caught instanceof ApiError ? caught.message : "Unable to load negotiation rounds.");
+      if (!controller.signal.aborted && loadContextRef.current === requestContext) {
+        setError(caught instanceof ApiError ? caught.message : "Unable to load negotiation rounds.");
+      }
     });
     return () => { controller.abort(); request.current?.abort(); };
-  }, [deal.id, deal.version, organizationId, reloadToken, reload]);
+  }, [deal.id, deal.version, organizationId, reloadToken, reload, loadContext]);
 
   function validateCollections(): string | null {
     if (items.length === 0) return "At least one line item is required.";
@@ -532,14 +539,14 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
           {view.latest.expires_at ? <p>Respond by: <time dateTime={view.latest.expires_at}>{new Date(view.latest.expires_at).toLocaleString()}</time></p> : null}
           <ProposalComparison latest={view.latest} proposals={view.proposals} />
           <div className="agreement-terms" aria-label="Latest proposal terms">
-            {view.latest.terms.line_items.map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
+            {(view.latest.terms.line_items ?? []).map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Item ID</dt><dd>{item.id}</dd></div> : null}
               <div><dt>Item</dt><dd>{item.description}</dd></div>
               <div><dt>Quantity</dt><dd>{item.quantity} {item.unit}</dd></div>
               {item.sku ? <div><dt>SKU</dt><dd>{item.sku}</dd></div> : null}
               <div><dt>Unit price</dt><dd>{item.unit_price.amount} {item.unit_price.currency}</dd></div>
             </dl>)}
-            {view.latest.terms.shipments.map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
+            {(view.latest.terms.shipments ?? []).map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Shipment ID</dt><dd>{item.id}</dd></div> : null}
               <div><dt>Delivery</dt><dd>{item.quantity ?? "Not specified"} to {item.destination}</dd></div>
               <div><dt>Date</dt><dd>{item.target_date ?? "Not specified"}</dd></div>
@@ -547,7 +554,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                 <div><dt>Allocations</dt><dd>{item.allocations.map(a => `${a.quantity} ${a.unit} of item ${a.line_item_id}`).join(", ")}</dd></div>
               ) : null}
             </dl>)}
-            {view.latest.terms.payment_terms.map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
+            {(view.latest.terms.payment_terms ?? []).map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Payment Term ID</dt><dd>{item.id}</dd></div> : null}
               <div><dt>Payment</dt><dd>{item.amount.amount} {item.amount.currency}</dd></div>
               <div><dt>Due condition</dt><dd>{item.due_condition}</dd></div>
@@ -857,8 +864,8 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
         <ol>{view.proposals.map((proposal) => <li key={proposal.id}>
           <details><summary>Round {proposal.proposal_number}: {proposalStatusLabel(proposal, organizationId)}{proposal.lifecycle_origin === "LEGACY" ? " (legacy record)" : ""}</summary>
             <code className="agreement-review__hash">{proposal.terms_hash}</code>
-            {proposal.terms.line_items.map((item, index) => <p key={index}>{item.id ? `[${item.id}] ` : ""}{item.description}: {item.quantity} {item.unit} at {item.unit_price.amount} {item.unit_price.currency}</p>)}
-            {proposal.evidence_refs.map((ref) => <p key={ref.fact_id}>Evidence {ref.fact_id}, version {ref.version}</p>)}
+            {(proposal.terms.line_items ?? []).map((item, index) => <p key={index}>{item.id ? `[${item.id}] ` : ""}{item.description}: {item.quantity} {item.unit} at {item.unit_price.amount} {item.unit_price.currency}</p>)}
+            {(proposal.evidence_refs ?? []).map((ref) => <p key={ref.fact_id}>Evidence {ref.fact_id}, version {ref.version}</p>)}
           </details>
         </li>)}</ol>
         <h3>Proposal activity</h3>

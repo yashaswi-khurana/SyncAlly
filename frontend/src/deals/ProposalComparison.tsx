@@ -4,12 +4,19 @@ import { paymentTimingLabel } from "../api/types";
 import type { NegotiationProposal } from "../api/types";
 
 type Terms = NegotiationProposal["terms"];
-type Field = readonly [label: string, value: string | null, identity?: string];
-type Entry = { label: string; fields: Field[] };
+type Field = readonly [label: string, value: string | null, identity?: string | null];
+type Entry = { id?: string; label: string; fields: Field[] };
 type Change = { before?: Entry; after?: Entry };
 
 function money(value: { amount: string; currency: string }) {
   return value.amount + " " + value.currency;
+}
+
+function normalizeLocation(value: string | null | undefined) {
+  if (value == null) return null;
+  return Array.from(value, (character) => character === "\u0131"
+    ? character
+    : character.toUpperCase().toLowerCase()).join("").replace(/ß/g, "ss");
 }
 
 function allocations<T>(
@@ -25,8 +32,11 @@ function allocations<T>(
 }
 
 function entries(terms: Terms) {
+  const lineItems = terms.line_items ?? [];
+  const shipmentsTerms = terms.shipments ?? [];
+  const paymentTerms = terms.payment_terms ?? [];
   const obligations = new Map<string, string>();
-  const items = terms.line_items.map((item, index) => {
+  const items = lineItems.map((item, index) => {
     const label = "Item " + (index + 1) + ": " + item.description;
     if (item.id) obligations.set(item.id, label);
     return { id: item.id, label, fields: [
@@ -36,11 +46,11 @@ function entries(terms: Terms) {
       ["Unit price", money(item.unit_price)],
     ] satisfies Field[] };
   });
-  const shipments = terms.shipments.map((shipment, index) => {
+  const shipments = shipmentsTerms.map((shipment, index) => {
     const label = "Shipment " + (index + 1) + " to " + shipment.destination;
     if (shipment.id) obligations.set(shipment.id, label);
     return { id: shipment.id, label, fields: [
-      ["Destination", shipment.destination],
+      ["Destination", shipment.destination, normalizeLocation(shipment.destination)],
       ["Delivery date", shipment.target_date],
       ["Quantity", shipment.quantity],
       allocations(
@@ -50,7 +60,7 @@ function entries(terms: Terms) {
       ),
     ] satisfies Field[] };
   });
-  const payments = terms.payment_terms.map((payment, index) => ({
+  const payments = paymentTerms.map((payment, index) => ({
     id: payment.id,
     label: "Payment " + (index + 1) + ": " + paymentTimingLabel(payment.trigger),
     fields: [
@@ -65,7 +75,7 @@ function entries(terms: Terms) {
     ] satisfies Field[],
   }));
   const trade = { label: "Other trade terms", fields: [
-    ["Delivery location", terms.delivery_location],
+    ["Delivery location", terms.delivery_location ?? null, normalizeLocation(terms.delivery_location)],
     ["Incoterm", terms.incoterm],
     ["Cancellation terms", terms.cancellation_terms],
   ] satisfies Field[] };
@@ -85,22 +95,99 @@ function compareEntries(before: Entry, after: Entry): Change[] {
   }];
 }
 
-function compareCollection(before: (Entry & { id?: string })[], after: (Entry & { id?: string })[]): Change[] {
+function sameTerms(before: Entry, after: Entry) {
+  return after.fields.every((field, index) => fieldValue(field) === fieldValue(before.fields[index]));
+}
+
+function pairCollection(before: Entry[], after: Entry[]): { pairs: [Entry, Entry][]; changes: Change[] } {
   // A legacy singleton can be compared with the only entry of its kind in the next round.
   if (before.length === 1 && after.length === 1 && (!before[0].id || !after[0].id)) {
-    return compareEntries(before[0], after[0]);
+    return { pairs: [[before[0], after[0]] as [Entry, Entry]], changes: compareEntries(before[0], after[0]) };
   }
 
   const unmatched = [...before];
+  const pairs: [Entry, Entry][] = [];
   const changes = after.flatMap((entry): Change[] => {
-    const match = unmatched.findIndex((previous) => entry.id
-      ? previous.id === entry.id
-      : !previous.id && entry.fields.every((field, index) => fieldValue(field) === fieldValue(previous.fields[index])));
+    const byId = entry.id ? unmatched.findIndex((previous) => previous.id === entry.id) : -1;
+    const byTerms = byId < 0 ? unmatched.findIndex((previous) => sameTerms(previous, entry)) : -1;
+    // ponytail: pair remaining ID-less legacy entries by order; schema v1 has no stable identity to disambiguate them.
+    const byLegacyPosition = byId < 0 && byTerms < 0 && !entry.id
+      ? unmatched.findIndex((previous) => !previous.id)
+      : -1;
+    const match = byId >= 0 ? byId : byTerms >= 0 ? byTerms : byLegacyPosition;
     if (match < 0) return [{ after: entry }];
     const [previous] = unmatched.splice(match, 1);
+    pairs.push([previous, entry]);
     return compareEntries(previous, entry);
   });
-  return [...changes, ...unmatched.map((entry) => ({ before: entry }))];
+  return { pairs, changes: [...changes, ...unmatched.map((entry) => ({ before: entry }))] };
+}
+
+function entrySignature(entry: Entry) {
+  return JSON.stringify(entry.fields.map(fieldValue));
+}
+
+function signatureCounts(entries: Entry[]) {
+  const counts = new Map<string, number>();
+  entries.forEach((entry) => {
+    const signature = entrySignature(entry);
+    counts.set(signature, (counts.get(signature) ?? 0) + 1);
+  });
+  return counts;
+}
+
+function referenceAliases(pairs: [Entry, Entry][], before: Entry[], after: Entry[], kind: string) {
+  const beforeCounts = signatureCounts(before);
+  const afterCounts = signatureCounts(after);
+  const beforeAliases = new Map<string, string>();
+  const afterAliases = new Map<string, string>();
+
+  pairs.forEach(([previous, current], index) => {
+    if (!previous.id || !current.id) return;
+    const signature = entrySignature(previous);
+    const unchangedAndUnique = signature === entrySignature(current)
+      && beforeCounts.get(signature) === 1 && afterCounts.get(signature) === 1;
+    if (previous.id !== current.id && !unchangedAndUnique) return;
+    const alias = previous.id === current.id ? `${kind}:id:${previous.id}` : `${kind}:pair:${index}`;
+    beforeAliases.set(previous.id, alias);
+    afterAliases.set(current.id, alias);
+  });
+
+  return { before: beforeAliases, after: afterAliases };
+}
+
+function remapAllocationReferences(entries: Entry[], aliases: Map<string, string>) {
+  return entries.map((entry) => ({
+    ...entry,
+    fields: entry.fields.map((field): Field => {
+      if (field[0] !== "Allocations" || field[2] == null) return field;
+      const allocations = JSON.parse(field[2]) as string[];
+      const remapped = allocations.map((allocation) => {
+        const [reference, ...values] = JSON.parse(allocation) as string[];
+        return JSON.stringify([aliases.get(reference) ?? reference, ...values]);
+      }).sort();
+      return [field[0], field[1], JSON.stringify(remapped)];
+    }),
+  }));
+}
+
+function comparisonChanges(previous: NegotiationProposal, current: NegotiationProposal) {
+  const before = entries(previous.terms);
+  const after = entries(current.terms);
+  const items = pairCollection(before.items, after.items);
+  const itemAliases = referenceAliases(items.pairs, before.items, after.items, "item");
+  const beforeShipments = remapAllocationReferences(before.shipments, itemAliases.before);
+  const afterShipments = remapAllocationReferences(after.shipments, itemAliases.after);
+  const shipments = pairCollection(beforeShipments, afterShipments);
+  const shipmentAliases = referenceAliases(shipments.pairs, beforeShipments, afterShipments, "shipment");
+  const beforeObligationAliases = new Map([...itemAliases.before, ...shipmentAliases.before]);
+  const afterObligationAliases = new Map([...itemAliases.after, ...shipmentAliases.after]);
+  const payments = pairCollection(
+    remapAllocationReferences(before.payments, beforeObligationAliases),
+    remapAllocationReferences(after.payments, afterObligationAliases),
+  );
+
+  return [...items.changes, ...shipments.changes, ...payments.changes, ...compareEntries(before.trade, after.trade)];
 }
 
 function ProposalValues({ round, entry }: { round: string; entry: Entry | undefined }) {
@@ -118,14 +205,7 @@ export default function ProposalComparison({ latest, proposals }: {
 }) {
   const headingId = useId();
   const previous = proposals.find((proposal) => proposal.id === latest.based_on_proposal_id && proposal.id !== latest.id);
-  const before = previous ? entries(previous.terms) : null;
-  const after = before ? entries(latest.terms) : null;
-  const changes = before && after ? [
-    ...compareCollection(before.items, after.items),
-    ...compareCollection(before.shipments, after.shipments),
-    ...compareCollection(before.payments, after.payments),
-    ...compareEntries(before.trade, after.trade),
-  ] : [];
+  const changes = previous ? comparisonChanges(previous, latest) : [];
 
   return <section className="proposal-comparison" aria-labelledby={headingId}>
     <h4 id={headingId}>Changes from the previous proposal</h4>

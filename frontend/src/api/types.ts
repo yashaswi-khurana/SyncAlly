@@ -77,6 +77,35 @@ export interface CreateMarketplaceListingInput {
   currency: string;
 }
 
+export interface MarketplaceRFQ {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  organization_country_code: string;
+  title: string;
+  description: string;
+  category: string;
+  quantity: string;
+  unit: string;
+  destination_country_code: string;
+  target_delivery_date: string | null;
+  target_unit_price: string | null;
+  currency: string | null;
+}
+
+export interface CreateMarketplaceRFQInput {
+  organization_id: string;
+  title: string;
+  description: string;
+  category: string;
+  quantity: string;
+  unit: string;
+  destination_country_code: string;
+  target_delivery_date?: string | null;
+  target_unit_price?: string | null;
+  currency?: string | null;
+}
+
 export type ContactVisibility = "PRIVATE" | "PARTICIPANTS";
 
 export interface OrganizationContact {

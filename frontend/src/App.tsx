@@ -299,6 +299,8 @@ export default function App() {
             onCreated={handleDealCreated}
             onOpeningMessageDraftReady={handleOpeningMessageDraftReady}
             initialCounterpartyId={route.sellerOrganizationId}
+            initialInitiatorParty={route.initiatorParty}
+            initialRfqId={route.rfqId}
           />
         ) : route.name === "marketplace" ? (
           <MarketplacePage organizations={organizations ?? []} />

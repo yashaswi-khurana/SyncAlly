@@ -1,6 +1,6 @@
 export type Route =
   | { name: "deals" }
-  | { name: "create"; sellerOrganizationId?: string }
+  | { name: "create"; sellerOrganizationId?: string; initiatorParty?: "BUYER" | "SELLER"; rfqId?: string }
   | { name: "deal"; dealId: string }
   | { name: "organizations"; inviteToken?: string; dealId?: string }
   | { name: "marketplace" }
@@ -26,7 +26,13 @@ export function parseRoute(hash: string): Route {
   }
   if (path === CREATE_DEAL_PATH) {
     const params = new URLSearchParams(queryString || "");
-    return { name: "create", sellerOrganizationId: params.get("sellerId") || undefined };
+    const initiatorParty = params.get("initiatorParty");
+    return {
+      name: "create",
+      sellerOrganizationId: params.get("sellerId") || undefined,
+      initiatorParty: initiatorParty === "SELLER" ? "SELLER" : "BUYER",
+      rfqId: params.get("rfqId") || undefined,
+    };
   }
   if (path === MARKETPLACE_PATH || path === `${MARKETPLACE_PATH}/`) {
     return { name: "marketplace" };
@@ -64,9 +70,15 @@ export function navigateToDeals(): void {
   window.location.hash = "#/deals";
 }
 
-export function navigateToCreateDeal(sellerOrganizationId?: string): void {
+export function navigateToCreateDeal(
+  sellerOrganizationId?: string,
+  initiatorParty: "BUYER" | "SELLER" = "BUYER",
+  rfqId?: string,
+): void {
   const params = new URLSearchParams();
   if (sellerOrganizationId) params.set("sellerId", sellerOrganizationId);
+  if (initiatorParty === "SELLER") params.set("initiatorParty", initiatorParty);
+  if (rfqId) params.set("rfqId", rfqId);
   window.location.hash = `#${CREATE_DEAL_PATH}${params.size ? `?${params.toString()}` : ""}`;
 }
 

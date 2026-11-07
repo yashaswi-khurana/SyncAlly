@@ -4862,7 +4862,8 @@ body::after {
   gap: 12px;
 }
 
-.marketplace-page__listings {
+.marketplace-page__listings,
+.marketplace-page__requests {
   display: grid;
   gap: 14px;
   margin-top: 22px;

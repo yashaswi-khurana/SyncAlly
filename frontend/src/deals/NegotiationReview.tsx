@@ -150,6 +150,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const loadContextRef = useRef(loadContext);
   const [observedContext, setObservedContext] = useState(loadContext);
   if (loadContext !== observedContext) {
+    const draft = defaultDraft();
     setObservedContext(loadContext);
     setView(null);
     setPending(false);
@@ -157,51 +158,51 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     setAuthorError("");
     setStale(false);
     setReplacementConfirmed(false);
+    setItems(draft.items);
+    setShipments(draft.shipments);
+    setPayments(draft.payments);
+    setDeliveryLocation(draft.deliveryLocation);
+    setIncoterm(draft.incoterm);
+    setCancellationTerms(draft.cancellationTerms);
     setIsDirty(false);
   }
 
   function populateEditorFromTerms(terms: ReviewedProposalTerms) {
     if (terms.schema_version === 2) {
-      if (terms.line_items && terms.line_items.length > 0) {
-        setItems(terms.line_items.map((it, idx) => ({
-          id: it.id || `item-${idx + 1}`,
-          description: it.description,
-          quantity: it.quantity,
-          unit: it.unit,
-          unitPrice: it.unit_price.amount,
-          currency: it.unit_price.currency,
-          sku: it.sku || "",
-        })));
-      }
-      if (terms.shipments && terms.shipments.length > 0) {
-        setShipments(terms.shipments.map((s, idx) => ({
-          id: s.id || `ship-${idx + 1}`,
-          destination: s.destination,
-          targetDate: s.target_date || "",
-          allocations: (s.allocations || []).map(a => ({
-            line_item_id: a.line_item_id,
-            quantity: a.quantity,
-            unit: a.unit,
-          })),
-        })));
-      }
-      if (terms.payment_terms && terms.payment_terms.length > 0) {
-        setPayments(terms.payment_terms.map((p, idx) => ({
-          id: p.id || `pay-${idx + 1}`,
-          amount: p.amount.amount,
-          currency: p.amount.currency,
-          trigger: p.trigger,
-          dueCondition: p.due_condition,
-          allocations: (p.allocations || []).map(a => ({
-            obligation_id: a.obligation_id,
-            amount: a.amount.amount,
-            currency: a.amount.currency,
-          })),
-        })));
-      }
-      if (terms.delivery_location) setDeliveryLocation(terms.delivery_location);
-      if (terms.incoterm) setIncoterm(terms.incoterm);
-      if (terms.cancellation_terms) setCancellationTerms(terms.cancellation_terms);
+      setItems((terms.line_items ?? []).map((it, idx) => ({
+        id: it.id || `item-${idx + 1}`,
+        description: it.description,
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unit_price.amount,
+        currency: it.unit_price.currency,
+        sku: it.sku || "",
+      })));
+      setShipments((terms.shipments ?? []).map((s, idx) => ({
+        id: s.id || `ship-${idx + 1}`,
+        destination: s.destination,
+        targetDate: s.target_date || "",
+        allocations: (s.allocations || []).map(a => ({
+          line_item_id: a.line_item_id,
+          quantity: a.quantity,
+          unit: a.unit,
+        })),
+      })));
+      setPayments((terms.payment_terms ?? []).map((p, idx) => ({
+        id: p.id || `pay-${idx + 1}`,
+        amount: p.amount.amount,
+        currency: p.amount.currency,
+        trigger: p.trigger,
+        dueCondition: p.due_condition,
+        allocations: (p.allocations || []).map(a => ({
+          obligation_id: a.obligation_id,
+          amount: a.amount.amount,
+          currency: a.amount.currency,
+        })),
+      })));
+      setDeliveryLocation(terms.delivery_location ?? "");
+      setIncoterm(terms.incoterm ?? "");
+      setCancellationTerms(terms.cancellation_terms ?? "");
     }
   }
 
@@ -863,8 +864,8 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
         <ol>{view.proposals.map((proposal) => <li key={proposal.id}>
           <details><summary>Round {proposal.proposal_number}: {proposalStatusLabel(proposal, organizationId)}{proposal.lifecycle_origin === "LEGACY" ? " (legacy record)" : ""}</summary>
             <code className="agreement-review__hash">{proposal.terms_hash}</code>
-            {proposal.terms.line_items.map((item, index) => <p key={index}>{item.id ? `[${item.id}] ` : ""}{item.description}: {item.quantity} {item.unit} at {item.unit_price.amount} {item.unit_price.currency}</p>)}
-            {proposal.evidence_refs.map((ref) => <p key={ref.fact_id}>Evidence {ref.fact_id}, version {ref.version}</p>)}
+            {(proposal.terms.line_items ?? []).map((item, index) => <p key={index}>{item.id ? `[${item.id}] ` : ""}{item.description}: {item.quantity} {item.unit} at {item.unit_price.amount} {item.unit_price.currency}</p>)}
+            {(proposal.evidence_refs ?? []).map((ref) => <p key={ref.fact_id}>Evidence {ref.fact_id}, version {ref.version}</p>)}
           </details>
         </li>)}</ol>
         <h3>Proposal activity</h3>

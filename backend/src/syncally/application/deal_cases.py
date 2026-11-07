@@ -178,15 +178,7 @@ def raise_deal_case(
     case_repo = SqlAlchemyDealCaseRepository(db)
     existing_case = case_repo.get(case_id)
     if existing_case is not None:
-        initial_evidence = next(
-            (
-                item for item in existing_case.evidence_items
-                if item.submitted_at == existing_case.created_at
-                and item.submitted_by_user_id == command.actor_user_id
-                and item.submitted_by_organization_id == command.actor_organization_id
-            ),
-            None,
-        )
+        initial_evidence = existing_case.evidence_items[0] if existing_case.evidence_items else None
         same_request = (
             existing_case.deal_id == deal.id
             and existing_case.case_type == command.case_type
@@ -201,6 +193,8 @@ def raise_deal_case(
         if command.evidence_notes:
             same_request = same_request and any(
                 item is initial_evidence
+                and item.submitted_by_user_id == command.actor_user_id
+                and item.submitted_by_organization_id == command.actor_organization_id
                 and item.visibility == command.evidence_visibility
                 and item.notes == command.evidence_notes
                 and item.metadata == command.evidence_metadata

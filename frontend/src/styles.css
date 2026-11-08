@@ -792,6 +792,402 @@ html.has-custom-cursor button {
   }
 }
 
+.collection-authoring {
+  gap: 16px;
+  border-color: var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 18px 38px rgba(24, 39, 34, 0.07);
+}
+
+.collection-authoring > summary {
+  min-height: 68px;
+  padding: 16px 20px;
+}
+
+.collection-authoring > summary::before {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  font-size: 1.15rem;
+}
+
+.collection-authoring > summary h3 {
+  font-size: 1.1rem;
+}
+
+.collection-authoring > summary .badge {
+  margin-left: auto;
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  font-size: 0.69rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.collection-authoring > :not(summary) {
+  margin-right: 20px;
+  margin-left: 20px;
+}
+
+.collection-authoring .proposal-editor__intro {
+  max-width: 68ch;
+  color: var(--ink-soft);
+  font-size: 0.96rem;
+  line-height: 1.65;
+}
+
+.proposal-workflow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal-workflow li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.proposal-workflow li span {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.proposal-workflow li:not(:last-child)::after {
+  content: "→";
+  margin-left: 4px;
+  color: var(--accent);
+}
+
+.proposal-editor__draft-note {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.proposal-editor__reset {
+  justify-self: start;
+  min-height: 36px;
+  padding: 7px 11px;
+  font-size: 0.78rem;
+}
+
+.authoring-items,
+.authoring-shipments,
+.authoring-payments {
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.proposal-section__heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px 24px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.proposal-section__heading h4 {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 1.2rem;
+  letter-spacing: -0.025em;
+}
+
+.proposal-section__heading p {
+  max-width: 38ch;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.proposal-section__step {
+  color: var(--accent);
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+.collection-authoring .button.secondary {
+  justify-self: start;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.collection-item-row,
+.collection-shipment-row,
+.collection-payment-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 13px;
+  padding: 15px;
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.collection-item-row > div:first-child {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.collection-item-row > div:first-child > label:first-child {
+  grid-column: span 2;
+}
+
+.collection-shipment-row > div:first-child {
+  grid-template-columns: minmax(0, 1.4fr) minmax(190px, 0.8fr);
+  gap: 12px;
+}
+
+.collection-payment-row > div:first-child {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.collection-item-row label,
+.collection-shipment-row label,
+.collection-payment-row label,
+.proposal-editor__optional label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.collection-item-row input,
+.collection-shipment-row input,
+.collection-payment-row input,
+.collection-shipment-row select,
+.collection-payment-row select,
+.collection-allocation-row input,
+.collection-allocation-row select,
+.proposal-editor__optional input {
+  height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #fffefa;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.collection-authoring input:focus-visible,
+.collection-authoring select:focus-visible,
+.collection-authoring button:focus-visible,
+.collection-authoring summary:focus-visible,
+.proposal-editor__optional summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.collection-authoring input:focus-visible,
+.collection-authoring select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.collection-authoring input::placeholder {
+  color: #9a9b92;
+  font-weight: 400;
+}
+
+.collection-item-row > div:last-of-type,
+.collection-shipment-row > div:last-of-type,
+.collection-payment-row > div:last-of-type {
+  display: flex;
+  align-items: center;
+}
+
+.collection-item-row > details {
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.proposal-editor__optional {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.proposal-editor__optional > summary {
+  width: fit-content;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.proposal-editor__optional[open] {
+  display: grid;
+  gap: 12px;
+}
+
+.proposal-order-total,
+.proposal-payment-amount,
+.proposal-payment-timing {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 9px;
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.proposal-order-total {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.proposal-order-total span,
+.proposal-payment-amount span,
+.proposal-payment-timing span {
+  color: rgba(247, 244, 236, 0.72);
+  font-size: 0.73rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.proposal-order-total strong {
+  font-family: var(--display);
+  font-size: 1rem;
+  text-align: right;
+}
+
+.proposal-payment-amount strong,
+.proposal-payment-timing strong {
+  font-family: var(--display);
+  font-size: 1.05rem;
+}
+
+.proposal-payment-amount small,
+.proposal-payment-timing small {
+  color: rgba(247, 244, 236, 0.72);
+  font-size: 0.75rem;
+}
+
+.proposal-editor__auto-note {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.proposal-editor__allocations {
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+  padding: 13px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.proposal-editor__allocations h5 {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.collection-allocation-row {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.7fr) auto;
+  gap: 10px;
+  margin: 0;
+}
+
+.collection-allocation-row label {
+  color: var(--ink-soft);
+}
+
+.collection-authoring .form-error {
+  padding: 10px 12px;
+  border: 1px solid rgba(185, 54, 45, 0.22);
+  border-radius: 7px;
+  background: rgba(185, 54, 45, 0.07);
+  color: var(--danger);
+}
+
+.proposal-editor__actions {
+  margin-top: 2px;
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--line);
+}
+
+.proposal-editor__actions .button {
+  min-height: 46px;
+  padding: 12px 20px;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 760px) {
+  .collection-authoring > :not(summary) {
+    margin-right: 12px;
+    margin-left: 12px;
+  }
+
+  .authoring-items,
+  .authoring-shipments,
+  .authoring-payments {
+    padding: 14px;
+  }
+
+  .proposal-section__heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .proposal-workflow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 600px) {
+  .collection-item-row > div:first-child,
+  .collection-shipment-row > div:first-child,
+  .collection-payment-row > div:first-child,
+  .collection-allocation-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .collection-item-row > div:first-child > label:first-child {
+    grid-column: auto;
+  }
+
+  .collection-allocation-row button {
+    justify-self: start;
+  }
+}
+
 .field input::placeholder {
   color: rgba(255, 255, 255, 0.28);
 }

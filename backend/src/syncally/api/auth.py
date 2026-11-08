@@ -182,7 +182,14 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-def _encode_password_setup_token(user_id: UUID, now: datetime | None = None) -> str:
+def _encode_password_setup_token(
+    user_id: UUID,
+    now: datetime | None = None,
+    *,
+    jti: UUID | None = None,
+    email: str | None = None,
+    deal_id: str | None = None,
+) -> str:
     issued_at = now or datetime.now(UTC)
     claims: dict[str, object] = {
         "sub": str(user_id),
@@ -190,6 +197,8 @@ def _encode_password_setup_token(user_id: UUID, now: datetime | None = None) -> 
         "exp": issued_at + timedelta(hours=24),
         "typ": "password_setup",
     }
+    if jti is not None and email is not None:
+        claims.update(invite_jti=str(jti), email=email.strip().lower(), deal_id=deal_id)
     if settings.jwt_issuer:
         claims["iss"] = settings.jwt_issuer
     if settings.jwt_audience:
@@ -420,7 +429,7 @@ def set_password(payload: PasswordSetupRequest, db: Session = Depends(get_db)) -
         raise _unauthorized("Authentication is not configured")
     decode_kwargs: dict[str, object] = {
         "algorithms": [settings.jwt_algorithm],
-        "options": {"require": ["sub", "exp", "typ"]},
+        "options": {"require": ["sub", "exp", "typ", "invite_jti", "email"]},
     }
     if settings.jwt_issuer:
         decode_kwargs["issuer"] = settings.jwt_issuer
@@ -431,6 +440,8 @@ def set_password(payload: PasswordSetupRequest, db: Session = Depends(get_db)) -
         if claims.get("typ") != "password_setup":
             raise jwt.InvalidTokenError("Token is not valid for password setup")
         user_id = UUID(str(claims["sub"]))
+        invite_jti = UUID(str(claims["invite_jti"]))
+        setup_email = str(claims["email"]).strip().lower()
     except (jwt.InvalidTokenError, KeyError, TypeError, ValueError) as exc:
         raise _unauthorized("Invalid or expired password setup link") from exc
 
@@ -439,8 +450,27 @@ def set_password(payload: PasswordSetupRequest, db: Session = Depends(get_db)) -
     )
     if user is None or user.status != "ACTIVE":
         raise _unauthorized("User is inactive or does not exist")
+    if user.email.strip().lower() != setup_email:
+        raise _unauthorized("Password setup link is not valid for this account")
     if user.password_hash is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Password setup has already been completed")
+
+    accepted_invite = db.scalar(select(AuditEvent).where(
+        AuditEvent.aggregate_type == "organization_invitation",
+        AuditEvent.aggregate_id == invite_jti,
+        AuditEvent.event_type == "invitation.accepted",
+    ))
+    if accepted_invite is None or str((accepted_invite.payload or {}).get("user_id")) != str(user_id):
+        raise _unauthorized("Password setup invitation is no longer active")
+    accepted_org_id = (accepted_invite.payload or {}).get("organization_id")
+    membership = db.scalar(select(OrganizationMember).where(
+        OrganizationMember.organization_id == accepted_org_id,
+        OrganizationMember.user_id == user_id,
+        OrganizationMember.status.in_(("ACTIVE", "PENDING_SETUP")),
+    ).with_for_update())
+    if membership is None:
+        raise _unauthorized("Password setup invitation is no longer active")
+    membership.status = "ACTIVE"
 
     now = datetime.now(UTC)
     updated = db.execute(

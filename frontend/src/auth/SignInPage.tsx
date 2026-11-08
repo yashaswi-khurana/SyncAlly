@@ -34,14 +34,14 @@ function getInviteTokenFromHash(): string | null {
   return null;
 }
 
-function readPendingPasswordSetupToken(invitationToken: string | null): string | null {
+function readPendingPasswordSetup(invitationToken: string | null): { setupToken: string; dealId: string | null } | null {
   if (!invitationToken) return null;
   try {
     const raw = window.sessionStorage.getItem("syncally.pendingPasswordSetup");
     if (!raw) return null;
-    const pending = JSON.parse(raw) as { invitationToken?: unknown; setupToken?: unknown };
+    const pending = JSON.parse(raw) as { invitationToken?: unknown; setupToken?: unknown; dealId?: unknown };
     if (pending.invitationToken === invitationToken && typeof pending.setupToken === "string") {
-      return pending.setupToken;
+      return { setupToken: pending.setupToken, dealId: typeof pending.dealId === "string" ? pending.dealId : null };
     }
     window.sessionStorage.removeItem("syncally.pendingPasswordSetup");
   } catch {
@@ -64,9 +64,8 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
   );
   const [inviteEmail, setInviteEmail] = useState(() => invitationPresentation(getInviteTokenFromHash()).recipientEmail ?? "");
   const [invitePassword, setInvitePassword] = useState("");
-  const [inviteSetupToken, setInviteSetupToken] = useState<string | null>(() =>
-    readPendingPasswordSetupToken(getInviteTokenFromHash()),
-  );
+  const [pendingSetup, setPendingSetup] = useState(() => readPendingPasswordSetup(getInviteTokenFromHash()));
+  const inviteSetupToken = pendingSetup?.setupToken ?? null;
   const [inviteDisplayName, setInviteDisplayName] = useState("");
   const [inviteOrgName, setInviteOrgName] = useState("");
   const [inviteCountryCode, setInviteCountryCode] = useState("US");
@@ -87,7 +86,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       setMode(token ? "invite" : "signin");
       setInviteEmail(invitationPresentation(token).recipientEmail ?? "");
       setInvitePassword("");
-      setInviteSetupToken(null);
+      setPendingSetup(null);
       setInviteDisplayName("");
       setInviteOrgName("");
       setInviteCountryCode("US");
@@ -168,7 +167,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           // Ignore unavailable browser storage.
         }
         onSignIn(tokens);
-        const acceptedDealId = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("dealId");
+        const acceptedDealId = pendingSetup?.dealId ?? new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("dealId");
         if (acceptedDealId) navigateToDeal(acceptedDealId);
         else navigateToDeals();
       } catch (caught) {
@@ -216,12 +215,13 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       if (currentInviteRef.current !== acceptingToken) return;
 
       if (res.password_setup_token) {
-        setInviteSetupToken(res.password_setup_token);
+        setPendingSetup({ setupToken: res.password_setup_token, dealId: res.deal_id ?? null });
         setInvitePassword("");
         try {
           window.sessionStorage.setItem("syncally.pendingPasswordSetup", JSON.stringify({
             invitationToken: acceptingToken,
             setupToken: res.password_setup_token,
+            dealId: res.deal_id ?? null,
           }));
         } catch {
           // The current page can still complete password setup without storage.
@@ -429,7 +429,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
               <span>{submitting ? (inviteSetupToken ? "Saving password…" : "Accepting invitation…") : inviteSetupToken ? "Set password and continue" : "Accept invitation"}</span>
               <span aria-hidden="true">↗</span>
             </button>
-            {!inviteSetupToken ? <div style={{ marginTop: 12, textAlign: "center" }}>
+            <div style={{ marginTop: 12, textAlign: "center" }}>
               <button
                 type="button"
                 className="button ghost"
@@ -439,7 +439,6 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                 Already have an account? Sign in
               </button>
             </div>
-            : null}
           </form>
           <div className="auth-card__fineprint">
             <span className="auth-card__fineprint-dot" aria-hidden="true" />

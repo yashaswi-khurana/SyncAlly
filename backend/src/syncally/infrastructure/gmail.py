@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import smtplib
 import ssl
+from email.utils import getaddresses
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from html import escape
@@ -229,6 +230,7 @@ class GmailSMTPInvitationNotifier:
     def send_team_invitation(
         self, recipient_email: str, organization_name: str, invite_url: str, expires_at: str
     ) -> None:
+        organization_name = _safe_email_label(organization_name)
         expiry = _format_expiry(expires_at)
         description = "You’ve been invited to join a team workspace on SyncAlly."
         self._send(
@@ -253,6 +255,8 @@ class GmailSMTPInvitationNotifier:
         self, recipient_email: str, organization_name: str, deal_name: str,
         invite_url: str, expires_at: str,
     ) -> None:
+        organization_name = _safe_email_label(organization_name)
+        deal_name = _safe_email_label(deal_name)
         description = f"{organization_name} invited your organization to join a deal on SyncAlly."
         self._send(
             recipient_email,
@@ -276,6 +280,7 @@ class GmailSMTPInvitationNotifier:
     def send_member_added_notice(
         self, recipient_email: str, organization_name: str, sign_in_url: str
     ) -> None:
+        organization_name = _safe_email_label(organization_name)
         description = "An administrator added your account to an organization workspace."
         self._send(
             recipient_email,
@@ -311,6 +316,7 @@ class GmailSMTPInvitationNotifier:
         action_url: str,
         note: str,
     ) -> None:
+        recipient_email = _single_mailbox(recipient_email)
         message = EmailMessage()
         message["From"] = self._from_email
         message["To"] = recipient_email
@@ -344,3 +350,19 @@ class GmailSMTPInvitationNotifier:
                 smtp.send_message(message)
         except (smtplib.SMTPException, OSError, TimeoutError) as error:
             raise InvitationEmailDeliveryError("Invitation email could not be delivered.") from error
+
+
+def _safe_email_label(value: str) -> str:
+    """Keep user supplied labels on one plain-text line and strip controls."""
+    cleaned = " ".join("".join(char if char >= " " and char != "\x7f" else " " for char in value).split())
+    return cleaned[:200]
+
+
+def _single_mailbox(value: str) -> str:
+    """Reject recipient headers that parse as anything other than one bare mailbox."""
+    if not isinstance(value, str) or any(char in value for char in "\r\n"):
+        raise ValueError("Invitation recipient must be one email address.")
+    parsed = getaddresses([value])
+    if len(parsed) != 1 or parsed[0][0] or parsed[0][1] != value.strip() or "," in value or ";" in value:
+        raise ValueError("Invitation recipient must be one email address.")
+    return parsed[0][1]

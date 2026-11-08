@@ -30,6 +30,15 @@ from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 
 
 class OpeningRequestNormalizationTests(unittest.TestCase):
+    def test_remote_configuration_does_not_mislabel_local_normalization(self) -> None:
+        config = Settings(_env_file=None, app_env="test", ai_provider="openai",
+                          ai_remote_egress_enabled=True, openai_model="test-model",
+                          openai_api_key="test-key")
+        result = normalize_opening_request("We need 12 boxes", ConfiguredAIProvider(config))
+        self.assertEqual(result.provenance.provider, "offline")
+        self.assertEqual(result.provenance.mode, "openai")
+        self.assertIsNone(result.provenance.model)
+
     def test_schema_contract_and_alias(self) -> None:
         self.assertIs(NormalizedTradeRequirements, NormalizedRequirement)
         req = NormalizedRequirement(

@@ -155,7 +155,7 @@ See [F5 rollout and verification](../docs/operations.md#f5-persisted-human-negot
 
 `AI_PROVIDER` defaults to `offline`: deterministic suggestions in development/test,
 and the existing generic unconfigured 503 elsewhere. An environment API key alone
-never enables HTTP. To opt into the single OpenAI Chat Completions adapter, set:
+never enables HTTP. To opt into OpenAI, set:
 
 ```text
 AI_PROVIDER=openai
@@ -165,12 +165,20 @@ AI_REMOTE_ALLOW_PRIVATE=false
 AI_REMOTE_PRIVATE_ORGANIZATION_IDS=[]
 ```
 
+To use Gemini instead, set `AI_PROVIDER=gemini`, `GEMINI_MODEL`, and
+`GOOGLE_API_KEY`, while keeping remote egress enabled. The adapter calls Google's
+GenerateContent API and uses the same locally validated fact and proposal
+contracts. Use Google's paid service for deal data. Its free tier may use
+submitted prompts and responses to improve Google products.
+
 `OPENAI_MODEL` is required with no default; the example is not live-verified and
 operators must verify their account's model support. Supply `OPENAI_API_KEY` through
 the environment or secret store; it is loaded as `SecretStr`, never sent to the UI
-or put into prompts. No real provider was called during implementation/evaluation.
+or put into prompts. Gemini is not yet live-verified; the deployment must be
+configured with a paid Gemini API key and an available model before use.
 
-`openai_with_offline_fallback` is an explicit alternative mode: missing credentials
+`openai_with_offline_fallback` and `gemini_with_offline_fallback` are explicit
+alternative modes: missing credentials
 can produce offline suggestions with a credential fallback reason; only exhausted
 transient network/429/5xx failures allow transient fallback. Quota exhaustion,
 authentication/refusal, invalid output, grounding failure and incomplete terms do

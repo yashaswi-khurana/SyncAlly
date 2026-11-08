@@ -567,9 +567,9 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                   <h3 style={{ margin: 0, fontSize: "1rem" }}>Structured Requirements</h3>
                   {analysisResult.provenance ? (
                     <span className="badge" style={{ fontSize: "0.75rem" }}>
-                      {analysisResult.provenance.provider === "openai" || analysisResult.provenance.mode === "openai"
-                        ? "AI Extracted (OpenAI)"
-                        : "Offline Normalization"}
+                      {analysisResult.provenance.provider === "openai" ? "AI Extracted (OpenAI)"
+                        : analysisResult.provenance.provider === "gemini" ? "AI Extracted (Google Gemini)"
+                          : "Offline Normalization"}
                     </span>
                   ) : null}
                 </div>

@@ -117,8 +117,11 @@ class AIConfigurationError(AIProviderError):
 
 @dataclass(frozen=True, slots=True)
 class AIProvenance:
-    provider: Literal["offline", "openai", "unknown"] = "unknown"
-    mode: Literal["offline", "openai", "openai_with_offline_fallback", "unknown"] = "unknown"
+    provider: Literal["offline", "openai", "gemini", "unknown"] = "unknown"
+    mode: Literal[
+        "offline", "openai", "openai_with_offline_fallback", "gemini",
+        "gemini_with_offline_fallback", "unknown",
+    ] = "unknown"
     model: str | None = None
     context_scope: Literal["authorized", "shareable_only", "authorized_private", "unknown"] = "unknown"
     fallback_reason: Literal["missing_credentials", "transient_exhausted"] | None = None

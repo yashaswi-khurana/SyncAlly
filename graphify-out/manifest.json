@@ -900,10 +900,10 @@
     "semantic_hash": "7b6d33d7d80427083e754f5bb7cc6a96"
   },
   "frontend/package.json": {
-    "mtime": 1792729557.637828,
-    "seen": 1793433921.835244,
-    "ast_hash": "31c66d482b530295fb9f2be95856e135",
-    "semantic_hash": "31c66d482b530295fb9f2be95856e135"
+    "mtime": 1794113812.6387765,
+    "seen": 1794114480.303012,
+    "ast_hash": "1e9c074e67bf1b07ce83405dd94092ea",
+    "semantic_hash": ""
   },
   "frontend/src/App.test.tsx": {
     "mtime": 1794078355.972777,
@@ -1602,16 +1602,16 @@
     "semantic_hash": "74a70f71fc254ccf13f02755bb54b9cc"
   },
   "docs/remaining-tasks/11-judge-demo.md": {
-    "mtime": 1793505734.1811805,
-    "seen": 1793506638.5265684,
-    "ast_hash": "6de234901b904cb992419fdc316d0205",
-    "semantic_hash": "6de234901b904cb992419fdc316d0205"
+    "mtime": 1794080845.7936296,
+    "seen": 1794110559.292928,
+    "ast_hash": "ed674eee584c717d50441b8f67e7c360",
+    "semantic_hash": ""
   },
   "docs/remaining-tasks/12-browser-verification.md": {
-    "mtime": 1793505734.1811805,
-    "seen": 1793506638.52657,
-    "ast_hash": "0f9d403f380b5704bb6a91b76ff3c851",
-    "semantic_hash": "0f9d403f380b5704bb6a91b76ff3c851"
+    "mtime": 1794114361.4325123,
+    "seen": 1794114480.3119445,
+    "ast_hash": "8b10cf884e6a444214d9df48a95854e2",
+    "semantic_hash": ""
   },
   "docs/remaining-tasks/13-postgres-temporal.md": {
     "mtime": 1793505734.1811805,
@@ -1638,9 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1794074692.2059767,
-    "seen": 1794074992.6769693,
-    "ast_hash": "b120a27c287508b269addb695820ede3",
+    "mtime": 1794080898.8433397,
+    "seen": 1794110559.2929482,
+    "ast_hash": "938b650e7d9386a84d9133ea155b3a3b",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -2215,13 +2215,13 @@
   },
   "infra/aws/temporal-sandbox-data.yaml": {
     "mtime": 1794066492.4332345,
-    "seen": 1794074992.6767986,
+    "seen": 1794110559.2927215,
     "ast_hash": "",
     "semantic_hash": ""
   },
   "infra/aws/temporal-workers.yaml": {
     "mtime": 1794066492.4332345,
-    "seen": 1794074992.6768007,
+    "seen": 1794110559.2927265,
     "ast_hash": "",
     "semantic_hash": ""
   },
@@ -2231,10 +2231,34 @@
     "ast_hash": "8ac300a180d4a7d391c85805cc47d1ae",
     "semantic_hash": ""
   },
+  "frontend/comprehensive-e2e-report.json": {
+    "mtime": 1794114247.0121825,
+    "seen": 1794114480.3029478,
+    "ast_hash": "a40712da224df913e26cc21b6d500037",
+    "semantic_hash": ""
+  },
+  "frontend/e2e-live-results.json": {
+    "mtime": 1794113865.2679648,
+    "seen": 1794114480.3029535,
+    "ast_hash": "5c29e01465670b37c87659b35f2156f6",
+    "semantic_hash": ""
+  },
+  "frontend/e2e/comprehensive_verification.mjs": {
+    "mtime": 1794114225.4881191,
+    "seen": 1794114480.302957,
+    "ast_hash": "f203922175ddf48f134f1e007f09781e",
+    "semantic_hash": ""
+  },
+  "frontend/e2e/test_browser_live.mjs": {
+    "mtime": 1794113804.6227474,
+    "seen": 1794114480.3029613,
+    "ast_hash": "2630796c92c4b9286a48dcadca746f3f",
+    "semantic_hash": ""
+  },
   "frontend/package-lock.json": {
-    "mtime": 1792729557.637828,
-    "seen": 1793516513.4279222,
-    "ast_hash": "ab9a64956fbdfc1b4fcb886aa91e8d56",
+    "mtime": 1794113812.8047771,
+    "seen": 1794114480.3124363,
+    "ast_hash": "2ee386ab7fc0373f702e507a78b02d5f",
     "semantic_hash": ""
   }
 }

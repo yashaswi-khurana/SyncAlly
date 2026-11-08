@@ -1,0 +1,48 @@
+{
+  "viewports": [
+    "desktop 1440x900",
+    "mobile 390x844",
+    "narrow mobile 360x740"
+  ],
+  "canvasPixelMetrics": {
+    "width": 647,
+    "height": 147,
+    "totalPixels": 95109,
+    "nonTransparentPixels": 95109,
+    "nonTransparentRatio": 100,
+    "distinctColors": 1505
+  },
+  "dealCanvasPixelMetrics": {
+    "width": 472,
+    "height": 367,
+    "nonTransparentPixels": 173224,
+    "ratio": 100
+  },
+  "motionProved": true,
+  "reducedMotionCompliant": true,
+  "bilateralApprovalPassed": true,
+  "agreementCommitted": false,
+  "downloadsVerified": [
+    {
+      "format": "zip-api",
+      "status": 422,
+      "contentType": "application/json",
+      "contentDisposition": null,
+      "blobSize": 142
+    }
+  ],
+  "unrelatedTenantDenied": true,
+  "responsiveLayoutDetails": {
+    "mobile390": {
+      "hasOverflow": true,
+      "scrollWidth": 443,
+      "clientWidth": 390
+    },
+    "narrow360": {
+      "hasOverflow": true,
+      "scrollWidth": 443,
+      "clientWidth": 360
+    }
+  },
+  "printMediaEvaluated": true
+}

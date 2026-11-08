@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-11-08T05:03:50.671Z",
+  "viewports": {
+    "desktop1440": {
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "hasOverflow": false
+    },
+    "mobile390": {
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "hasOverflow": false
+    },
+    "narrow360": {
+      "scrollWidth": 443,
+      "clientWidth": 360,
+      "hasOverflow": true
+    }
+  },
+  "threeJs": {
+    "bounds": {
+      "x": 102.390625,
+      "y": 518.453125,
+      "width": 646.140625,
+      "height": 146
+    },
+    "dimensions": "647x147",
+    "nonTransparentPixels": 95109,
+    "nonTransparentRatio": "100.00%",
+    "distinctColors": 1480,
+    "motionDiffPixels": 1992,
+    "motionProved": true,
+    "reducedMotionPass": true
+  },
+  "dealConstellation": {
+    "bounds": {
+      "x": 803.3125,
+      "y": 266,
+      "width": 471.6875,
+      "height": 366.75
+    },
+    "dimensions": "472x367",
+    "nonTransparentPixels": 173224,
+    "ratio": "100.00%"
+  },
+  "twoPartyAuth": {},
+  "downloads": {
+    "zip": {
+      "filename": "syncally-deal-f27344e1-5776-4d63-ae2f-05a95cfd5dcf-agreement-v1-trade-pack.zip",
+      "size": 2583,
+      "safeFilename": true,
+      "members": [
+        {
+          "path": "trade-pack.html",
+          "size": 3775
+        },
+        {
+          "path": "canonical-terms.json",
+          "size": 530
+        },
+        {
+          "path": "manifest.json",
+          "size": 1136
+        }
+      ]
+    },
+    "html": {
+      "filename": "syncally-deal-f27344e1-5776-4d63-ae2f-05a95cfd5dcf-agreement-v1-trade-pack.html",
+      "size": 3775,
+      "safeFilename": true,
+      "hasDoctype": true,
+      "hasSecurityHeaders": true,
+      "hasTermsHash": true
+    },
+    "sellerZipSize": 2583
+  },
+  "printMedia": {
+    "hasMain": true,
+    "scrollWidth": 1440,
+    "clientWidth": 1440,
+    "hasTable": false
+  },
+  "unrelatedTenant": {
+    "unauthDealStatus": 401,
+    "bogusTokenDealStatus": 401,
+    "unauthDocStatus": 401,
+    "verified": true
+  },
+  "verdict": "ALL_TESTS_PASSED"
+}

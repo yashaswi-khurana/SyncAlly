@@ -33,6 +33,12 @@ type PaymentState =
       milestone: { amount: string; currency: string } | null;
     };
 
+const PAYPAL_INVOICE_CURRENCIES = new Set([
+  "AUD", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP", "HKD",
+  "HUF", "ILS", "JPY", "MXN", "MYR", "NOK", "NZD", "PHP", "PLN", "RUB",
+  "SEK", "SGD", "THB", "TWD", "USD",
+]);
+
 interface RecipientPreview {
   legalName: string;
   countryCode: string;
@@ -481,6 +487,7 @@ export default function PaymentStatusPanel({
       ? state.sellerMember ? sellerOrganizationId : state.buyerOrganizationId ?? ""
       : ""
   );
+
   const isBuyer = state.status === "ready" && state.buyerMember &&
     Boolean(state.buyerOrganizationId) && selectedPartyId === state.buyerOrganizationId;
   const isSeller = state.status === "ready" && state.sellerMember &&
@@ -618,6 +625,7 @@ export default function PaymentStatusPanel({
             );
             const invoiceUrl = effectivePayment?.invoice_url ?? milestone.invoice_url;
             const failureReason = effectivePayment?.failure_reason ?? milestone.failure_reason;
+            const paypalCurrencyUnsupported = !PAYPAL_INVOICE_CURRENCIES.has(milestone.currency);
 
             return (
               <article
@@ -645,6 +653,12 @@ export default function PaymentStatusPanel({
                   </span>
                 </div>
                 <p className="muted">{presentation.detail}</p>
+                {paypalCurrencyUnsupported ? (
+                  <div className="payment-status__currency-warning" role="note">
+                    <strong>PayPal Sandbox cannot invoice {milestone.currency}</strong>
+                    <span>The trade can remain in {milestone.currency}. To use PayPal, both parties must approve a supported currency; SyncAlly will not convert the agreed amount.</span>
+                  </div>
+                ) : null}
                 {paymentDisagreesWithTerms && effectivePayment ? (
                   <div className="payment-status__mismatch" role="alert">
                     <strong>Payment request differs from the committed terms</strong>

@@ -79,27 +79,29 @@ Strict JSON schemas require every key, including nullable optional values, with
 `additionalProperties=false` at every object. Ordinary code validates again:
 facts must ground against exact transmitted messages; each populated proposal
 field requires a locally grounded citation or an exact transmitted term citation.
-USD, decimal bounds, canonical dates, and plain decimal strings are enforced.
+Three-letter currency codes, decimal bounds, canonical dates, and plain decimal
+strings are enforced.
 Missing required terms must return an insufficient-context failure, not invented defaults.
 
-Remote monetary facts and message-backed proposal price citations require the
-explicit `USD` code adjacent to the exact amount in the exact authorized,
-transmitted quote. `$`, `dollars`, and currency evidence elsewhere in context
-cannot establish USD. The accepted strict policy requires one monetary amount
-in the quote and its original message clause, associated with `unit price`,
-`per unit`, `/unit`, `each`, or a quantity-at-price form such as `12 boxes at
-USD 2.50`. Budget, payment, total, deposit, balance, and subtotal clauses cannot
-authorize a unit price. Compound monetary quotes are rejected rather than
-interpreted: `Budget USD 2.50; actual unit price $2.50.` is invalid. Cropping
-that quote to `USD 2.50` or `2.50` cannot hide its original budget role; repeated
-quote occurrences must all satisfy the policy. An unambiguous `actual unit
-price USD 2.50` or `USD 2.50 per unit` citation remains valid and is preserved
-verbatim. These are conservative accepted forms, not a universal natural-language
-grounding guarantee. Recognized non-USD codes, names, or symbols anywhere in
-the cited source message conservatively invalidate that monetary evidence, even
-when the quote omits the contradictory qualifier. No currency conversion is
-allowed. An exact authorized transmitted price term with currency `USD` remains
-valid evidence for a proposal. Invalid currency evidence is permanent: one HTTP
+Remote monetary facts and message-backed proposal price citations require an
+explicit three-letter currency code adjacent to the exact amount in the exact
+authorized, transmitted quote. A symbol, currency name, or currency evidence
+elsewhere in context cannot establish a code. The accepted strict policy requires
+one monetary amount in the quote and its original message clause, associated
+with `unit price`, `per unit`, `/unit`, `each`, or a quantity-at-price form such
+as `12 boxes at INR 2.50`. Budget, payment, total, deposit, balance, and subtotal
+clauses cannot authorize a unit price. Compound monetary quotes are rejected
+rather than interpreted: `Budget INR 2.50; actual unit price $2.50.` is invalid.
+Cropping that quote to `INR 2.50` or `2.50` cannot hide its original budget role;
+repeated quote occurrences must all satisfy the policy. An unambiguous `actual
+unit price INR 2.50` or `INR 2.50 per unit` citation remains valid and is
+preserved verbatim. These are conservative accepted forms, not a universal
+natural-language grounding guarantee. Recognized conflicting currency codes,
+names, or symbols anywhere in the cited source message conservatively invalidate
+that monetary evidence, even when the quote omits the contradictory qualifier.
+No currency conversion is allowed. An exact authorized transmitted price term
+with the same explicit currency code remains valid evidence for a proposal.
+Invalid currency evidence is permanent: one HTTP
 attempt, no offline fallback, no candidates or draft, and no database writes.
 This stricter remote policy does not change the permissive offline demo helpers.
 

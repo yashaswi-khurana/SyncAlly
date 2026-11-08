@@ -94,7 +94,7 @@ def fact_suggestion_guidance(missing_fields: list[str]) -> str:
     missing = ", ".join(labels[field] for field in missing_fields)
     return (
         f"Add the missing details: {missing}. Suggested format: "
-        "‘Order of [item], [quantity] [unit] at USD [price] each, "
+        "‘Order of [item], [quantity] [unit] at [currency code] [price] each, "
         "ship to [city or port] by YYYY-MM-DD.’"
     )
 
@@ -596,13 +596,30 @@ _CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _CURRENCY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("CAD", re.compile(r"\b(?:CAD|Canadian\s*Dollars?)\b|C\$", re.IGNORECASE)),
     ("AUD", re.compile(r"\b(?:AUD|Australian\s*Dollars?)\b|A\$", re.IGNORECASE)),
-    ("USD", re.compile(r"\b(?:USD|US\s*Dollars?)\b|(?<![A-Za-z])\$", re.IGNORECASE)),
+    ("NZD", re.compile(r"\b(?:NZD|New\s+Zealand\s*Dollars?)\b|NZ\$", re.IGNORECASE)),
+    ("HKD", re.compile(r"\b(?:HKD|Hong\s+Kong\s*Dollars?)\b|HK\$", re.IGNORECASE)),
+    ("SGD", re.compile(r"\b(?:SGD|Singapore\s*Dollars?)\b|S\$", re.IGNORECASE)),
+    ("USD", re.compile(r"\b(?:USD|US\s*Dollars?)\b|US\$", re.IGNORECASE)),
     ("EUR", re.compile(r"\b(?:EUR|Euros?)\b|€", re.IGNORECASE)),
-    ("GBP", re.compile(r"\b(?:GBP|Pounds?)\b|£", re.IGNORECASE)),
-    ("JPY", re.compile(r"\b(?:JPY|Yen)\b|¥", re.IGNORECASE)),
+    ("GBP", re.compile(r"\b(?:GBP|British\s+Pounds?)\b|£", re.IGNORECASE)),
+    ("JPY", re.compile(r"\b(?:JPY|Yen)\b", re.IGNORECASE)),
     ("CHF", re.compile(r"\b(?:CHF|Swiss\s*Francs?)\b", re.IGNORECASE)),
     ("CNY", re.compile(r"\b(?:CNY|RMB|Yuan)\b", re.IGNORECASE)),
     ("INR", re.compile(r"\b(?:INR|Rupees?)\b|₹", re.IGNORECASE)),
+    ("BRL", re.compile(r"\b(?:BRL|Brazilian\s+Reais?)\b|R\$", re.IGNORECASE)),
+    ("MXN", re.compile(r"\b(?:MXN|Mexican\s+Pesos?)\b", re.IGNORECASE)),
+    ("CZK", re.compile(r"\bCZK\b", re.IGNORECASE)),
+    ("DKK", re.compile(r"\bDKK\b", re.IGNORECASE)),
+    ("HUF", re.compile(r"\bHUF\b", re.IGNORECASE)),
+    ("ILS", re.compile(r"\bILS\b", re.IGNORECASE)),
+    ("MYR", re.compile(r"\bMYR\b", re.IGNORECASE)),
+    ("NOK", re.compile(r"\bNOK\b", re.IGNORECASE)),
+    ("PHP", re.compile(r"\bPHP\b", re.IGNORECASE)),
+    ("PLN", re.compile(r"\bPLN\b", re.IGNORECASE)),
+    ("RUB", re.compile(r"\bRUB\b", re.IGNORECASE)),
+    ("SEK", re.compile(r"\bSEK\b", re.IGNORECASE)),
+    ("THB", re.compile(r"\bTHB\b", re.IGNORECASE)),
+    ("TWD", re.compile(r"\bTWD\b", re.IGNORECASE)),
 )
 
 
@@ -871,8 +888,6 @@ def extract_normalized_requirement(raw_text: str) -> NormalizedRequirement:
         if val:
             try:
                 target_unit_price = Decimal(val.replace(",", ""))
-                if currency is None:
-                    currency = "USD"
             except (ArithmeticError, ValueError, decimal.DecimalException):
                 target_unit_price = None
 
@@ -882,8 +897,6 @@ def extract_normalized_requirement(raw_text: str) -> NormalizedRequirement:
         if val:
             try:
                 budget = Decimal(val.replace(",", ""))
-                if currency is None:
-                    currency = "USD"
             except (ArithmeticError, ValueError, decimal.DecimalException):
                 budget = None
 

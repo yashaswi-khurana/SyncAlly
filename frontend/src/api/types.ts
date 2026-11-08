@@ -717,7 +717,7 @@ export interface ProposalSuggestion {
   quantity: string;
   unit: string;
   unit_price: string;
-  currency: "USD";
+  currency: string;
   delivery_destination: string;
   delivery_date: string | null;
   status: "DRAFT";
@@ -739,7 +739,7 @@ export interface ReviewedProposalTerms {
   quantity?: string;
   unit?: string;
   unit_price?: string;
-  currency?: "USD" | string;
+  currency?: string;
   delivery_destination?: string;
   delivery_date?: string | null;
   payment_trigger?: PaymentTrigger;

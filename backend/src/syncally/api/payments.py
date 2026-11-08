@@ -53,6 +53,7 @@ from syncally.infrastructure.models import (
     PaymentIntent,
     PaymentMilestone,
 )
+from syncally.infrastructure.paypal import PAYPAL_INVOICE_SUPPORTED_CURRENCIES
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 from syncally.infrastructure.repositories.payments import (
     SqlAlchemyPaymentIntentRepository,
@@ -543,6 +544,19 @@ def authorize_payment_route(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Payment milestone {milestone.sequence_number} is not eligible: {reason}",
+            )
+
+        if (
+            settings.payment_mode == PaymentExecutionMode.PAYPAL_SANDBOX.value
+            and milestone.currency not in PAYPAL_INVOICE_SUPPORTED_CURRENCIES
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"PayPal Invoicing does not support {milestone.currency}. "
+                    "The agreed trade currency remains unchanged; both parties must "
+                    "approve a PayPal-supported currency before requesting an invoice."
+                ),
             )
 
         outcome = authorize_payment_intent_in_transaction(

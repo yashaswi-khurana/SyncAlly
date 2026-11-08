@@ -78,7 +78,7 @@ class OpeningRequestNormalizationTests(unittest.TestCase):
         self.assertEqual(result.unit, "units")
         self.assertEqual(result.target_unit_price, Decimal("15"))
         self.assertEqual(result.budget, Decimal("7500"))
-        self.assertEqual(result.currency, "USD")
+        self.assertIsNone(result.currency)
         self.assertEqual(result.destination_country_code, "DE")
         self.assertEqual(result.destination_name, "Berlin, Germany")
         self.assertEqual(result.target_delivery_date, date(2026, 12, 1))
@@ -154,7 +154,7 @@ class OpeningRequestNormalizationTests(unittest.TestCase):
         self.assertEqual(result.unit, "housings")
         self.assertEqual(result.budget, Decimal("20000"))
         self.assertEqual(result.target_unit_price, Decimal("4"))
-        self.assertEqual(result.currency, "USD")
+        self.assertIsNone(result.currency)
         self.assertEqual(result.destination_country_code, "DE")
         self.assertEqual(result.destination_name, "Germany")
         self.assertIn("Injection Molding", result.capabilities_required)
@@ -202,14 +202,23 @@ class OpeningRequestNormalizationTests(unittest.TestCase):
             ("Order of 100 widgets at €50 each", "EUR", Decimal("50")),
             ("Order of 100 widgets at £25.50 each", "GBP", Decimal("25.50")),
             ("100 units under C$ 3000", "CAD", Decimal("3000")),
+            ("100 units under NZ$ 3000", "NZD", Decimal("3000")),
+            ("100 units under HK$ 3000", "HKD", Decimal("3000")),
+            ("100 units under S$ 3000", "SGD", Decimal("3000")),
             ("100 units at 5000 JPY each", "JPY", Decimal("5000")),
             ("100 units budget 15000 INR", "INR", Decimal("15000")),
+            ("100 units budget 15000 BRL", "BRL", Decimal("15000")),
         )
         for text, curr, amount in currencies:
             res = extract_normalized_requirement(text)
             self.assertEqual(res.currency, curr)
             if res.target_unit_price is not None:
                 self.assertIn(amount, (res.target_unit_price, res.budget))
+
+    def test_ambiguous_dollar_symbol_does_not_assume_usd(self) -> None:
+        result = extract_normalized_requirement("Need 100 units at $45.50 each.")
+        self.assertEqual(result.target_unit_price, Decimal("45.50"))
+        self.assertIsNone(result.currency)
 
     def test_demo_provider_normalize_opening_request_method(self) -> None:
         provider = DemoAISuggestionProvider()

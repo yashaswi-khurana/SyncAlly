@@ -299,7 +299,7 @@ class TestOpeningRequestE2ETier1FeatureCoverage(BaseOpeningRequestE2ETest):
         self.assertEqual(Decimal(str(req["quantity"])), Decimal("500"))
         self.assertEqual(req["unit"].lower(), "units")
         self.assertEqual(Decimal(str(req["target_unit_price"])), Decimal("15"))
-        self.assertEqual(req["currency"], "USD")
+        self.assertIsNone(req["currency"])
         self.assertEqual(req["raw_text"], text)
 
     def test_tier1_normalization_agricultural_produce(self) -> None:
@@ -430,7 +430,7 @@ class TestOpeningRequestE2ETier1FeatureCoverage(BaseOpeningRequestE2ETest):
         req = response.json()["requirements"]
         self.assertEqual(req["raw_text"], "Fasteners")
 
-    def test_tier1_fallback_currency_symbols_parsing(self) -> None:
+    def test_tier1_ambiguous_dollar_symbol_does_not_assume_usd(self) -> None:
         if not _is_route_available("/deals/opening-request/analyze"):
             self.skipTest("POST /deals/opening-request/analyze not yet mounted in app")
 
@@ -443,7 +443,7 @@ class TestOpeningRequestE2ETier1FeatureCoverage(BaseOpeningRequestE2ETest):
         self.assertEqual(response.status_code, 200)
         req = response.json()["requirements"]
         self.assertEqual(Decimal(str(req["target_unit_price"])), Decimal("45.50"))
-        self.assertEqual(req["currency"], "USD")
+        self.assertIsNone(req["currency"])
 
     # --------------------------------------------------------------------------
     # Feature 1.3: Multi-Factor Seller Suggestion Matching (5 tests)

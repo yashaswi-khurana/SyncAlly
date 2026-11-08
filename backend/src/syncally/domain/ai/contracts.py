@@ -19,7 +19,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from syncally.domain.agreements.trade_terms import (
-    SUPPORTED_DEMO_CURRENCY,
     SUPPORTED_DEMO_PAYMENT_DUE_CONDITION,
     SUPPORTED_DEMO_PAYMENT_TRIGGER,
     TRADE_TERMS_SCHEMA_VERSION,
@@ -131,7 +130,11 @@ class ExtractedFact:
         if not isinstance(self.source, SourceReference):
             raise AIContractError("extracted fact requires a SourceReference")
         value = self.value.strip()
-        _validate_fact_value(self.field, value, self.currency_or_unit)
+        currency_or_unit = self.currency_or_unit
+        if self.field is FactField.UNIT_PRICE:
+            currency_or_unit = _currency_code(currency_or_unit, "unit_price currency_or_unit")
+            object.__setattr__(self, "currency_or_unit", currency_or_unit)
+        _validate_fact_value(self.field, value, currency_or_unit)
         object.__setattr__(self, "value", value)
 
     @classmethod
@@ -316,8 +319,7 @@ class ProposedTerms:
         if self.unit_price <= 0:
             raise AIContractError("unit_price must be positive")
         _validate_unit(self.unit)
-        if self.currency != SUPPORTED_DEMO_CURRENCY:
-            raise AIContractError("only USD is supported for the demo proposal")
+        object.__setattr__(self, "currency", _currency_code(self.currency, "currency"))
         _required_string(self.delivery_destination, "delivery_destination")
         if len(self.delivery_destination.strip()) > 2_000:
             raise AIContractError("delivery_destination is too long")
@@ -336,9 +338,7 @@ class ProposedTerms:
                 "currency", "delivery_destination", "delivery_date",
             },
         )
-        currency = _required_string(payload.get("currency"), "currency")
-        if currency != SUPPORTED_DEMO_CURRENCY:
-            raise AIContractError("only USD is supported for the demo proposal")
+        currency = _currency_code(payload.get("currency"), "currency")
         raw_date = payload.get("delivery_date")
         try:
             delivery_date = None if raw_date is None else date.fromisoformat(
@@ -445,8 +445,8 @@ def _validate_fact_value(
         decimal_value = _decimal(value, fact_field.value)
         if decimal_value <= 0:
             raise AIContractError(f"{fact_field.value} must be finite and positive")
-        if fact_field is FactField.UNIT_PRICE and currency_or_unit != "USD":
-            raise AIContractError("unit_price requires currency_or_unit USD")
+        if fact_field is FactField.UNIT_PRICE:
+            _currency_code(currency_or_unit, "unit_price currency_or_unit")
         if fact_field is FactField.QUANTITY and currency_or_unit is not None:
             _validate_unit(currency_or_unit)
         return
@@ -472,6 +472,7 @@ def _validate_fact_value(
 
 
 _DECIMAL_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?")
+_CURRENCY_CODE_PATTERN = re.compile(r"[A-Za-z]{3}")
 _UNIT_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9 -]{0,31}")
 _NATURAL_DATE_PATTERN = re.compile(
     r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
@@ -486,10 +487,16 @@ def _validate_unit(value: Any) -> None:
         raise AIContractError("unit must be well-formed plain text (1-32 characters)")
 
 
+def _currency_code(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not _CURRENCY_CODE_PATTERN.fullmatch(value.strip()):
+        raise AIContractError(f"{field_name} must be a three-letter currency code")
+    return value.strip().upper()
+
+
 def _fact_value_is_supported_by_quote(fact: ExtractedFact, quote: str) -> bool:
     if fact.field in {FactField.QUANTITY, FactField.UNIT_PRICE}:
         if fact.field is FactField.UNIT_PRICE:
-            return _number_with_currency_is_present(fact.value, "USD", quote)
+            return _number_with_currency_is_present(fact.value, fact.currency_or_unit or "", quote)
         if fact.currency_or_unit is not None:
             return _number_with_unit_is_present(fact.value, fact.currency_or_unit, quote)
         return _contains_numeric_token(fact.value, quote)
@@ -532,7 +539,7 @@ def _number_with_currency_is_present(value: str, currency: str, text: str) -> bo
         rf"(?<![A-Za-z]){currency_token}\s*{number}(?![\w.,])"
         rf"|(?<![\w.,+-]){number}\s*{currency_token}(?![A-Za-z])"
     ]
-    if currency == SUPPORTED_DEMO_CURRENCY:
+    if currency.upper() == "USD":
         alternatives.extend(
             (
                 rf"(?<![\w.,+-])\$\s*{number}(?![\w.,])",

@@ -7,6 +7,7 @@ import {
   REQUIRED_TRADE_FIELDS,
   guidanceForMissingTradeFields,
   missingRequiredTradeFields,
+  findSharedTermDrift,
   requiredTradeField,
   toFactSuggestionDraft,
   toProposalDraft,
@@ -187,6 +188,8 @@ export default function AISuggestionReview({
   useEffect(() => { submissionContext.current = contextSignature; }, [contextSignature]);
   const missingFields = missingRequiredTradeFields([...knownFactsById.values()],
     serverFactsSignature === factsSignature ? serverMissingFields : null);
+  const sharedFacts = [...knownFactsById.values()].filter((fact) => fact.visibility === "SHAREABLE");
+  const sharedTermDrift = findSharedTermDrift(sharedFacts);
   const confirmedValues: Partial<Record<keyof ProposalSuggestionDraft, string>> = {};
   const confirmedSignatures: Partial<Record<keyof ProposalSuggestionDraft, string>> = {};
   const conflictingFields = new Set<keyof ProposalSuggestionDraft>();
@@ -555,6 +558,55 @@ export default function AISuggestionReview({
           </div>
         ) : null}
       </section>
+      {hasFactSuggestionRun ? (
+        <section className="ai-change-radar" aria-labelledby={`ai-change-radar-heading-${dealId}`}>
+          <div className="ai-change-radar__header">
+            <div>
+              <span className="eyebrow">Cross-message intelligence</span>
+              <h3 id={`ai-change-radar-heading-${dealId}`}>Negotiation change radar</h3>
+            </div>
+            <span className={`ai-change-radar__count${sharedTermDrift.length ? " is-alert" : ""}`}>
+              {sharedTermDrift.length ? `${sharedTermDrift.length} term${sharedTermDrift.length === 1 ? "" : "s"} to review` : "No conflicts found"}
+            </span>
+          </div>
+          <p className="ai-change-radar__intro">
+            AI extracts trade positions from shared messages; SyncAlly compares the sourced values. A difference may be a counteroffer, not an accepted change.
+          </p>
+          {sharedTermDrift.length ? (
+            <ul className="ai-change-radar__list">
+              {sharedTermDrift.map((change) => (
+                <li key={change.field} className="ai-change-radar__item">
+                  <div className="ai-change-radar__item-heading">
+                    <strong>{change.label}</strong>
+                    <span>{change.values.length} values found in shared messages</span>
+                  </div>
+                  <div className="ai-change-radar__values">
+                    {change.values.map(({ value, facts: sources }) => (
+                      <div key={`${change.field}:${value}`} className="ai-change-radar__value">
+                        <strong>{value}</strong>
+                        {sources.slice(0, 2).map((source) => (
+                          <div key={source.id} className="ai-change-radar__source">
+                            {source.source_span ? <blockquote>“{source.source_span}”</blockquote> : null}
+                            {source.source_message_id ? (
+                              <button type="button" onClick={() => onTraceSource(source.source_message_id!)}>
+                                View source message
+                              </button>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="ai-change-radar__clear" role="status">
+              No conflicting shared values surfaced in this scan. The parties still need to review and approve the agreement.
+            </p>
+          )}
+        </section>
+      ) : null}
       <div className="ai-review-actions">
         <button ref={factSuggestionButtonRef} type="button" className="button" disabled={pendingAction !== null} onClick={() => void runFactSuggestion()}>
           {pendingAction === "facts" ? "Extracting facts..." : "Suggest facts from this side's messages"}
@@ -595,7 +647,7 @@ export default function AISuggestionReview({
               </div>
               <div className="field">
                 <label htmlFor={`manual-fact-unit-${dealId}`}>Currency or unit (optional)</label>
-                <input id={`manual-fact-unit-${dealId}`} value={manualCurrencyOrUnit} maxLength={32} onChange={(event) => setManualCurrencyOrUnit(event.target.value)} placeholder="For example, USD or bags" />
+                <input id={`manual-fact-unit-${dealId}`} value={manualCurrencyOrUnit} maxLength={32} onChange={(event) => setManualCurrencyOrUnit(event.target.value)} placeholder="For example, INR or bags" />
               </div>
               <div className="field">
                 <label htmlFor={`manual-fact-visibility-${dealId}`}>Visibility</label>

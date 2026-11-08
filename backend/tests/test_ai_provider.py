@@ -548,7 +548,7 @@ class AISuggestionProviderTests(unittest.TestCase):
         from syncally.application.ai import call_with_bounded_retry
         with patch("syncally.application.ai.monotonic", side_effect=[0, 0, 21, 21, 21]):
             with self.assertRaises(AITransientError):
-                call_with_bounded_retry(lambda: "late", AIRetryPolicy(), sleep=lambda _: None)
+                call_with_bounded_retry(lambda: "late", AIRetryPolicy(timeout_seconds=10), sleep=lambda _: None)
 
     def test_remote_envelope_finish_model_and_choices_are_strict(self) -> None:
         for mutate in (

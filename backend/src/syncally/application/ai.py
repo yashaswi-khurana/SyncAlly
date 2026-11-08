@@ -47,7 +47,7 @@ from syncally.domain.shared.identifiers import ConstraintId, DealId, Organizatio
 NormalizedTradeRequirements = NormalizedRequirement
 
 DEFAULT_MAX_ATTEMPTS = 2
-DEFAULT_TIMEOUT_SECONDS = 10.0
+DEFAULT_TIMEOUT_SECONDS = 25.0
 DEFAULT_BACKOFF_SECONDS = 0.5
 
 _REQUIRED_PROPOSAL_FIELDS = (

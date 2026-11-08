@@ -75,7 +75,7 @@ export type {
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
 
 /**
- * Upper bound for any API call, above the AI boundary's 20.5-second remote budget.
+ * Default upper bound for API calls.
  */
 export const API_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -141,6 +141,7 @@ export async function apiRequest<T>(
   init: RequestInit = {},
   responseType: "json" | "blob" = "json",
   authRequired = true,
+  timeoutMs = API_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", responseType === "blob" ? "application/zip, text/html" : "application/json");
@@ -165,7 +166,7 @@ export async function apiRequest<T>(
   const deadline = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, API_REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
 
   try {
     const response = await fetch(`${apiBaseUrl()}${path}`, {
@@ -797,7 +798,7 @@ export function suggestDealFacts(
   return apiRequest<FactSuggestionResult>(`/deals/${encodeURIComponent(dealId)}/ai/facts`, {
     method: "POST",
     body: JSON.stringify({ organization_id: organizationId }),
-  });
+  }, "json", true, 60_000);
 }
 
 export function draftDealProposal(
@@ -807,7 +808,7 @@ export function draftDealProposal(
   return apiRequest<ProposalSuggestion>(`/deals/${encodeURIComponent(dealId)}/ai/proposal`, {
     method: "POST",
     body: JSON.stringify({ organization_id: organizationId }),
-  });
+  }, "json", true, 60_000);
 }
 
 export function correctDealFact(

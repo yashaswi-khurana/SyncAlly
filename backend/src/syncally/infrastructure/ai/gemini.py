@@ -15,7 +15,6 @@ from syncally.application.ai import AIPermanentError, AITransientError
 from syncally.application.conversations import AiContext
 from syncally.infrastructure.ai.openai import (
     MAX_BYTES,
-    MAX_OUTPUT_TOKENS,
     OpenAIChatCompletions,
     _json,
 )
@@ -72,8 +71,9 @@ class GeminiGenerateContent(OpenAIChatCompletions):
         raw = json.dumps({
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
-                "maxOutputTokens": MAX_OUTPUT_TOKENS,
+                "maxOutputTokens": 8192,
                 "responseMimeType": "application/json",
+                **({"thinkingConfig": {"thinkingLevel": "low"}} if self.model.startswith("gemini-3") else {}),
             },
         }, ensure_ascii=False, allow_nan=False).encode("utf-8")
         if len(raw) > MAX_BYTES:

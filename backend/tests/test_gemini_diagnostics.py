@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from pydantic import SecretStr
@@ -12,6 +14,17 @@ from syncally.operations import SafeOperationalFormatter
 
 
 class GeminiDiagnosticsTests(unittest.TestCase):
+    def test_request_uses_json_mode_and_includes_schema(self):
+        provider = GeminiGenerateContent(api_key=SecretStr("key"), model="gemini-3.5-flash")
+        context = SimpleNamespace(messages=(), constraints=())
+        schema = {"type": "object", "properties": {"facts": {"type": "array"}}}
+        with patch.object(provider, "_http", new_callable=AsyncMock, return_value={}) as call:
+            provider._call(context, "facts", schema, 1)
+        body = json.loads(call.call_args.args[0])
+        self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+        self.assertNotIn("responseJsonSchema", body["generationConfig"])
+        self.assertIn(json.dumps(schema), body["contents"][0]["parts"][0]["text"])
+
     def test_rate_limit_logs_only_safe_status(self):
         provider = GeminiGenerateContent(
             api_key=SecretStr("private-key"), model="gemini-3.8-flash",

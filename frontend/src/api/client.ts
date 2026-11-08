@@ -64,12 +64,37 @@ import type {
   RespondCaseInput,
   AddCaseEvidenceInput,
   OpeningRequestAnalysisResult,
+  MarketplaceListingDetail,
+  InquiryDraft,
+  InterpretSourcingRequest,
+  InterpretSourcingResponse,
+  CompareSourcingRequest,
+  CompareSourcingResponse,
+  GapAnalysisSourcingRequest,
+  GapAnalysisSourcingResponse,
+  DraftInquirySourcingRequest,
+  EvaluateSourcingRequest,
+  EvaluateSourcingResponse,
 } from "./types";
 
 export type {
   NormalizedTradeRequirements,
   SuggestedSeller,
   OpeningRequestAnalysisResult,
+  BuyerRequirements,
+  MarketplaceListingDetail,
+  ComparisonResult,
+  CommercialGap,
+  InquiryDraft,
+  InterpretSourcingRequest,
+  InterpretSourcingResponse,
+  CompareSourcingRequest,
+  CompareSourcingResponse,
+  GapAnalysisSourcingRequest,
+  GapAnalysisSourcingResponse,
+  DraftInquirySourcingRequest,
+  EvaluateSourcingRequest,
+  EvaluateSourcingResponse,
 } from "./types";
 
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
@@ -965,3 +990,74 @@ export function analyzeOpeningRequest(
     })),
   }));
 }
+
+export function interpretSourcingRequirements(
+  input: InterpretSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<InterpretSourcingResponse> {
+  return apiRequest<InterpretSourcingResponse>("/sourcing/interpret", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function getSourcingListings(
+  params: { category?: string; completeness?: string; q?: string } = {},
+  options?: { signal?: AbortSignal },
+): Promise<{ listings: MarketplaceListingDetail[]; total: number }> {
+  const query = new URLSearchParams();
+  if (params.category) query.set("category", params.category);
+  if (params.completeness) query.set("completeness", params.completeness);
+  if (params.q) query.set("q", params.q);
+  const qs = query.toString();
+  return apiRequest<{ listings: MarketplaceListingDetail[]; total: number }>(
+    `/sourcing/listings${qs ? `?${qs}` : ""}`,
+    { signal: options?.signal },
+  );
+}
+
+export function compareSourcingListings(
+  input: CompareSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<CompareSourcingResponse> {
+  return apiRequest<CompareSourcingResponse>("/sourcing/compare", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function analyzeSourcingGaps(
+  input: GapAnalysisSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<GapAnalysisSourcingResponse> {
+  return apiRequest<GapAnalysisSourcingResponse>("/sourcing/gap-analysis", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function draftSourcingInquiry(
+  input: DraftInquirySourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<InquiryDraft> {
+  return apiRequest<InquiryDraft>("/sourcing/draft-inquiry", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function evaluateSourcing(
+  input: EvaluateSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<EvaluateSourcingResponse> {
+  return apiRequest<EvaluateSourcingResponse>("/sourcing/evaluate", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+

@@ -1044,3 +1044,235 @@ export interface OpeningRequestAnalysisResult {
   suggested_sellers: SuggestedSeller[];
   provenance?: AIProvenance;
 }
+
+// ==============================================================================
+// SOURCING AGENT DOMAIN TYPES (Milestone M3)
+// ==============================================================================
+
+export type Incoterm =
+  | "EXW"
+  | "FCA"
+  | "CPT"
+  | "CIP"
+  | "DAP"
+  | "DPU"
+  | "DDP"
+  | "FAS"
+  | "FOB"
+  | "CFR"
+  | "CIF";
+
+export type GapCategory = "MISSING" | "AMBIGUOUS" | "NON_COMPLIANT";
+export type GapSeverity = "CRITICAL" | "MODERATE" | "LOW";
+export type ComparisonStatus = "MATCH" | "ACCEPTABLE_VARIANCE" | "ACCEPTABLE" | "GAP";
+export type MatchTier = "Tier A" | "Tier B" | "Tier C" | "Tier D";
+
+export interface TechnicalSpecification {
+  materials: string[];
+  tolerances?: string | null;
+  certifications: string[];
+  standards: string[];
+  quality_grade?: string | null;
+  notes?: string | null;
+}
+
+export interface PricingConstraint {
+  target_unit_price?: string | null;
+  max_unit_price?: string | null;
+  max_total_budget?: string | null;
+  currency: string;
+}
+
+export interface QuantityRequirement {
+  target_quantity: string;
+  min_acceptable_quantity?: string | null;
+  unit: string;
+  packaging_preference?: string | null;
+}
+
+export interface DeliveryConstraint {
+  destination_country_code: string;
+  destination_port_or_city?: string | null;
+  required_delivery_date?: string | null;
+  max_lead_time_days?: number | null;
+}
+
+export interface CommercialTermsRequirement {
+  preferred_incoterm?: string | null;
+  acceptable_incoterms: string[];
+  preferred_payment_term?: string | null;
+  min_warranty_months: number;
+  inspection_requirement: string;
+}
+
+export interface BuyerRequirements {
+  title: string;
+  category: string;
+  description: string;
+  technical_specs: TechnicalSpecification;
+  pricing: PricingConstraint;
+  quantity: QuantityRequirement;
+  delivery: DeliveryConstraint;
+  commercial_terms: CommercialTermsRequirement;
+  raw_prompt?: string | null;
+}
+
+export interface CommercialGap {
+  gap_id: string;
+  field_name: string;
+  category: GapCategory;
+  severity: GapSeverity;
+  buyer_requirement_value: string;
+  seller_offered_value: string | null;
+  explanation: string;
+  suggested_action: string;
+  negotiation_priority?: number;
+}
+
+export interface AttributeComparison {
+  field_name: string;
+  display_name: string;
+  buyer_value: string;
+  seller_value?: string | null;
+  variance: string;
+  status: ComparisonStatus;
+  gap_category?: GapCategory | null;
+  explanation?: string | null;
+  attribute?: string;
+  buyer_requirement?: string;
+  candidate_value?: string;
+}
+
+export interface AttributeComparisonRow {
+  attribute: string;
+  buyer_requirement: string;
+  candidate_value: string;
+  variance: string;
+  status: "MATCH" | "ACCEPTABLE" | "GAP";
+}
+
+export interface ScoreBreakdown {
+  specifications: number;
+  pricing: number;
+  quantity_and_moq: number;
+  lead_time: number;
+  commercial_terms: number;
+  composite: number;
+}
+
+export interface MarketplaceListingDetail {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  country_code: string;
+  title: string;
+  category: string;
+  description: string;
+  available_quantity: string;
+  moq?: string | null;
+  unit: string;
+  unit_price: string;
+  currency: string;
+  lead_time_days?: number | null;
+  incoterms: (Incoterm | string)[];
+  payment_terms?: string | null;
+  technical_specs: TechnicalSpecification;
+  warranty_months?: number | null;
+  warranty_description?: string | null;
+  inspection_terms?: string | null;
+  completeness_tier: string;
+}
+
+export interface ComparisonResult {
+  listing_id: string;
+  listing_title: string;
+  seller_organization_id: string;
+  seller_organization_name: string;
+  country_code: string;
+  unit_price: string;
+  currency: string;
+  available_quantity: string;
+  moq: string | null;
+  unit: string;
+  lead_time_days: number | null;
+  composite_score: number;
+  tier: MatchTier;
+  match_tier?: "A" | "B" | "C" | "D";
+  score_breakdown: ScoreBreakdown;
+  completeness_tier?: string;
+  category?: string;
+  attribute_comparisons?: AttributeComparison[];
+  attribute_matrix?: AttributeComparisonRow[];
+  detected_gaps?: CommercialGap[];
+  gaps?: CommercialGap[];
+  is_disqualified?: boolean;
+  disqualification_reasons?: string[];
+}
+
+export interface InquiryDraft {
+  listing_id?: string;
+  seller_organization_id?: string;
+  seller_organization_name?: string;
+  subject: string;
+  body: string;
+  gaps_addressed: string[];
+  proposed_terms?: Record<string, unknown>;
+}
+
+export interface SourcingEvaluationReport {
+  requirements: BuyerRequirements;
+  comparisons: ComparisonResult[];
+  inquiries: Record<string, InquiryDraft>;
+  total_listings_evaluated: number;
+}
+
+export interface InterpretSourcingRequest {
+  prompt?: string;
+  structured_overrides?: Partial<BuyerRequirements>;
+}
+
+export interface InterpretSourcingResponse {
+  requirements: BuyerRequirements;
+  parsed_fields: string[];
+}
+
+export interface CompareSourcingRequest {
+  requirements: BuyerRequirements;
+  listing_ids?: string[];
+}
+
+export interface CompareSourcingResponse {
+  results: ComparisonResult[];
+}
+
+export interface GapAnalysisSourcingRequest {
+  requirements: BuyerRequirements;
+  listing_id: string;
+}
+
+export interface GapAnalysisSourcingResponse {
+  listing: MarketplaceListingDetail;
+  gaps: CommercialGap[];
+  overall_severity: string;
+}
+
+export interface DraftInquirySourcingRequest {
+  requirements: BuyerRequirements;
+  listing_id: string;
+  buyer_organization_id?: string;
+}
+
+export interface EvaluateSourcingRequest {
+  prompt?: string;
+  requirements?: BuyerRequirements;
+  listing_ids?: string[];
+  buyer_organization_id?: string;
+}
+
+export interface EvaluateSourcingResponse {
+  requirements: BuyerRequirements;
+  comparisons: ComparisonResult[];
+  inquiries: Record<string, InquiryDraft>;
+  total_listings_evaluated: number;
+}
+

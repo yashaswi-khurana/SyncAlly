@@ -1,168 +1,218 @@
-# TEST_INFRA.md — E2E Testing Infrastructure & Specification
+# TEST_INFRA.md — Production Buyer Sourcing Agent E2E Testing Infrastructure
 
-## Executive Summary
-This document establishes the architecture, test runners, oracles, and test inventory for the **AI-Powered Opening Request Analysis & Seller Suggestion** feature suite in SyncAlly.
+## 1. Executive Summary
 
-The testing architecture follows an **opaque-box end-to-end (E2E)** methodology across four hierarchical tiers:
-- **Tier 1 — Feature Coverage**: Happy-path verification for normalization, AI fallback, multi-factor seller suggestion, and deal creation integration (>=5 tests per feature).
-- **Tier 2 — Boundary & Corner Cases**: Stress-testing edge inputs, zero/multiple matching sellers, deterministic tie-breakers, self-dealing prevention, and inactive organization disqualification (>=5 tests per feature).
-- **Tier 3 — Cross-Feature Combinations**: Pairwise interactions between normalization, seller suggestion, and deal creation with complete and partial parameters.
-- **Tier 4 — Real-World Application Scenarios**: Comprehensive end-to-end buyer procurement workflows spanning varied global industries (Aerospace, Agriculture, Healthcare, Multi-currency, Air-gapped offline).
+This document establishes the architecture, test runners, oracles, data contracts, and test inventory for the **Production Buyer Sourcing Agent** in SyncAlly, as mandated by `ORIGINAL_REQUEST.md` (R1–R4) and `PROJECT.md` (§ Architecture, § Feature Inventory F1–F22, § Interface Contracts).
+
+The test suite is structured as an **opaque-box end-to-end (E2E)** verification matrix spanning four systematic tiers:
+- **Tier 1 — Feature Coverage**: Happy-path verification for requirement interpretation, technical spec parsing, pricing & budget validation, quantity/MOQ compliance, lead time feasibility, commercial terms normalization, multi-factor scoring, attribute matrix generation, gap detection, seller inquiry drafting, REST API routes, and deal handoff (>=5 tests per feature).
+- **Tier 2 — Boundary & Corner Cases**: Rigorous edge testing including empty/whitespace inputs, extreme lengths (8,000 chars), zero prices ($0.00), massive quantities (100M units), past delivery dates, missing lead times/warranties, ambiguous phrasing ("standard warranty"), and non-standard Incoterms (>=5 tests per feature).
+- **Tier 3 — Cross-Feature Combinations**: Pairwise and multi-attribute commercial trade-offs (e.g. over-budget price + missing lead time, non-compliant MOQ + ambiguous warranty, missing regulatory certs + tight deadline, currency mismatch + restrictive EXW terms).
+- **Tier 4 — Real-World Application Scenarios**: Comprehensive end-to-end procurement journeys covering all 5 core B2B industrial sectors (Fasteners, Electronics, Agriculture, Textiles, Medical/PPE).
 
 ---
 
-## 1. Test Architecture & Runners
+## 2. Test Architecture & Runners
 
-### 1.1 Backend Test Runner (`pytest`)
+### 2.1 Backend Test Runner (`pytest`)
 - **Binary**: `/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest`
-- **Working Directory**: `/home/yashaswi/Project/SyncAlly/backend`
-- **Framework**: `pytest 9.1.1` on Python 3.12 with `unittest.TestCase` and `httpx.AsyncClient` ASGI transport.
-- **Database Isolation**: In-memory SQLite (`sqlite+pysqlite:///:memory:`) using `StaticPool` and `check_same_thread=False`. Clean schema creation (`Base.metadata.create_all(engine)`) and teardown (`Base.metadata.drop_all(engine)`) per test.
-- **Authentication & Dependency Injection**: FastAPI `app.dependency_overrides[get_db]` and `app.dependency_overrides[get_current_actor]`.
-- **Primary Suite**: `backend/tests/test_e2e_opening_request_analysis.py`
+- **Framework**: `pytest 9.1.1` on Python 3.12 with `unittest.TestCase` and `httpx.AsyncClient` ASGI transport (`httpx.ASGITransport(app=app)`).
+- **Primary Suite**: `backend/tests/test_e2e_buyer_sourcing.py` (79 automated test cases).
+- **Database Isolation**: In-memory SQLite (`sqlite+pysqlite:///:memory:`) using `StaticPool` with `check_same_thread=False`. Per-test clean schema creation (`Base.metadata.create_all(engine)`) and teardown (`Base.metadata.drop_all(engine)`).
+- **Dependency Overrides & Authentication**: FastAPI `app.dependency_overrides[get_db]` and `app.dependency_overrides[get_current_actor]`.
+- **Progressive Testability**: Employs `_is_route_available(...)` checks. During pre-implementation milestones (M-E2E), tests compile and are collected cleanly with standard unittest skips (`self.skipTest(...)`), ensuring exit code 0. Once implementation milestones (M1/M2) register the router at `/sourcing/*`, the exact same tests execute full assertions without code modification.
+- **Offline Self-Containment**: Zero external API keys, zero remote network egress.
 
-### 1.2 Frontend Test Runner (`vitest`)
-- **Binary**: `npx vitest run` via Node / npm in `/home/yashaswi/Project/SyncAlly/frontend`
-- **Framework**: `vitest 5.0.5` with `@testing-library/react`, `@testing-library/jest-dom`, and jsdom environment.
-- **Network Boundary**: Mocked API client layer (`vi.mock("../api/client")`) testing end-to-end component rendering, user interactions, debounced queries, form submission, and error recovery.
-- **Primary Suite**: `frontend/src/deals/CreateDealPage.e2e.test.tsx`
-
----
-
-## 2. Oracles & Expected Output Derivation
-
-For each test tier and test case, expected values are derived from canonical specifications:
-1. **Normalization Contracts**: Defined in `PROJECT.md` § Interface Contracts (1. Backend Normalization Schema).
-   - Extracted trade fields: `item_description`, `category`, `quantity`, `unit`, `target_unit_price`, `budget`, `currency`, `destination_country_code`, `destination_name`, `target_delivery_date`, `capabilities_required`, `raw_text`.
-2. **Offline Rule-Based Extractor Oracle**: Defined in `DemoAISuggestionProvider` (`backend/src/syncally/infrastructure/ai/demo.py`).
-   - Parses regex patterns for unit prices (`$X` or `X USD`), quantities and units (`X units`, `X boxes`, `X kg`, `X meters`), destinations, and delivery dates.
-3. **Multi-Factor Matching Engine Oracle**: Defined in `PROJECT.md` § 2 & `spec_miner_survey_3/handoff.md`:
-   $$\text{Score}(S, R) = 0.40 \cdot S_{\text{prod}} + 0.25 \cdot S_{\text{cap}} + 0.20 \cdot S_{\text{reg}} + 0.15 \cdot S_{\text{cat}}$$
-   - Strict exclusions: Disqualifies buyer self-match (`candidate.id != buyer_organization_id`) and inactive organizations (`status != 'ACTIVE'`).
-   - Deterministic tie-breaking: Score desc $\to$ matched token count desc $\to$ legal name asc $\to$ organization ID asc.
-4. **Deal Creation Compatibility Oracle**: Defined in `backend/src/syncally/api/deals.py`:
-   - `POST /deals` accepts `buyer_organization_id`, `seller_organization_id`, optional `display_name`, and `initiator_party`. Must return `201 Created` with schema `{id, buyer_organization_id, seller_organization_id, status: 'DRAFT', version: 0, pending_counterparty: false, display_name}`.
+### 2.2 Frontend Test Runner (`vitest`)
+- **Binary**: `npm --prefix frontend test -- ... --run` via Vitest 5.0.5.
+- **Framework**: Vitest 5.0.5 with `@testing-library/react`, `@testing-library/jest-dom`, and jsdom environment.
+- **Primary Suite**: `frontend/src/sourcing/SourcingHub.test.tsx` (23 automated test cases).
+- **Component Coverage**: Full mounting and DOM verification of `ReferenceSourcingHub`, testing navigation breadcrumbs, dual-mode requirement input (prompt vs structured fields), candidate listing cards, match score badges, attribute comparison table, gap analysis inspector drawer, seller inquiry modal, clipboard copy, and deal creation bridge (`#/deals/new`).
+- **Offline Fallback Simulation**: Validates client-side fallback to bundled listings dataset when network is unavailable or disconnected.
 
 ---
 
-## 3. Test Suites & Coverage Inventory
+## 3. Authoritative Oracles & Output Derivation
 
-### 3.1 Backend E2E Test Suite (`backend/tests/test_e2e_opening_request_analysis.py`)
+All expected values across the 102 test cases are derived strictly from authoritative domain specifications:
 
-#### Tier 1: Feature Coverage (>=5 tests per feature)
-- **Feature 1.1: Requirement Normalization with Varied Phrasings (Happy Path)**
-  - `test_tier1_normalization_industrial_fasteners`: Industrial procurement phrasing (stainless steel bolts, units, USD price, destination Berlin, Germany).
-  - `test_tier1_normalization_agricultural_produce`: Commodity bulk order (10,000 kg organic coffee beans, Canada, target price).
-  - `test_tier1_normalization_electronics_hardware`: Electronics component RFQ (copper wire harness, units, Tokyo Japan, target price).
-  - `test_tier1_normalization_medical_supplies`: Healthcare procurement phrasing (1,500 boxes nitrile gloves, US, FDA compliance capability).
-  - `test_tier1_normalization_textile_materials`: Raw textile RFQ (50,000 yards cotton fabric, UK destination, total budget).
-- **Feature 1.2: Fallback Behavior when AI is Unconfigured or Offline**
-  - `test_tier1_fallback_offline_mode_returns_rule_based_extraction`: Mode `offline` extracts structured requirements and reports `AIProvenance(mode="offline")`.
-  - `test_tier1_fallback_missing_credentials_graceful_recovery`: Missing OpenAI API key records `fallback_reason="missing_credentials"` without 500 error.
-  - `test_tier1_fallback_transient_error_exhausted`: Simulated network outage falls back with `fallback_reason="transient_exhausted"`.
-  - `test_tier1_fallback_minimal_text_graceful_extraction`: Minimal phrase preserves `raw_text` and populates non-null fields without crashing.
-  - `test_tier1_fallback_currency_symbols_parsing`: Parses `$`, `USD`, `EUR` currency denominations accurately in fallback.
-- **Feature 1.3: Multi-Factor Seller Suggestion Matching**
-  - `test_tier1_suggestion_product_exact_match`: Seller with matching product in `OrganizationProfile.products` scores high product weight.
-  - `test_tier1_suggestion_capability_match`: Seller with matching capability (e.g., "Precision Machining") receives capability boost.
-  - `test_tier1_suggestion_regional_compatibility`: Destination country code matching seller country or `regions` receives regional weight.
-  - `test_tier1_suggestion_marketplace_catalog_fit`: Active listing matching category with sufficient quantity and price $\le$ budget boosts catalog weight.
-  - `test_tier1_suggestion_multi_factor_composite_scoring`: Evaluates composite formula ($0.40/0.25/0.20/0.15$) and returns match reasons.
-- **Feature 1.4: Deal Creation Flow Integration**
-  - `test_tier1_deal_creation_standard_without_opening_request`: `POST /deals` succeeds with `201 Created` when no opening request is provided.
-  - `test_tier1_deal_creation_with_opening_request_text`: Deal creation succeeds and preserves draft message draft.
-  - `test_tier1_deal_creation_with_suggested_seller`: Creates deal using counterparty selected directly from suggestion engine.
-  - `test_tier1_deal_creation_seller_initiated`: Initiator party `SELLER` creates draft deal with buyer.
-  - `test_tier1_deal_creation_backward_compatibility`: Validates exact `DealResponse` schema compatibility.
+### 3.1 Requirement Interpretation Oracle (`ORIGINAL_REQUEST.md:R1`, `spec_miner handoff § 1`)
+- **Domain Contract**: `BuyerRequirements` schema composed of:
+  - `technical_specs`: Materials list, tolerances, certifications (ISO, CE, RoHS, FDA), standards (DIN, ASTM, JASO, OEKO-TEX).
+  - `pricing`: Target unit price, max unit price ceiling, max total budget, currency (ISO 4217).
+  - `quantity`: Target quantity, min acceptable quantity, unit, packaging preference.
+  - `delivery`: Destination country code (ISO 3166-1 alpha-2), destination port/city, required delivery date, max lead time days.
+  - `commercial_terms`: Preferred Incoterm (Incoterms 2020), acceptable Incoterms list, preferred payment term (Net 30, Escrow, etc.), min warranty months, inspection requirement.
 
-#### Tier 2: Boundary & Corner Cases (>=5 tests per feature)
-- **Feature 2.1: Extreme Inputs & Adversarial Formats**
-  - `test_tier2_input_empty_string_rejected`: Empty string `""` rejected with `422 Unprocessable Entity`.
-  - `test_tier2_input_whitespace_only_handled_safely`: Whitespace-only string rejected with 422 or handled cleanly without server error.
-  - `test_tier2_input_exact_max_length_8000_chars`: 8,000 character quote processes cleanly.
-  - `test_tier2_input_exceeding_max_length_rejected`: 8,001 character quote rejected with `422 Unprocessable Entity`.
-  - `test_tier2_input_sql_xss_control_characters_escaped`: Injection payloads (`<script>`, SQL fragments, ANSI control chars) preserved verbatim in `raw_text` without execution.
-  - `test_tier2_input_unicode_and_multilingual`: Multi-language inputs (Chinese, Japanese, Cyrillic, Accented characters) normalized cleanly.
-  - `test_tier2_input_non_matching_gibberish`: Random nonsense text returns empty suggestions without 500 crash.
-- **Feature 2.2: Suggestion Cardinality, Thresholds & Tie-Breaking**
-  - `test_tier2_suggestion_zero_matching_sellers`: Non-matching request returns empty `suggested_sellers: []` and 200 OK.
-  - `test_tier2_suggestion_multiple_sellers_ranked_descending`: Multiple matches ranked strictly by `match_score` desc.
-  - `test_tier2_suggestion_deterministic_tie_breaking`: Identical score broken by matched tokens desc $\to$ `legal_name` asc $\to$ `id` asc.
-  - `test_tier2_suggestion_top_n_limit_capping`: Capped at top 10 sellers when >10 candidates match.
-  - `test_tier2_suggestion_threshold_filtering`: Candidates scoring below minimum threshold (<0.15) excluded.
-- **Feature 2.3: Disqualification & Exclusion Invariants**
-  - `test_tier2_exclusion_buyer_self_dealing_prevented`: Buyer organization is NEVER suggested as a seller even with 100% keyword match.
-  - `test_tier2_exclusion_inactive_organization_disqualified`: Organizations with `status = "INACTIVE"` excluded from suggestions.
-  - `test_tier2_exclusion_suspended_organization_disqualified`: Organizations with `status = "SUSPENDED"` excluded.
-  - `test_tier2_exclusion_inactive_listing_ignored`: Inactive listings do not count towards catalog fit score.
-  - `test_tier2_exclusion_incompatible_region_penalized`: Sellers whose registered regions explicitly exclude destination receive 0 regional score.
+### 3.2 Bundled Realistic Dataset Oracle (`PROJECT.md § Architecture`, `spec_miner handoff § 2`)
+8 curated candidate listings across 5 industrial sectors intentionally modeling completeness variations:
+1. `Listing 101` (DE — Berlin Fastener & Bolt GmbH): DIN 933 M8 Grade 316 Bolts, $11.50/box, MOQ 500, lead time 21d, DDP/CIF/FOB, Net 30/Escrow, 24mo warranty, EN 10204 3.1 QC. (`FULL_COMPLETE`)
+2. `Listing 102` (US — Apex Hardware): Precision Bolts M8, $10.80/box, MOQ 200, missing lead time, missing Incoterms. (`PARTIAL_MISSING_LEAD_TIME_OR_TERMS`)
+3. `Listing 103` (JP — Tokyo Micro-Conductor): Automotive Wire Harness 28AWG, $7.20/unit, MOQ 500, lead time 28d, ambiguous payment ("negotiable"), ambiguous warranty ("standard"). (`AMBIGUOUS_SPECS_OR_TERMS`)
+4. `Listing 104` (PL — Baltic Fastener Works): Marine A4-80 Bolts, $9.50/box, MOQ 5,000 (barrier), lead time 35d. (`NON_COMPLIANT_MOQ`)
+5. `Listing 105` (SE — Nordic AeroSpares): Aerospace Fasteners M8, $24.00/box (over budget), MOQ 100, lead time 14d. (`NON_COMPLIANT_PRICE`)
+6. `Listing 106` (GB — Lancashire Weaving Mills): Industrial Canvas Fabric 320 GSM, $3.10/yd, MOQ 1,000, missing lead time, EXW only. (`AMBIGUOUS_SPECS_OR_TERMS`)
+7. `Listing 107` (CN — Shenzhen Precision Interconnect): Shielded Coaxial Assembly, $5.80/unit, MOQ 1,000, lead time 75d (excessive). (`NON_COMPLIANT_LEAD_TIME`)
+8. `Listing 108` (US — MediShield Global Corp): Nitrile Examination Gloves 4 mil, $8.50/box, MOQ 500, lead time 10d, FDA 510(k), ISO 13485, CE. (`FULL_COMPLETE`)
 
-#### Tier 3: Cross-Feature Combinations
-- `test_tier3_full_pipeline_normalize_suggest_create_deal`: Full lifecycle: Quote $\to$ Normalization $\to$ Suggestion $\to$ Deal Creation.
-- `test_tier3_partial_requirements_quantity_only`: Partial input with quantity but no price matches sellers by product/quantity.
-- `test_tier3_partial_requirements_destination_only`: Partial input with destination only matches sellers operating in that region.
-- `test_tier3_zero_suggestion_fallback_to_directory_deal`: Zero matches falls back cleanly to directory selection and deal creation.
-- `test_tier3_offline_fallback_with_deal_creation`: Offline fallback succeeds and downstream deal creation proceeds seamlessly.
-- `test_tier3_unscoped_analysis_without_buyer_id`: Analysis without `buyer_organization_id` returns suggestions without self-exclusion.
+### 3.3 Multi-Factor Commercial Scoring Oracle (`PROJECT.md § 3.1`, `spec_miner handoff § 3`)
+- **Formula**:
+  $$S = 0.30 \cdot s_{\text{spec}} + 0.25 \cdot s_{\text{price}} + 0.15 \cdot s_{\text{qty}} + 0.15 \cdot s_{\text{lead}} + 0.15 \cdot s_{\text{terms}} \in [0, 100]$$
+- **Match Tiers**:
+  - **Tier A (90% – 100%)**: Ideal Match (Immediate deal room initiation).
+  - **Tier B (75% – 89%)**: Strong Candidate (Minor commercial variance).
+  - **Tier C (50% – 74%)**: Conditional Candidate (Moderate gaps requiring inquiry).
+  - **Tier D (< 50%)**: Disqualified / Substantial Mismatch (Critical deal blocker).
 
-#### Tier 4: Real-World Application Scenarios
-- `test_tier4_scenario_aerospace_precision_machining`: High-tech manufacturing procurement with tight tolerances and ISO certifications.
-- `test_tier4_scenario_agricultural_export_supply_chain`: Bulk agricultural commodity trade across international borders.
-- `test_tier4_scenario_medical_device_procurement`: Regulated medical devices with CE mark / FDA compliance requirements.
-- `test_tier4_scenario_international_multicurrency_trade`: Cross-border deal with EUR budget and US seller USD catalog.
-- `test_tier4_scenario_air_gapped_offline_resilience`: Complete deal initiation performed entirely in offline fallback mode.
+### 3.4 Gap Taxonomy & Explanation Oracle (`ORIGINAL_REQUEST.md:R2`, `spec_miner handoff § 4`)
+- **3 Categories**: `MISSING`, `AMBIGUOUS`, `NON_COMPLIANT`.
+- **3 Severities**: `CRITICAL` (deal blockers: price > max budget, MOQ > 1.5x demand, lead time > deadline, missing regulatory certs), `MODERATE` (commercial risks: missing lead time, EXW vs DDP, advance payment vs Net 30), `LOW` (clarifications).
+- **Explanations**: Include exact mathematical and commercial deltas (e.g., "$24.00 exceeds $14.00 by 71.4%").
+
+### 3.5 Inquiry Drafting Oracle (`ORIGINAL_REQUEST.md:R2`, `spec_miner handoff § 5`)
+- Generates polite B2B letters with structured sections: Subject, Salutation, Order Summary Scope, Targeted Gap Paragraphs with proposed compromises (trial batches, volume discounts, warranty extensions), Counter-terms, and Call-to-Action.
 
 ---
 
-### 3.2 Frontend E2E Test Suite (`frontend/src/deals/CreateDealPage.e2e.test.tsx`)
+## 4. Comprehensive Test Inventory (102 Tests)
 
-#### Tier 1: UI Feature Coverage
-- `renders the "Analyze & suggest sellers" trigger button beneath opening request textarea`
-- `triggers analysis on button click and renders structured requirements card`
-- `renders suggested seller cards with match score badge and match reasons`
-- `allows selecting a suggested seller to prefill counterparty`
-- `creates deal normally without analysis when opening request is omitted`
+### 4.1 Backend Test Cases (`backend/tests/test_e2e_buyer_sourcing.py` — 79 Tests)
 
-#### Tier 2: Boundary & Edge Cases
-- `disables or ignores analysis when opening request is empty or whitespace`
-- `handles maximum length 8,000 character quote in textarea without crashing`
-- `displays friendly empty state when zero sellers match requirements`
-- `excludes the active buyer organization from suggested sellers list in UI`
-- `renders Unicode and special characters in requirements preview without distortion`
+| Tier | Category / Feature | Test Identifier | Summary |
+|---|---|---|---|
+| Tier 1 | F1 & F2 Natural Language & Technical Specs | `test_tier1_interpret_fasteners_material_tolerance_standards` | Fastener prompt -> 316 SS, ISO 965-1 6g, DIN 933, CE/RoHS |
+| Tier 1 | F1 & F2 Natural Language & Technical Specs | `test_tier1_interpret_electronics_wire_gauge_jaso` | Wire harness prompt -> 28AWG, JASO D611, RoHS, Tokyo |
+| Tier 1 | F1 & F2 Natural Language & Technical Specs | `test_tier1_interpret_agriculture_fair_trade_organic` | Bulk Arabica coffee -> 20,000 kg, Fair Trade, CIF Hamburg |
+| Tier 1 | F1 & F2 Natural Language & Technical Specs | `test_tier1_interpret_textiles_oeko_tex_gsm` | Cotton canvas -> 5,000 yd, 320 GSM, OEKO-TEX 100, London |
+| Tier 1 | F1 & F2 Natural Language & Technical Specs | `test_tier1_interpret_medical_fda_astm_cleanroom` | Nitrile gloves -> 10,000 boxes, ASTM D6319, FDA 510(k), CE |
+| Tier 1 | F3 & F4 Pricing & Volume MOQ | `test_tier1_pricing_unit_price_constraint` | Validates target price and budget ceiling |
+| Tier 1 | F3 & F4 Pricing & Volume MOQ | `test_tier1_pricing_total_budget_cap` | Validates ceiling budget cap vs quantity calculation |
+| Tier 1 | F3 & F4 Pricing & Volume MOQ | `test_tier1_quantity_target_and_min_acceptable` | Validates target quantity vs min acceptable batches |
+| Tier 1 | F3 & F4 Pricing & Volume MOQ | `test_tier1_quantity_moq_compatibility_within_limits` | Seller MOQ <= buyer quantity evaluates to full MOQ score |
+| Tier 1 | F3 & F4 Pricing & Volume MOQ | `test_tier1_quantity_unit_packaging_preference` | Preserves units and packaging specifications |
+| Tier 1 | F5 & F6 Lead Time & Terms Normalization | `test_tier1_lead_time_days_delivery_feasibility` | Lead time days and arrival date buffer calculation |
+| Tier 1 | F5 & F6 Lead Time & Terms Normalization | `test_tier1_commercial_terms_incoterms_normalization` | Normalizes Incoterms 2020 preference (DDP/CIF/FOB) |
+| Tier 1 | F5 & F6 Lead Time & Terms Normalization | `test_tier1_commercial_terms_payment_methods` | Normalizes Net 30, Net 60, Escrow, 30/70 split |
+| Tier 1 | F5 & F6 Lead Time & Terms Normalization | `test_tier1_commercial_terms_warranty_duration` | Validates minimum warranty duration threshold |
+| Tier 1 | F5 & F6 Lead Time & Terms Normalization | `test_tier1_commercial_terms_inspection_preferences` | Validates EN 10204 3.1 mill certificate and third-party QC |
+| Tier 1 | F7 & F8 Bundled Dataset & Scoring Engine | `test_tier1_bundled_listings_repository_retrieval` | Bundled repository returns listings across all 5 sectors |
+| Tier 1 | F7 & F8 Bundled Dataset & Scoring Engine | `test_tier1_scoring_engine_5_dimension_weights` | Verifies 30% specs, 25% price, 15% qty, 15% lead, 15% terms |
+| Tier 1 | F7 & F8 Bundled Dataset & Scoring Engine | `test_tier1_scoring_engine_tier_a_ideal_match` | Fully compliant candidate achieves Tier A (score >= 90%) |
+| Tier 1 | F7 & F8 Bundled Dataset & Scoring Engine | `test_tier1_scoring_engine_tier_b_minor_variance` | Candidate with minor variance receives Tier B (75-89%) |
+| Tier 1 | F7 & F8 Bundled Dataset & Scoring Engine | `test_tier1_scoring_engine_tier_d_disqualified` | Disqualified candidate with severe mismatch receives Tier D |
+| Tier 1 | F9 Attribute-by-Attribute Matrix | `test_tier1_comparison_matrix_exact_match_status` | Exact matching attributes tagged with MATCH status |
+| Tier 1 | F9 Attribute-by-Attribute Matrix | `test_tier1_comparison_matrix_acceptable_variance_status` | Minor commercial variance tagged ACCEPTABLE |
+| Tier 1 | F9 Attribute-by-Attribute Matrix | `test_tier1_comparison_matrix_gap_status` | Non-compliant / missing attributes tagged GAP |
+| Tier 1 | F9 Attribute-by-Attribute Matrix | `test_tier1_comparison_matrix_numerical_delta_formatting` | Numerical deltas for price and lead time canonically formatted |
+| Tier 1 | F9 Attribute-by-Attribute Matrix | `test_tier1_comparison_matrix_omitted_attributes_rendered` | Missing listing attributes rendered as 'Not Specified' |
+| Tier 1 | F10 & F11 Gap Taxonomy & Explanations | `test_tier1_gap_detection_missing_classification` | Omitted lead time or terms classified as MISSING |
+| Tier 1 | F10 & F11 Gap Taxonomy & Explanations | `test_tier1_gap_detection_ambiguous_classification` | Vague phrasing ("standard warranty") classified AMBIGUOUS |
+| Tier 1 | F10 & F11 Gap Taxonomy & Explanations | `test_tier1_gap_detection_non_compliant_classification` | High MOQ or over-budget price classified NON_COMPLIANT |
+| Tier 1 | F10 & F11 Gap Taxonomy & Explanations | `test_tier1_gap_severity_critical_deal_blocker` | Blocker violations (>1.5x MOQ, > budget) tagged CRITICAL |
+| Tier 1 | F10 & F11 Gap Taxonomy & Explanations | `test_tier1_gap_explanation_generator_mathematical_delta` | Explanations detail exact numbers and percentage variance |
+| Tier 1 | F12 Targeted Seller Inquiry Drafting | `test_tier1_inquiry_drafting_missing_lead_time` | Inquiry requests explicit calendar day lead time |
+| Tier 1 | F12 Targeted Seller Inquiry Drafting | `test_tier1_inquiry_drafting_ambiguous_warranty` | Inquiry clarifies warranty duration and defect claim protocol |
+| Tier 1 | F12 Targeted Seller Inquiry Drafting | `test_tier1_inquiry_drafting_non_compliant_moq` | Inquiry proposes pilot lot or volume tiers |
+| Tier 1 | F12 Targeted Seller Inquiry Drafting | `test_tier1_inquiry_drafting_non_compliant_price` | Inquiry requests volume discount toward target price |
+| Tier 1 | F12 Targeted Seller Inquiry Drafting | `test_tier1_inquiry_drafting_zero_gaps_purchase_intent` | Zero-gap candidate produces formal purchase intent RFQ |
+| Tier 1 | F13 & F14 Sourcing REST API & Deal Bridge | `test_tier1_api_interpret_endpoint` | POST /sourcing/interpret schema contract validation |
+| Tier 1 | F13 & F14 Sourcing REST API & Deal Bridge | `test_tier1_api_listings_endpoint_filtering` | GET /sourcing/listings category and query filter validation |
+| Tier 1 | F13 & F14 Sourcing REST API & Deal Bridge | `test_tier1_api_compare_endpoint` | POST /sourcing/compare ranking and score payload validation |
+| Tier 1 | F13 & F14 Sourcing REST API & Deal Bridge | `test_tier1_api_gap_analysis_endpoint` | POST /sourcing/gap-analysis gap taxonomy payload validation |
+| Tier 1 | F13 & F14 Sourcing REST API & Deal Bridge | `test_tier1_deal_handoff_bridge_prefilled_terms` | Evaluated terms prefilled into deal initiation bridge |
+| Tier 2 | Boundary: Parsing Edge Cases | `test_tier2_parsing_empty_string` | Empty string returns blank requirements without 500 error |
+| Tier 2 | Boundary: Parsing Edge Cases | `test_tier2_parsing_whitespace_only` | Whitespace-only string handled cleanly |
+| Tier 2 | Boundary: Parsing Edge Cases | `test_tier2_parsing_extreme_long_prompt` | 8,000-character input parsed without timeout or buffer overflow |
+| Tier 2 | Boundary: Parsing Edge Cases | `test_tier2_parsing_conflicting_budget_and_unit_price` | Unit price $10 vs $50k budget for 100 units handled cleanly |
+| Tier 2 | Boundary: Parsing Edge Cases | `test_tier2_parsing_past_delivery_date` | Date 2020-01-01 in past flagged or nullified safely |
+| Tier 2 | Boundary: Parsing Edge Cases | `test_tier2_parsing_unparseable_alphanumeric_quantity` | "a few hundred boxes" handles quantity as None gracefully |
+| Tier 2 | Boundary: Pricing Limits | `test_tier2_pricing_zero_unit_price` | $0.00 price flagged as custom quote required |
+| Tier 2 | Boundary: Pricing Limits | `test_tier2_pricing_extreme_large_price` | $1,000,000 unit price handled without numeric overflow |
+| Tier 2 | Boundary: Pricing Limits | `test_tier2_pricing_zero_max_budget` | $0.00 max budget handled gracefully |
+| Tier 2 | Boundary: Pricing Limits | `test_tier2_pricing_currency_mismatch_without_fx` | USD buyer vs EUR seller flagged MODERATE gap without crash |
+| Tier 2 | Boundary: Pricing Limits | `test_tier2_pricing_fractional_cent_precision` | $0.0075 unit price compared with Decimal precision |
+| Tier 2 | Boundary: Quantity & MOQ Limits | `test_tier2_quantity_extreme_large_volume` | 100,000,000 units compared accurately |
+| Tier 2 | Boundary: Quantity & MOQ Limits | `test_tier2_quantity_fractional_decimal_quantity` | 0.25 metric tons handled accurately |
+| Tier 2 | Boundary: Quantity & MOQ Limits | `test_tier2_quantity_seller_moq_100x_buyer_demand` | 100x seller MOQ triggers CRITICAL deal blocker |
+| Tier 2 | Boundary: Quantity & MOQ Limits | `test_tier2_quantity_missing_seller_moq` | None seller MOQ scored at baseline and flagged MISSING |
+| Tier 2 | Boundary: Quantity & MOQ Limits | `test_tier2_quantity_incompatible_unit_types` | Non-convertible units (kg vs liters) handled safely |
+| Tier 2 | Boundary: Lead Time & Delivery | `test_tier2_lead_time_zero_days` | Zero lead time days handled as immediate dispatch |
+| Tier 2 | Boundary: Lead Time & Delivery | `test_tier2_lead_time_extreme_days` | 730 days lead time flagged as non-compliant blocker |
+| Tier 2 | Boundary: Lead Time & Delivery | `test_tier2_lead_time_vague_qualitative_phrase` | "immediate dispatch upon reopening" flagged AMBIGUOUS |
+| Tier 2 | Boundary: Lead Time & Delivery | `test_tier2_lead_time_delivery_deadline_tomorrow` | 1-day deadline vs 21-day lead time flags CRITICAL |
+| Tier 2 | Boundary: Lead Time & Delivery | `test_tier2_lead_time_missing_in_listing` | None lead time scored at baseline and flagged MISSING |
+| Tier 2 | Boundary: Commercial Terms | `test_tier2_commercial_terms_unrecognized_incoterm` | Non-standard Incoterm flagged AMBIGUOUS |
+| Tier 2 | Boundary: Commercial Terms | `test_tier2_commercial_terms_missing_warranty` | None warranty scored 0 pts and flagged MISSING |
+| Tier 2 | Boundary: Commercial Terms | `test_tier2_commercial_terms_100_percent_advance_demand` | 100% advance payment penalized and flagged NON_COMPLIANT |
+| Tier 2 | Boundary: Commercial Terms | `test_tier2_commercial_terms_ambiguous_standard_warranty` | "standard warranty applies" flagged AMBIGUOUS |
+| Tier 2 | Boundary: Commercial Terms | `test_tier2_commercial_terms_empty_acceptable_incoterms_list` | Empty acceptable Incoterms list handled cleanly |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_high_price_plus_missing_lead_time` | Over-budget price + missing lead time -> 2-point inquiry |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_non_compliant_moq_plus_ambiguous_warranty` | High MOQ + vague warranty -> pilot lot + warranty inquiry |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_missing_regulatory_cert_plus_tight_deadline` | Missing CE/FDA + 14d deadline -> disqualification score |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_currency_mismatch_plus_restrictive_exw` | EUR price + EXW terms -> currency lock + freight inquiry |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_category_disqualification_with_attractive_pricing` | Wrong category (Medical Gloves vs Fasteners) receives 0 specs |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_partial_material_match_with_high_volume_discount` | 304 vs 316 SS -> material variance clarification inquiry |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_100_percent_advance_plus_unverified_seller` | Advance payment demand triggers SyncAlly Escrow proposal |
+| Tier 3 | Cross-Feature Interaction | `test_tier3_combo_extreme_lead_time_with_acceptable_price_and_specs` | 75d lead time vs 30d window triggers expedited freight request |
+| Tier 4 | Real-World Procurement Journey | `test_tier4_journey_fasteners_automotive_oem` | Fasteners OEM journey: Berlin Tier A match, deal opened |
+| Tier 4 | Real-World Procurement Journey | `test_tier4_journey_electronics_iot_cable_harness` | Electronics journey: Tokyo Micro-Conductor warranty inquiry |
+| Tier 4 | Real-World Procurement Journey | `test_tier4_journey_agriculture_specialty_coffee` | Agriculture journey: 20t Arabica Fair Trade CIF Hamburg |
+| Tier 4 | Real-World Procurement Journey | `test_tier4_journey_textiles_organic_canvas` | Textiles journey: Lancashire Mills missing lead time inquiry |
+| Tier 4 | Real-World Procurement Journey | `test_tier4_journey_medical_ppe_hospital_replenishment` | Medical journey: MediShield gloves FDA 510(k) immediate deal |
 
-#### Tier 3: Cross-Feature Interactions
-- `one-click seller selection updates selected seller and switches counterparty mode`
-- `gracefully displays inline error message when analysis API fails`
-- `allows editing opening request and re-analyzing`
-- `displays partial trade attributes cleanly when some fields are absent`
-- `maintains separate state and appropriate labels when switching between Buyer and Seller roles`
+### 4.2 Frontend Test Cases (`frontend/src/sourcing/SourcingHub.test.tsx` — 23 Tests)
 
-#### Tier 4: Real-World Buyer Workflows
-- `full buyer workflow: enter complex quote -> analyze -> inspect match reasons -> select seller -> create deal`
-- `offline resilience workflow: displays offline extractor provenance badge and creates deal`
-- `standard procurement workflow: manual directory selection without using opening request analysis`
+| Tier | Category / Feature | Test Name | Summary |
+|---|---|---|---|
+| Tier 1 | Navigation & Layout | `1.1 renders Sourcing Hub title, breadcrumbs, and active navigation state` | Verifies header, breadcrumbs, and title |
+| Tier 1 | Dual-Mode Input Form | `1.2 switches between natural language mode and structured field controls` | Toggles between prompt textarea and structured fields |
+| Tier 1 | Dual-Mode Input Form | `1.3 submits natural language requirement prompt and updates evaluation` | Submits prompt and updates candidate listings |
+| Tier 1 | Comparison Cards | `1.4 renders candidate listing comparison cards with match score badges and completeness tier` | Verifies Berlin Tier A and Nordic Tier D badges |
+| Tier 1 | Comparison Matrix | `1.5 displays attribute-by-attribute comparison table with MATCH, ACCEPTABLE, and GAP status icons` | Verifies tabular comparison matrix rows |
+| Tier 1 | Gap Inspector Drawer | `1.6 opens gap analysis inspector drawer displaying MISSING, AMBIGUOUS, and NON_COMPLIANT items` | Inspects Baltic MOQ gap with CRITICAL badge |
+| Tier 1 | Seller Inquiry Modal | `1.7 opens seller inquiry modal and renders customizable letter addressing detected gaps` | Verifies prefilled inquiry addressing MOQ gap |
+| Tier 1 | Clipboard Integration | `1.8 copies drafted inquiry to clipboard and triggers user notification toast` | Verifies navigator.clipboard.writeText and toast |
+| Tier 1 | Deal Bridge Integration | `1.9 bridges selected candidate and inquiry into Deal Creation form (#/deals/new)` | Verifies hash navigation with deal parameters |
+| Tier 2 | Boundary / Validation | `2.1 displays validation error when submitting empty requirement input` | Renders inline validation error alert |
+| Tier 2 | Boundary / Incompleteness | `2.2 handles candidate listing with missing lead time gracefully` | Renders "Lead: Missing" badge |
+| Tier 2 | Boundary / Non-compliance | `2.3 handles excessive seller MOQ relative to buyer demand with critical badge` | Displays CRITICAL severity and +400% explanation |
+| Tier 2 | Boundary / Over-budget | `2.4 handles over-budget candidate listing by assigning Tier D rating` | Displays Tier D rating on Nordic AeroSpares |
+| Tier 2 | Boundary / Zero Gaps | `2.5 renders 100% compliant zero-gap listing with immediate purchase intent prompt` | Renders zero-gap purchase confirmation text |
+| Tier 3 | Cross-Feature Interaction | `3.1 recalculates candidate tiers dynamically when user modifies max budget` | Changing max budget dynamically upgrades candidate tier |
+| Tier 3 | Cross-Feature Interaction | `3.2 clicking candidate card immediately switches comparison matrix and gap list` | Card selection updates table and gap inspector |
+| Tier 3 | Cross-Feature Interaction | `3.3 editing inquiry draft in modal retains custom buyer changes upon deal initiation` | Custom edits preserved through deal creation bridge |
+| Tier 3 | Cross-Feature Interaction | `3.4 filtering by sector updates candidate cards count and list dynamically` | Sector dropdown dynamically filters candidates |
+| Tier 4 | Real-World Journey | `4.1 Industrial Fasteners Journey: OEM engineer evaluates bolts, inspects Baltic MOQ gap, selects Berlin, and initiates deal` | End-to-end fastener procurement walkthrough |
+| Tier 4 | Real-World Journey | `4.2 Electronics & Wiring Journey: IoT maker evaluates harness and prepares inquiry clarifying ambiguous warranty` | End-to-end electronics wiring harness walkthrough |
+| Tier 4 | Real-World Journey | `4.3 Agricultural Commodities Journey: Coffee buyer verifies organic green coffee with Fair Trade and CIF terms` | End-to-end coffee commodity trade walkthrough |
+| Tier 4 | Real-World Journey | `4.4 Textiles & Apparel Journey: Fashion brand evaluates cotton canvas and drafts lead time inquiry` | End-to-end textile sourcing walkthrough |
+| Tier 4 | Real-World Journey | `4.5 Medical Supplies & PPE Journey: Hospital replenishes 10,000 boxes nitrile examination gloves with FDA certs` | End-to-end medical PPE replenishment walkthrough |
 
 ---
 
-## 4. Execution Commands
+## 5. Execution Commands
 
-### 4.1 Running Backend E2E Tests
+### 5.1 Run Backend E2E Sourcing Test Suite
 ```bash
-/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_opening_request_analysis.py -v
+/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_buyer_sourcing.py -v
 ```
 
-### 4.2 Running Frontend E2E Tests
+### 5.2 Run Frontend E2E Sourcing Test Suite
 ```bash
-(cd frontend && npx vitest run src/deals/CreateDealPage.e2e.test.tsx)
+npm --prefix frontend test -- src/sourcing/SourcingHub.test.tsx --run
 ```
 
-### 4.3 Running Full Quality Gate
+### 5.3 Run Linting & Quality Gates
 ```bash
-# Backend tests & linting
-/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_opening_request_analysis.py
-/home/yashaswi/Project/SyncAlly/backend/.venv/bin/ruff check backend/src backend/tests
+# Backend lint check
+/home/yashaswi/Project/SyncAlly/backend/.venv/bin/ruff check backend/tests/test_e2e_buyer_sourcing.py
 
-# Frontend tests & linting
-(cd frontend && npx vitest run src/deals/CreateDealPage.e2e.test.tsx)
-(cd frontend && npm run lint)
+# Frontend lint check
+(cd /home/yashaswi/Project/SyncAlly/frontend && npx eslint src/sourcing/SourcingHub.test.tsx)
+```
+
+### 5.4 Run Combined Full Sourcing Test Suite
+```bash
+/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_buyer_sourcing.py && \
+npm --prefix frontend test -- src/sourcing/SourcingHub.test.tsx --run
 ```

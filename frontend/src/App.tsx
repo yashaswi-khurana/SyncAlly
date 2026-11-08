@@ -13,12 +13,14 @@ import OrganizationSignupPage from "./organizations/OrganizationSignupPage";
 import OrganizationsSettingsPage from "./organizations/OrganizationsSettingsPage";
 import PlatformOrganizationsPage from "./platform/PlatformOrganizationsPage";
 import MarketplacePage from "./marketplace/MarketplacePage";
+import SourcingHubPage from "./sourcing/SourcingHubPage";
 import {
   navigateToCreateDeal,
   navigateToDeal,
   navigateToDeals,
   navigateToOrganizations,
   navigateToMarketplace,
+  navigateToSourcing,
   navigateToPlatform,
 } from "./router";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
@@ -215,12 +217,13 @@ export default function App() {
   const isCreate = route.name === "create";
   const isOrganizations = route.name === "organizations";
   const isMarketplace = route.name === "marketplace";
+  const isSourcing = route.name === "sourcing";
   const isPlatform = route.name === "platform";
   const isWorkspace = route.name === "deals" || route.name === "deal";
   const hasPendingInvitation =
     route.name === "organizations" && Boolean(route.inviteToken);
   const needsOrganizationInvitation = organizations !== null && organizations.length === 0 &&
-    !hasPendingInvitation && !isPlatform && route.name !== "organizations" && !isMarketplace;
+    !hasPendingInvitation && !isPlatform && route.name !== "organizations" && !isMarketplace && !isSourcing;
 
   return (
     <div className="app-shell">
@@ -251,6 +254,13 @@ export default function App() {
             onClick={navigateToMarketplace}
           >
             Marketplace
+          </button>
+          <button
+            type="button"
+            className={`nav-link${isSourcing ? " is-active" : ""}`}
+            onClick={() => navigateToSourcing()}
+          >
+            Sourcing Hub
           </button>
           <button
             type="button"
@@ -305,6 +315,11 @@ export default function App() {
           />
         ) : route.name === "marketplace" ? (
           <MarketplacePage organizations={organizations ?? []} />
+        ) : route.name === "sourcing" ? (
+          <SourcingHubPage
+            organizations={organizations ?? []}
+            initialListingId={route.listingId}
+          />
         ) : route.name === "organizations" ? (
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : route.name === "platform" ? (

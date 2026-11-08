@@ -1,22 +1,24 @@
-# TEST_READY.md — E2E Test Suite Readiness Declaration
+# TEST_READY.md — Production Buyer Sourcing Agent E2E Test Suite Readiness Declaration
 
 **Status**: **READY**  
 **Date**: 2026-11-08  
-**Agent**: `test_writer_e2e` (Role: teamwork_test_writer)  
-**Task Scope**: AI-Powered Opening Request Analysis & Seller Suggestion (ORIGINAL_REQUEST.md / PROJECT.md)
+**Agent**: `test_writer_sourcing_e2e` (Archetype: `test_writer`, Roles: `specialist`, `qa`)  
+**Task Scope**: Production Buyer Sourcing Agent Integration (ORIGINAL_REQUEST.md / PROJECT.md)  
+**Milestone**: M-E2E  
 
 ---
 
 ## 1. Executive Summary
 
-The comprehensive, opaque-box E2E test suite covering Tiers 1 through 4 for opening request analysis, requirement normalization, multi-factor seller suggestion, and buyer deal creation flow is fully authored, validated against the project linters, and verified executable across both backend (`pytest`) and frontend (`vitest`) test runners.
+The comprehensive, opaque-box E2E test suite covering Tiers 1 through 4 for the **Production Buyer Sourcing Agent** is fully authored, validated against the project linters (Ruff and ESLint), and verified executable across both backend (`pytest`) and frontend (`vitest`) test runners.
 
-- **Total Test Cases Implemented**: 65 E2E test cases
-  - Backend: 48 automated test cases in `backend/tests/test_e2e_opening_request_analysis.py`
-  - Frontend: 17 automated test cases in `frontend/src/deals/CreateDealPage.e2e.test.tsx`
+- **Total Test Cases Implemented**: **102 E2E test cases**
+  - **Backend**: 79 automated test cases in `backend/tests/test_e2e_buyer_sourcing.py`
+  - **Frontend**: 23 automated test cases in `frontend/src/sourcing/SourcingHub.test.tsx`
 - **Methodology Compliance**: Strict opaque-box progressive testability across Tiers 1–4.
-  - Active baseline features (e.g., standard deal creation without opening request, role switching, max length input bounds, offline fallback deal initiation) pass immediately with exit code 0.
-  - Milestone M2 and M3 features gracefully skip until application routes and UI components are mounted, enabling seamless progressive testability without false failures.
+  - Active frontend components pass immediately with exit code 0 (23 passed in 4.05s).
+  - Backend tests compile cleanly and are discovered by pytest (79 items discovered). Route-availability checks gracefully skip until application routes (`/sourcing/*`) and domain services are mounted in milestones M1 and M2, ensuring progressive testability with exit code 0.
+- **Offline Self-Containment**: 100% self-contained local execution with zero network egress and zero remote API keys.
 
 ---
 
@@ -24,9 +26,10 @@ The comprehensive, opaque-box E2E test suite covering Tiers 1 through 4 for open
 
 | Path | Runner | Test Count | Scope |
 |---|---|---|---|
-| `backend/tests/test_e2e_opening_request_analysis.py` | `pytest` | 48 | Requirement normalization (varied phrasings), AI offline/unconfigured fallback, multi-factor seller suggestion (product, capability, region, catalog), exclusions & tie-breakers, backward-compatible deal creation |
-| `frontend/src/deals/CreateDealPage.e2e.test.tsx` | `vitest` | 17 | Buyer new deal UI flow, normalization trigger button, structured requirements card, suggested seller cards, match reasons, single-click counterparty selection, inline error recovery |
-| `TEST_INFRA.md` | Markdown | Documentation | Complete test architecture, mathematical scoring oracles, data schemas, and edge case inventory |
+| `backend/tests/test_e2e_buyer_sourcing.py` | `pytest 9.1.1` | 79 | Natural language interpretation, technical specs parsing, pricing & budget limits, volume MOQ validation, lead time feasibility, commercial terms normalization, 5-dimension scoring engine, attribute matrix, gap classification, targeted seller inquiry drafting, REST API endpoints, deal handoff bridge |
+| `frontend/src/sourcing/SourcingHub.test.tsx` | `vitest 5.0.5` | 23 | Sourcing Hub navigation & layout, dual-mode requirement input (prompt vs structured fields), candidate listing cards, match score badges, attribute comparison table, gap analysis inspector drawer, seller inquiry modal, clipboard copy, deal creation bridge (`#/deals/new`) |
+| `TEST_INFRA.md` | Markdown | Docs | Test architecture, mathematical scoring oracles, data contracts, bundled fixtures, and complete test inventory |
+| `TEST_READY.md` | Markdown | Docs | Suite readiness declaration, test tier breakdown, and verification execution logs |
 
 ---
 
@@ -35,107 +38,119 @@ The comprehensive, opaque-box E2E test suite covering Tiers 1 through 4 for open
 ### 3.1 Backend E2E Test Suite
 ```bash
 # Execute backend E2E tests with pytest
-/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_opening_request_analysis.py -v
+/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_buyer_sourcing.py -v
 
-# Run backend linter on E2E test files
-/home/yashaswi/Project/SyncAlly/backend/.venv/bin/ruff check backend/tests/test_e2e_opening_request_analysis.py
+# Run backend linter (Ruff) on test file
+/home/yashaswi/Project/SyncAlly/backend/.venv/bin/ruff check backend/tests/test_e2e_buyer_sourcing.py
 ```
 
 ### 3.2 Frontend E2E Test Suite
 ```bash
 # Execute frontend E2E tests with vitest
-(cd /home/yashaswi/Project/SyncAlly/frontend && npx vitest run src/deals/CreateDealPage.e2e.test.tsx)
+npm --prefix /home/yashaswi/Project/SyncAlly/frontend test -- src/sourcing/SourcingHub.test.tsx --run
 
-# Run frontend linter
-(cd /home/yashaswi/Project/SyncAlly/frontend && npm run lint)
+# Run frontend linter (ESLint) on test file
+(cd /home/yashaswi/Project/SyncAlly/frontend && npx eslint src/sourcing/SourcingHub.test.tsx)
 ```
 
-### 3.3 Full Combined E2E Verification
+### 3.3 Full Combined Verification
 ```bash
-/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_opening_request_analysis.py && \
-(cd /home/yashaswi/Project/SyncAlly/frontend && npx vitest run src/deals/CreateDealPage.e2e.test.tsx)
+/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_buyer_sourcing.py && \
+npm --prefix /home/yashaswi/Project/SyncAlly/frontend test -- src/sourcing/SourcingHub.test.tsx --run
 ```
 
 ---
 
-## 4. Test Tier Breakdown
+## 4. Test Tier Summary Matrix
 
-### Tier 1: Feature Coverage (>=5 per feature)
-- **Feature 1.1: Requirement Normalization with Varied Phrasings (Happy Path)**
-  - Industrial manufacturing / fasteners (units, specifications, USD price, destination Berlin)
-  - Agricultural produce / bulk commodities (10,000 kg organic coffee, Canada, price/kg)
-  - Electronics & wiring hardware (2,000 units harness, Tokyo, target price)
-  - Medical / healthcare supplies (1,500 boxes nitrile gloves, US, FDA compliance)
-  - Raw textiles & fabrics (50,000 yards organic cotton, UK, target budget)
-- **Feature 1.2: Fallback Behavior when AI is Unconfigured or Offline**
-  - Offline mode deterministic regex extraction with `AIProvenance(mode="offline")`
-  - Graceful recovery when OpenAI API key is unset (`fallback_reason="missing_credentials"`)
-  - Transient network failure fallback (`fallback_reason="transient_exhausted"`)
-  - Minimal / informal text parsing without server crash
-  - Currency symbols parsing (`$`, `USD`, `EUR`)
-- **Feature 1.3: Multi-Factor Seller Suggestion Matching**
-  - Product exact keyword matching in `OrganizationProfile.products`
-  - Capability overlap matching in `OrganizationProfile.capabilities`
-  - Regional geographic matching against seller `country_code` and `regions`
-  - Catalog listing fit evaluating `MarketplaceListing` category, available quantity, and unit price
-  - Composite multi-factor formula scoring ($0.40 \cdot \text{prod} + 0.25 \cdot \text{cap} + 0.20 \cdot \text{reg} + 0.15 \cdot \text{cat}$)
-- **Feature 1.4: Deal Creation Flow Integration**
-  - Standard deal creation with NO opening request returns `201 Created`
-  - Deal creation with opening request text preserved
-  - Deal creation using counterparty selected directly from suggestions
-  - Seller-initiated deal creation
-  - Exact schema backward-compatibility (`DealResponse` contract)
+| Tier | Category | Backend Tests | Frontend Tests | Total Tests |
+|---|---|---|---|---|
+| **Tier 1** | Feature Coverage (Happy Path across F1–F14) | 40 | 9 | 49 |
+| **Tier 2** | Boundary & Corner Cases (Extreme values, invalid inputs) | 26 | 5 | 31 |
+| **Tier 3** | Cross-Feature Combinations (Pairwise trade-offs) | 8 | 4 | 12 |
+| **Tier 4** | Real-World Application Scenarios (5 industrial sectors) | 5 | 5 | 10 |
+| **Total** | **All Systematic Tiers** | **79** | **23** | **102** |
 
-### Tier 2: Boundary & Corner Cases (>=5 per feature)
-- **Feature 2.1: Extreme Inputs & Adversarial Formats**
-  - Empty string `""` rejected with `422 Unprocessable Entity`
-  - Whitespace-only string rejected with 422 or empty requirements without 500 error
-  - Exact 8,000 max length string accepted and processed
-  - Exceeding max length (8,001 characters) rejected with `422 Unprocessable Entity`
-  - SQL injection, XSS tokens, and ANSI control characters safely escaped in `raw_text`
-  - Unicode & multilingual scripts (Chinese, Japanese, Cyrillic, Accented characters) normalized cleanly
-  - Non-matching gibberish string returns empty suggestions without server error
-- **Feature 2.2: Suggestion Cardinality, Thresholds & Tie-Breaking**
-  - Zero matching sellers returns empty `suggested_sellers: []` with 200 OK
-  - Multiple sellers ranked strictly by `match_score` descending
-  - Deterministic tie-breaking (equal score broken by matched tokens $\to$ legal name $\to$ ID)
-  - Top-N limit capping (max 10 suggestions returned)
-  - Threshold filtering (candidates scoring < 0.15 excluded)
-- **Feature 2.3: Disqualification & Exclusion Invariants**
-  - Buyer self-dealing strictly prohibited (requesting buyer never suggested to themselves)
-  - Inactive organizations (`status = "INACTIVE"`) disqualified
-  - Suspended organizations (`status = "SUSPENDED"`) disqualified
-  - Inactive marketplace listings ignored in catalog scoring
-  - Incompatible region penalized or disqualified
+### Tier Breakdown Details
 
-### Tier 3: Cross-Feature Combinations
-- Complete end-to-end flow: Quote $\to$ Normalization $\to$ Suggestion $\to$ Deal Creation
-- Partial requirements: Quantity only (no price or destination) matches by product
-- Partial requirements: Destination only matches by operational region
-- Zero matching suggestions falls back cleanly to directory search and deal creation
-- Offline fallback analysis followed by successful deal creation
-- Unscoped analysis without buyer organization ID returns suggestions without self-exclusion
+#### Tier 1: Feature Coverage (49 tests)
+- **F1 & F2 Technical Specs & NL Interpretation**: 5 backend tests parsing Fasteners (DIN 933), Electronics (JASO D611), Agriculture (Fair Trade), Textiles (OEKO-TEX 100), Medical (FDA 510(k)).
+- **F3 & F4 Pricing & Quantity / Volume MOQ**: 5 backend tests validating unit price limits, total budget ceiling, target quantity, compliant MOQ, and packaging preferences.
+- **F5 & F6 Lead Time & Commercial Terms**: 5 backend tests evaluating lead time days, Incoterms normalization (DDP/CIF/FOB), payment methods (Net 30/Escrow), warranty duration, and inspection rights.
+- **F7 & F8 Bundled Dataset & Scoring Engine**: 5 backend tests verifying repository retrieval, 5-dimension weights (30/25/15/15/15%), Tier A ideal match, Tier B minor variance, and Tier D disqualification.
+- **F9 Attribute Comparison Matrix**: 5 backend tests verifying `MATCH`, `ACCEPTABLE`, `GAP` statuses, numerical delta formatting, and omitted attributes.
+- **F10 & F11 Gap Taxonomy & Explanations**: 5 backend tests classifying `MISSING`, `AMBIGUOUS`, `NON_COMPLIANT`, `CRITICAL` deal blockers, and mathematical delta explanations.
+- **F12 Targeted Seller Inquiry Drafting**: 5 backend tests synthesizing targeted inquiry letters for missing lead time, ambiguous warranty, high MOQ, over-budget price, and zero-gap purchase commitment.
+- **F13 & F14 REST API & Deal Bridge**: 5 backend tests verifying `/sourcing/interpret`, `/sourcing/listings`, `/sourcing/compare`, `/sourcing/gap-analysis`, and deal room prefill handoff.
+- **Frontend UI Features**: 9 tests covering Sourcing Hub navigation, dual-mode form switching, prompt evaluation, comparative cards, matrix table, gap inspector drawer, inquiry modal, clipboard copy, and deal creation bridge.
 
-### Tier 4: Real-World Procurement Scenarios
-- Aerospace precision machining procurement with DIN standards & heat treatment
-- Agricultural export bulk trade with Fair Trade certification across borders
-- Regulated healthcare bulk purchase with FDA compliance
-- International multi-currency transaction (EUR quote, US seller USD catalog)
-- Air-gapped offline resilience workflow verifying full database persistence
+#### Tier 2: Boundary & Corner Cases (31 tests)
+- **Parsing Boundaries**: 6 backend tests for empty string `""`, whitespace only, 8,000 max character inputs, conflicting unit price vs budget, past delivery dates, and unparseable alphanumeric quantities.
+- **Pricing Boundaries**: 5 backend tests for zero price `$0.00` custom quotes, extreme $1M prices, $0 max budget, currency mismatch without FX rate, and fractional cent precision.
+- **Quantity & MOQ Boundaries**: 5 backend tests for 100M extreme quantities, fractional quantities (0.25 tons), 100x seller MOQ barrier (`CRITICAL`), missing seller MOQ, and incompatible units.
+- **Lead Time Boundaries**: 5 backend tests for zero lead time days, extreme 730-day delays, vague qualitative phrases ("promptly"), 1-day delivery deadline, and omitted lead times.
+- **Commercial Terms Boundaries**: 5 backend tests for non-standard Incoterms, missing warranties, 100% advance payment demands, ambiguous "standard warranty", and empty acceptable Incoterms list.
+- **Frontend UI Boundaries**: 5 tests for empty input validation alert, missing lead time badge, excessive MOQ critical badge, over-budget Tier D rating, and zero-gap purchase confirmation.
+
+#### Tier 3: Cross-Feature Combinations (12 tests)
+- 8 backend tests: High price + missing lead time; high MOQ + ambiguous warranty; missing regulatory certs + tight deadline; currency mismatch + EXW shipping; category mismatch disqualification; partial material match + volume discount; 100% advance payment + unverified seller; 75-day lead time + acceptable price.
+- 4 frontend tests: Dynamic re-scoring on budget edits; candidate card selection updating matrix and gap list; inquiry draft customization persistence; sector dropdown filter updating candidate cards and count.
+
+#### Tier 4: Real-World Procurement Journeys across 5 Sectors (10 tests)
+- 5 backend end-to-end journey tests covering:
+  1. Industrial Fasteners (Automotive OEM sourcing DIN 933 M8 Grade 316 bolts for German plant).
+  2. Electronics & Wiring (IoT maker procuring 28AWG wire harness with JASO and RoHS).
+  3. Agricultural Commodities (Coffee roaster sourcing 20,000 kg Arabica green coffee with Fair Trade and CIF terms).
+  4. Textiles & Apparel (Fashion brand procuring 5,000 yards organic cotton canvas resolving lead time and EXW terms).
+  5. Medical Supplies & PPE (Hospital network emergency replenishment of 10,000 boxes nitrile gloves with FDA clearance).
+- 5 frontend end-to-end UI journey tests covering interactive workflows across the same 5 industrial sectors.
 
 ---
 
 ## 5. Verification Results
 
-- **Backend Pytest Run**:
-  - Command: `/home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_opening_request_analysis.py -v`
-  - Result: `8 passed, 40 skipped in 15.27s` (Exit code: `0`)
-- **Backend Ruff Run**:
-  - Command: `/home/yashaswi/Project/SyncAlly/backend/.venv/bin/ruff check backend/tests/test_e2e_opening_request_analysis.py`
-  - Result: `All checks passed!` (Exit code: `0`)
-- **Frontend Vitest Run**:
-  - Command: `(cd frontend && npx vitest run src/deals/CreateDealPage.e2e.test.tsx)`
-  - Result: `4 passed, 13 skipped in 5.23s` (Exit code: `0`)
-- **Frontend ESLint Run**:
-  - Command: `(cd frontend && npm run lint)`
-  - Result: `Clean pass` (Exit code: `0`)
+### 5.1 Backend Pytest Suite
+```
+$ /home/yashaswi/Project/SyncAlly/backend/.venv/bin/pytest backend/tests/test_e2e_buyer_sourcing.py
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.7.0
+rootdir: /home/yashaswi/Project/SyncAlly/backend
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 79 items
+
+backend/tests/test_e2e_buyer_sourcing.py sssssssssssssssssssssssssssssss [ 39%]
+ssssssssssssssssssssssssssssssssssssssssssssssss                         [100%]
+
+============================= 79 skipped in 9.86s ==============================
+```
+*Note: All 79 items discovered. Progressive skips active pending route mounting in M1/M2.*
+
+### 5.2 Backend Ruff Lint Check
+```
+$ /home/yashaswi/Project/SyncAlly/backend/.venv/bin/ruff check backend/tests/test_e2e_buyer_sourcing.py
+All checks passed!
+```
+
+### 5.3 Frontend Vitest Suite
+```
+$ npm --prefix frontend test -- src/sourcing/SourcingHub.test.tsx --run
+ RUN  v5.0.5 /home/yashaswi/Project/SyncAlly/frontend
+
+ ✓ src/sourcing/SourcingHub.test.tsx (23 tests) 2061ms
+   ✓ SourcingHub Frontend Test Suite (23)
+     ✓ Tier 1: UI Feature Coverage (9)
+     ✓ Tier 2: UI Boundary & Error Handling (5)
+     ✓ Tier 3: Cross-Feature Combinations (4)
+     ✓ Tier 4: Real-World Procurement Journeys across 5 Sectors (5)
+
+ Test Files  1 passed (1)
+      Tests  23 passed (23)
+   Duration  4.05s
+```
+
+### 5.4 Frontend ESLint Check
+```
+$ (cd frontend && npx eslint src/sourcing/SourcingHub.test.tsx)
+Done with exit code 0 (no errors).
+```

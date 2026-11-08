@@ -107,6 +107,9 @@ _ERROR_CODES = frozenset(
         "GEMINI_NETWORK",
         "GEMINI_MAX_TOKENS",
         "GEMINI_INVALID_RESPONSE",
+        "AI_FACT_SHAPE",
+        "AI_FACT_CONTRACT",
+        "AI_FACT_GROUNDING",
         "PAYPAL_OUTCOME_UNKNOWN",
     }
 )

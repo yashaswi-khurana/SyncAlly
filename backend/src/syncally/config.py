@@ -103,13 +103,18 @@ class Settings(BaseSettings):
     temporal_api_key: SecretStr = SecretStr("")
     outbox_poll_interval_seconds: float = 2.0
     outbox_batch_size: int = 25
-    ai_provider: Literal["offline", "openai", "openai_with_offline_fallback"] = "offline"
+    ai_provider: Literal[
+        "offline", "openai", "openai_with_offline_fallback",
+        "gemini", "gemini_with_offline_fallback",
+    ] = "offline"
     payment_mode: Literal["PAYPAL_SANDBOX", "OFFLINE_DEMO"] = "PAYPAL_SANDBOX"
     ai_remote_egress_enabled: bool = False
     ai_remote_allow_private: bool = False
     ai_remote_private_organization_ids: frozenset[UUID] = frozenset()
     openai_api_key: SecretStr = SecretStr("")
     openai_model: str = ""
+    google_api_key: SecretStr = SecretStr("")
+    gemini_model: str = ""
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":

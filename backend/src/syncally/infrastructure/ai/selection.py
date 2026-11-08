@@ -16,6 +16,7 @@ from syncally.config import Settings
 from syncally.domain.ai.contracts import ExtractedFact, NormalizedRequirement, ProposedTerms
 from syncally.domain.conversations import Visibility
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
+from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions, transmitted_context
 
 
@@ -25,22 +26,28 @@ class ConfiguredAIProvider:
         self._config = config
         mode = config.ai_provider
         self.provenance = AIProvenance(provider="offline", mode=mode, context_scope="authorized")
-        self._remote: OpenAIChatCompletions | None = None
+        self._remote: OpenAIChatCompletions | GeminiGenerateContent | None = None
         if mode == "offline":
             if config.app_env.lower() not in {"development", "test"}:
                 raise AIConfigurationError("AI suggestions are not configured")
             return
-        if not config.ai_remote_egress_enabled or not config.openai_model.strip():
+        is_gemini = mode.startswith("gemini")
+        model = config.gemini_model if is_gemini else config.openai_model
+        api_key = config.google_api_key if is_gemini else config.openai_api_key
+        if not config.ai_remote_egress_enabled or not model.strip():
             raise AIConfigurationError("AI suggestions are not configured")
-        if not config.openai_api_key.get_secret_value().strip():
-            if mode != "openai_with_offline_fallback":
+        if not api_key.get_secret_value().strip():
+            if not mode.endswith("_with_offline_fallback"):
                 raise AIConfigurationError("AI suggestions are not configured")
             self.provenance = replace(self.provenance, fallback_reason="missing_credentials")
             return
-        self._remote = OpenAIChatCompletions(
-            api_key=config.openai_api_key, model=config.openai_model.strip(), transport=transport,
+        adapter = GeminiGenerateContent if is_gemini else OpenAIChatCompletions
+        self._remote = adapter(api_key=api_key, model=model.strip(), transport=transport)
+        self.provenance = replace(
+            self.provenance,
+            provider="gemini" if is_gemini else "openai",
+            model=self._remote.model,
         )
-        self.provenance = replace(self.provenance, provider="openai", model=self._remote.model)
 
     def prepare_context(self, context: AiContext) -> AiContext:
         if self._remote is None:
@@ -77,7 +84,7 @@ class ConfiguredAIProvider:
             self.provenance = replace(self.provenance, model=self._remote.response_model)
 
     def _fallback(self) -> None:
-        if self._config.ai_provider != "openai_with_offline_fallback":
+        if not self._config.ai_provider.endswith("_with_offline_fallback"):
             raise AITransientError("AI provider is temporarily unavailable") from None
         self.provenance = replace(self.provenance, provider="offline", model=None, fallback_reason="transient_exhausted")
 
@@ -95,6 +102,8 @@ class ConfiguredAIProvider:
         try:
             if self._remote is not None and hasattr(self._remote, "normalize_opening_request"):
                 return self._remote.normalize_opening_request(text, timeout_seconds=timeout_seconds)  # type: ignore[no-any-return]
+            if self._remote is not None:
+                self.provenance = replace(self.provenance, provider="offline", model=None)
             return self._offline.normalize_opening_request(text)
         finally:
             self._record_model()

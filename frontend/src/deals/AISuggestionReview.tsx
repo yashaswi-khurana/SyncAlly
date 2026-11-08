@@ -48,7 +48,8 @@ function describeError(caught: unknown): string {
 function invocationLabel(provenance: AIProvenance | undefined): string {
   if (!provenance || provenance.provider === "unknown") return "Unknown (legacy)";
   const label = provenance.provider === "openai" ? "OpenAI"
-    : provenance.fallback_reason ? "Offline fallback" : "Offline";
+    : provenance.provider === "gemini" ? "Google Gemini"
+      : provenance.fallback_reason ? "Offline fallback" : "Offline";
   const scopes = {
     authorized: "Authorized local context", shareable_only: "Shareable context only",
     authorized_private: "Private context permitted", unknown: "Unknown context scope",
@@ -566,11 +567,11 @@ export default function AISuggestionReview({
               <h3 id={`ai-change-radar-heading-${dealId}`}>Negotiation change radar</h3>
             </div>
             <span className={`ai-change-radar__count${sharedTermDrift.length ? " is-alert" : ""}`}>
-              {sharedTermDrift.length ? `${sharedTermDrift.length} term${sharedTermDrift.length === 1 ? "" : "s"} to review` : "No conflicts found"}
+              {sharedTermDrift.length ? `${sharedTermDrift.length} term${sharedTermDrift.length === 1 ? "" : "s"} to review` : "No differences surfaced"}
             </span>
           </div>
           <p className="ai-change-radar__intro">
-            AI extracts trade positions from shared messages; SyncAlly compares the sourced values. A difference may be a counteroffer, not an accepted change.
+            SyncAlly compares extracted shared values. Differences may be counteroffers, and equivalent values may be written differently.
           </p>
           {sharedTermDrift.length ? (
             <ul className="ai-change-radar__list">
@@ -602,7 +603,7 @@ export default function AISuggestionReview({
             </ul>
           ) : (
             <p className="ai-change-radar__clear" role="status">
-              No conflicting shared values surfaced in this scan. The parties still need to review and approve the agreement.
+              No differences surfaced among extracted shared values. This does not check every message or establish agreement.
             </p>
           )}
         </section>

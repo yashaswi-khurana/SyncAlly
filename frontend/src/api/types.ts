@@ -695,8 +695,8 @@ export interface DealFact {
 export type FactReviewAction = "confirm" | "reject" | "clarify";
 
 export interface AIProvenance {
-  provider: "offline" | "openai" | "unknown";
-  mode: "offline" | "openai" | "openai_with_offline_fallback" | "unknown";
+  provider: "offline" | "openai" | "gemini" | "unknown";
+  mode: "offline" | "openai" | "openai_with_offline_fallback" | "gemini" | "gemini_with_offline_fallback" | "unknown";
   model: string | null;
   context_scope: "authorized" | "shareable_only" | "authorized_private" | "unknown";
   fallback_reason: "missing_credentials" | "transient_exhausted" | null;

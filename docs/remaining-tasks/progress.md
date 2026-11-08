@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); **Step 06 Milestone Payments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 07 Amendments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 08 Cancel Disputes is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed; ledger row corrected to match existing evidence entry below); **Step 09 Approval Routing is REVIEW_PENDING** (implemented and self-verified directly by the assisting model, no second independent reviewer); **Step 10 Reminders is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 11 Judge Demo is ACCEPTED** (Developer & Reviewer verified, 0 findings, all 12 checkpoints and 8 verification gates pass exit 0); mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); **Step 06 Milestone Payments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 07 Amendments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 08 Cancel Disputes is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed; ledger row corrected to match existing evidence entry below); **Step 09 Approval Routing is REVIEW_PENDING** (implemented and self-verified directly by the assisting model, no second independent reviewer); **Step 10 Reminders is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 11 Judge Demo is ACCEPTED** (Developer & Reviewer verified, 0 findings, all 12 checkpoints and 8 verification gates pass exit 0); mandatory live/environment gates 12–13 remain unmet; optional election 14 Sandbox offline fake provider suites pass and is BLOCKED on live PayPal credentials; optional election 15 remains unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -27,7 +27,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | [11 Judge Demo](11-judge-demo.md) | 01-10 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: all 12 judge demo simulation checkpoints pass (1.623s); 3/3 test_judge_demo pass; 5/5 test_demo_lifecycle pass; 46 focused runner tests pass (1 skip); ruff clean; 64 focused frontend tests pass; lint:check clean; build clean; git diff --check clean. 2-party Buyer/Seller simulation covering profile capabilities/products/regions/private contacts isolation, UNVERIFIED status, directory queries, bilateral proposals, facts, bilateral agreement drafting & commitment, OFFLINE_DEMO milestone payment, offline payment reconciliation, 3-state partial fulfillment (SHIPPED/OBSERVED/CONFIRMED), v2 amendment impact & commitment, dispute case raising/evidence/consent resolution, reminder isolation, and trade pack ZIP verification. |
 | [12 Browser Verification](12-browser-verification.md) | 11 + approved runnable deployment/tools | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Mandatory live/visual gate unmet |
 | [13 PostgreSQL Temporal](13-postgres-temporal.md) | 01-11 + approved isolated environments | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Mandatory real migration/race/restart gate unmet |
-| [14 Sandbox](14-sandbox.md) | 06, 13 + explicit opt-in/private credentials | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Election not recorded; no live payment claim |
+| [14 Sandbox](14-sandbox.md) | 06, 13 + explicit opt-in/private credentials | BLOCKED | ACCEPTED | ACCEPTED | REVIEW_PENDING | 0/3 | Offline fake provider test suites pass (51/51 across webhooks, reconciliation, processing); full backend discovery passes (905 ran, 881 pass, 24 skip); frontend payment tests pass (76/76 PaymentStatusPanel); ruff, lint:check, build, and git diff clean. Live PayPal Sandbox execution BLOCKED: PAYPAL_WEBHOOK_ID is configured in backend/.env, but live PayPal API interaction requires unconfigured PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET; no fake completion or production actions claimed. |
 | [15 AI Optional](15-ai-optional.md) | 05, 11 + explicit egress/retention opt-in | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Election not recorded; no live quality/retention claim |
 | [16 Final Gates](16-final-gates.md) | Mandatory 01-13; 14/15 reported separately | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Full current tests/review/docs unmet |
 
@@ -853,4 +853,66 @@ Optional election: elected / explicitly not elected / unknown:
   - N/A for Step 11.
 Completion report / next concrete operator actions:
   - Step 11 Judge Demo (F1b) fully implemented, independently reviewed (0 findings, 0 repairs), and ACCEPTED.
+```
+
+## Step 14 Execution Evidence
+
+```text
+UTC timestamp: 2026-11-08T07:15:00Z
+Step / dependency verification / current status: Step 14 Sandbox - F11b Explicit Opt-In / Hard dependencies 06 (Milestone Payments), 13 (PostgreSQL Temporal) verified (offline payment architecture intact); live Sandbox credentials evaluated / BLOCKED
+Role identity / coordination evidence (never pretend):
+  - PLANNER: Read-only Architecture Planner subagent (id: planner_14) inspected offline fake provider suites, repository code gates, and initial credential state; generated plan in .agents/teamwork/planner_14/handoff.md.
+  - DEVELOPER: Specialized Role Developer subagent (id: developer_14 / 51aaf221-981f-4e57-9086-e064376d5f6e) executed BaseSettings cleared-credentials offline fake provider test runner (51/51 passed in 3.502s), backend discovery (905 ran, 881 passed, 24 skipped), static gates, safe credential evaluation incorporating user webhook configuration, and documented provenance.
+  - REVIEWER: Independent Code Reviewer subagent (pending dispatch by Orchestrator).
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch: main (working tree clean of uncommitted production code changes; untracked agent metadata in .agents/teamwork/)
+  - Migration actual head: 0031_reminders (head intact, no new migrations required)
+  - Inspected: backend/src/syncally/infrastructure/paypal.py:L1-L250, backend/src/syncally/api/paypal_webhooks.py:L25-L45, backend/src/syncally/infrastructure/offline_payments.py:L50-L70, backend/src/syncally/config.py:L1-L150, backend/tests/test_paypal_webhooks.py:L1-L181, backend/tests/test_payment_reconciliation.py:L1-L310, backend/tests/test_payment_processing.py:L1-L1433, frontend/src/deals/PaymentStatusPanel.tsx:L1-L600
+Hypothesis / cheapest discriminating check:
+  - Offline fake provider safety domain: All payment error conditions (invalid webhook signature, duplicate delivery, unmatched invoice, atomic state transition SENT->PAID, partial payments, out-of-order lower payments, stale provider observations, and unknown create idempotency) pass deterministically in memory SQLite with provider credentials cleared from environment.
+  - Credential isolation & requirement: PayPal Sandbox live execution requires PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, and PAYPAL_WEBHOOK_ID. Without PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET, live API calls (OAuth Bearer token acquisition, invoice create, invoice send, and live authenticated reconciliation) cannot execute.
+  - Cheapest checks: BaseSettings cleared-credentials runner (51 tests) && python3 -c "import os; assert not [k for k in os.environ if 'PAYPAL' in k.upper()]" && python3 safe key inspection on backend/.env.
+Authorized scope / policy or private operator election (no secrets):
+  - F11b Sandbox bounded scope: offline fake provider suite validation and safe credential evaluation. No secrets logged or printed; no production credentials, accounts, or egress used; no fake or simulated provider responses passed off as genuine live provider approvals. Status BLOCKED per contract until operator provides live client credentials.
+Files changed / preserved unrelated changes:
+  - Modified: docs/remaining-tasks/progress.md, docs/remaining-tasks/14-sandbox.md.
+  - Preserved: all dirty tracked/untracked/user changes in graphify-out/; untouched backend/.env; no git reset, commit, branch deletion, or push.
+Command exactly / cwd / immediate exit code:
+  - backend offline runner: `cd /home/yashaswi/Project/SyncAlly/backend && .venv/bin/python -c '<BaseSettings cleared-credentials runner script>'` / backend / exit 0 (51 ran, 51 passed in 3.502s)
+  - backend discovery: `cd /home/yashaswi/Project/SyncAlly/backend && PYTHONPATH=tests .venv/bin/python -m unittest discover -s tests -p 'test_*.py'` / backend / exit 0 (905 ran, 881 passed, 24 skipped in 144.630s)
+  - backend ruff check: `cd /home/yashaswi/Project/SyncAlly/backend && .venv/bin/ruff check src tests` / backend / exit 0 (All checks passed)
+  - frontend lint check: `cd /home/yashaswi/Project/SyncAlly/frontend && npm run lint:check` / frontend / exit 0 (0 errors)
+  - frontend build: `cd /home/yashaswi/Project/SyncAlly/frontend && npm run build` / frontend / exit 0 (clean build in 965ms)
+  - frontend payment tests: `cd /home/yashaswi/Project/SyncAlly/frontend && npx vitest run src/deals/PaymentStatusPanel.test.tsx` / frontend / exit 0 (76/76 passed in 3.08s)
+  - git diff check: `cd /home/yashaswi/Project/SyncAlly && git diff --check` / repo root / exit 0 (clean, no whitespace/newline errors)
+  - credential audit: safe python inspection of backend/.env and os.environ / repo root / exit 0
+Results: run / pass / fail / skip / reasons / warnings:
+  - Offline fake provider suite: 51 ran, 51 passed, 0 failed.
+  - Backend full discovery: 905 ran, 881 passed, 0 failed, 24 skipped (PostgreSQL/Temporal live environment gates).
+  - Backend ruff: 0 errors.
+  - Frontend lint/typecheck: 0 errors.
+  - Frontend production build: built successfully in 965ms.
+  - Frontend payment tests: 76 ran, 76 passed, 0 failed.
+  - Git diff check: clean, 0 errors.
+  - Credential audit: PAYPAL_WEBHOOK_ID is present in backend/.env; PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET are absent (False in .env, False in os.environ).
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Offline Fake Provider Suite: 51 tests across test_paypal_webhooks.py (3 tests), test_payment_reconciliation.py (8 tests), test_payment_processing.py (40 tests).
+  - Signature verification: test_invalid_signature_is_rejected_without_persisting_event rejects forgery with HTTP 400.
+  - Idempotent webhooks: test_verified_event_and_reconciliation_outbox_are_saved_once verifies single persistence and duplicate return HTTP 202.
+  - Atomic reconciliation: test_payment_audit_webhook_and_outbox_complete_atomically transitions SENT -> PAID with AuditEvent.
+  - Stale observation defense: test_stale_provider_observation_cannot_downgrade_paid_intent and test_older_lower_payment_result_cannot_overwrite_progress prevent regressions.
+  - Idempotency retry safety: test_create_timeout_reconciled_before_retry and test_safe_30_minute_retry_window prevent duplicate invoice issuance.
+  - Credential audit artifact: Safe environment evaluation confirmed absence of PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET, precluding live Sandbox invoice generation or live authenticated reconciliation.
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - None yet (Developer execution complete; ready for independent Reviewer audit).
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 0/3. Developer phase complete; ready for independent Reviewer audit.
+Implementation acceptance versus live verification versus production approval:
+  - Step 14 offline fake provider implementation and gate verification ACCEPTED. Live PayPal Sandbox execution BLOCKED due to absent client ID and client secret credentials. Production approval NOT_GRANTED.
+Blockers / dependent steps / independent steps continued:
+  - Blocker: Operator provisioning of PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in backend/.env or terminal session. Unmet prerequisite blocks live Sandbox invoice issuance and live webhook roundtrip. Independent steps (e.g., Step 15 AI Optional, Step 16 Final Gates) may continue.
+Optional election: elected / explicitly not elected / unknown:
+  - Elected for offline verification; live Sandbox execution BLOCKED pending complete credential provisioning (webhook ID present; client ID/secret absent).
+Completion report / next concrete operator actions:
+  - Step 14 offline verification and repository code gates successfully passed with exit code 0. Status recorded as BLOCKED per Task 14 contract. Operator may privately configure PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in backend/.env to unblock live Sandbox testing. Ready for independent Reviewer audit.
 ```

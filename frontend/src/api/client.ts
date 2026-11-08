@@ -63,6 +63,13 @@ import type {
   RaiseCaseInput,
   RespondCaseInput,
   AddCaseEvidenceInput,
+  OpeningRequestAnalysisResult,
+} from "./types";
+
+export type {
+  NormalizedTradeRequirements,
+  SuggestedSeller,
+  OpeningRequestAnalysisResult,
 } from "./types";
 
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
@@ -914,4 +921,47 @@ export function suppressDealReminder(
       method: "POST",
     },
   );
+}
+
+export function analyzeOpeningRequest(
+  input: string | { text: string; buyer_organization_id?: string },
+  buyerOrgOrOptions?: string | { signal?: AbortSignal },
+  options?: { signal?: AbortSignal },
+): Promise<OpeningRequestAnalysisResult> {
+  let text: string;
+  let buyer_organization_id: string | undefined;
+  let signal: AbortSignal | undefined;
+
+  if (typeof input === "string") {
+    text = input;
+    if (typeof buyerOrgOrOptions === "string") {
+      buyer_organization_id = buyerOrgOrOptions;
+      signal = options?.signal;
+    } else {
+      signal = buyerOrgOrOptions?.signal;
+    }
+  } else {
+    text = input.text;
+    buyer_organization_id = input.buyer_organization_id;
+    if (typeof buyerOrgOrOptions === "object" && buyerOrgOrOptions !== null && "signal" in buyerOrgOrOptions) {
+      signal = buyerOrgOrOptions.signal;
+    } else if (options?.signal) {
+      signal = options.signal;
+    }
+  }
+
+  return apiRequest<OpeningRequestAnalysisResult>("/deals/opening-request/analyze", {
+    method: "POST",
+    body: JSON.stringify({
+      text,
+      ...(buyer_organization_id ? { buyer_organization_id } : {}),
+    }),
+    signal,
+  }).then((res) => ({
+    ...res,
+    suggested_sellers: (res.suggested_sellers || []).map((seller) => ({
+      ...seller,
+      id: seller.id || seller.organization_id || "",
+    })),
+  }));
 }

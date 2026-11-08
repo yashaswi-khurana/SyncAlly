@@ -16,6 +16,8 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from syncally.domain.agreements.trade_terms import (
     SUPPORTED_DEMO_CURRENCY,
     SUPPORTED_DEMO_PAYMENT_DUE_CONDITION,
@@ -382,6 +384,29 @@ class ProposedTerms:
             )
         except (InvariantViolation, ArithmeticError) as exc:
             raise AIContractError(f"proposal terms violate domain rules: {exc}") from exc
+
+
+class NormalizedRequirement(BaseModel):
+    """Normalized trade requirement extracted from an opening request or quote."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    item_description: str | None = None
+    category: str | None = None
+    quantity: Decimal | None = None
+    unit: str | None = None
+    target_unit_price: Decimal | None = None
+    budget: Decimal | None = None
+    currency: str | None = None
+    destination_country_code: str | None = None
+    destination_name: str | None = None
+    target_delivery_date: date | None = None
+    capabilities_required: list[str] = Field(default_factory=list)
+    payment_terms: str | None = None
+    raw_text: str
+
+
+NormalizedTradeRequirements = NormalizedRequirement
 
 
 def scope_extracted_facts(

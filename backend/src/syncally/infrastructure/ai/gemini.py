@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from urllib.parse import quote
 
@@ -18,8 +19,10 @@ from syncally.infrastructure.ai.openai import (
     OpenAIChatCompletions,
     _json,
 )
+from syncally.operations import Operation, log_operation
 
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/"
+logger = logging.getLogger(__name__)
 
 
 class GeminiGenerateContent(OpenAIChatCompletions):
@@ -77,7 +80,11 @@ class GeminiGenerateContent(OpenAIChatCompletions):
             raise AIPermanentError("AI request exceeds the size limit")
         try:
             return asyncio.run(asyncio.wait_for(self._http(raw, timeout), timeout=timeout))
-        except (TimeoutError, httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
+        except (TimeoutError, httpx.TimeoutException):
+            log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="TRANSIENT", error_code="GEMINI_TIMEOUT")
+            raise AITransientError("AI provider is temporarily unavailable") from None
+        except (httpx.NetworkError, httpx.RemoteProtocolError):
+            log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="TRANSIENT", error_code="GEMINI_NETWORK")
             raise AITransientError("AI provider is temporarily unavailable") from None
         except (ValueError, TypeError, KeyError, AttributeError, UnicodeError,
                 RecursionError, httpx.HTTPError):
@@ -108,6 +115,7 @@ class GeminiGenerateContent(OpenAIChatCompletions):
                         raise AIPermanentError("AI response exceeds the size limit")
                     body.extend(chunk)
                 if response.status_code == 429 or 500 <= response.status_code <= 599:
+                    log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="TRANSIENT", http_status=response.status_code)
                     raise AITransientError("AI provider is temporarily unavailable")
                 if response.status_code == 401:
                     raise AIPermanentError("Gemini API authentication failed; check the configured Google API key")

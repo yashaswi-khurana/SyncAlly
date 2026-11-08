@@ -13,6 +13,13 @@ function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "The marketplace is unavailable right now.";
 }
 
+function compactDecimal(value: string): string {
+  const [integer, fraction] = value.split(".");
+  if (fraction === undefined) return value;
+  const trimmedFraction = fraction.replace(/0+$/, "");
+  return trimmedFraction ? `${integer}.${trimmedFraction}` : integer;
+}
+
 export default function MarketplacePage({ organizations }: MarketplacePageProps) {
   const [product, setProduct] = useState("");
   const [country, setCountry] = useState("");
@@ -290,10 +297,10 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           <article className="card marketplace-page__listing" key={rfq.id}>
             <div className="marketplace-page__item-heading">
               <div><span className="eyebrow">{rfq.category} · Deliver to {rfq.destination_country_code}</span><h3>{rfq.title}</h3></div>
-              <strong>{rfq.quantity} {rfq.unit}</strong>
+              <strong>{compactDecimal(rfq.quantity)} {rfq.unit}</strong>
             </div>
             <p>{rfq.organization_name} · {rfq.organization_country_code}{rfq.target_delivery_date ? ` · Needed by ${rfq.target_delivery_date}` : ""}</p>
-            {rfq.target_unit_price && rfq.currency ? <p>Target price: {rfq.target_unit_price} {rfq.currency} / {rfq.unit}</p> : null}
+            {rfq.target_unit_price && rfq.currency ? <p>Target price: {compactDecimal(rfq.target_unit_price)} {rfq.currency} / {rfq.unit}</p> : null}
             {rfq.description ? <p className="muted">{rfq.description}</p> : null}
             {adminOrganizationIds.has(rfq.organization_id) ? (
               <button className="button ghost" type="button" disabled={closingRfqId === rfq.id} onClick={() => void closeRfq(rfq.id)}>
@@ -315,9 +322,9 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           <article className="card marketplace-page__listing" key={listing.id}>
             <div className="marketplace-page__item-heading">
               <div><span className="eyebrow">{listing.category} · {listing.country_code}</span><h3>{listing.title}</h3></div>
-              <strong>{listing.unit_price} {listing.currency} / {listing.unit}</strong>
+              <strong>{compactDecimal(listing.unit_price)} {listing.currency} / {listing.unit}</strong>
             </div>
-            <p>{listing.organization_name} · {listing.available_quantity} {listing.unit} available</p>
+            <p>{listing.organization_name} · {compactDecimal(listing.available_quantity)} {listing.unit} available</p>
             {listing.description ? <p className="muted">{listing.description}</p> : null}
             {adminOrganizationIds.has(listing.organization_id) ? (
               <button className="button ghost" type="button" disabled={deactivatingId === listing.id} onClick={() => void takeDownListing(listing.id)}>

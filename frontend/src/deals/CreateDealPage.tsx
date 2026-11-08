@@ -56,24 +56,6 @@ function describeCreateError(caught: unknown, initiatorParty: "BUYER" | "SELLER"
   return "Unable to create the deal. Please try again.";
 }
 
-function counterpartyInviteUrl(invitation: Invitation): string {
-  if (import.meta.env.DEV) {
-    try {
-      const configuredUrl = new URL(invitation.invite_url);
-      const localHosts = new Set(["localhost", "127.0.0.1"]);
-      if (localHosts.has(configuredUrl.hostname) && localHosts.has(window.location.hostname)) {
-        const appPath = window.location.pathname.endsWith("/")
-          ? window.location.pathname
-          : `${window.location.pathname}/`;
-        return `${window.location.origin}${appPath}#/invite?token=${encodeURIComponent(invitation.token)}`;
-      }
-    } catch {
-      // Preserve the trusted server URL when it cannot be parsed locally.
-    }
-  }
-  return invitation.invite_url;
-}
-
 function counterpartyInvitePreview(inviteUrl: string): string {
   try {
     const url = new URL(inviteUrl);
@@ -394,7 +376,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
   }
 
   if (invitation) {
-    const invitationUrl = counterpartyInviteUrl(invitation);
+    const invitationUrl = invitation.invite_url;
     return (
       <div className="workspace counterparty-invitation-page">
         <Reveal>
@@ -405,8 +387,11 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
             </div>
             <h1 id="counterparty-invitation-heading" className="display">Awaiting counterparty</h1>
             <p className="counterparty-invitation__summary" role="status">
-              Your deal is ready, but the invitation has not been sent. Copy the link and send it securely to {recipientEmail.trim().toLowerCase()}.
+              {invitation.email_sent
+                ? `Your deal is ready. An invitation email was sent to ${recipientEmail.trim().toLowerCase()}.`
+                : `Your deal is ready, but the invitation email could not be sent to ${recipientEmail.trim().toLowerCase()}. Copy the link and share it securely.`}
             </p>
+            {!invitation.email_sent && invitation.email_error ? <p className="hint" role="alert">{invitation.email_error}</p> : null}
             {invitationOpeningDraft ? <p className="hint">
               Your opening request is carried into the pending deal. You can review and send it after the counterparty joins.
             </p> : null}
@@ -422,7 +407,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                 <code className="counterparty-invitation__preview">
                   {counterpartyInvitePreview(invitationUrl)}
                 </code>
-                <p className="hint">Only share this single-use link with the intended recipient.</p>
+                <p className="hint">Only share this single-use link with the intended recipient. It expires in 7 days.</p>
               </div>
               <button type="button" className="button" onClick={() => copyInvitationLink(invitationUrl)}>
                 {copied ? "Copied!" : "Copy Link"}

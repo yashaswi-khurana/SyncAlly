@@ -148,6 +148,11 @@ class CredentialsRequest(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
+class PasswordSetupRequest(BaseModel):
+    setup_token: str = Field(min_length=1)
+    password: str = Field(min_length=12, max_length=128)
+
+
 class OrganizationRegistrationRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
     display_name: str = Field(min_length=1, max_length=200)
@@ -175,6 +180,21 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+def _encode_password_setup_token(user_id: UUID, now: datetime | None = None) -> str:
+    issued_at = now or datetime.now(UTC)
+    claims: dict[str, object] = {
+        "sub": str(user_id),
+        "iat": issued_at,
+        "exp": issued_at + timedelta(hours=24),
+        "typ": "password_setup",
+    }
+    if settings.jwt_issuer:
+        claims["iss"] = settings.jwt_issuer
+    if settings.jwt_audience:
+        claims["aud"] = settings.jwt_audience
+    return jwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 class SystemAdminBootstrapRequest(BaseModel):
@@ -391,6 +411,52 @@ def login(payload: CredentialsRequest, db: Session = Depends(get_db)) -> TokenRe
     if user is None or not _verify_password(payload.password, user.password_hash):
         raise _unauthorized("Invalid email or password")
     return _issue_tokens(db, user.id, datetime.now(UTC))
+
+
+@router.post("/set-password", response_model=TokenResponse)
+def set_password(payload: PasswordSetupRequest, db: Session = Depends(get_db)) -> TokenResponse:
+    """Finish an invitation signup before issuing normal sign-in credentials."""
+    if not settings.jwt_secret:
+        raise _unauthorized("Authentication is not configured")
+    decode_kwargs: dict[str, object] = {
+        "algorithms": [settings.jwt_algorithm],
+        "options": {"require": ["sub", "exp", "typ"]},
+    }
+    if settings.jwt_issuer:
+        decode_kwargs["issuer"] = settings.jwt_issuer
+    if settings.jwt_audience:
+        decode_kwargs["audience"] = settings.jwt_audience
+    try:
+        claims = jwt.decode(payload.setup_token, settings.jwt_secret, **decode_kwargs)
+        if claims.get("typ") != "password_setup":
+            raise jwt.InvalidTokenError("Token is not valid for password setup")
+        user_id = UUID(str(claims["sub"]))
+    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError) as exc:
+        raise _unauthorized("Invalid or expired password setup link") from exc
+
+    user = db.scalar(
+        select(User).where(User.id == user_id).with_for_update().execution_options(populate_existing=True)
+    )
+    if user is None or user.status != "ACTIVE":
+        raise _unauthorized("User is inactive or does not exist")
+    if user.password_hash is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Password setup has already been completed")
+
+    now = datetime.now(UTC)
+    updated = db.execute(
+        update(User)
+        .where(User.id == user_id, User.status == "ACTIVE", User.password_hash.is_(None))
+        .values(password_hash=hash_password(payload.password))
+    )
+    if updated.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Password setup has already been completed")
+    response = TokenResponse(
+        access_token=_encode_access_token(user.id, now),
+        refresh_token=create_refresh_token(db, user.id, now, commit=False),
+    )
+    db.commit()
+    return response
 
 
 @router.post("/dev-login", response_model=TokenResponse)

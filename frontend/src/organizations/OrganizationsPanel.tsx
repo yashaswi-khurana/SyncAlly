@@ -90,7 +90,10 @@ export default function OrganizationsPanel({
     setInviting(true);
     try {
       const member = await addOrganizationMember(selectedOrganization.id, email);
-      setInviteNotice(`Added ${member.email} as ${member.role}.`);
+      setInviteNotice(member.email_sent
+        ? `Added ${member.email} as ${member.role}. A sign-in email was sent.`
+        : `Added ${member.email} as ${member.role}.`);
+      setInviteError(member.email_sent ? null : member.email_error || "The account was added, but its notification email could not be sent.");
       setInviteEmail("");
     } catch (caught) {
       setInviteError(describeError(caught));

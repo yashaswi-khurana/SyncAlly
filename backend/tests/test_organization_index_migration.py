@@ -112,7 +112,7 @@ class OrganizationIndexPostgresMigrationTests(unittest.TestCase):
             connection.execute(text(
                 "INSERT INTO organizations (id, legal_name, country_code) VALUES (:id, 'Migration proof', 'US')"
             ), {"id": organization_id})
-        self.migrate("upgrade", "head")
+        self.migrate("upgrade", HEAD)
         self.assert_head()
         with self.scoped_engine.connect() as connection:
             self.assertEqual(connection.execute(text(
@@ -120,17 +120,17 @@ class OrganizationIndexPostgresMigrationTests(unittest.TestCase):
             ), {"id": organization_id}).scalar_one(), "Migration proof")
 
     def test_fresh_upgrade_downgrade_and_reupgrade(self) -> None:
-        self.migrate("upgrade", "head")
+        self.migrate("upgrade", HEAD)
         self.assert_head()
         self.migrate("downgrade", PREVIOUS)
         self.assertEqual(self.version_column(), ("text", None))
         with self.scoped_engine.connect() as connection:
             self.assertEqual(connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one(), PREVIOUS)
             self.assertIsNone(connection.execute(text("SELECT to_regclass(:name)"), {"name": INDEX}).scalar_one())
-        self.migrate("upgrade", "head")
+        self.migrate("upgrade", HEAD)
         self.assert_head()
         self.migrate("downgrade", "base")
-        self.migrate("upgrade", "head")
+        self.migrate("upgrade", HEAD)
         self.assert_head()
 
     def test_recovers_index_left_by_interrupted_stamp(self) -> None:
@@ -140,14 +140,14 @@ class OrganizationIndexPostgresMigrationTests(unittest.TestCase):
                 f"CREATE INDEX {INDEX} ON organizations (lower(legal_name)) WHERE status = 'ACTIVE'"
             ))
         self.assertEqual(self.version_column(), ("character varying", 32))
-        self.migrate("upgrade", "head")
+        self.migrate("upgrade", HEAD)
         self.assert_head()
 
     def test_existing_wider_version_column_remains_compatible(self) -> None:
         self.migrate("upgrade", PREVIOUS)
         with self.scoped_engine.begin() as connection:
             connection.execute(text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)"))
-        self.migrate("upgrade", "head")
+        self.migrate("upgrade", HEAD)
         self.assert_head()
         self.migrate("downgrade", PREVIOUS)
         self.assertEqual(self.version_column(), ("text", None))

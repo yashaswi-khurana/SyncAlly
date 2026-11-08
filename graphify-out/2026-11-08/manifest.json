@@ -258,16 +258,16 @@
     "semantic_hash": "c28d07c7365ad2722516f431d72cfc0b"
   },
   "backend/src/syncally/cli/seed_demo.py": {
-    "mtime": 1793641453.0557172,
-    "seen": 1793641872.3604422,
-    "ast_hash": "ef39e111501ac3b5b1477102412e27ae",
+    "mtime": 1794078499.7629597,
+    "seen": 1794080098.6302333,
+    "ast_hash": "2bfb4d8957ccfb17121a49d6c3739670",
     "semantic_hash": ""
   },
   "backend/src/syncally/cli/simulate_deal_flow.py": {
-    "mtime": 1793505734.1751807,
-    "seen": 1793506638.5262508,
-    "ast_hash": "4485445279a5d10c913bb711944a91da",
-    "semantic_hash": "4485445279a5d10c913bb711944a91da"
+    "mtime": 1794079785.5215702,
+    "seen": 1794080098.6302369,
+    "ast_hash": "3da21a13439103f9932ec697d3bf0dee",
+    "semantic_hash": ""
   },
   "backend/src/syncally/config.py": {
     "mtime": 1794066492.4045577,
@@ -738,10 +738,10 @@
     "semantic_hash": "ad68b2b4a0883ac417b1895bbbcfb051"
   },
   "backend/tests/test_demo_lifecycle.py": {
-    "mtime": 1793505734.1781805,
-    "seen": 1793506638.5263855,
-    "ast_hash": "4830088ba5765ffde197ac77d8d9e10c",
-    "semantic_hash": "4830088ba5765ffde197ac77d8d9e10c"
+    "mtime": 1794078522.4501517,
+    "seen": 1794080098.6353433,
+    "ast_hash": "53be1bdbbf81862c881c32e91eb82c5c",
+    "semantic_hash": ""
   },
   "backend/tests/test_demo_lifecycle_lock.py": {
     "mtime": 1793505734.1781805,
@@ -750,10 +750,10 @@
     "semantic_hash": "b47c2de294b63e2a997cb6210d2f0dd6"
   },
   "backend/tests/test_demo_seed.py": {
-    "mtime": 1793505734.1781805,
-    "seen": 1793506638.5263882,
-    "ast_hash": "be8b8097f75d3d4ba7de5f1e341e83cd",
-    "semantic_hash": "be8b8097f75d3d4ba7de5f1e341e83cd"
+    "mtime": 1794078573.420587,
+    "seen": 1794080098.6353853,
+    "ast_hash": "2679738839819f68b64441397ac6e0e5",
+    "semantic_hash": ""
   },
   "backend/tests/test_dev_routes.py": {
     "mtime": 1793505734.1791806,
@@ -906,9 +906,9 @@
     "semantic_hash": "31c66d482b530295fb9f2be95856e135"
   },
   "frontend/src/App.test.tsx": {
-    "mtime": 1794066492.4155583,
-    "seen": 1794066569.1275268,
-    "ast_hash": "67f511880f9ebfc489d83ee96812cc7d",
+    "mtime": 1794078355.972777,
+    "seen": 1794080098.637005,
+    "ast_hash": "0a8a8fc2636f8cda217e5d579e13dc16",
     "semantic_hash": ""
   },
   "frontend/src/App.tsx": {
@@ -1038,9 +1038,9 @@
     "semantic_hash": ""
   },
   "frontend/src/deals/DealDetailPage.tsx": {
-    "mtime": 1794071413.52646,
-    "seen": 1794074992.6766727,
-    "ast_hash": "d81d2cf0863e158d784f54fafcb3c817",
+    "mtime": 1794077876.603482,
+    "seen": 1794080098.6379864,
+    "ast_hash": "7f5d78912f9ac10fa00a17379c9f9c3f",
     "semantic_hash": ""
   },
   "frontend/src/deals/DealsPage.test.tsx": {
@@ -1602,16 +1602,16 @@
     "semantic_hash": "74a70f71fc254ccf13f02755bb54b9cc"
   },
   "docs/remaining-tasks/11-judge-demo.md": {
-    "mtime": 1793505734.1811805,
-    "seen": 1793506638.5265684,
-    "ast_hash": "6de234901b904cb992419fdc316d0205",
-    "semantic_hash": "6de234901b904cb992419fdc316d0205"
+    "mtime": 1794080845.7936296,
+    "seen": 1794110559.292928,
+    "ast_hash": "ed674eee584c717d50441b8f67e7c360",
+    "semantic_hash": ""
   },
   "docs/remaining-tasks/12-browser-verification.md": {
-    "mtime": 1793505734.1811805,
-    "seen": 1793506638.52657,
-    "ast_hash": "0f9d403f380b5704bb6a91b76ff3c851",
-    "semantic_hash": "0f9d403f380b5704bb6a91b76ff3c851"
+    "mtime": 1794112072.2179222,
+    "seen": 1794112230.163733,
+    "ast_hash": "f1b2faff3b0ba50c71c446d45cf6fb38",
+    "semantic_hash": ""
   },
   "docs/remaining-tasks/13-postgres-temporal.md": {
     "mtime": 1793505734.1811805,
@@ -1638,9 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1794074692.2059767,
-    "seen": 1794074992.6769693,
-    "ast_hash": "b120a27c287508b269addb695820ede3",
+    "mtime": 1794080898.8433397,
+    "seen": 1794110559.2929482,
+    "ast_hash": "938b650e7d9386a84d9133ea155b3a3b",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -2215,14 +2215,20 @@
   },
   "infra/aws/temporal-sandbox-data.yaml": {
     "mtime": 1794066492.4332345,
-    "seen": 1794074992.6767986,
+    "seen": 1794110559.2927215,
     "ast_hash": "",
     "semantic_hash": ""
   },
   "infra/aws/temporal-workers.yaml": {
     "mtime": 1794066492.4332345,
-    "seen": 1794074992.6768007,
+    "seen": 1794110559.2927265,
     "ast_hash": "",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_judge_demo.py": {
+    "mtime": 1794079686.4309056,
+    "seen": 1794080098.6357777,
+    "ast_hash": "8ac300a180d4a7d391c85805cc47d1ae",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

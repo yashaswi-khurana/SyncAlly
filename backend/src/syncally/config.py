@@ -254,7 +254,7 @@ class PayPalSettings(BaseSettings):
 
 
 class GmailSettings(BaseSettings):
-    """Optional Gmail SMTP credentials loaded only by the payment worker."""
+    """Optional Gmail SMTP credentials for payment and invitation notifications."""
 
     gmail_smtp_username: str = ""
     gmail_app_password: SecretStr = SecretStr("")

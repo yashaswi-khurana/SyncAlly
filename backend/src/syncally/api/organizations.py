@@ -1,8 +1,11 @@
 """Organization creation and initial membership setup endpoints."""
 
+import logging
 import unicodedata
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address
 from typing import Annotated, Any, Literal
+from urllib.parse import quote, urlsplit
 from uuid import UUID, uuid4
 
 import jwt
@@ -15,13 +18,14 @@ from sqlalchemy.orm import Session
 
 from syncally.api.auth import (
     _encode_access_token,
+    _encode_password_setup_token,
     bearer_scheme,
     create_refresh_token,
     get_current_actor,
 )
 from syncally.application.identity import ActorContext
 from syncally.application.passwords import hash_password, verify_password
-from syncally.config import settings
+from syncally.config import GmailSettings, settings
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.organizations.approval_routing import ApprovalRoutingMode
 from syncally.domain.organizations.approval_routing import (
@@ -44,6 +48,7 @@ from syncally.domain.shared.identifiers import DealId, OrganizationId, UserId
 from syncally.infrastructure.counterparty_onboarding import lock_deal
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
+from syncally.infrastructure.gmail import GmailSMTPInvitationNotifier, InvitationEmailDeliveryError
 from syncally.infrastructure.identity import repair_organization_finance_membership
 from syncally.infrastructure.models import (
     AgreementVersion,
@@ -70,6 +75,88 @@ from syncally.infrastructure.repositories.organizations import (
 
 router = APIRouter(tags=["organizations"])
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
+
+
+def _public_invitation_base_url() -> str:
+    """Allow loopback only for local testing; deployed invites must use public HTTPS."""
+    value = settings.public_frontend_url
+    if not value:
+        raise HTTPException(status_code=503, detail="A public invitation URL is not configured.")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="Configure a public HTTPS invitation URL.") from exc
+    if (
+        not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(status_code=503, detail="Configure a public HTTPS invitation URL.")
+    normalized_host = hostname.lower().rstrip(".")
+    local_environment = settings.app_env.lower() in {"development", "test"}
+    is_loopback = normalized_host == "localhost"
+    try:
+        is_loopback = is_loopback or ip_address(normalized_host).is_loopback
+    except ValueError:
+        pass
+    if local_environment and is_loopback:
+        if parsed.scheme not in {"http", "https"}:
+            raise HTTPException(status_code=503, detail="Configure a local HTTP or HTTPS invitation URL.")
+        return value.rstrip("/")
+    if parsed.scheme != "https":
+        raise HTTPException(status_code=503, detail="Configure a public HTTPS invitation URL.")
+
+    local_suffixes = (".localhost", ".local", ".internal", ".test", ".invalid", ".example")
+    try:
+        address = ip_address(normalized_host)
+    except ValueError:
+        if (
+            normalized_host == "localhost"
+            or normalized_host.endswith(local_suffixes)
+            or "." not in normalized_host
+        ):
+            raise HTTPException(status_code=503, detail="Configure a public HTTPS invitation URL.")
+    else:
+        if not address.is_global or address.is_multicast or getattr(address, "is_site_local", False):
+            raise HTTPException(status_code=503, detail="Configure a public HTTPS invitation URL.")
+    return value.rstrip("/")
+
+
+def _invitation_delivery() -> tuple[GmailSMTPInvitationNotifier | None, str, str | None]:
+    base_url = _public_invitation_base_url()
+    config = GmailSettings()
+    username = config.gmail_smtp_username.strip()
+    password = config.gmail_app_password.get_secret_value()
+    if not username or not password.strip():
+        return None, base_url, "Email delivery is not configured. Set the Gmail SMTP sender credentials."
+    try:
+        notifier = GmailSMTPInvitationNotifier(
+            username,
+            password,
+            config.gmail_from_email.strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="Invitation email sender configuration is invalid.") from exc
+    return notifier, base_url, None
+
+
+def _invite_url(base_url: str, token: str) -> str:
+    return f"{base_url}/#/invite?token={quote(token, safe='')}"
+
+
+def _send_invitation_email(send_email: Any, *args: str) -> tuple[bool, str | None]:
+    if send_email is None:
+        return False, "Email delivery is not configured. Set the Gmail SMTP sender credentials."
+    try:
+        send_email(*args)
+    except InvitationEmailDeliveryError:
+        logging.getLogger(__name__).warning("Invitation email delivery failed")
+        return False, "The invitation was created, but its email could not be delivered. Copy the link and try again later."
+    return True, None
 
 
 def get_optional_actor(
@@ -127,12 +214,17 @@ class UpdateMemberPermissionsRequest(BaseModel):
 class CreateInvitationRequest(BaseModel):
     deal_id: UUID | None = None
     role: str = Field(default="MEMBER", pattern=r"^(ADMIN|MEMBER)$")
-    recipient_email: str | None = Field(default=None, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    recipient_email: str = Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
     @field_validator("recipient_email", mode="before")
     @classmethod
     def normalize_recipient(cls, value: object) -> object:
-        return value.strip().lower() if isinstance(value, str) else value
+        if not isinstance(value, str):
+            return value
+        value = value.strip().lower()
+        if any(char in value for char in ",;\r\n") or value.count("@") != 1:
+            raise ValueError("Recipient must be one email address")
+        return value
 
 
 class CreateCounterpartyInvitationRequest(CreateOrganizationRequest):
@@ -145,7 +237,12 @@ class CreateCounterpartyInvitationRequest(CreateOrganizationRequest):
     @field_validator("recipient_email", mode="before")
     @classmethod
     def normalize_recipient(cls, value: object) -> object:
-        return value.strip().lower() if isinstance(value, str) else value
+        if not isinstance(value, str):
+            return value
+        value = value.strip().lower()
+        if any(char in value for char in ",;\r\n") or value.count("@") != 1:
+            raise ValueError("Recipient must be one email address")
+        return value
 
 
 class InvitationResponse(BaseModel):
@@ -157,6 +254,8 @@ class InvitationResponse(BaseModel):
     role: str
     expires_at: str
     kind: str | None = None
+    email_sent: bool = False
+    email_error: str | None = None
 
 
 class CounterpartyInvitationResponse(InvitationResponse):
@@ -199,6 +298,7 @@ class AcceptInvitationResponse(BaseModel):
     deal_id: UUID | None = None
     access_token: str | None = None
     refresh_token: str | None = None
+    password_setup_token: str | None = None
     token_type: str = "bearer"
 
 
@@ -835,9 +935,9 @@ def add_organization_member(
     payload: AddOrganizationMemberRequest,
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Add an existing active account to an organization as a regular member."""
-    _active_admin_membership(db, organization_id, actor.user_id)
+    organization, _ = _active_admin_membership(db, organization_id, actor.user_id)
     email = payload.email.strip().lower()
     user = db.scalar(
         select(User).where(
@@ -848,6 +948,7 @@ def add_organization_member(
     )
     if user is None:
         raise HTTPException(status_code=404, detail="Active provisioned user not found")
+    notifier, public_base_url, _configuration_error = _invitation_delivery()
 
     existing_membership = db.scalar(
         select(OrganizationMember).where(
@@ -857,13 +958,27 @@ def add_organization_member(
     )
     if existing_membership is not None:
         if existing_membership.status == "ACTIVE":
-            raise HTTPException(status_code=409, detail="User already has an active membership")
+            email_sent, email_error = _send_invitation_email(
+                notifier.send_member_added_notice if notifier else None,
+                user.email,
+                organization.legal_name,
+                f"{public_base_url}/#/deals",
+            )
+            return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role,
+                    "email_sent": email_sent, "email_error": email_error}
         existing_membership.role = "MEMBER"
         existing_membership.status = "ACTIVE"
         existing_membership.capabilities = []
         existing_membership.version = existing_membership.version + 1
         db.commit()
-        return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role}
+        email_sent, email_error = _send_invitation_email(
+            notifier.send_member_added_notice if notifier else None,
+            user.email,
+            organization.legal_name,
+            f"{public_base_url}/#/deals",
+        )
+        return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role,
+                "email_sent": email_sent, "email_error": email_error}
 
     membership = OrganizationMember(
         organization_id=organization_id,
@@ -880,7 +995,14 @@ def add_organization_member(
             raise HTTPException(status_code=409, detail="User already has an active membership") from exc
         raise
 
-    return {"user_id": str(user.id), "email": user.email, "role": membership.role}
+    email_sent, email_error = _send_invitation_email(
+        notifier.send_member_added_notice if notifier else None,
+        user.email,
+        organization.legal_name,
+        f"{public_base_url}/#/deals",
+    )
+    return {"user_id": str(user.id), "email": user.email, "role": membership.role,
+            "email_sent": email_sent, "email_error": email_error}
 
 
 @org_router.get(
@@ -1274,7 +1396,7 @@ def _create_invitation_token(
     return token, expires_at, jti
 
 
-def _decode_invitation_token(token: str) -> dict[str, object]:
+def _decode_invitation_token(token: str, *, allow_expired: bool = False) -> dict[str, object]:
     if not settings.jwt_secret:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1285,7 +1407,7 @@ def _decode_invitation_token(token: str) -> dict[str, object]:
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
-            options={"require": ["sub", "exp", "typ", "jti"]},
+            options={"require": ["sub", "exp", "typ", "jti"], "verify_exp": not allow_expired},
         )
         if claims.get("typ") != "organization_invitation":
             raise jwt.InvalidTokenError("Token type is not valid for invitation")
@@ -1335,26 +1457,15 @@ def _decode_invitation_token(token: str) -> dict[str, object]:
 )
 def create_organization_invitation(
     organization_id: UUID,
-    payload: CreateInvitationRequest = CreateInvitationRequest(),
+    payload: CreateInvitationRequest,
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     """Generate a signed single-use invitation token valid for 7 days."""
     organization, _ = _active_admin_membership(db, organization_id, actor.user_id)
-    if payload.recipient_email is not None and payload.deal_id is not None:
-        raise HTTPException(status_code=422, detail="Use counterparty deal creation for recipient-bound deal invitations")
     if payload.deal_id is not None:
-        deal = db.scalar(select(Deal).where(Deal.id == payload.deal_id))
-        if deal is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
-        if deal.onboarding is not None:
-            raise HTTPException(status_code=409, detail="This deal already has a bound counterparty invitation")
-        if organization_id not in (deal.buyer_organization_id, deal.seller_organization_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Organization is not a participant in this deal",
-            )
-
+        raise HTTPException(status_code=422, detail="Use counterparty deal creation for recipient-bound deal invitations")
+    notifier, public_base_url, configuration_error = _invitation_delivery()
     token, expires_at, jti = _create_invitation_token(
         organization, actor.user_id, payload.deal_id, payload.role,
         recipient_email=payload.recipient_email,
@@ -1377,15 +1488,25 @@ def create_organization_invitation(
         )
     )
     db.commit()
+    invite_url = _invite_url(public_base_url, token)
+    email_sent, email_error = _send_invitation_email(
+        notifier.send_team_invitation if notifier else None,
+        payload.recipient_email,
+        organization.legal_name,
+        invite_url,
+        expires_at.isoformat(),
+    ) if configuration_error is None else (False, configuration_error)
     return {
         "token": token,
-        "invite_url": f"{settings.public_frontend_url}/#/invite?token={token}",
+        "invite_url": invite_url,
         "organization_id": str(organization_id),
         "organization_legal_name": organization.legal_name,
         "deal_id": str(payload.deal_id) if payload.deal_id else None,
-        "role": "MEMBER" if payload.recipient_email else payload.role,
+        "role": "MEMBER",
         "expires_at": expires_at.isoformat(),
-        "kind": "TEAM" if payload.recipient_email else None,
+        "kind": "TEAM",
+        "email_sent": email_sent,
+        "email_error": email_error,
     }
 
 
@@ -1404,6 +1525,7 @@ def create_counterparty_invitation(
         if inviting_id is None:
             raise HTTPException(status_code=422, detail="An inviting organization is required")
         inviter, _ = _active_admin_membership(db, inviting_id, actor.user_id)
+        notifier, public_base_url, configuration_error = _invitation_delivery()
         active_user = db.scalar(select(User.id).where(User.id == actor.user_id, User.status == "ACTIVE").with_for_update())
         if active_user is None:
             raise HTTPException(status_code=401, detail="Active user session not found")
@@ -1432,10 +1554,20 @@ def create_counterparty_invitation(
                           occurred_at=now, payload={"kind": "COUNTERPARTY", "deal_id": str(deal.id),
                                                     "organization_id": str(inviter.id), "expires_at": expires_at.isoformat()}))
         db.commit()
-        return {"token": token, "invite_url": f"{settings.public_frontend_url}/#/invite?token={token}",
+        invite_url = _invite_url(public_base_url, token)
+        email_sent, email_error = _send_invitation_email(
+            notifier.send_counterparty_invitation if notifier else None,
+            payload.recipient_email,
+            inviter.legal_name,
+            deal.display_name or "your shared trade deal",
+            invite_url,
+            expires_at.isoformat(),
+        ) if configuration_error is None else (False, configuration_error)
+        return {"token": token, "invite_url": invite_url,
                 "organization_id": str(inviter.id), "organization_legal_name": inviter.legal_name,
                 "deal_id": str(deal.id), "role": "ADMIN", "kind": "COUNTERPARTY",
-                "expires_at": expires_at.isoformat(), "pending_counterparty": True}
+                "expires_at": expires_at.isoformat(), "pending_counterparty": True,
+                "email_sent": email_sent, "email_error": email_error}
     except Exception:
         db.rollback()
         raise
@@ -1506,7 +1638,9 @@ def _accept_invitation(
     payload: AcceptInvitationRequest, actor: ActorContext | None, db: Session
 ) -> dict[str, object]:
     """Accept an invitation token to sign up, join an organization, or link a counterparty into a deal."""
-    claims = _decode_invitation_token(payload.token)
+    # Verify the signature and claims first. Expiration is handled after the used-token
+    # recovery check, so an invite accepted before expiry can still resume password setup.
+    claims = _decode_invitation_token(payload.token, allow_expired=True)
     try:
         jti = UUID(str(claims["jti"]))
         org_id = UUID(str(claims["org_id"]))
@@ -1534,28 +1668,77 @@ def _accept_invitation(
             or onboarding.inviter_party != (claims.get("inviter_party") if claims["version"] == 2 else "BUYER")
         ):
             raise HTTPException(status_code=409, detail="Counterparty invitation binding is no longer valid")
-        if onboarding.consumed_at is not None:
-            raise HTTPException(status_code=409, detail="Invitation token has already been used")
-        if as_utc(onboarding.expires_at) <= datetime.now(UTC):
-            raise HTTPException(status_code=400, detail="Invitation token has expired")
-        shell = db.scalar(select(Organization).where(Organization.id == onboarding.shell_organization_id)
-                          .with_for_update().execution_options(populate_existing=True))
-        if shell is None or shell.status != "INACTIVE":
-            raise HTTPException(status_code=409, detail="Counterparty shell is no longer unclaimed")
+        if onboarding.consumed_at is None:
+            if as_utc(onboarding.expires_at) <= datetime.now(UTC):
+                raise HTTPException(status_code=400, detail="Invitation token has expired")
+            shell = db.scalar(select(Organization).where(Organization.id == onboarding.shell_organization_id)
+                              .with_for_update().execution_options(populate_existing=True))
+            if shell is None or shell.status != "INACTIVE":
+                raise HTTPException(status_code=409, detail="Counterparty shell is no longer unclaimed")
 
     # Atomic single-use check
     already_used = db.scalar(
-        select(AuditEvent.id).where(
+        select(AuditEvent).where(
             AuditEvent.aggregate_type == "organization_invitation",
             AuditEvent.aggregate_id == jti,
             AuditEvent.event_type == "invitation.accepted",
         )
     )
     if already_used is not None:
+        # If signup was interrupted after acceptance, the original invite link can
+        # safely resume password setup for the same passwordless account.
+        recipient_email = str(claims.get("recipient_email", "")).strip().lower()
+        accepted_user_id = already_used.payload.get("user_id") if already_used.payload else None
+        accepted_org_id = already_used.payload.get("organization_id") if already_used.payload else None
+        if actor is None and kind in {"TEAM", "COUNTERPARTY"} and payload.email and recipient_email == payload.email.strip().lower():
+            try:
+                accepted_user_uuid = UUID(str(accepted_user_id))
+                accepted_org_uuid = UUID(str(accepted_org_id))
+            except (TypeError, ValueError):
+                accepted_user_uuid = accepted_org_uuid = None
+            accepted_user = db.scalar(
+                select(User).where(
+                    User.id == accepted_user_uuid,
+                    User.email == recipient_email,
+                    User.status == "ACTIVE",
+                    User.password_hash.is_(None),
+                )
+            ) if accepted_user_uuid else None
+            accepted_org = db.scalar(
+                select(Organization).where(
+                    Organization.id == accepted_org_uuid,
+                    Organization.status == "ACTIVE",
+                )
+            ) if accepted_org_uuid else None
+            accepted_membership = db.scalar(
+                select(OrganizationMember.id).where(
+                    OrganizationMember.organization_id == accepted_org_uuid,
+                    OrganizationMember.user_id == accepted_user_uuid,
+                    OrganizationMember.status.in_(("ACTIVE", "PENDING_SETUP")),
+                )
+            ) if accepted_org_uuid and accepted_user_uuid else None
+            if accepted_user is not None and accepted_org is not None and accepted_membership is not None:
+                return {
+                    "status": "ACCEPTED",
+                    "organization_id": str(accepted_org.id),
+                    "organization_legal_name": accepted_org.legal_name,
+                    "user_id": str(accepted_user.id),
+                    "role": str(already_used.payload.get("role", role)),
+                    "deal_id": deal_id_str,
+                    "access_token": None,
+                    "refresh_token": None,
+                    "password_setup_token": _encode_password_setup_token(
+                        accepted_user.id, jti=jti, email=recipient_email,
+                        deal_id=deal_id_str,
+                    ),
+                }
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Invitation token has already been used",
         )
+
+    if int(claims["exp"]) <= int(datetime.now(UTC).timestamp()):
+        raise HTTPException(status_code=400, detail="Invitation token has expired")
 
     inviting_org = db.scalar(
         select(Organization).where(Organization.id == org_id, Organization.status == "ACTIVE")
@@ -1626,32 +1809,37 @@ def _accept_invitation(
                 detail="Active user session not found",
             )
     else:
-        if not payload.email or not payload.password:
+        if not payload.email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email and password are required to accept an invitation when not signed in",
+                detail="Email is required to accept an invitation when not signed in",
             )
         clean_email = payload.email.strip().lower()
         if kind and clean_email != claims["recipient_email"]:
             raise HTTPException(status_code=403, detail="Invitation is addressed to a different account")
         user = db.scalar(select(User).where(User.email == clean_email).with_for_update().execution_options(populate_existing=True))
         if user is not None:
-            if not verify_password(payload.password, user.password_hash):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid credentials for existing account",
-                )
+            if user.password_hash is not None:
+                if payload.password is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="An account already exists for this email. Sign in, then accept the invitation.",
+                    )
+                if not verify_password(payload.password, user.password_hash):
+                    raise HTTPException(status_code=401, detail="Invalid email or password")
             if user.status != "ACTIVE":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="User account is suspended",
                 )
+            if user.password_hash is None and payload.password is not None:
+                user.password_hash = hash_password(payload.password)
         else:
             display_name = (payload.display_name or "").strip() or clean_email.split("@")[0]
             user = User(
                 email=clean_email,
                 display_name=display_name,
-                password_hash=hash_password(payload.password),
+                password_hash=hash_password(payload.password) if payload.password is not None else None,
                 status="ACTIVE",
             )
             db.add(user)
@@ -1661,6 +1849,7 @@ def _accept_invitation(
         raise HTTPException(status_code=403, detail="Invitation is addressed to a different account")
 
     # 2. Handle organization membership & counterparty organization creation
+    membership_status = "PENDING_SETUP" if actor is None and user.password_hash is None else "ACTIVE"
     if payload.organization_legal_name:
         active_count = db.scalar(select(func.count(OrganizationMember.id)).join(Organization, Organization.id == OrganizationMember.organization_id)
                     .where(OrganizationMember.user_id == user.id, OrganizationMember.status == "ACTIVE", Organization.status == "ACTIVE"))
@@ -1679,7 +1868,7 @@ def _accept_invitation(
                 organization_id=recipient_org.id,
                 user_id=user.id,
                 role="ADMIN",
-                status="ACTIVE",
+                status=membership_status,
                 capabilities=["FINANCE"],
             )
         )
@@ -1700,7 +1889,7 @@ def _accept_invitation(
                     detail="User already has an active membership in this organization",
                 )
             existing.role = role
-            existing.status = "ACTIVE"
+            existing.status = membership_status
             existing.capabilities = []
             existing.version = existing.version + 1
         else:
@@ -1709,7 +1898,7 @@ def _accept_invitation(
                     organization_id=org_id,
                     user_id=user.id,
                     role=role,
-                    status="ACTIVE",
+                    status=membership_status,
                 )
             )
         effective_org = inviting_org
@@ -1767,8 +1956,12 @@ def _accept_invitation(
         db.flush()
 
         # 5. Issue auth tokens for seamless sign-in in the same transaction.
-        access_token = _encode_access_token(user.id, now)
-        refresh_token = create_refresh_token(db, user.id, now, commit=False)
+        needs_password_setup = actor is None and user.password_hash is None
+        access_token = None if needs_password_setup else _encode_access_token(user.id, now)
+        refresh_token = None if needs_password_setup else create_refresh_token(db, user.id, now, commit=False)
+        password_setup_token = _encode_password_setup_token(
+            user.id, now, jti=jti, email=user.email, deal_id=deal_id_str
+        ) if needs_password_setup else None
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -1786,6 +1979,7 @@ def _accept_invitation(
         "deal_id": deal_id_str,
         "access_token": access_token,
         "refresh_token": refresh_token,
+        "password_setup_token": password_setup_token,
         "token_type": "bearer",
     }
 

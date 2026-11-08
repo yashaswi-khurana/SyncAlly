@@ -172,6 +172,8 @@ export interface Invitation {
   expires_at: string;
   kind?: "TEAM" | "COUNTERPARTY" | null;
   pending_counterparty?: boolean;
+  email_sent?: boolean;
+  email_error?: string | null;
 }
 
 export interface InvitationAcceptanceInput {
@@ -192,6 +194,7 @@ export interface InvitationAcceptance {
   deal_id: string | null;
   access_token?: string;
   refresh_token?: string;
+  password_setup_token?: string;
   token_type?: string;
 }
 
@@ -879,6 +882,8 @@ export interface OrganizationMember {
   capabilities: OrganizationCapability[];
   assigned_capabilities?: OrganizationCapability[];
   version: number;
+  email_sent?: boolean;
+  email_error?: string | null;
 }
 
 export interface UpdateMemberPermissionsInput {

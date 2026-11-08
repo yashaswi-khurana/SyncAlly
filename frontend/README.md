@@ -64,8 +64,9 @@ During local development the Vite dev server proxies `/auth`, `/dev`, `/organiza
 origin, set `VITE_API_BASE_URL`; that environment needs CORS configured on the backend.
 
 New deal offers Existing organization (active directory selection) and Invite counterparty.
-The latter collects recipient/company details and returns a copyable URL tied to the new
-pending DRAFT deal; no email is sent. Awaiting counterparty permits human preparation but
+The latter collects recipient/company details, emails a single-use invitation, and returns
+a copyable URL tied to the new pending DRAFT deal. If delivery fails, the response includes
+a clear error and the URL remains available to share securely. Awaiting counterparty permits human preparation but
 disables sending, thread import and proposal/approval actions until acceptance; refresh/poll
 restores the existing review controls. Settings and deal-context invitations are clearly
 Invite team member, recipient-bound, and contain no manual Deal ID.

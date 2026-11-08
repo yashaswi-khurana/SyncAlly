@@ -34,6 +34,8 @@ class GeminiDiagnosticsTests(unittest.TestCase):
             provider._call(context, "facts", schema, 1)
         body = json.loads(call.call_args.args[0])
         self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+        self.assertEqual(body["generationConfig"]["thinkingConfig"], {"thinkingLevel": "low"})
+        self.assertEqual(body["generationConfig"]["maxOutputTokens"], 8192)
         self.assertNotIn("responseJsonSchema", body["generationConfig"])
         self.assertIn(json.dumps(schema), body["contents"][0]["parts"][0]["text"])
 

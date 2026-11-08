@@ -8,12 +8,24 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from pydantic import SecretStr
 
-from syncally.application.ai import AITransientError
+from syncally.application.ai import AIPermanentError, AITransientError, FactExtractionRequest
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.operations import SafeOperationalFormatter
 
 
 class GeminiDiagnosticsTests(unittest.TestCase):
+    def test_invalid_fact_shape_logs_only_validation_stage(self):
+        provider = GeminiGenerateContent(api_key=SecretStr("private-key"), model="gemini-3.5-flash")
+        context = SimpleNamespace()
+        with patch("syncally.infrastructure.ai.openai.transmitted_context", return_value=context), \
+             patch.object(provider, "_call", return_value={"private": "content"}), \
+             self.assertLogs("syncally.infrastructure.ai.openai", level="INFO") as captured:
+            with self.assertRaises(AIPermanentError):
+                provider.extract_facts(FactExtractionRequest(context=context), timeout_seconds=1)
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertEqual(event["error_code"], "AI_FACT_SHAPE")
+        self.assertNotIn("private", json.dumps(event))
+
     def test_token_limit_is_logged_without_response_content(self):
         response = {"modelVersion": "model", "candidates": [{"index": 0, "finishReason": "MAX_TOKENS"}]}
         provider = GeminiGenerateContent(

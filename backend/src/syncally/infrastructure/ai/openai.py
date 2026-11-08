@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import replace
@@ -30,11 +31,13 @@ from syncally.domain.ai.contracts import (
     scope_extracted_facts,
 )
 from syncally.domain.conversations import ConstraintStatus
+from syncally.operations import Operation, log_operation
 
 ENDPOINT = "https://api.openai.com/v1/chat/completions"
 MAX_BYTES = 128 * 1024
 MAX_FACTS = 100
 MAX_OUTPUT_TOKENS = 4096
+logger = logging.getLogger(__name__)
 
 
 def _remote_currency_is_grounded(value: str, currency: str, quote: str, message: str) -> bool:
@@ -202,12 +205,16 @@ class OpenAIChatCompletions:
     ) -> tuple[ExtractedFact, ...]:
         context = transmitted_context(request.context)
         payload = self._call(context, "facts", FACTS_SCHEMA, timeout_seconds)
+        stage = "AI_FACT_SHAPE"
         try:
             wrapper = _shape(payload, {"schema_version", "facts"})
+            stage = "AI_FACT_CONTRACT"
             facts = self._facts(wrapper["facts"])
+            stage = "AI_FACT_GROUNDING"
             self._ground(facts, context)
             return facts
         except (ValueError, TypeError, KeyError, AIContractError, AIPermanentError):
+            log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="PERMANENT", error_code=stage)
             raise AIPermanentError("AI provider returned invalid or ungrounded output") from None
 
     def draft_proposal(

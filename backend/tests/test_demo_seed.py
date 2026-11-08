@@ -40,6 +40,7 @@ from syncally.infrastructure.models import (
     Obligation,
     Organization,
     OrganizationMember,
+    OrganizationProfile,
     OutboxEvent,
     PaymentIntent,
     PaymentMilestone,
@@ -84,6 +85,19 @@ class DemoSeedTests(unittest.TestCase):
         self.assertEqual(len(memberships), 2)
         self.assertEqual({membership.role for membership in memberships}, {"ADMIN"})
         self.assertEqual({membership.status for membership in memberships}, {"ACTIVE"})
+        for membership in memberships:
+            self.assertIn("FINANCE", membership.capabilities or [])
+            self.assertIn("FULFILLMENT", membership.capabilities or [])
+        profiles = list(self.db.scalars(select(OrganizationProfile)))
+        self.assertEqual(len(profiles), 2)
+        for profile in profiles:
+            self.assertEqual(profile.verification_status, "UNVERIFIED")
+            self.assertEqual(profile.version, 1)
+            self.assertTrue(len(profile.capabilities) > 0)
+            self.assertTrue(len(profile.products) > 0)
+            self.assertTrue(len(profile.regions) > 0)
+            self.assertTrue(len(profile.contacts) > 0)
+            self.assertEqual(profile.contacts[0]["visibility"], "PRIVATE")
         self.assertTrue(
             all(user.password_hash and user.password_hash.startswith("scrypt$") for user in users)
         )

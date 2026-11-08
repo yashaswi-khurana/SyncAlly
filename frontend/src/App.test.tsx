@@ -30,13 +30,30 @@ vi.mock("./api/client", async (importOriginal) => {
     getDealMessageExistence: vi.fn(),
     listDealFacts: vi.fn(),
     listDealMessages: vi.fn(),
+    getCurrentUser: vi.fn().mockResolvedValue({
+      id: "user-1",
+      email: "user@test.com",
+      display_name: "Test User",
+      system_role: "USER",
+    }),
+    listDealReminders: vi.fn().mockResolvedValue([]),
+    syncDealReminders: vi.fn().mockResolvedValue({ created: 0, suppressed: 0 }),
+    suppressDealReminder: vi.fn(),
+    listDealCases: vi.fn().mockResolvedValue([]),
+    raiseDealCase: vi.fn(),
+    respondToDealCase: vi.fn(),
+    addCaseEvidence: vi.fn(),
+    getDealFulfillment: vi.fn().mockResolvedValue({
+      events: [],
+      summary: { shipped: "0", observed: "0", confirmed: "0" },
+    }),
+    recordDealFulfillment: vi.fn(),
   };
 });
 
 import {
   ApiError,
   apiRequest,
-  createOrganization,
   createDeal,
   createCounterpartyInvitation,
   createDealMessage,
@@ -55,7 +72,7 @@ import {
   login,
 } from "./api/client";
 import { clearAccessToken, getAccessToken, setAccessToken } from "./api/tokenStore";
-import type { AgreementVersion } from "./api/types";
+import type { AgreementVersion, Organization } from "./api/types";
 
 const mockedGetDeal = vi.mocked(getDeal);
 const mockedGetOrganization = vi.mocked(getOrganization);
@@ -64,7 +81,6 @@ const mockedGetCurrentAgreement = vi.mocked(getCurrentAgreement);
 const mockedGetDealMessageExistence = vi.mocked(getDealMessageExistence);
 const mockedListDeals = vi.mocked(listDeals);
 const mockedListOrganizations = vi.mocked(listOrganizations);
-const mockedCreateOrganization = vi.mocked(createOrganization);
 const mockedCreateDeal = vi.mocked(createDeal);
 const mockedCreateCounterpartyInvitation = vi.mocked(createCounterpartyInvitation);
 const mockedCreateDealMessage = vi.mocked(createDealMessage);
@@ -430,7 +446,7 @@ describe("App", () => {
 
     expect(window.location.hash).toBe("#/settings/organizations");
     expect(
-      await screen.findByRole("heading", { name: "Organization IDs" }),
+      await screen.findByRole("heading", { name: "Manage organizations" }),
     ).toBeInTheDocument();
     expect(mockedListOrganizations).toHaveBeenCalledTimes(2);
     expect(organizationsLink).toHaveClass("is-active");
@@ -443,9 +459,9 @@ describe("App", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "Organization IDs" }),
+      await screen.findByRole("heading", { name: "Manage organizations" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Demo Buyer Co (US)")).toBeInTheDocument();
+    expect(screen.getByText("Demo Buyer Co")).toBeInTheDocument();
     expect(mockedListOrganizations).toHaveBeenCalledTimes(2);
   });
 
@@ -456,7 +472,7 @@ describe("App", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "Organization IDs" }),
+      await screen.findByRole("heading", { name: "Manage organizations" }),
     ).toBeInTheDocument();
   });
 
@@ -514,7 +530,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
     await act(async () => {});
-    fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "Sign out" }));
+    fireEvent.click(within(screen.getAllByRole("banner")[0]).getByRole("button", { name: "Sign out" }));
     await act(async () => resolveRefresh([]));
     expect(screen.getByRole("heading", { name: "Join via counterparty invite." })).toBeInTheDocument();
     expect(mockedGetDeal).not.toHaveBeenCalledWith("stale-deal");
@@ -524,7 +540,7 @@ describe("App", () => {
   it.each([false, true])("ignores invitation A's refresh after opening B (reopen A: %s)", async (reopenA) => {
     setAccessToken("access-token");
     window.location.hash = "#/invite?token=invitation-a";
-    let resolveRefresh!: (organizations: []) => void;
+    let resolveRefresh!: (organizations: Organization[]) => void;
     mockedApiRequest.mockImplementationOnce(async () => {
       mockedListOrganizations.mockImplementationOnce(() => new Promise((resolve) => {
         resolveRefresh = resolve;
@@ -549,7 +565,14 @@ describe("App", () => {
       });
     }
     const currentHash = window.location.hash;
-    await act(async () => resolveRefresh([]));
+    await act(async () => resolveRefresh([
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        legal_name: "Demo Buyer Co",
+        country_code: "US",
+        role: "ADMIN",
+      },
+    ]));
     expect(window.location.hash).toBe(currentHash);
     expect(mockedGetDeal).not.toHaveBeenCalledWith("deal-a");
     expect(screen.getByRole("button", { name: "Accept & Join" })).toBeEnabled();
@@ -572,7 +595,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
     if (change === "sign out") {
-      fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "Sign out" }));
+      fireEvent.click(within(screen.getAllByRole("banner")[0]).getByRole("button", { name: "Sign out" }));
     } else {
       mockedApiRequest.mockResolvedValueOnce({ message: "Reset" });
       fireEvent.click(screen.getByRole("button", { name: "Reset Demo Data" }));
@@ -594,45 +617,18 @@ describe("App", () => {
     expect(getAccessToken()).toBe(change === "sign out" ? null : "access-token");
   });
 
-  it("guides a new user with 0 organizations through the setup wizard to create an organization and routes to deal register with toast", async () => {
+  it("shows organization invitation waiting screen for a new user with 0 organizations", async () => {
     setAccessToken("access-token");
     mockedListOrganizations.mockResolvedValueOnce([]);
-    mockedCreateOrganization.mockResolvedValue({
-      id: "org-grain-1",
-      legal_name: "Global Grain Importers Ltd",
-      country_code: "DE",
-      role: "ADMIN",
-    });
 
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "Set up your trading organization" }),
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText("Company Legal Name")).toBeInTheDocument();
-    expect(screen.getByLabelText("Country Code")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Company Legal Name"), {
-      target: { value: "Global Grain Importers Ltd" },
-    });
-    fireEvent.change(screen.getByLabelText("Country Code"), {
-      target: { value: "DE" },
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /create & continue/i }));
-
-    expect(mockedCreateOrganization).toHaveBeenCalledWith({
-      legal_name: "Global Grain Importers Ltd",
-      country_code: "DE",
-    });
-
-    expect(
-      await screen.findByRole("heading", { name: "Deals shared with you" }),
+      await screen.findByRole("heading", { name: "Your workspace is waiting for an invitation." }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByText(/Created Global Grain Importers Ltd \(DE\)/i),
+      screen.getByText(/Your account is not a member of an organization yet/i),
     ).toBeInTheDocument();
-    expect(window.location.hash).toBe("#/deals");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -654,7 +650,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "Set up your trading organization" }),
+      screen.queryByRole("heading", { name: "Your workspace is waiting for an invitation." }),
     ).not.toBeInTheDocument();
   });
 
@@ -670,112 +666,22 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("ignores late organization creation completion from a previous session after sign out", async () => {
+  it("allows a user waiting for an invitation to sign out and switch accounts", async () => {
     setAccessToken("token-user-a");
     mockedListOrganizations.mockResolvedValueOnce([]);
-
-    let resolveCreate!: (org: {
-      id: string;
-      legal_name: string;
-      country_code: string;
-      role: string;
-    }) => void;
-    mockedCreateOrganization.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveCreate = resolve;
-        }),
-    );
 
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "Set up your trading organization" }),
+      await screen.findByRole("heading", { name: "Your workspace is waiting for an invitation." }),
     ).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Company Legal Name"), {
-      target: { value: "User A Corp" },
-    });
-    fireEvent.change(screen.getByLabelText("Country Code"), {
-      target: { value: "US" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /create & continue/i }));
-
-    const globalSignOut = within(screen.getByRole("banner")).getByRole("button", {
-      name: "Sign out",
-    });
-    fireEvent.click(globalSignOut);
+    const signOutBtn = screen.getAllByRole("button", { name: "Sign out" })[0];
+    fireEvent.click(signOutBtn);
 
     expect(
       await screen.findByRole("heading", { name: "Open your trade desk." }),
     ).toBeInTheDocument();
-
-    mockedLogin.mockResolvedValueOnce({
-      access_token: "token-user-b",
-      refresh_token: "refresh-b",
-      token_type: "Bearer",
-    });
-    mockedListOrganizations.mockResolvedValueOnce([]);
-
-    fireEvent.change(screen.getByLabelText("Email"), {
-      target: { value: "user-b@example.com" },
-    });
-    fireEvent.change(screen.getByLabelText("Password"), {
-      target: { value: "password123" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
-
-    expect(
-      await screen.findByRole("heading", { name: "Set up your trading organization" }),
-    ).toBeInTheDocument();
-
-    resolveCreate({
-      id: "org-a-123",
-      legal_name: "User A Corp",
-      country_code: "US",
-      role: "ADMIN",
-    });
-
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(
-      screen.getByRole("heading", { name: "Set up your trading organization" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/Created User A Corp/i)).not.toBeInTheDocument();
-  });
-
-  it("clears the previous user's toast on sign out so it does not carry over to the next user", async () => {
-    setAccessToken("token-user-a");
-    mockedListOrganizations.mockResolvedValueOnce([]);
-    mockedCreateOrganization.mockResolvedValueOnce({
-      id: "org-a-1",
-      legal_name: "Alpha Corp",
-      country_code: "US",
-      role: "ADMIN",
-    });
-
-    render(<App />);
-
-    expect(
-      await screen.findByRole("heading", { name: "Set up your trading organization" }),
-    ).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Company Legal Name"), {
-      target: { value: "Alpha Corp" },
-    });
-    fireEvent.change(screen.getByLabelText("Country Code"), {
-      target: { value: "US" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /create & continue/i }));
-
-    expect(await screen.findByText(/Created Alpha Corp \(US\)/i)).toBeInTheDocument();
-
-    const globalSignOut = within(screen.getByRole("banner")).getByRole("button", {
-      name: "Sign out",
-    });
-    fireEvent.click(globalSignOut);
-
-    expect(screen.queryByText(/Created Alpha Corp \(US\)/i)).not.toBeInTheDocument();
 
     mockedLogin.mockResolvedValueOnce({
       access_token: "token-user-b",
@@ -802,8 +708,60 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Deals shared with you" }),
     ).toBeInTheDocument();
+  });
 
-    expect(screen.queryByText(/Created Alpha Corp \(US\)/i)).not.toBeInTheDocument();
+  it("clears the session on sign out so it does not carry over to the next user", async () => {
+    setAccessToken("token-user-a");
+    mockedListOrganizations.mockResolvedValueOnce([
+      {
+        id: "org-a-1",
+        legal_name: "Alpha Corp",
+        country_code: "US",
+        role: "ADMIN",
+      },
+    ]);
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Deals shared with you" }),
+    ).toBeInTheDocument();
+
+    const globalSignOut = within(screen.getAllByRole("banner")[0]).getByRole("button", {
+      name: "Sign out",
+    });
+    fireEvent.click(globalSignOut);
+
+    expect(
+      await screen.findByRole("heading", { name: "Open your trade desk." }),
+    ).toBeInTheDocument();
+    expect(getAccessToken()).toBeNull();
+
+    mockedLogin.mockResolvedValueOnce({
+      access_token: "token-user-b",
+      refresh_token: "refresh-b",
+      token_type: "Bearer",
+    });
+    mockedListOrganizations.mockResolvedValueOnce([
+      {
+        id: "org-b-1",
+        legal_name: "Beta Ltd",
+        country_code: "GB",
+        role: "ADMIN",
+      },
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "user-b@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enter workspace" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Deals shared with you" }),
+    ).toBeInTheDocument();
   });
 
   it("returns to the deals workspace after resetting from a deal route", async () => {

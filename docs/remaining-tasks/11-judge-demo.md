@@ -106,3 +106,33 @@ if ($LASTEXITCODE -ne 0) { throw 'Frontend static gate failed' }
 ## Acceptance and Completion Report
 
 Repeatable two-party reviewed judge journey covers 01-10 while preserving claims/paid history/drain and simulation truth. Independent review required. Append progress UTC/11/dependencies/roles/file:line/version evidence/commands/cwd/exits/counts/skips/artifacts/findings severity-proof-impact-fix/repairs 0-3. NOT_RUN to ACCEPTED only with current focused review/checks, otherwise BLOCKED. Report implementation/files/runbook/checks/risks; do not call browser/live gates completed by fixtures.
+
+### Execution Verdict: ACCEPTED
+- **Status**: ACCEPTED (Repairs: 0/3, all gates passed, independent review APPROVED)
+- **Role Coordination Evidence**:
+  - **PLANNER (read-only)**: Subagent `planner_11` inspected code, historical fixtures, requirements, and designed 4-phase execution plan in `.agents/teamwork/planner_11/handoff.md`.
+  - **DEVELOPER (planned task)**: Subagent `developer_11` (`fe25f78a-327d-479f-8cbb-3d80f70ddaf3`) implemented Phase 1 test suite and runner repairs (`test_demo_lifecycle.py`, `DealDetailPage.tsx`, `App.test.tsx`), Phase 2 profile and member capability seeding (`seed_demo.py`, `test_demo_seed.py`), Phase 3 12-checkpoint judge journey simulation engine and regression test suite (`simulate_deal_flow.py`, `test_judge_demo.py`), and Phase 4 empirical verification gates and documentation updates.
+  - **REVIEWER (independent)**: Subagent reviewer_11 (c36fef90-6462-4dce-a198-9ca080d912f6) independently audited all code and executed all 8 verification gates. Verdict: APPROVE (0 findings, 0 integrity violations, 0 defects).
+- **Backend Evidence**:
+  - Judge Demo Simulation CLI (`python -m syncally.cli.simulate_deal_flow --ci`): 12/12 checkpoints passed in 1.656s, exit code 0.
+  - Judge Demo Integration Suite (`python -m unittest tests/test_judge_demo.py`): 3 ran, 3 passed in 6.897s, exit code 0 (covering full journey, sequential re-execution idempotency, and fail-closed live execution refusal).
+  - Lifecycle Test Suite (`python -m unittest tests/test_demo_lifecycle.py`): 5 ran, 5 passed in 2.905s, exit code 0.
+  - BaseSettings Isolated Discovery Runner (`test_demo*.py`, `test_local_workflow_smoke.py`): 46 ran, 45 passed, 1 skipped (`LocalWorkflowSmokeTests` skipped as expected without Postgres/Temporal credentials), exit code 0 in 16.071s.
+  - Static gate (`ruff check src tests`): All checks passed, 0 errors, exit code 0.
+- **Frontend Evidence**:
+  - Focused UI tests (`npm test -- src/App.test.tsx src/deals/DealDetailPage.test.tsx`): 64 passed across 2 test files (24 in `App.test.tsx`, 40 in `DealDetailPage.test.tsx`), exit code 0 in 6.42s.
+  - Static gate (`npm run lint:check`): Clean, 0 errors, 0 warnings, exit code 0.
+  - Production build (`npm run build`): Clean build in 589ms, exit code 0.
+  - Whitespace/format gate (`git diff --check`): Clean, 0 warnings/errors, exit code 0.
+- **Contracts & Boundaries Preserved**:
+  - Offline demo boundaries: simulation strictly runs under `OFFLINE_DEMO` payment mode, `sqlite+pysqlite:///:memory:`, and offline fake AI provider with zero real money movement or external egress.
+  - Two-party isolation: Buyer (`buyer@syncally.demo`) and Seller (`seller@syncally.demo`) operate in strictly isolated tenant contexts; counterparty private contacts remain inaccessible (0 private contacts returned to counterparty).
+  - Profile immutability: seeded profiles are strictly `UNVERIFIED` with bounded ISO-3166 regions (`["US", "CA"]`), explicit capabilities, products, and private contacts.
+  - Zero AI authority: 7 commercial facts suggested by AI are unconfirmed until explicit human API confirmation (`POST /deals/{id}/facts/{fact_id}/confirm`).
+  - Exact-version commitment: Version 1 draft committed only after matching bilateral approval tokens (`9fa7295fa14cb9dec0037c5a66e0a2e44ab117ec6a133ecd1a78615ce365fbb0`).
+  - Milestone payment & offline reconciliation: Authorized payment intent is `OFFLINE_DEMO` with `OFFLINE-` invoice reference, initially in `SENT` state (queued/sent is not paid), subsequently reconciled to `PAID` via `/dev/payments/{intent_id}/simulate-reconciliation` with matching outbox event dispatch.
+  - Bounded 3-state partial fulfillment: Seller ships 5.0 units (`SHIPPED`), Buyer observes (`OBSERVED`), Buyer confirms (`CONFIRMED`); 10^18 integer-scaled math validates partial fulfillment with `deal_completed == False` (5/12 units delivered).
+  - Exact-version amendment: Amendment Version 2 proposed referencing committed Version 1 and prior hash, assessed via `/deals/{id}/agreements/amendments/impact?version_number=2`, bilaterally approved, and committed (`61fcd89ee0b3fc585391d764afaee7e38bad34445fedb7fd76cf2e5feb0e3e70`).
+  - Dispute case resolution: Buyer raises `DISPUTE` case, attaches inspection evidence, Seller reviews case and submits `CONSENT` decision, transitioning case to `RESOLVED` without automated fund transfers or liability waivers.
+  - Scoped reminders & F12 export: Scoped durable reminders synced with counterparty privacy isolation; commercial draft export contains unrecorded terms disclaimer (`"Not specified in committed terms"`); Trade Pack ZIP export contains valid ZIP binary header (`b"PK\x03\x04"`).
+  - Existing safeguards: claim locks, worker drain, 0014/0017 safeguards, paid-history preservation, and reset refusal intact; actual migration head `0031_reminders` preserved with zero new migrations.

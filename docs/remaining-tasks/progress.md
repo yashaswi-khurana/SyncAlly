@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); **Step 06 Milestone Payments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 07 Amendments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 08 Cancel Disputes is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed; ledger row corrected to match existing evidence entry below); **Step 09 Approval Routing is REVIEW_PENDING** (implemented and self-verified directly by the assisting model, no second independent reviewer); **Step 10 Reminders is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); Step 11 remains **NOT_RUN**; mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
+Initialized **2026-11-01** for Markdown authoring only, where initially every execution step **01-16 was NOT_RUN**. As of current execution, **Step 01 Profiles is ACCEPTED**; **Step 02 Permissions is ACCEPTED**; **Step 03 Fulfillment is ACCEPTED**; **Step 04 Collection Schema is ACCEPTED**; **Step 05 Collections API UI Docs is REVIEW_PENDING** (Developer verified, awaiting independent Reviewer); **Step 06 Milestone Payments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 07 Amendments is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 08 Cancel Disputes is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed; ledger row corrected to match existing evidence entry below); **Step 09 Approval Routing is REVIEW_PENDING** (implemented and self-verified directly by the assisting model, no second independent reviewer); **Step 10 Reminders is ACCEPTED** (Developer & Reviewer verified, 1 repair, all gates passed); **Step 11 Judge Demo is ACCEPTED** (Developer & Reviewer verified, 0 findings, all 12 checkpoints and 8 verification gates pass exit 0); mandatory live/environment gates 12–13 remain unmet; optional elections 14–15 remain unrecorded; Step 16 final gates remain unmet. Project completion **NOT_COMPLETE**; production approval **NOT_GRANTED**. Preserve all existing dirty tracked/untracked/user work and existing historical doc statuses.
 
 The standalone [master](00-run-all.md) contains all contracts and gates. Each linked step independently works as an upload. Locate SyncAlly root using backend manifest/config and frontend manifest; accessible `C:\Proj\SyncAlly` is optional, not an external dependency.
 
@@ -13,7 +13,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 ## Step Ledger
 
 | Step / Document | Hard Dependencies | Execution Status | PLANNER | DEVELOPER | REVIEWER | Repairs | Results / Evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | [01 Profiles](01-profiles.md) | Existing identity/onboarding | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 112/112 backend org tests pass (6 skip); 370/370 frontend tests pass (+6 F14 profile tests); ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. All 4 profile dimensions, UNVERIFIED immutability, optimistic locking (409), contact privacy isolation, and downgrade guard verified. |
 | [02 Permissions](02-permissions.md) | 01 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 48/48 backend tests pass; 83/83 focused frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Full server capability matrix, safe defaults, no blanket finance/fulfillment, self-escalation (403), last-admin (409), optimistic concurrency (409), commit-time row-lock verification, and migration 0019 downgrade safeguard verified. |
 | [03 Fulfillment](03-fulfillment.md) | 02 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: 66/66 backend tests pass (8 skip); 36/36 frontend tests pass; ruff 0 errors; lint:check 0 errors; build 0 errors; git diff clean. Append-only fulfillment events (SHIPPED/OBSERVED/CONFIRMED), fresh FULFILLMENT capability verification, 10^18 scaled integer math, OCC (409), dual delivery+payment deal completion, and migration 0020 downgrade safety verified. |
@@ -24,7 +24,7 @@ The standalone [master](00-run-all.md) contains all contracts and gates. Each li
 | [08 Cancel Disputes](08-cancel-disputes.md) | 03, 06, 07 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 1/3 | Verified: 58 discovery tests pass; 12 deal cases tests pass; ruff clean; 424 frontend tests pass; lint clean; build pass. See full evidence entry below (ledger row corrected to match it). |
 | [09 Approval Routing](09-approval-routing.md) | 02, 07, 08 | REVIEW_PENDING | N/A | ACCEPTED | NOT_RUN | 0/3 | Verified: 10/10 focused backend routing tests pass; 6/6 HTTP route tests pass; 867/867 full backend discovery pass (10 pre-existing failures/3 pre-existing errors unrelated and unchanged); ruff 0 errors; 39/39 focused frontend tests pass; frontend lint/typecheck 0 errors; build pass. Default bilateral continuity, PARALLEL/SEQUENTIAL routing, always-available REJECT veto, revoked/stale-approver handling, eligibility validation, and OCC version conflicts verified. No second independent reviewer pass. |
 | [10 Reminders](10-reminders.md) | 03, 06, 08, 09 | ACCEPTED | N/A | ACCEPTED | ACCEPTED | 1/3 | Verified: 35/35 backend reminder and activity tests pass (8 domain, 12 service, 5 routes, 10 activities); 869/869 full backend discovery pass (33 skip); 48/48 focused tests pass (2 skip); 46/46 focused frontend tests pass (40 DealDetailPage, 6 RemindersPanel); ruff clean; lint:check clean; build clean; git diff --check clean. Scoped durable reminder schedules for fulfillment, milestones, cases, and routing with replay-safe timers, recipient-scoped dedup keys, in-flight payment deferral, organization-switch and terminal deal suppression, outbox notifications, IN_APP delivery, and privacy isolation. Migration 0031_reminders with downgrade guard. |
-| [11 Judge Demo](11-judge-demo.md) | 01-10 | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | No current execution evidence |
+| [11 Judge Demo](11-judge-demo.md) | 01-10 | ACCEPTED | ACCEPTED | ACCEPTED | ACCEPTED | 0/3 | Verified: all 12 judge demo simulation checkpoints pass (1.623s); 3/3 test_judge_demo pass; 5/5 test_demo_lifecycle pass; 46 focused runner tests pass (1 skip); ruff clean; 64 focused frontend tests pass; lint:check clean; build clean; git diff --check clean. 2-party Buyer/Seller simulation covering profile capabilities/products/regions/private contacts isolation, UNVERIFIED status, directory queries, bilateral proposals, facts, bilateral agreement drafting & commitment, OFFLINE_DEMO milestone payment, offline payment reconciliation, 3-state partial fulfillment (SHIPPED/OBSERVED/CONFIRMED), v2 amendment impact & commitment, dispute case raising/evidence/consent resolution, reminder isolation, and trade pack ZIP verification. |
 | [12 Browser Verification](12-browser-verification.md) | 11 + approved runnable deployment/tools | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Mandatory live/visual gate unmet |
 | [13 PostgreSQL Temporal](13-postgres-temporal.md) | 01-11 + approved isolated environments | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Mandatory real migration/race/restart gate unmet |
 | [14 Sandbox](14-sandbox.md) | 06, 13 + explicit opt-in/private credentials | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | 0/3 | Election not recorded; no live payment claim |
@@ -791,4 +791,66 @@ Optional election: elected / explicitly not elected / unknown:
   - N/A for Step 10.
 Completion report / next concrete operator actions:
   - Step 10 Reminders (F13) fully implemented, independently reviewed, repaired (1/3), and ACCEPTED.
+```
+
+## Step 11 Execution Evidence
+
+```text
+UTC timestamp: 2026-11-07T19:35:00Z
+Step / dependency verification / current status: Step 11 Judge Demo (F1b) / Dependencies 01-10 verified / ACCEPTED
+Role identity / coordination evidence (never pretend):
+  - PLANNER: Read-only Architecture Planner subagent (id: planner_11) inspected code, fixtures, and requirements; generated 4-phase execution plan in .agents/teamwork/planner_11/handoff.md.
+  - DEVELOPER: Feature Developer subagent (id: fe25f78a-327d-479f-8cbb-3d80f70ddaf3) implemented Phase 1 environment repairs, Phase 2 profile & capability seeding, Phase 3 12-checkpoint judge journey simulation engine & tests, and Phase 4 empirical verification gates.
+  - REVIEWER: Independent Code Reviewer subagent (id: reviewer_11 / c36fef90-6462-4dce-a198-9ca080d912f6) independently audited code and executed all 8 gates. Verdict: APPROVE (0 findings, 0 integrity violations).
+Current repo version or worktree snapshot / inspected file:line:
+  - Branch: 138-task-11-judge-demo---f1b
+  - Migration actual head: 0031_reminders (head intact, no new migrations required)
+  - Inspected: backend/src/syncally/cli/seed_demo.py:L1-L400, backend/src/syncally/cli/simulate_deal_flow.py:L1-L1050, backend/src/syncally/infrastructure/demo_lifecycle.py:L1-L400, backend/src/syncally/infrastructure/offline_payments.py:L1-L200, frontend/src/deals/DealDetailPage.tsx:L130-L150, frontend/src/App.test.tsx:L1-L150
+Hypothesis / cheapest discriminating check:
+  - Dual-role judge journey simulation: authenticates Buyer & Seller, queries UNVERIFIED directory profiles with counterparty private contact isolation, posts messages, triggers AI fact suggestion with zero-authority human confirmation, proposes Schema 2 draft with bilateral approvals, commits exact-version agreement, authorizes OFFLINE_DEMO milestone payment in SENT state, reconciles offline payment to PAID via dev API, records 3-state partial fulfillment (SHIPPED/OBSERVED/CONFIRMED) with 10^18 integer-scaled math and dual completion logic, assesses and commits v2 amendment, raises and consensually resolves dispute case with evidence, verifies counterparty reminder isolation, and downloads commercial draft with unrecorded terms disclaimer and valid Trade Pack ZIP binary.
+  - Cheapest checks: python -m syncally.cli.simulate_deal_flow --ci && python -m unittest tests/test_judge_demo.py && npm test -- src/App.test.tsx src/deals/DealDetailPage.test.tsx
+Authorized scope / policy or private operator election (no secrets):
+  - F1b Judge Demo bounded scope: fixture-based offline sandbox (`OFFLINE_DEMO`, memory SQLite, offline fake AI); no live money movement, no external network egress, no blanket permissions, no secrets in logs. Live browser/3D and live Postgres/Temporal gates reported separately without live execution.
+Files changed / preserved unrelated changes:
+  - Created: backend/tests/test_judge_demo.py
+  - Modified: backend/src/syncally/cli/seed_demo.py, backend/src/syncally/cli/simulate_deal_flow.py, backend/tests/test_demo_lifecycle.py, backend/tests/test_demo_seed.py, frontend/src/App.test.tsx, frontend/src/deals/DealDetailPage.tsx, docs/remaining-tasks/11-judge-demo.md, docs/remaining-tasks/progress.md
+  - Preserved: all dirty tracked/untracked/user changes in graphify-out/; no git reset, commit, branch deletion, or push.
+Command exactly / cwd / immediate exit code:
+  - backend: `python -m syncally.cli.simulate_deal_flow --ci` / backend / exit 0 (12/12 checkpoints passed in 1.656s)
+  - backend: `python -m unittest tests/test_judge_demo.py` / backend / exit 0 (3/3 passed in 6.897s)
+  - backend: `python -m unittest tests/test_demo_lifecycle.py` / backend / exit 0 (5/5 passed in 2.905s)
+  - backend: BaseSettings discovery test runner (`test_demo*.py`, `test_local_workflow_smoke.py`) / backend / exit 0 (46 ran, 45 passed, 1 skipped)
+  - backend: `.venv/bin/ruff check src tests` / backend / exit 0 (all checks passed)
+  - frontend: `npm test -- src/App.test.tsx src/deals/DealDetailPage.test.tsx` / frontend / exit 0 (64/64 passed in 6.42s)
+  - frontend: `npm run lint:check` / frontend / exit 0 (clean, 0 errors, 0 warnings)
+  - frontend: `npm run build` / frontend / exit 0 (clean build in 589ms)
+  - git: `git diff --check` / repo root / exit 0 (clean, no whitespace/newline errors)
+Results: run / pass / fail / skip / reasons / warnings:
+  - Simulation CLI: 12 ran, 12 passed, 0 failed.
+  - Judge demo unit/integration tests: 3 ran, 3 passed, 0 failed.
+  - Lifecycle tests: 5 ran, 5 passed, 0 failed.
+  - Settings-isolated discovery tests: 46 ran, 45 passed, 0 failed, 1 skipped (LocalWorkflowSmoke requires external Postgres/Temporal).
+  - Frontend focused tests: 64 ran, 64 passed, 0 failed across 2 files.
+  - Static gates: ruff 0 errors, eslint + tsc 0 errors, vite build 0 errors, git diff --check 0 errors.
+Evidence artifacts / redacted scenario assertions / schema revisions:
+  - Deal ID: 9c3c317d-ebc9-4f76-95fe-c9a06cd10e71
+  - Agreement Version 1 Terms Hash: 9fa7295fa14cb9dec0037c5a66e0a2e44ab117ec6a133ecd1a78615ce365fbb0
+  - Payment Intent: 1438c092-b314-40be-8e42-b10fb0bcd571 (Mode: OFFLINE_DEMO, Ref: OFFLINE-1438c092-b314-40be-8e42-b10fb0bcd571, State: SENT -> PAID via simulate-reconciliation)
+  - Fulfillment: Seller 5.0 SHIPPED, Buyer 5.0 OBSERVED, Buyer 5.0 CONFIRMED; deal_completed is False (5/12 delivered)
+  - Agreement Version 2 Terms Hash: 61fcd89ee0b3fc585391d764afaee7e38bad34445fedb7fd76cf2e5feb0e3e70
+  - Dispute Case: 4024d857-7253-42c5-941b-3ea7439bcc47 (OPEN -> RESOLVED via CONSENT)
+  - Commercial Draft: Unrecorded terms disclaimer verified
+  - Trade Pack: Valid ZIP binary verified (b"PK\x03\x04")
+Reviewer finding: severity / file:line / proof / impact / fix:
+  - None (0 findings, 0 integrity violations; all 8 verification gates pass exit 0).
+Repair number 0-3 / same-task focused rerun / independent review result:
+  - Repairs: 0/3.
+Implementation acceptance versus live verification versus production approval:
+  - Step 11 Judge Demo implementation and documentation ACCEPTED by independent Reviewer audit. Mandatory live browser/3D verification (Step 12), live PostgreSQL/Temporal verification (Step 13), and production approval remain unmet.
+Blockers / dependent steps / independent steps continued:
+  - Step 11 unblocks Step 12 (Browser Verification) and Step 13 (PostgreSQL Temporal). Steps 12-16 mandatory gates remain unmet.
+Optional election: elected / explicitly not elected / unknown:
+  - N/A for Step 11.
+Completion report / next concrete operator actions:
+  - Step 11 Judge Demo (F1b) fully implemented, independently reviewed (0 findings, 0 repairs), and ACCEPTED.
 ```

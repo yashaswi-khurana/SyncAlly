@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, closeMarketplaceRFQ, createMarketplaceListing, createMarketplaceRFQ, deactivateMarketplaceListing, searchMarketplaceListings, searchMarketplaceRFQs, searchOrganizationDirectory } from "../api/client";
-import type { CreateMarketplaceListingInput, CreateMarketplaceRFQInput, MarketplaceListing, MarketplaceRFQ, Organization, OrganizationDirectoryItem, OrganizationDirectorySearch } from "../api/types";
+import { ApiError, closeMarketplaceRFQ, createMarketplaceListing, createMarketplaceRFQ, deactivateMarketplaceListing, searchMarketplaceListings, searchMarketplaceRFQs } from "../api/client";
+import type { CreateMarketplaceListingInput, CreateMarketplaceRFQInput, MarketplaceListing, MarketplaceRFQ, Organization } from "../api/types";
 import { navigateToCreateDeal } from "../router";
 
 interface MarketplacePageProps {
@@ -14,18 +14,13 @@ function errorMessage(error: unknown): string {
 }
 
 export default function MarketplacePage({ organizations }: MarketplacePageProps) {
-  const [name, setName] = useState("");
   const [product, setProduct] = useState("");
   const [country, setCountry] = useState("");
-  const [capability, setCapability] = useState("");
-  const [filters, setFilters] = useState<OrganizationDirectorySearch>({});
-  const [items, setItems] = useState<OrganizationDirectoryItem[]>([]);
+  const [filters, setFilters] = useState<{ product?: string; country_code?: string }>({});
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [rfqs, setRfqs] = useState<MarketplaceRFQ[]>([]);
-  const [loading, setLoading] = useState(true);
   const [loadingListings, setLoadingListings] = useState(true);
   const [loadingRfqs, setLoadingRfqs] = useState(true);
-  const [error, setError] = useState("");
   const [listingError, setListingError] = useState("");
   const [rfqError, setRfqError] = useState("");
   const [sellerOrganizationId, setSellerOrganizationId] = useState("");
@@ -60,21 +55,8 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
 
   useEffect(() => {
     const controller = new AbortController();
-    void searchOrganizationDirectory(filters, { signal: controller.signal }).then(
-      (result) => setItems(result),
-      (caught: unknown) => {
-        if (!controller.signal.aborted) setError(errorMessage(caught));
-      },
-    ).finally(() => {
-      if (!controller.signal.aborted) setLoading(false);
-    });
-    return () => controller.abort();
-  }, [filters]);
-
-  useEffect(() => {
-    const controller = new AbortController();
     void searchMarketplaceListings({
-      q: filters.product || filters.q,
+      q: filters.product,
       country_code: filters.country_code,
     }, { signal: controller.signal }).then(
       (result) => {
@@ -93,7 +75,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
   useEffect(() => {
     const controller = new AbortController();
     void searchMarketplaceRFQs({
-      q: filters.product || filters.q,
+      q: filters.product,
       destination_country_code: filters.country_code,
     }, { signal: controller.signal }).then(
       (result) => {
@@ -111,17 +93,13 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
 
   function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setLoading(true);
     setLoadingListings(true);
     setLoadingRfqs(true);
-    setError("");
     setListingError("");
     setRfqError("");
     setFilters({
-      q: name.trim() || undefined,
       product: product.trim() || undefined,
       country_code: country.trim().toUpperCase() || undefined,
-      capability: capability.trim() || undefined,
     });
   }
 
@@ -225,14 +203,10 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
       <header className="hero">
         <span className="eyebrow">Marketplace</span>
         <h1 className="display">Find your next <span className="gradient-text">trade.</span></h1>
-        <p className="hero__lede">Browse active product listings and buyer requests, or find organizations by product, country, and capability.</p>
+        <p className="hero__lede">Browse active product listings and buyer requests.</p>
       </header>
 
       <form className="card marketplace-page__filters" onSubmit={search}>
-        <label>
-          Organization
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="Company name" />
-        </label>
         <label>
           Product or keyword
           <input value={product} onChange={(event) => setProduct(event.target.value)} maxLength={100} placeholder="Grain, textiles, machinery…" />
@@ -241,11 +215,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           Country code
           <input value={country} onChange={(event) => setCountry(event.target.value.toUpperCase())} maxLength={2} placeholder="IN" />
         </label>
-        <label>
-          Capability
-          <input value={capability} onChange={(event) => setCapability(event.target.value)} maxLength={100} placeholder="Wholesale, manufacturing…" />
-        </label>
-        <button className="button" type="submit" disabled={loading}>Search marketplace</button>
+        <button className="button" type="submit" disabled={loadingListings || loadingRfqs}>Search marketplace</button>
       </form>
 
       {adminOrganizations.length > 0 ? (
@@ -361,36 +331,6 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
         {listingError ? <p role="alert">{listingError}</p> : null}
       </section>
 
-      <section className="marketplace-page__results" aria-label="Marketplace results" aria-live="polite">
-        {loading ? <p role="status">Searching organizations…</p> : null}
-        {error ? <p role="alert">{error}</p> : null}
-        {!loading && !error && items.length === 0 ? <p className="muted">No organizations match these filters.</p> : null}
-        {items.map((item) => (
-          <article className="card marketplace-page__item" key={item.id}>
-            <div className="marketplace-page__item-heading">
-              <div>
-                <span className="eyebrow">{item.country_code}</span>
-                <h2>{item.legal_name}</h2>
-              </div>
-              {ownOrganizationIds.has(item.id) ? <span className="hint">Your organization</span> : null}
-            </div>
-            {item.products?.length ? (
-              <div>
-                <h3>Products</h3>
-                <p>{item.products.join(" · ")}</p>
-              </div>
-            ) : <p className="muted">No profile products shared yet.</p>}
-            {item.capabilities?.length ? <p><strong>Capabilities:</strong> {item.capabilities.join(" · ")}</p> : null}
-            {item.regions?.length ? <p><strong>Markets served:</strong> {item.regions.join(" · ")}</p> : null}
-            {!ownOrganizationIds.has(item.id) && organizations.length > 0 ? (
-              <button className="button secondary" type="button" onClick={() => navigateToCreateDeal(item.id)}>
-                Start a deal
-              </button>
-            ) : null}
-          </article>
-        ))}
-        {!loading && !error && items.length === 100 ? <p className="hint">Showing the first 100 results. Add filters to narrow your search.</p> : null}
-      </section>
     </div>
   );
 }

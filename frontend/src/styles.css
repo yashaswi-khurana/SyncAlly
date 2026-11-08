@@ -4828,17 +4828,6 @@ body::after {
   font-size: 0.9rem;
 }
 
-.marketplace-page__results {
-  display: grid;
-  gap: 14px;
-  margin-top: 20px;
-}
-
-.marketplace-page__item {
-  display: grid;
-  gap: 12px;
-}
-
 .marketplace-page__item-heading {
   display: flex;
   align-items: start;

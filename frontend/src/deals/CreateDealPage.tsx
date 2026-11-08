@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, getMarketplaceListing, getMarketplaceRFQ, getOrganization, listOrganizations } from "../api/client";
 import type { Invitation, Organization } from "../api/types";
+import { compactDecimal } from "../formatting";
 import Reveal from "../ui/Reveal";
 import type { OpeningMessageDraftInput } from "./openingMessageDraft";
 
@@ -185,9 +186,9 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
         if (cancelled) return;
         const requestedTerms = [
           `We're responding to your request for ${rfq.title} (${rfq.category}).`,
-          `Requested quantity: ${rfq.quantity} ${rfq.unit}.`,
+          `Requested quantity: ${compactDecimal(rfq.quantity)} ${rfq.unit}.`,
           `Delivery destination: ${rfq.destination_country_code}${rfq.target_delivery_date ? ` by ${rfq.target_delivery_date}` : ""}.`,
-          rfq.target_unit_price && rfq.currency ? `Target price: ${rfq.target_unit_price} ${rfq.currency} per ${rfq.unit}.` : "",
+          rfq.target_unit_price && rfq.currency ? `Target price: ${compactDecimal(rfq.target_unit_price)} ${rfq.currency} per ${rfq.unit}.` : "",
           rfq.description ? `Requirements: ${rfq.description}` : "",
           "Please review our quote and proposed trade terms.",
         ].filter(Boolean);
@@ -214,8 +215,8 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
           `Hello ${listing.organization_name},`,
           "",
           `I'm interested in your ${listing.title} listing (${listing.category}).`,
-          `Listed availability: ${listing.available_quantity} ${listing.unit}.`,
-          `Listed price: ${listing.unit_price} ${listing.currency} / ${listing.unit}.`,
+          `Listed availability: ${compactDecimal(listing.available_quantity)} ${listing.unit}.`,
+          `Listed price: ${compactDecimal(listing.unit_price)} ${listing.currency} / ${listing.unit}.`,
           listing.description ? `Listing details: ${listing.description}` : null,
           "",
           "Please confirm current availability and share delivery options and payment terms.",
@@ -233,6 +234,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
 
   const results = searchState.status === "ready" ? searchState.items : [];
   const listOpen = searchOpen && results.length > 0;
+  const marketplaceContext = Boolean(initialListingId || initialRfqId);
 
   function selectSeller(item: DirectoryItem) {
     setSeller(item);
@@ -469,17 +471,23 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
         <section className="card" aria-labelledby="create-deal-heading">
           <div className="panel-head">
             <span className="eyebrow">Draft deal</span>
-            <h2 id="create-deal-heading">Create a draft deal</h2>
+            <h2 id="create-deal-heading">{initialListingId ? "Start a deal from this listing" : initialRfqId ? "Respond to a buyer request" : "Create a draft deal"}</h2>
           </div>
           <p className="muted">
-            Choose your role and the other organization for this deal.
+            {marketplaceContext
+              ? initialListingId
+                ? "You’re the buyer. The seller and product are from the listing you chose."
+                : "You’re responding as the seller. The buyer and requirements are from their request."
+              : "Choose your role and the other company for this deal."}
           </p>
           <form className="form" onSubmit={handleSubmit} noValidate style={{ marginTop: 22 }}>
-            <fieldset disabled={submitting}>
-              <legend>Your role</legend>
-              <label><input type="radio" name="initiator-party" checked={initiatorParty === "BUYER"} onChange={() => { setInitiatorParty("BUYER"); setFieldErrors({}); }} /> Buyer</label>
-              <label><input type="radio" name="initiator-party" checked={initiatorParty === "SELLER"} onChange={() => { setInitiatorParty("SELLER"); setFieldErrors({}); }} /> Seller</label>
-            </fieldset>
+            {!marketplaceContext ? (
+              <fieldset disabled={submitting}>
+                <legend>Your role</legend>
+                <label><input type="radio" name="initiator-party" checked={initiatorParty === "BUYER"} onChange={() => { setInitiatorParty("BUYER"); setFieldErrors({}); }} /> Buyer</label>
+                <label><input type="radio" name="initiator-party" checked={initiatorParty === "SELLER"} onChange={() => { setInitiatorParty("SELLER"); setFieldErrors({}); }} /> Seller</label>
+              </fieldset>
+            ) : null}
             <div className="field">
               <label htmlFor="deal-display-name">Deal name (optional)</label>
               <input id="deal-display-name" type="text" maxLength={160} value={displayName}
@@ -488,7 +496,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
               <p className="hint">A short name helps both sides find this deal later.</p>
             </div>
             <div className="field">
-              <label htmlFor="deal-opening-message">Opening request or quote (optional)</label>
+              <label htmlFor="deal-opening-message">{initialListingId ? "Message to the seller (optional)" : initialRfqId ? "Quote to the buyer (optional)" : "Opening request or quote (optional)"}</label>
               <textarea
                 id="deal-opening-message"
                 value={openingMessage}
@@ -500,15 +508,17 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                   : "We can offer [product/specification], [available quantity and unit] at [price and currency], delivered to [destination] by [date]. Our payment terms are [terms]."}
                 onChange={(event) => setOpeningMessage(event.target.value)}
               />
-              <p className="hint">It remains a draft until you choose Send. If you invite a counterparty, it will be ready after they join.</p>
+              <p className="hint">{marketplaceContext ? "The deal stays a draft until you send this message." : "The deal stays a draft until you send this message. If you invite a company, it will be ready after they join."}</p>
             </div>
-            <fieldset disabled={submitting}>
-              <legend>Counterparty</legend>
-              <label><input type="radio" name="counterparty-mode" checked={mode === "directory"} onChange={() => { setMode("directory"); setFieldErrors({}); }} /> Existing organization</label>
-              <label><input type="radio" name="counterparty-mode" checked={mode === "invite"} onChange={() => { setMode("invite"); setFieldErrors({}); }} /> Invite counterparty</label>
-            </fieldset>
+            {!marketplaceContext ? (
+              <fieldset disabled={submitting}>
+                <legend>Counterparty</legend>
+                <label><input type="radio" name="counterparty-mode" checked={mode === "directory"} onChange={() => { setMode("directory"); setFieldErrors({}); }} /> Existing organization</label>
+                <label><input type="radio" name="counterparty-mode" checked={mode === "invite"} onChange={() => { setMode("invite"); setFieldErrors({}); }} /> Invite counterparty</label>
+              </fieldset>
+            ) : null}
             <div className="field">
-              <label htmlFor="buyer-organization">{initiatorParty === "BUYER" ? "Buyer organization" : "Seller organization"}</label>
+              <label htmlFor="buyer-organization">{marketplaceContext ? "Your organization" : initiatorParty === "BUYER" ? "Buyer organization" : "Seller organization"}</label>
               <select
                 id="buyer-organization"
                 name="buyer-organization"
@@ -534,7 +544,13 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                 </p>
               ) : null}
             </div>
-            {mode === "invite" ? <>
+            {marketplaceContext ? (
+              <div className="field">
+                <label htmlFor="marketplace-other-company">{initiatorParty === "BUYER" ? "Seller" : "Buyer"}</label>
+                <input id="marketplace-other-company" value={seller?.legal_name ?? "Loading company…"} readOnly />
+                <p className="hint">Selected from the marketplace {initialListingId ? "listing" : "request"}.</p>
+              </div>
+            ) : mode === "invite" ? <>
               <div className="field"><label htmlFor="counterparty-email">Counterparty email</label><input id="counterparty-email" type="email" maxLength={320} disabled={submitting} value={recipientEmail} onChange={(event) => setRecipientEmail(event.target.value)} /></div>
               <div className="field"><label htmlFor="counterparty-name">Counterparty company legal name</label><input id="counterparty-name" maxLength={200} disabled={submitting} value={counterpartyName} onChange={(event) => setCounterpartyName(event.target.value)} /></div>
               <div className="field"><label htmlFor="counterparty-country">Country code</label><input id="counterparty-country" maxLength={2} disabled={submitting} value={countryCode} onChange={(event) => setCountryCode(event.target.value.toUpperCase())} /></div>

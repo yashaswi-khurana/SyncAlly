@@ -579,12 +579,12 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
         </> : <p>No human proposal has been submitted. Extracted facts and AI suggestions still need review by a person before they can become a proposal.</p>}
 
         {view.eligible_actions.includes("submit") || view.eligible_actions.includes("counter") ? (
-          <div className="collection-authoring" aria-label="Create a trade proposal">
-            <h3>Create a trade proposal</h3>
-            <p className="hint">Enter the actual item, delivery, and payment terms your organizations have reviewed. Blank fields are intentional.</p>
-            <p className="hint" aria-label="Authoring draft status">Draft status: <strong>{authoringStatus}</strong></p>
-            <button type="button" className="button secondary" onClick={resetEditor} style={{ marginBottom: "8px" }}>Reset draft</button>
+          <details className="collection-authoring" aria-label="Create a trade proposal">
+            <summary><h3>Create a trade proposal</h3><span className="badge">Advanced manual entry</span></summary>
+            <p className="hint">Use the conversation and fact review above for most deals. Manual entry is for complex terms.</p>
             {authorError ? <p role="alert" className="form-error">{authorError}</p> : null}
+            <p className="hint" aria-label="Authoring draft status">Draft status: <strong>{authoringStatus}</strong></p>
+            <button type="button" className="button secondary" onClick={resetEditor}>Reset draft</button>
 
             <div className="authoring-items" aria-label="Authoring line items">
               <h4>Line items</h4>
@@ -857,22 +857,26 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                 </button>
               ) : null}
             </div>
-          </div>
+          </details>
         ) : null}
 
-        <h3>Proposal history</h3>
-        <ol>{view.proposals.map((proposal) => <li key={proposal.id}>
-          <details><summary>Round {proposal.proposal_number}: {proposalStatusLabel(proposal, organizationId)}{proposal.lifecycle_origin === "LEGACY" ? " (legacy record)" : ""}</summary>
-            <code className="agreement-review__hash">{proposal.terms_hash}</code>
-            {(proposal.terms.line_items ?? []).map((item, index) => <p key={index}>{item.id ? `[${item.id}] ` : ""}{item.description}: {item.quantity} {item.unit} at {item.unit_price.amount} {item.unit_price.currency}</p>)}
-            {(proposal.evidence_refs ?? []).map((ref) => <p key={ref.fact_id}>Evidence {ref.fact_id}, version {ref.version}</p>)}
-          </details>
-        </li>)}</ol>
-        <h3>Proposal activity</h3>
-        <ol>{view.history.map((event) => <li key={event.id}>
-          <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time>: {historyActionLabel(event.action)}
-          {event.invalidated_candidate_id ? " - prior candidate invalidated" : ""}
-        </li>)}</ol>
+        {view.proposals.length > 0 ? <>
+          <h3>Proposal history</h3>
+          <ol>{view.proposals.map((proposal) => <li key={proposal.id}>
+            <details><summary>Round {proposal.proposal_number}: {proposalStatusLabel(proposal, organizationId)}{proposal.lifecycle_origin === "LEGACY" ? " (legacy record)" : ""}</summary>
+              <code className="agreement-review__hash">{proposal.terms_hash}</code>
+              {(proposal.terms.line_items ?? []).map((item, index) => <p key={index}>{item.id ? `[${item.id}] ` : ""}{item.description}: {item.quantity} {item.unit} at {item.unit_price.amount} {item.unit_price.currency}</p>)}
+              {(proposal.evidence_refs ?? []).map((ref) => <p key={ref.fact_id}>Evidence {ref.fact_id}, version {ref.version}</p>)}
+            </details>
+          </li>)}</ol>
+        </> : null}
+        {view.history.length > 0 ? <>
+          <h3>Proposal activity</h3>
+          <ol>{view.history.map((event) => <li key={event.id}>
+            <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time>: {historyActionLabel(event.action)}
+            {event.invalidated_candidate_id ? " - prior candidate invalidated" : ""}
+          </li>)}</ol>
+        </> : null}
       </> : null}
     </section>
   );

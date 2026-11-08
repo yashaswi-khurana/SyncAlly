@@ -589,6 +589,58 @@ html.has-custom-cursor button {
   min-width: 0;
 }
 
+.collection-authoring {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.collection-authoring > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 14px;
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.collection-authoring > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collection-authoring > summary::before {
+  content: "+";
+  color: var(--accent);
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.collection-authoring[open] > summary::before {
+  content: "−";
+}
+
+.collection-authoring > summary h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.collection-authoring[open] > summary {
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.collection-authoring > :not(summary) {
+  margin-right: 12px;
+  margin-left: 12px;
+}
+
+.collection-authoring > :last-child {
+  margin-bottom: 12px;
+}
+
 .collection-item-row,
 .collection-shipment-row,
 .collection-payment-row {

@@ -34,6 +34,13 @@ from syncally.domain.shared.money import Money, canonical_decimal
 PAYPAL_SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com"
 _PAYPAL_TIMEOUT_SECONDS = 15.0
 _ZERO_DECIMAL_CURRENCIES = {"HUF", "JPY", "TWD"}
+# PayPal REST currency reference, checked 2026-11-08. BRL/CNY/MYR availability
+# has additional account-country restrictions enforced by PayPal.
+PAYPAL_INVOICE_SUPPORTED_CURRENCIES = frozenset({
+    "AUD", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP",
+    "HKD", "HUF", "ILS", "JPY", "MXN", "MYR", "NOK", "NZD", "PHP",
+    "PLN", "RUB", "SEK", "SGD", "THB", "TWD", "USD",
+})
 
 
 def _has_excess_currency_precision(value: Decimal, precision: int) -> bool:
@@ -362,6 +369,13 @@ class PayPalSandboxInvoiceProvider(PaymentInvoiceProvider):
         )
 
     def _invoice_payload(self, request: PaymentInvoiceRequest) -> dict:
+        if request.amount.currency not in PAYPAL_INVOICE_SUPPORTED_CURRENCIES:
+            raise PaymentNeedsAction(
+                "PAYPAL_CURRENCY_UNSUPPORTED",
+                f"PayPal Invoicing does not support {request.amount.currency}. "
+                "SyncAlly keeps the agreed currency and amount unchanged; both parties "
+                "must agree to a PayPal-supported currency before requesting a PayPal invoice.",
+            )
         if (
             not request.invoice_number
             or len(request.invoice_number) > 25

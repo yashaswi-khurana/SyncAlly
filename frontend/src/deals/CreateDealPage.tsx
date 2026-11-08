@@ -587,6 +587,9 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                   {analysisResult.requirements.target_unit_price || analysisResult.requirements.budget ? (
                     <div><small className="muted">Target Price / Budget</small><div><strong>{analysisResult.requirements.target_unit_price || analysisResult.requirements.budget} {analysisResult.requirements.currency || ""}</strong></div></div>
                   ) : null}
+                  {(analysisResult.requirements.target_unit_price || analysisResult.requirements.budget) && !analysisResult.requirements.currency ? (
+                    <p className="muted">Currency wasn’t explicit in the request. Confirm it with the seller before comparing or proposing prices.</p>
+                  ) : null}
                   {analysisResult.requirements.destination_name || analysisResult.requirements.destination_country_code || analysisResult.requirements.delivery_destination ? (
                     <div><small className="muted">Destination</small><div><strong>{analysisResult.requirements.destination_name || analysisResult.requirements.destination_country_code || analysisResult.requirements.delivery_destination}</strong></div></div>
                   ) : null}

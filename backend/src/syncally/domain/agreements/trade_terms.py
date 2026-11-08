@@ -20,7 +20,6 @@ SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({
     TRADE_TERMS_SCHEMA_VERSION_LEGACY,
     COLLECTION_TRADE_TERMS_SCHEMA_VERSION,
 })
-SUPPORTED_DEMO_CURRENCY = "USD"
 SUPPORTED_DEMO_PAYMENT_TRIGGER = "seller_invoice"
 SUPPORTED_DEMO_PAYMENT_DUE_CONDITION = "when seller invoices"
 
@@ -484,8 +483,6 @@ class TradeTerms:
             raise InvariantViolation("Unsupported trade terms schema version")
 
         if self.schema_version == TRADE_TERMS_SCHEMA_VERSION_LEGACY:
-            if self.currency != SUPPORTED_DEMO_CURRENCY:
-                raise InvariantViolation("Only USD agreements are supported for the demo")
             if len(self.line_items) != 1 or len(self.shipments) != 1 or len(self.payment_terms) != 1:
                 raise InvariantViolation("The demo supports one line item, shipment, and payment term")
             if self.incoterm is not None or self.cancellation_terms:

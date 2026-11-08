@@ -12,6 +12,7 @@ import {
 } from "../api/client";
 import type { AIProvenance, DealFact } from "../api/types";
 import AISuggestionReview from "./AISuggestionReview";
+import { findSharedTermDrift } from "./suggestionPreview";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -34,6 +35,21 @@ const mockedCreateDealFact = vi.mocked(createDealFact);
 const mockedCorrectDealFact = vi.mocked(correctDealFact);
 const mockedReviewDealFact = vi.mocked(reviewDealFact);
 const mockedSuggestDealFacts = vi.mocked(suggestDealFacts);
+
+describe("shared negotiation change radar", () => {
+  it("surfaces conflicting shared prices while excluding private and superseded facts", () => {
+    const changes = findSharedTermDrift([
+      fact({ id: "shared-1", field: "unit_price", typed_value: "25.000", currency_or_unit: "inr", visibility: "SHAREABLE" }),
+      fact({ id: "shared-2", field: "price", typed_value: "24.00", currency_or_unit: "INR", visibility: "SHAREABLE" }),
+      fact({ id: "private", field: "unit_price", typed_value: "20", currency_or_unit: "INR", visibility: "PRIVATE" }),
+      fact({ id: "old", field: "unit_price", typed_value: "18", currency_or_unit: "INR", visibility: "SHAREABLE", status: "SUPERSEDED" }),
+    ]);
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0].label).toBe("Unit price");
+    expect(changes[0].values.map(({ value }) => value)).toEqual(["25 INR", "24 INR"]);
+  });
+});
 
 function fact(overrides: Partial<DealFact> = {}): DealFact {
   return {
@@ -105,7 +121,8 @@ describe("AISuggestionReview readiness and manual entry", () => {
     expect(metadata).toHaveTextContent(`Last fact invocation: ${label}`);
     if (reason) expect(metadata).toHaveTextContent(reason === "missing_credentials" ? "Missing credentials" : "Temporary provider failure");
     if (provider === "openai") expect(metadata).toHaveTextContent("Model: operator-test-model | Shareable context only");
-    expect(screen.getByText("Human review required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
     expect(mockedReviewDealFact).not.toHaveBeenCalled();
     expect(negotiateDeal).not.toHaveBeenCalled();
   });

@@ -453,22 +453,24 @@ class AISuggestionProviderTests(unittest.TestCase):
             if index == 0:
                 self.assertEqual(result.proposal, self.proposal)
 
-    def test_remote_currency_requires_explicit_noncontradictory_cited_usd(self) -> None:
+    def test_remote_currency_requires_explicit_noncontradictory_cited_currency(self) -> None:
         for price, valid in (
             ("CAD $2.50", False), ("EUR $2.50", False),
             ("AUD 2.50 dollars", False), ("$2.50", False),
             ("2.50 dollars", False), ("USD 2.50", True),
             ("USD $2.50", True), ("2.50 USD", True),
+            ("INR 2.50", True), ("2.50 INR", True),
             ("CAD USD 2.50", False),
         ):
             with self.subTest(price=price):
+                currency = "INR" if "INR" in price else "USD"
                 context = self._demo_context(f"Item: Widget, 12 boxes at {price}, deliver to Toronto by 2026-12-01.")
                 context = replace(context, messages=tuple(replace(message, visibility=Visibility.SHAREABLE) for message in context.messages))
                 baseline = self._demo_context("Item: Widget, 12 boxes at USD 2.50, deliver to Toronto by 2026-12-01.")
                 facts = DemoAISuggestionProvider().extract_facts(FactExtractionRequest(baseline), timeout_seconds=1)
                 citations = [{
                     "schema_version": 1, "field": fact.field.value, "value": fact.value,
-                    "currency_or_unit": fact.currency_or_unit,
+                    "currency_or_unit": currency if fact.field.value == "unit_price" else fact.currency_or_unit,
                     "source": {"schema_version": 1, "message_id": str(context.messages[0].id),
                                "quote": price if fact.field.value == "unit_price" else fact.source.quote,
                                "unknown_reason": None},
@@ -477,7 +479,7 @@ class AISuggestionProviderTests(unittest.TestCase):
                     calls = []
                     output = {"schema_version": 1, "facts": citations} if operation == "facts" else {
                         "schema_version": 1, "insufficient_context": False,
-                        "proposal": _proposal_payload(), "citations": citations,
+                        "proposal": _proposal_payload(currency=currency), "citations": citations,
                     }
                     def respond(request: httpx.Request) -> httpx.Response:
                         calls.append(request)
@@ -524,6 +526,23 @@ class AISuggestionProviderTests(unittest.TestCase):
                 self.assertEqual(result.candidates, ())
                 self.assertEqual(len(calls), 1)
                 self.assertIsNone(result.provenance.fallback_reason)
+
+    def test_billing_error_preserves_safe_project_limit_diagnostic(self) -> None:
+        response = httpx.Response(
+            429,
+            json={"error": {"code": "project_spend_limit_exceeded", "type": "insufficient_quota"}},
+        )
+        provider = ConfiguredAIProvider(
+            self._remote_config(ai_provider="openai_with_offline_fallback"),
+            transport=httpx.MockTransport(lambda _: response),
+        )
+
+        result = extract_facts_from_context(self._remote_context(), provider)
+
+        self.assertIs(result.result.status, ValidationStatus.INVALID)
+        self.assertIn("project_spend_limit_exceeded", result.result.issues[0].message)
+        self.assertIn("hard spend limit", result.result.issues[0].message)
+        self.assertIsNone(result.provenance.fallback_reason)
 
     def test_retry_elapsed_budget_disallows_late_success(self) -> None:
         from syncally.application.ai import call_with_bounded_retry
@@ -1109,8 +1128,9 @@ class AISuggestionProviderTests(unittest.TestCase):
 
         with self.assertRaises(AIPermanentError):
             parse_extracted_facts([_fact_payload(field="bank_account")])
+        self.assertEqual(parse_proposed_terms(_proposal_payload(currency="INR")).currency, "INR")
         with self.assertRaises(AIPermanentError):
-            parse_proposed_terms(_proposal_payload(currency="CAD"))
+            parse_proposed_terms(_proposal_payload(currency="US"))
 
     def test_parse_errors_do_not_echo_provider_payload_content(self) -> None:
         secret = "sk-live-do-not-log-1234567890"

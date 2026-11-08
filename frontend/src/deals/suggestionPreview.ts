@@ -41,7 +41,7 @@ export function guidanceForMissingTradeFields(fields: RequiredTradeField[]): str
   const labels = fields.map((field) =>
     REQUIRED_TRADE_FIELDS.find((required) => required.key === field)?.label.toLowerCase() ?? field,
   );
-  return `Add the missing details: ${labels.join(", ")}. Suggested format: “Order of [item], [quantity] [unit] at USD [price] each, ship to [city or port] by YYYY-MM-DD.”`;
+  return `Add the missing details: ${labels.join(", ")}. Suggested format: “Order of [item], [quantity] [unit] at [currency code] [price] each, ship to [city or port] by YYYY-MM-DD.”`;
 }
 
 export function missingRequiredTradeFields(
@@ -75,7 +75,7 @@ export interface ProposalSuggestionDraft {
   quantity: string;
   unit: string;
   unitPrice: string;
-  currency: "USD";
+  currency: string;
   deliveryDestination: string;
   deliveryDate: string;
 }
@@ -102,6 +102,60 @@ export function toProposalDraft(proposal: ProposalSuggestion): ProposalSuggestio
     deliveryDestination: proposal.delivery_destination,
     deliveryDate: proposal.delivery_date ?? "",
   };
+}
+
+export interface SharedTermDrift {
+  field: RequiredTradeField;
+  label: string;
+  values: Array<{ value: string; facts: DealFact[] }>;
+}
+
+function normalizedDecimal(value: string): string {
+  const normalized = value.trim();
+  if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(normalized)) return normalized.toLocaleLowerCase();
+  return normalized.includes(".")
+    ? normalized.replace(/0+$/, "").replace(/\.$/, "")
+    : normalized;
+}
+
+/** Compare only AI/user-reviewed facts that both parties explicitly shared. */
+export function findSharedTermDrift(facts: DealFact[]): SharedTermDrift[] {
+  const labels = new Map<RequiredTradeField, string>([
+    ["item_description", "Product"], ["quantity", "Quantity"], ["unit", "Unit"],
+    ["unit_price", "Unit price"], ["delivery_destination", "Delivery destination"],
+    ["delivery_date", "Delivery date"],
+  ]);
+  const groups = new Map<RequiredTradeField, Map<string, DealFact[]>>();
+  for (const fact of facts) {
+    if (fact.visibility !== "SHAREABLE" || !["EXTRACTED", "CONFIRMED"].includes(fact.status)) continue;
+    const field = requiredTradeField(fact.field);
+    if (!field) continue;
+    const value = field === "unit_price"
+      ? `${normalizedDecimal(fact.typed_value)} ${fact.currency_or_unit ?? ""}`.trim().toUpperCase()
+      : field === "quantity" && fact.currency_or_unit
+        ? `${normalizedDecimal(fact.typed_value)} ${fact.currency_or_unit.trim().toLocaleLowerCase()}`
+        : field === "quantity"
+          ? normalizedDecimal(fact.typed_value)
+          : fact.typed_value.trim().toLocaleLowerCase();
+    const values = groups.get(field) ?? new Map<string, DealFact[]>();
+    values.set(value, [...(values.get(value) ?? []), fact]);
+    groups.set(field, values);
+  }
+  return [...groups.entries()]
+    .filter(([, values]) => values.size > 1)
+    .map(([field, values]) => ({
+      field,
+      label: labels.get(field) ?? field,
+      values: [...values.values()].map((matches) => {
+        const fact = matches[0];
+        const value = field === "unit_price"
+          ? `${normalizedDecimal(fact.typed_value)} ${fact.currency_or_unit?.trim().toUpperCase() ?? ""}`.trim()
+          : field === "quantity" && fact.currency_or_unit
+            ? `${normalizedDecimal(fact.typed_value)} ${fact.currency_or_unit.trim().toLocaleLowerCase()}`
+            : fact.typed_value;
+        return { value, facts: matches };
+      }),
+    }));
 }
 
 export function reviewActionLabel(action: FactReviewAction): string {

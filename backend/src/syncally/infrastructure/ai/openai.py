@@ -37,33 +37,67 @@ MAX_FACTS = 100
 MAX_OUTPUT_TOKENS = 4096
 
 
-def _remote_usd_is_grounded(value: str, quote: str, message: str) -> bool:
+def _remote_currency_is_grounded(value: str, currency: str, quote: str, message: str) -> bool:
+    currency = currency.upper()
+    if re.fullmatch(r"[A-Z]{3}", currency) is None:
+        return False
     integer, separator, fractional = value.partition(".")
     number = rf"(?:{re.escape(integer)}|{re.escape(f'{int(integer):,}')})"
     if separator:
         number += rf"\.{re.escape(fractional)}"
-    usd = r"USD"
     explicit = list(re.finditer(
-        rf"(?<![\w$]){usd}\s*\$?\s*{number}(?![\w.,])"
-        rf"|(?<![\w.,+$-]){number}\s*{usd}(?!\w)",
+        rf"(?<![A-Za-z]){currency}\s*\$?\s*{number}(?![\w.,])"
+        rf"|(?<![\w.,+-]){number}\s*{currency}(?![A-Za-z])",
         quote, re.IGNORECASE,
     ))
-    contradictory = re.search(
-        r"\b(?:CAD|EUR|AUD|GBP|JPY|CHF|CNY|RMB|NZD|HKD|SGD|INR|KRW|"
-        r"BRL|MXN|ZAR|SEK|NOK|DKK|RUB|AED|SAR|PLN|TRY|THB|IDR|MYR|PHP|"
-        r"Canadian|Australian|New\s+Zealand|Hong\s+Kong|Singapore)\b"
-        r"|\b(?:euros?|pounds?|yen|yuan|rupees?|pesos?)\b|[\u20ac\u00a3\u00a5]"
-        r"|(?:C|A|NZ|HK|S)\$",
-        message, re.IGNORECASE,
+    currency_amount = re.compile(
+        r"(?<![A-Za-z])(?P<prefix>[A-Z]{3})\s*\$?\s*\d+(?:[.,]\d+)*(?![A-Za-z_]|[.,]\d)"
+        r"|(?<![\w.,+-])\d+(?:[.,]\d+)*\s*(?P<suffix>[A-Z]{3})(?![A-Za-z])"
     )
-    monetary_amount = r"\bUSD\s*\$?\s*\d+(?:[.,]\d+)*|\$\s*\d+(?:[.,]\d+)*|\b\d+(?:[.,]\d+)*\s*USD\b"
-    if len(explicit) != 1 or contradictory is not None or len(re.findall(monetary_amount, quote, re.IGNORECASE)) != 1:
+    quote_amounts = list(currency_amount.finditer(quote))
+    message_amounts = list(currency_amount.finditer(message))
+    if (
+        len(explicit) != 1
+        or len(quote_amounts) != 1
+        or (quote_amounts[0].group("prefix") or quote_amounts[0].group("suffix")).upper() != currency
+    ):
         return False
+    if any(
+        not any(amount.start() <= marker.start() < amount.end() for amount in message_amounts)
+        for marker in re.finditer(r"\$", message)
+    ):
+        return False
+    markers = re.finditer(
+        r"\b(?:CAD|EUR|AUD|GBP|JPY|CHF|CNY|RMB|NZD|HKD|SGD|INR|KRW|BRL|MXN|"
+        r"ZAR|SEK|NOK|DKK|RUB|AED|SAR|PLN|TRY|THB|IDR|MYR|PHP|HUF|ILS|TWD|CZK|"
+        r"Canadian|Australian|New\s+Zealand|Hong\s+Kong|Singapore|euros?|pounds?|"
+        r"yen|yuan|rupees?|pesos?)\b|[\u20ac\u00a3\u00a5\u20b9]|(?:C|A|NZ|HK|S)\$|\$",
+        message,
+        re.IGNORECASE,
+    )
+    marker_codes = {
+        "canadian": "CAD", "australian": "AUD", "new zealand": "NZD",
+        "hong kong": "HKD", "singapore": "SGD", "euro": "EUR", "euros": "EUR",
+        "pound": "GBP", "pounds": "GBP", "yen": "JPY", "yuan": "CNY",
+        "rupee": "INR", "rupees": "INR", "€": "EUR", "£": "GBP", "¥": "JPY/CNY",
+        "₹": "INR", "c$": "CAD", "a$": "AUD", "nz$": "NZD", "hk$": "HKD", "s$": "SGD",
+        "$": "USD/CAD/AUD/NZD/HKD/SGD", "peso": "PESO", "pesos": "PESO",
+    }
+    for marker in markers:
+        token = marker.group().casefold()
+        marked_currency = marker_codes.get(token, token.upper())
+        if marked_currency != currency and not (
+            marked_currency == "JPY/CNY" and currency in {"JPY", "CNY"}
+        ) and not (
+            marked_currency == "USD/CAD/AUD/NZD/HKD/SGD"
+            and currency in {"USD", "CAD", "AUD", "NZD", "HKD", "SGD"}
+        ):
+            return False
     unit_price_prefix = (
         r"\bunit[ -]price\s*(?:(?:is|of)\s*|[:=]\s*)?$"
         r"|\b\d+(?:[.,]\d+)*\s+[a-z]+\s+at\s*$"
     )
-    unit_price_suffix = r"^\s*(?:/\s*unit\b|per\s+unit\b|each\b)"
+    unit_price_suffix = r"^\s*(?:/\s*[a-z][a-z0-9-]*\b|per\s+[a-z][a-z0-9-]*\b|each\b)"
     occurrences = list(re.finditer(re.escape(quote), message))
     for occurrence in occurrences:
         amount_start = occurrence.start() + explicit[0].start()
@@ -74,7 +108,7 @@ def _remote_usd_is_grounded(value: str, quote: str, message: str) -> bool:
         clause = message[clause_start:clause_end]
         if re.search(r"\b(?:budget|payment|total|deposit|balance|subtotal)\b", clause, re.IGNORECASE):
             return False
-        if len(re.findall(monetary_amount, clause, re.IGNORECASE)) != 1:
+        if len(list(currency_amount.finditer(clause))) != 1:
             return False
         if not (
             re.search(unit_price_prefix, message[clause_start:amount_start], re.IGNORECASE)
@@ -107,7 +141,7 @@ FACT_ARRAY_SCHEMA = {"type": "array", "items": FACT_SCHEMA, "maxItems": MAX_FACT
 FACTS_SCHEMA = _object({"schema_version": _VERSION, "facts": FACT_ARRAY_SCHEMA})
 TERMS_SCHEMA = _object({
     "schema_version": _VERSION, "description": _STRING, "quantity": _STRING,
-    "unit": _STRING, "unit_price": _STRING, "currency": {"type": "string", "enum": ["USD"]},
+    "unit": _STRING, "unit_price": _STRING, "currency": _STRING,
     "delivery_destination": _STRING, "delivery_date": _NULLABLE_STRING,
 })
 PROPOSAL_SCHEMA = _object({
@@ -215,7 +249,14 @@ class OpenAIChatCompletions:
             if fact.field is FactField.UNIT_PRICE:
                 message = messages.get(fact.source.message_id)
                 quote = fact.source.quote
-                if message is None or quote is None or quote not in message or not _remote_usd_is_grounded(fact.value, quote, message):
+                if (
+                    message is None
+                    or quote is None
+                    or quote not in message
+                    or not _remote_currency_is_grounded(
+                        fact.value, fact.currency_or_unit or "", quote, message
+                    )
+                ):
                     raise ValueError("Unsupported remote currency evidence")
 
     def _ground_proposal(
@@ -260,10 +301,11 @@ class OpenAIChatCompletions:
             "using the same fact contract; a stored term may instead use null message_id/quote and "
             "unknown_reason transmitted_term with the exact term value and currency_or_unit. "
             "If required terms are absent return insufficient_context true, proposal null and citations []. "
-            "Cite only one monetary claim for unit_price: an explicit USD amount in a unit-price, "
+            "Cite only one monetary claim for unit_price: an explicit three-letter ISO-4217 currency code "
+            "and amount in a unit-price, "
             "per-unit, or quantity-at-price clause. Never borrow budget, payment, or total evidence "
-            "or crop away the original claim role. Use USD only with an explicit USD code in the exact price quote, never "
-            "infer USD from $ or dollars alone or convert another currency. "
+            "or crop away the original claim role. Use the exact currency code in the quote; never "
+            "infer currency from a symbol or currency name alone or convert another currency. "
             "Dates must be YYYY-MM-DD and numbers plain decimal strings."
         )
         raw = json.dumps({
@@ -306,12 +348,38 @@ class OpenAIChatCompletions:
                 if response.status_code == 429 or 500 <= response.status_code <= 599:
                     try:
                         error = _json(body).get("error", {})
-                        quota = error.get("code") == "insufficient_quota" or error.get("type") == "insufficient_quota"
+                        error_code = error.get("code")
+                        error_type = error.get("type")
+                        quota = (
+                            error_code == "insufficient_quota"
+                            or error_type == "insufficient_quota"
+                            or error_code in {
+                                "credit_balance_exhausted",
+                                "organization_usage_limit_exceeded",
+                                "organization_spend_limit_exceeded",
+                                "project_spend_limit_exceeded",
+                            }
+                        )
                     except (ValueError, TypeError, AttributeError, UnicodeError, RecursionError):
                         quota = False
+                        error_code = None
                     if not quota:
                         raise AITransientError("AI provider is temporarily unavailable")
-                    raise AIPermanentError("OpenAI quota is exhausted; check the API project's billing and limits")
+                    reason = (
+                        error_code
+                        if isinstance(error_code, str) and re.fullmatch(r"[a-z0-9_]{1,80}", error_code)
+                        else "insufficient_quota"
+                    )
+                    guidance = {
+                        "credit_balance_exhausted": "add API credits to the key's organization",
+                        "organization_usage_limit_exceeded": "review the organization's approved usage limit",
+                        "organization_spend_limit_exceeded": "review the organization's hard spend limit",
+                        "project_spend_limit_exceeded": "review this project's hard spend limit",
+                    }.get(reason, "check the API key's organization, project billing, and spend limits")
+                    raise AIPermanentError(
+                        f"OpenAI rejected this request ({reason}); {guidance}. "
+                        "A new API key does not add credits or change these limits."
+                    )
                 if response.status_code != 200:
                     if response.status_code == 401:
                         raise AIPermanentError("OpenAI authentication failed; check the API key configured for this service")

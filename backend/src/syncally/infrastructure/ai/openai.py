@@ -311,8 +311,13 @@ class OpenAIChatCompletions:
                         quota = False
                     if not quota:
                         raise AITransientError("AI provider is temporarily unavailable")
+                    raise AIPermanentError("OpenAI quota is exhausted; check the API project's billing and limits")
                 if response.status_code != 200:
-                    raise AIPermanentError("AI provider rejected the request")
+                    if response.status_code == 401:
+                        raise AIPermanentError("OpenAI authentication failed; check the API key configured for this service")
+                    if response.status_code == 403:
+                        raise AIPermanentError("OpenAI denied access; check the API project's permissions and model access")
+                    raise AIPermanentError(f"OpenAI rejected the request (HTTP {response.status_code}); check the model and request configuration")
                 envelope = _json(body)
                 if not isinstance(envelope, dict) or envelope.get("object") != "chat.completion":
                     raise ValueError("Invalid completion envelope")

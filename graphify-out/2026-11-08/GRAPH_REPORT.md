@@ -1,17 +1,17 @@
 # Graph Report - SyncAlly  (2026-11-08)
 
 ## Corpus Check
-- 370 files · ~338,069 words
+- 374 files · ~344,812 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 14 file(s) not represented in the graph (top: (none) 8, .example 2, .ini 1)
 
 ## Summary
-- 5667 nodes · 18600 edges · 200 communities (139 shown, 61 thin omitted)
+- 5680 nodes · 18621 edges · 205 communities (146 shown, 59 thin omitted)
 - Extraction: 87% EXTRACTED · 13% INFERRED · 0% AMBIGUOUS · INFERRED: 2462 edges (avg confidence: 0.92)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `6ef4472c`
+- Built from commit: `5b3e0a4c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -20,57 +20,57 @@
 - AIContractError
 - BaseModel
 - repositories/agreements.py
-- ai.py
+- AISuggestionProviderTests
 - schedule_deal_reminders
 - repositories/agreements.py
 - PaymentNeedsAction
-- canonical_decimal
+- PaymentProviderResolver
 - api/agreements.py
 - Test Conversation Routes (ConversationRouteTests)
-- SqlAlchemyPaymentIntentRepository
+- OutboxEvent
 - Test Agreement Routes (AgreementRouteTests)
-- ._seed
+- Message
 - process_payment_intent
-- AISuggestionProviderTests
+- draft_proposal_from_context
 - NegotiationTests
 - Types & Client
 - listOrganizations
 - OrganizationPermissionsTests
-- AmendmentTests
+- AgreementVersionId
 - Test Outbox Dispatcher & Outbox
 - Simulate Deal Flow & Test
 - Test Organization Invitations & Organizations
-- repositories/communications.py
-- Package & Vite.Config
+- DealId
+- package.json
 - Organization
 - Dealconversationreview & Dealconversationreview.Test
 - Skill & Skill.Md
 - api/payments.py
-- User
+- repositories/payment_processing.py
 - repositories/negotiation.py
 - workflow_state.py
 - Aisuggestionreview & Suggestionpreview
 - SyncAlly Implementation Plan Document
 - PaymentProcessingTests
 - application/deal_cases.py
-- activities.py
+- worker.py
 - ApprovalRoutingTestCase
 - Paymentstatuspanel & Paymentstatuspanel.Test
 - PaymentIntentRepositoryTests
 - services
 - api/deals.py
 - InvariantViolation
-- Agreement
+- build_terms
 - Test Dev Routes (DevRoutesTests)
-- Session
+- add_organization_member
 - DealWorkflowTests
 - Test Organization Directory & Organizations
 - create_deal
 - SqlAlchemyDealRepository
 - auth.py
 - PaymentOutboxWorkerTests
-- authorize_payment_route
-- gmail.py
+- api/payments.py
+- repositories/agreements.py
 - NegotiationReview.tsx
 - RemindersPanel.tsx
 - _active_admin_membership
@@ -83,22 +83,22 @@
 - api/negotiation.py
 - Compose.Yaml (volumes)
 - Architectural & Implementation Plan: Step 08 Cancel Disputes (F8)
-- apiRequest
+- CreateDealPage.tsx
 - CommitAgreementCommand
-- DealId
-- simulate_deal_flow.py
-- Money
+- PaymentWorkItem
+- simulate_payment
+- TradeTerms
 - PersistentDemoSeedTests
 - AgreementReview.tsx
 - refresh_access_token
 - SqlAlchemyReminderRepository
-- AgreementRepository
+- repositories/agreements.py
 - IdentityBoundaryTests
 - Optional AI Specification
 - Tsconfig (tsconfig.json)
 - Test Paypal Webhooks (FakeWebhookVerifier)
 - NegotiationPostgresRaceTests
-- get_current_actor
+- authorize_payment_intent
 - uuid
 - SafeOperationsTests
 - environment
@@ -108,7 +108,7 @@
 - ApiError
 - Test Organization Index Migration (OrganizationIndexPostgresMigrationTests)
 - Server-Enforced Capability Matrix
-- ApprovalDecision
+- maybe_complete_deal
 - NegotiationRouteTests
 - InvalidTransition
 - lock_demo_deal_creation
@@ -121,35 +121,35 @@
 - temporal-namespace
 - api/reminders.py
 - ProposedTerms
-- .__call__
+- .test_generates_draft_from_schema_2_committed_terms
 - x-app-environment
 - Test Payment Mode Migration (PaymentModeMigrationTests)
 - environment
 - Test Communication Migration (ConversationPartyUniquenessMigrationTests)
 - create_worker
-- confirm_constraint
+- OnboardingWizard.tsx
 - ApprovalRoutingRouteTests
 - NegotiationCommand
 - healthcheck
-- NegotiationPostgresRaceTests
+- queue_simulated_reconciliation
 - DealWorkflowInput
 - AiContextSelectionTests
-- .add
+- canonical_decimal
 - Final Gates and Truthful Completion Specification
 - Skill (Repo Idea Thinker Skill)
-- authorize_payment_intent
+- SqlAlchemyPaymentIntentRepository
 - Vite Env.D (ImportMeta)
 - temporal-schema
 - PaymentReconciliationRepositoryTests
 - Index (Frontend HTML Root Document)
 - Pyproject (syncally)
 - Customer journey: buyer and seller
-- AuthorizePaymentIntentCommand
+- devDependencies
 - sqlalchemy
 - scaling
 - Deal
 - SyncAlly deployment
-- queue_simulated_reconciliation
+- comprehensive_verification.mjs
 - DealDetailPage.test.tsx
 - ProposalComparison.tsx
 - api/fulfillment.py
@@ -160,7 +160,7 @@
 - setup-temporal-postgres.sh
 - FulfillmentMigrationTests
 - ProviderInvoiceUniqueMigrationTests
-- database_health
+- simulate_deal_flow.py
 - current_user
 - MigrationConfigTests
 - CollectionSchemaMigrationTests
@@ -171,7 +171,7 @@
 - repositories/reminders.py
 - DealWorkflowInput
 - STATE LOG: developer
-- DealWorkflow
+- AuthorizePaymentIntentCommand
 - 0004_communication_sources_and_scope_indexes.py
 - DealCasesTests
 - MilestonePaymentsMigrationTests
@@ -180,25 +180,29 @@
 - STATE LOG: reviewer
 - CONTRACT: cancel-disputes-contract v1   status: FROZEN
 - organization.py
-- simulate_payment
+- eslint.config.js
 - _register_shutdown_handlers
 - get_commercial_document_draft_route
 - Constraint
-- CreateAgreementDraftCommand
+- scripts
 - FakePayPalInvoiceProvider
 - hostless-start.sh
-- WorkflowWorkerIntegrationTests
-- 0024_deal_display_name.py
+- vite.config.ts
+- VerifiedProviderPaymentState
 - login
-- list_deals
-- typing
+- .__call__
+- main.py
 - SyncAlly: Confirmed Bugs and Feature Roadmap
 - Code Review: Step 08 Cancel Disputes (F8) — Work Package RV1
 - check_milestone_trigger_eligibility
+- _is_one_active_per_milestone_violation
+- ._seed
+- env.py
+- get_optional_actor
 - _is_duplicate_membership_error
-- verify_password
 - Frontend product review
-- DealWorkflowStarter
+- DealWorkflowNotification
+- HealthRouteTests
 
 ## God Nodes (most connected - your core abstractions)
 1. `ActorContext` - 313 edges
@@ -209,20 +213,20 @@
 6. `DealId` - 122 edges
 7. `Deal` - 114 edges
 8. `SqlAlchemyAgreementRepository` - 113 edges
-9. `TradeTerms` - 87 edges
-10. `AISuggestionProviderTests` - 87 edges
+9. `AISuggestionProviderTests` - 87 edges
+10. `TradeTerms` - 87 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `1. Executive Summary & Change Stack Digest` --references--> `_resolve_deal_party_organization()`  [INFERRED]
-  .orchestrator/reviews/RV1/review.md → backend/src/syncally/api/deals.py
-- `5. Audit Checklist Verification` --references--> `_resolve_deal_party_organization()`  [INFERRED]
-  .orchestrator/reviews/RV1/review.md → backend/src/syncally/api/deals.py
+- `5. Audit Checklist Verification` --references--> `AuditEvent`  [INFERRED]
+  .orchestrator/reviews/RV1/review.md → backend/src/syncally/infrastructure/models/operations.py
+- `Existing Codebase Behavior` --references--> `InvalidTransition`  [INFERRED]
+  .orchestrator/plans/cancel_disputes_plan.md → backend/src/syncally/domain/shared/errors.py
+- `5. Audit Checklist Verification` --references--> `OutboxEvent`  [INFERRED]
+  .orchestrator/reviews/RV1/review.md → backend/src/syncally/infrastructure/models/operations.py
 - `AST Metrics Table` --references--> `_raise_case_impl()`  [INFERRED]
   .orchestrator/reviews/RV1/review.md → backend/src/syncally/api/deals.py
 - `AST Metrics Table` --references--> `_respond_case_impl()`  [INFERRED]
   .orchestrator/reviews/RV1/review.md → backend/src/syncally/api/deals.py
-- `Existing Codebase Behavior` --references--> `InvalidTransition`  [INFERRED]
-  .orchestrator/plans/cancel_disputes_plan.md → backend/src/syncally/domain/shared/errors.py
 
 ## Import Cycles
 - None detected.
@@ -241,59 +245,71 @@
 - **PayPal Payment Intent and Reconciliation Lifecycle** — docs_architecture_03_paypal_payment_intent_lifecycle_payment_intent, docs_architecture_03_paypal_payment_intent_lifecycle_create_unknown_state, docs_architecture_03_paypal_payment_intent_lifecycle_payment_reconciliation [INFERRED 0.95]
 - **Temporal Outbox Relay and Workflow Orchestration** — docs_architecture_02_temporal_deal_workflow_contract_deal_workflow, docs_architecture_02_temporal_deal_workflow_contract_outbox_workflow_start, docs_architecture_02_temporal_deal_workflow_contract_refresh_deal_state, infra_readme_restart_smoke_test [INFERRED 0.95]
 
-## Communities (200 total, 61 thin omitted)
+## Communities (205 total, 59 thin omitted)
 
 ### Community 0 - "Conversations & Test Conversation Use"
 Cohesion: 0.06
-Nodes (44): add_message_route(), AddMessageRequest, AISuggestionRequest, clarify_fact_route(), confirm_fact_route(), ConstraintResponse, correct_fact_route(), CorrectFactRequest (+36 more)
+Nodes (45): add_message_route(), AddMessageRequest, AISuggestionRequest, clarify_fact_route(), confirm_fact_route(), ConstraintResponse, correct_fact_route(), CorrectFactRequest (+37 more)
 
 ### Community 1 - "AIContractError"
 Cohesion: 0.07
-Nodes (24): AIContractError, AIValidationClaim, _check_keys(), _contains_numeric_token(), _contains_token(), _date_value_is_present(), _decimal(), _fact_value_is_supported_by_quote() (+16 more)
+Nodes (25): AIContractError, AIValidationClaim, _check_keys(), _contains_numeric_token(), _contains_token(), _date_value_is_present(), _decimal(), _fact_value_is_supported_by_quote() (+17 more)
+
+### Community 2 - "BaseModel"
+Cohesion: 0.09
+Nodes (11): AcceptInvitationResponse, ApprovalRoutingPolicyRequest, ApprovalRoutingPolicyResponse, ContactPayload, ContactResponse, CounterpartyInvitationResponse, InvitationResponse, OrganizationDirectoryItem (+3 more)
 
 ### Community 3 - "repositories/agreements.py"
-Cohesion: 0.06
-Nodes (25): AgreementAccessDenied, AgreementAlreadyCommitted, AgreementNotFound, AgreementVersionConflict, DuplicateApproval, NotEligibleApprover, OutOfSequenceApproval, ProposalNotFound (+17 more)
+Cohesion: 0.07
+Nodes (23): AgreementAccessDenied, AgreementAlreadyCommitted, AgreementNotFound, AgreementVersionConflict, create_agreement_draft(), CreateAgreementDraftCommand, ProposalNotFound, StaleAgreementVersion (+15 more)
 
-### Community 4 - "ai.py"
-Cohesion: 0.04
-Nodes (39): get_ai_suggestion_provider(), AIConfigurationError, AIProvenance, AIRetryPolicy, AISuggestionProvider, call_with_bounded_retry(), draft_proposal(), draft_proposal_from_context() (+31 more)
+### Community 4 - "AISuggestionProviderTests"
+Cohesion: 0.07
+Nodes (15): get_ai_suggestion_provider(), extract_facts_from_context(), ConfiguredAIProvider, AISuggestionProviderTests, respond(), respond(), respond(), respond() (+7 more)
 
 ### Community 5 - "schedule_deal_reminders"
 Cohesion: 0.18
 Nodes (3): dispatch_due_reminders(), schedule_deal_reminders(), RemindersServiceTests
 
 ### Community 6 - "repositories/agreements.py"
-Cohesion: 0.07
-Nodes (32): _is_active_member(), _create_fixture(), DemoIdentity, _password_for(), _seed_identities(), AgreementRoutingDecision, AgreementVersion, Approval (+24 more)
+Cohesion: 0.06
+Nodes (33): _is_active_member(), NotificationKind, _create_fixture(), DemoIdentity, _password_for(), _seed_identities(), AgreementRoutingDecision, AgreementVersion (+25 more)
 
 ### Community 7 - "PaymentNeedsAction"
-Cohesion: 0.10
-Nodes (9): receive_paypal_invoice_webhook(), PaymentNeedsAction, PaymentOutcomeUnknown, PaymentRetryableError, PayPalSandboxInvoiceProvider, _provider_request_id(), _send_request(), PayPalSandboxAdapterTests (+1 more)
+Cohesion: 0.09
+Nodes (11): get_paypal_webhook_configuration(), receive_paypal_invoice_webhook(), PaymentNeedsAction, PaymentOutcomeUnknown, PaymentRetryableError, PayPalSandboxInvoiceProvider, _provider_request_id(), _send_request() (+3 more)
 
-### Community 8 - "canonical_decimal"
-Cohesion: 0.11
-Nodes (9): get_paypal_webhook_configuration(), PaymentInvoiceLookup, PaymentInvoiceRequest, PaymentWorkItem, main(), GmailSettings, PayPalSettings, OfflineDemoInvoiceProvider (+1 more)
+### Community 8 - "PaymentProviderResolver"
+Cohesion: 0.10
+Nodes (8): PaymentInvoiceNotice, main(), GmailSettings, PayPalSettings, GmailSMTPInvoiceNotifier, PaymentProviderResolver, _FakeSMTP, GmailSMTPInvoiceNotifierTests
 
 ### Community 9 - "api/agreements.py"
 Cohesion: 0.05
-Nodes (50): AgreementVersionResponse, AmendmentImpactResponse, ApprovalResponse, approve_agreement_route(), commit_agreement_route(), CommitAgreementRequest, compare_agreements_route(), create_agreement_draft_route() (+42 more)
+Nodes (46): AgreementVersionResponse, AmendmentImpactResponse, ApprovalResponse, approve_agreement_route(), commit_agreement_route(), CommitAgreementRequest, compare_agreements_route(), create_agreement_draft_route() (+38 more)
 
 ### Community 10 - "Test Conversation Routes (ConversationRouteTests)"
 Cohesion: 0.10
-Nodes (4): ConversationRouteTests, extract_facts(), respond(), send()
+Nodes (3): ConversationRouteTests, respond(), send()
 
-### Community 11 - "SqlAlchemyPaymentIntentRepository"
-Cohesion: 0.11
-Nodes (3): PaymentStatusResponse, SqlAlchemyPaymentIntentRepository, PaymentStatusExtendedModelTests
+### Community 11 - "OutboxEvent"
+Cohesion: 0.12
+Nodes (3): PaymentStatusResponse, OutboxEvent, PaymentStatusExtendedModelTests
+
+### Community 13 - "Message"
+Cohesion: 0.07
+Nodes (19): ConcurrentConstraintUpdate, message_fingerprint(), MessageIdempotencyConflict, ConstraintKind, ConstraintStatus, Conversation, Message, MessageSourceType (+11 more)
 
 ### Community 14 - "process_payment_intent"
-Cohesion: 0.08
-Nodes (15): PaymentInvoiceNotifier, PaymentInvoiceProvider, PaymentProcessingRepository, process_payment_intent(), reconcile_payment_intent(), _request_id_retry_window_expired(), require_payment_provider(), claim_next_payment_event() (+7 more)
+Cohesion: 0.07
+Nodes (15): payment_invoice_number(), PaymentInvoiceNotifier, PaymentInvoiceProvider, PaymentProcessingRepository, reconcile_payment_intent(), _request_id_retry_window_expired(), require_payment_provider(), claim_next_payment_event() (+7 more)
+
+### Community 15 - "draft_proposal_from_context"
+Cohesion: 0.07
+Nodes (25): AIProvenance, AIRetryPolicy, AISuggestionProvider, call_with_bounded_retry(), draft_proposal(), draft_proposal_from_context(), extract_facts(), fact_suggestion_guidance() (+17 more)
 
 ### Community 16 - "NegotiationTests"
-Cohesion: 0.22
-Nodes (3): EvidenceReference, negotiate_in_transaction(), NegotiationTests
+Cohesion: 0.20
+Nodes (4): EvidenceReference, ProposalBase, negotiate_in_transaction(), NegotiationTests
 
 ### Community 17 - "Types & Client"
 Cohesion: 0.04
@@ -301,87 +317,83 @@ Nodes (98): closeMarketplaceRFQ(), createMarketplaceListing(), createMarketplace
 
 ### Community 18 - "listOrganizations"
 Cohesion: 0.05
-Nodes (71): dependencies, react@^19.3.0, react-dom@^19.3.0, three@^0.186.1, getCurrentUser(), login(), registerOrganization(), clearAccessToken() (+63 more)
+Nodes (67): dependencies, react@^19.3.0, react-dom@^19.3.0, three@^0.186.1, getCurrentUser(), listOrganizations(), login(), registerOrganization() (+59 more)
 
 ### Community 19 - "OrganizationPermissionsTests"
-Cohesion: 0.13
-Nodes (5): _compute_effective_capabilities(), revoke_organization_member(), update_member_permissions(), UpdateMemberPermissionsRequest, OrganizationPermissionsTests
+Cohesion: 0.07
+Nodes (18): _active_admin_membership(), _compute_effective_capabilities(), _deal_awaiting_counterparty(), delete_approval_routing_policy_route(), get_approval_routing_policy_route(), get_organization_profile_route(), get_organization_route(), list_my_organizations() (+10 more)
 
-### Community 20 - "AmendmentTests"
-Cohesion: 0.10
-Nodes (8): AuthorizePaymentRequest, propose_amendment(), ProposeAmendmentCommand, withdraw_amendment(), WithdrawAmendmentCommand, propose_amendment_in_transaction(), withdraw_amendment_in_transaction(), AmendmentTests
+### Community 20 - "AgreementVersionId"
+Cohesion: 0.14
+Nodes (7): PaymentMilestone, AgreementVersionId, PaymentMilestoneId, _restore_domain_intent(), MilestoneDomainValidationTests, DealDomainTests, make_deal()
 
 ### Community 21 - "Test Outbox Dispatcher & Outbox"
 Cohesion: 0.09
-Nodes (13): build_deal_workflow_id(), dispatch_outbox_event(), OutboxDispatchResult, PendingOutboxEvent, apply_dispatch_result(), claim_next_pending_event(), _claim_statement(), dispatch_one_pending_event() (+5 more)
+Nodes (14): build_deal_workflow_id(), dispatch_outbox_event(), OutboxDispatchResult, PendingOutboxEvent, WorkflowStartTransientError, apply_dispatch_result(), claim_next_pending_event(), _claim_statement() (+6 more)
 
 ### Community 22 - "Simulate Deal Flow & Test"
-Cohesion: 0.06
-Nodes (13): _build_in_process_client(), dispatch_payment(), mark_fixture(), session_factory(), ci_deal_flow_hook(), DealFlowContext, DealFlowSimulator, run_simulation() (+5 more)
+Cohesion: 0.05
+Nodes (14): _build_in_process_client(), dispatch_payment(), mark_fixture(), session_factory(), ci_deal_flow_hook(), DealFlowContext, DealFlowSimulator, run_simulation() (+6 more)
 
 ### Community 23 - "Test Organization Invitations & Organizations"
-Cohesion: 0.15
-Nodes (7): accept_invitation(), _accept_invitation(), AcceptInvitationRequest, create_organization_invitation(), CreateInvitationRequest, _decode_invitation_token(), OrganizationInvitationTests
+Cohesion: 0.16
+Nodes (5): accept_invitation(), AcceptInvitationRequest, create_organization_invitation(), CreateInvitationRequest, OrganizationInvitationTests
 
-### Community 24 - "repositories/communications.py"
-Cohesion: 0.04
-Nodes (27): can_view_message(), ConcurrentConstraintUpdate, ConstraintNotFound, message_fingerprint(), MessageIdempotencyConflict, ConstraintKind, ConstraintStatus, Conversation (+19 more)
-
-### Community 25 - "Package & Vite.Config"
+### Community 24 - "DealId"
 Cohesion: 0.06
-Nodes (47): devDependencies, eslint@^10.13.0, @eslint/js@^10.0.1, eslint-plugin-react-hooks@^7.1.1, eslint-plugin-react-refresh@^0.4.20, globals@^17.13.0, happy-dom@^21.0.3, @testing-library/dom@^10.4.1 (+39 more)
+Nodes (11): confirm_constraint(), ConstraintNotFound, ConstraintId, ConversationId, DealId, MessageId, constraint(), message() (+3 more)
+
+### Community 25 - "package.json"
+Cohesion: 0.15
+Nodes (12): happy-dom@^21.0.3, @testing-library/dom@^10.4.1, @testing-library/jest-dom@^7.0.1, engines, node, name, private, type (+4 more)
 
 ### Community 26 - "Organization"
-Cohesion: 0.07
-Nodes (35): API_REQUEST_TIMEOUT_MS, deleteApprovalRoutingPolicy(), getApprovalRoutingPolicy(), listOrganizationMembers(), putApprovalRoutingPolicy(), revokeOrganizationMember(), CREATED_MESSAGE, fetchMock (+27 more)
+Cohesion: 0.04
+Nodes (58): API_REQUEST_TIMEOUT_MS, deleteApprovalRoutingPolicy(), getApprovalRoutingPolicy(), getCommercialDocumentDraft(), listOrganizationMembers(), putApprovalRoutingPolicy(), revokeOrganizationMember(), CREATED_MESSAGE (+50 more)
 
 ### Community 27 - "Dealconversationreview & Dealconversationreview.Test"
 Cohesion: 0.07
-Nodes (45): createDealMessage(), importDealThread(), listDealFacts(), previewDealThreadImport(), reviewDealFact(), updateFactVisibility(), Visibility, areFactsEqual() (+37 more)
+Nodes (47): createDealMessage(), importDealThread(), listDealFacts(), listDealMessages(), previewDealThreadImport(), reviewDealFact(), updateFactVisibility(), Visibility (+39 more)
 
 ### Community 28 - "Skill & Skill.Md"
 Cohesion: 0.04
 Nodes (43): API and Database Engineer Skill, API Design and Contract Semantics, Data Integrity and Invariant Enforcement, Query Performance and Projection Optimization, Schema Migration and Backward Compatibility, Transaction Boundaries and Atomicity, Archify Diagrammer Skill, Archify CLI Global Tool (+35 more)
 
-### Community 29 - "api/payments.py"
-Cohesion: 0.05
-Nodes (19): get_payment_status_repository(), PaymentOutboxStatus, CommercialDocumentDraft, IdempotencyKeyReused, list_current_payment_statuses(), PaymentIntentCommandMismatch, PaymentMilestoneNotFound, PaymentStatusRecord (+11 more)
-
-### Community 30 - "User"
-Cohesion: 0.13
-Nodes (13): AcceptInvitationResponse, add_organization_member(), AddOrganizationMemberRequest, ApprovalRoutingPolicyResponse, ContactResponse, CounterpartyInvitationResponse, create_organization(), CreateOrganizationRequest (+5 more)
+### Community 30 - "repositories/payment_processing.py"
+Cohesion: 0.06
+Nodes (8): _persist_paypal_webhook_event(), PaymentInvoiceLineItem, PaymentIntentCommandMismatch, PaymentMilestoneNotFound, PaymentIntentId, _has_excess_currency_precision(), _provider_error_code(), record_paypal_webhook_event()
 
 ### Community 31 - "repositories/negotiation.py"
-Cohesion: 0.17
-Nodes (7): _raise_error(), NegotiationConflict, NegotiationNotFound, NegotiationOrganizationRequired, ProposalId, SqlAlchemyNegotiationRepository, projection()
+Cohesion: 0.19
+Nodes (6): NegotiationConflict, NegotiationNotFound, NegotiationOrganizationRequired, ProposalId, SqlAlchemyNegotiationRepository, projection()
 
 ### Community 32 - "workflow_state.py"
-Cohesion: 0.09
-Nodes (10): DealWorkflowState, load_deal_workflow_state(), parse_workflow_uuid(), WorkflowAgreementRepository, WorkflowDealNotFound, WorkflowDealRepository, _workflow_input_value(), _FakeAgreementRepository (+2 more)
+Cohesion: 0.11
+Nodes (9): DealWorkflowState, load_deal_workflow_state(), parse_workflow_uuid(), WorkflowAgreementRepository, WorkflowDealNotFound, WorkflowDealRepository, _FakeAgreementRepository, _FakeDealRepository (+1 more)
 
 ### Community 33 - "Aisuggestionreview & Suggestionpreview"
 Cohesion: 0.09
-Nodes (37): correctDealFact(), createDealFact(), draftDealProposal(), getNegotiation(), negotiateDeal(), suggestDealFacts(), AIProvenance, DealFact (+29 more)
+Nodes (38): correctDealFact(), createDealFact(), draftDealProposal(), getNegotiation(), suggestDealFacts(), AIProvenance, DealFact, FactReviewAction (+30 more)
 
 ### Community 34 - "SyncAlly Implementation Plan Document"
 Cohesion: 0.13
 Nodes (16): SyncAlly Architecture Document, System Topology and Ownership Boundaries, Temporal Worker and Outbox Architecture, AI Provider Boundary Specification, AI Resilience and Retry Policy, AISuggestionProvider Contract, Acceptance Criteria Verification Matrix, SyncAlly Implementation Plan Document (+8 more)
 
 ### Community 35 - "PaymentProcessingTests"
-Cohesion: 0.13
-Nodes (5): FakeInvoiceProvider, FakeProcessingRepository, PaymentProcessingTests, _request(), _work_item()
+Cohesion: 0.15
+Nodes (6): process_payment_intent(), FakeInvoiceProvider, FakeProcessingRepository, PaymentProcessingTests, _request(), _work_item()
 
 ### Community 36 - "application/deal_cases.py"
 Cohesion: 0.09
-Nodes (28): add_case_evidence(), AddCaseEvidenceCommand, assess_deal_case_blockers(), DealCaseNotFound, DealCaseRepository, DealNotFound, list_deal_cases(), raise_deal_case() (+20 more)
+Nodes (29): add_case_evidence(), AddCaseEvidenceCommand, assess_deal_case_blockers(), DealCaseNotFound, DealCaseRepository, DealNotFound, list_deal_cases(), raise_deal_case() (+21 more)
 
-### Community 37 - "activities.py"
-Cohesion: 0.06
-Nodes (20): WorkflowStartOutcome, DealWorkflowNotification, NotificationKind, _connect_with_retry(), main(), run_forever(), main(), run_forever() (+12 more)
+### Community 37 - "worker.py"
+Cohesion: 0.09
+Nodes (16): _connect_with_retry(), main(), run_forever(), main(), run_forever(), is_permanent_rpc_error(), configure_logging(), log_operation() (+8 more)
 
 ### Community 38 - "ApprovalRoutingTestCase"
-Cohesion: 0.08
-Nodes (10): delete_approval_routing_policy_route(), ApprovalRoutingPolicy, OrganizationId, UserId, routing_policy_to_domain(), SqlAlchemyApprovalRoutingPolicyRepository, ApprovalRoutingTestCase, OrganizationDomainTests (+2 more)
+Cohesion: 0.09
+Nodes (10): ApprovalRoutingPolicy, OrganizationId, UserId, routing_policy_to_domain(), SqlAlchemyApprovalRoutingPolicyRepository, ApprovalRoutingTestCase, FakeDealRepository, OrganizationDomainTests (+2 more)
 
 ### Community 39 - "Paymentstatuspanel & Paymentstatuspanel.Test"
 Cohesion: 0.09
@@ -392,88 +404,88 @@ Cohesion: 0.09
 Nodes (29): build, depends_on, restart, context, dockerfile, migrate, temporal-namespace, build (+21 more)
 
 ### Community 42 - "api/deals.py"
-Cohesion: 0.14
-Nodes (30): add_evidence_deals_route(), _add_evidence_impl(), add_evidence_v1_route(), AddEvidenceRequest, CaseEvidenceResponse, CaseResponse, CreateDealRequest, DealResponse (+22 more)
+Cohesion: 0.13
+Nodes (31): add_evidence_deals_route(), _add_evidence_impl(), add_evidence_v1_route(), AddEvidenceRequest, CaseEvidenceResponse, CaseResponse, create_deal_route(), CreateDealRequest (+23 more)
 
 ### Community 43 - "InvariantViolation"
-Cohesion: 0.09
+Cohesion: 0.11
 Nodes (5): _normalized_text(), _require_decimal(), InvariantViolation, bounded_decimal(), BoundedDecimalTests
 
-### Community 44 - "Agreement"
-Cohesion: 0.21
-Nodes (8): _display(), _render(), Agreement, Approval, AgreementId, FakeAgreementRepository, FakeDealRepository, TradeTermsTests
+### Community 44 - "build_terms"
+Cohesion: 0.19
+Nodes (14): build_trade_terms_from_request(), PaymentObligationAllocation, PaymentTerm, ShipmentItemAllocation, ShipmentTerm, TradeLineItem, ProposedTerms, Money (+6 more)
 
-### Community 46 - "Session"
-Cohesion: 0.09
-Nodes (16): ApprovalRoutingPolicyRequest, _case_insensitive_prefix(), _deal_awaiting_counterparty(), _escape_like(), get_approval_routing_policy_route(), get_optional_actor(), get_organization_profile_route(), get_organization_route() (+8 more)
+### Community 46 - "add_organization_member"
+Cohesion: 0.22
+Nodes (5): add_organization_member(), AddOrganizationMemberRequest, create_organization(), CreateOrganizationRequest, OrganizationOnboardingTests
 
 ### Community 47 - "DealWorkflowTests"
-Cohesion: 0.29
-Nodes (3): DealWorkflowResult, DealWorkflowTests, new_notification()
+Cohesion: 0.13
+Nodes (5): DealWorkflow, DealWorkflowResult, DealWorkflowTests, DealWorkflowUnitTests, new_notification()
+
+### Community 48 - "Test Organization Directory & Organizations"
+Cohesion: 0.13
+Nodes (4): _case_insensitive_prefix(), _escape_like(), value(), OrganizationDirectoryTests
 
 ### Community 49 - "create_deal"
-Cohesion: 0.13
-Nodes (8): create_deal_route(), _both_organizations_active(), create_deal(), CreateDealCommand, DealAccessDenied, DealNotFound, DealUseCaseTests, FakeDealRepository
+Cohesion: 0.16
+Nodes (5): _both_organizations_active(), create_deal(), CreateDealCommand, DealUseCaseTests, FakeDealRepository
 
 ### Community 50 - "SqlAlchemyDealRepository"
 Cohesion: 0.18
 Nodes (3): _active_participation(), SqlAlchemyDealRepository, DealRepositoryTests
 
 ### Community 51 - "auth.py"
-Cohesion: 0.18
-Nodes (10): _as_utc(), bootstrap_system_admin(), create_refresh_token(), _encode_access_token(), _issue_tokens(), register_organization(), _replay_rotation(), _revoke_family() (+2 more)
+Cohesion: 0.13
+Nodes (15): _as_utc(), create_refresh_token(), current_user(), CurrentUserResponse, _decode_token(), _development_actor(), development_login(), _encode_access_token() (+7 more)
 
 ### Community 52 - "PaymentOutboxWorkerTests"
 Cohesion: 0.10
 Nodes (5): FakeRepository, NoCallProvider, PaymentOutboxWorkerTests, resolve(), _utc()
 
-### Community 53 - "authorize_payment_route"
-Cohesion: 0.17
-Nodes (10): authorize_payment_route(), AuthorizePaymentResponse, _check_milestone_delivery_confirmed(), list_payment_milestones_route(), list_payment_statuses_route(), MilestoneAllocationResponse, MilestonePaymentSummaryResponse, PaymentPreviewResponse (+2 more)
+### Community 53 - "api/payments.py"
+Cohesion: 0.09
+Nodes (21): authorize_payment_route(), AuthorizePaymentRequest, AuthorizePaymentResponse, _check_milestone_delivery_confirmed(), get_payment_status_repository(), list_payment_milestones_route(), list_payment_statuses_route(), MilestoneAllocationResponse (+13 more)
 
-### Community 54 - "gmail.py"
-Cohesion: 0.06
-Nodes (10): payment_invoice_number(), PaymentInvoiceNotice, PaymentInvoiceReconciliation, canonical_decimal(), GmailSMTPInvoiceNotifier, _has_excess_currency_precision(), _provider_error_code(), _FakeSMTP (+2 more)
+### Community 54 - "repositories/agreements.py"
+Cohesion: 0.07
+Nodes (21): DuplicateApproval, NotEligibleApprover, OutOfSequenceApproval, record_routing_decision(), RecordRoutingDecisionCommand, RoutingDecisionOutcome, ApprovalDecision, ApprovalRoutingMode (+13 more)
 
 ### Community 55 - "NegotiationReview.tsx"
-Cohesion: 0.07
-Nodes (35): Deal, NegotiationView, AgreementReviewProps, DealCasesPanelProps, DealConversationReviewProps, DEAL_STAGE_LABELS, DealOverview(), hasVerifiedCurrentAgreement() (+27 more)
+Cohesion: 0.05
+Nodes (49): getDeal(), getOrganization(), negotiateDeal(), Deal, NegotiationView, AgreementReviewProps, DealCasesPanelProps, DealConstellation() (+41 more)
 
 ### Community 56 - "RemindersPanel.tsx"
 Cohesion: 0.21
 Nodes (14): listDealReminders(), suppressDealReminder(), syncDealReminders(), ReminderScope, ReminderStatus, formatUtc(), RemindersPanel(), scopeBadgeLabel() (+6 more)
 
 ### Community 57 - "_active_admin_membership"
-Cohesion: 0.12
-Nodes (16): close_marketplace_rfq(), create_marketplace_listing(), create_marketplace_rfq(), deactivate_marketplace_listing(), get_marketplace_listing(), get_marketplace_rfq(), MarketplaceListingRequest, MarketplaceListingResponse (+8 more)
+Cohesion: 0.14
+Nodes (14): close_marketplace_rfq(), create_marketplace_listing(), create_marketplace_rfq(), deactivate_marketplace_listing(), get_marketplace_listing(), get_marketplace_rfq(), MarketplaceListingRequest, MarketplaceListingResponse (+6 more)
 
 ### Community 58 - "CommercialDocumentDraftTests"
-Cohesion: 0.12
-Nodes (12): AgreementNotCommitted, export_display_terms(), generate_commercial_document_draft(), generate_trade_pack(), InvalidTradePack, _json_bytes(), _shape(), _trade_pack_html() (+4 more)
+Cohesion: 0.14
+Nodes (11): export_display_terms(), generate_commercial_document_draft(), generate_trade_pack(), InvalidTradePack, _json_bytes(), _shape(), _trade_pack_html(), section() (+3 more)
 
 ### Community 59 - "Test Migration Lock & Env"
-Cohesion: 0.10
-Nodes (9): run_migrations_offline(), run_migrations_online(), serialize_migrations(), _make_postgres_connection(), _make_sqlite_connection(), MigrationLockTests, simulated_migration(), PostgresRealAdvisoryLockTests (+1 more)
-
-### Community 60 - "Payment Processing & Test Payment"
-Cohesion: 0.15
-Nodes (5): PaymentInvoiceLineItem, PaymentIntentStatus, SqlAlchemyPaymentProcessingRepository, transition(), transition()
+Cohesion: 0.12
+Nodes (8): run_migrations_online(), serialize_migrations(), _make_postgres_connection(), _make_sqlite_connection(), MigrationLockTests, simulated_migration(), PostgresRealAdvisoryLockTests, worker()
 
 ### Community 61 - "01 Commercial Domain Model &"
 Cohesion: 0.07
 Nodes (19): AgreementVersion Aggregate, Append-Only AuditEvent Ledger, Commercial Constraint and Provenance, Deal Aggregate, Organization and Membership Entities, PaymentMilestone and Obligation, Proposal Aggregate and Terms Hash, Temporal Deal Workflow (+11 more)
 
 ### Community 62 - "create_counterparty_invitation"
-Cohesion: 0.14
-Nodes (6): create_counterparty_invitation(), _create_invitation_token(), CreateCounterpartyInvitationRequest, OnboardingConcurrencyCases, OnboardingPostgresConcurrencyTests, OnboardingSQLiteConcurrencyTests
+Cohesion: 0.12
+Nodes (7): create_counterparty_invitation(), _create_invitation_token(), CreateCounterpartyInvitationRequest, _decode_invitation_token(), OnboardingConcurrencyCases, OnboardingPostgresConcurrencyTests, OnboardingSQLiteConcurrencyTests
 
 ### Community 63 - "Test Deal Routes & Identity"
 Cohesion: 0.20
 Nodes (3): require_system_admin(), ActorContext, DealRouteTests
 
 ### Community 64 - "api/negotiation.py"
-Cohesion: 0.14
-Nodes (11): BaseRequest, CandidateRequest, EvidenceRequest, HistoryResponse, NegotiationRequest, NegotiationResponse, NegotiationResult, ProposalResponse (+3 more)
+Cohesion: 0.13
+Nodes (12): BaseRequest, CandidateRequest, EvidenceRequest, HistoryResponse, NegotiationRequest, NegotiationResponse, NegotiationResult, ProposalResponse (+4 more)
 
 ### Community 65 - "Compose.Yaml (volumes)"
 Cohesion: 0.09
@@ -483,48 +495,48 @@ Nodes (22): POSTGRES_DB, POSTGRES_PASSWORD, POSTGRES_USER, interval, retries, te
 Cohesion: 0.10
 Nodes (19): 1. Executive Summary & Existing vs. Required Behavior, 2. Domain Entities & Value Objects, 3. Deal Aggregate Coordination, 4. Persistence Models & Alembic Migration 0025, 5. Application Layer: Use Cases & Operational Impact Assessment, 6. HTTP API Layer, 7. Frontend Integration, 9. Verification & Test Plan (+11 more)
 
-### Community 67 - "apiRequest"
-Cohesion: 0.04
-Nodes (69): acceptInvitation(), apiBaseUrl(), ApiError, apiRequest(), createAgreementFromReviewedTerms(), createCounterpartyInvitation(), createDeal(), getCommercialDocumentDraft() (+61 more)
+### Community 67 - "CreateDealPage.tsx"
+Cohesion: 0.07
+Nodes (29): createCounterpartyInvitation(), createDeal(), getMarketplaceListing(), getMarketplaceRFQ(), listDeals(), ViewerRole, counterpartyInvitePreview(), counterpartyInviteUrl() (+21 more)
 
 ### Community 68 - "CommitAgreementCommand"
-Cohesion: 0.09
-Nodes (8): CommitAgreementCommand, record_approval(), RecordApprovalCommand, commit_agreement_in_transaction(), record_approval_in_transaction(), AgreementCommitTests, LocalWorkflowSmokeTests, commit_once()
+Cohesion: 0.07
+Nodes (11): CommitAgreementCommand, propose_amendment(), ProposeAmendmentCommand, RecordApprovalCommand, commit_agreement_in_transaction(), propose_amendment_in_transaction(), record_approval_in_transaction(), AgreementCommitTests (+3 more)
 
-### Community 69 - "DealId"
-Cohesion: 0.18
-Nodes (8): PaymentMilestone, AgreementVersionId, DealId, PaymentMilestoneId, _restore_domain_intent(), MilestoneDomainValidationTests, DealDomainTests, make_deal()
+### Community 69 - "PaymentWorkItem"
+Cohesion: 0.14
+Nodes (4): PaymentInvoiceLookup, PaymentInvoiceRequest, PaymentWorkItem, OfflineDemoInvoiceProvider
 
-### Community 70 - "simulate_deal_flow.py"
-Cohesion: 0.10
-Nodes (11): DevResetResponse, reset_demo(), _clear_fixture(), _delete_scoped(), DemoCollisionError, _normalized_index_predicate(), _preflight(), seed_demo_data() (+3 more)
+### Community 70 - "simulate_payment"
+Cohesion: 0.15
+Nodes (7): DevResetResponse, DevRoleSwitchRequest, _require_demo_admin(), reset_demo(), simulate_payment(), SimulatePaymentRequest, switch_role()
 
-### Community 71 - "Money"
+### Community 71 - "TradeTerms"
 Cohesion: 0.12
-Nodes (15): build_trade_terms_from_request(), _decimal(), _money(), _parse_money(), PaymentObligationAllocation, PaymentTerm, ShipmentItemAllocation, ShipmentTerm (+7 more)
+Nodes (5): compare_agreement_terms(), _money(), _parse_money(), TradeTerms, with_timing()
 
 ### Community 72 - "PersistentDemoSeedTests"
 Cohesion: 0.10
-Nodes (7): fixture_id(), initialize_offline_database(), main(), OutboxEvent, PersistentDemoSeedTests, exercise_api(), dispatch()
+Nodes (7): fixture_id(), initialize_offline_database(), main(), PersistentDemoSeedTests, exercise_api(), start_deal_workflow(), dispatch()
 
 ### Community 73 - "AgreementReview.tsx"
-Cohesion: 0.10
-Nodes (38): commitAgreementVersion(), compareAgreementVersions(), getAgreementHistory(), getAgreementVersion(), getAmendmentImpact(), previewAmendmentImpact(), proposeAmendment(), recordAgreementDecision() (+30 more)
+Cohesion: 0.07
+Nodes (54): acceptInvitation(), apiBaseUrl(), ApiError, apiRequest(), commitAgreementVersion(), compareAgreementVersions(), createAgreementFromReviewedTerms(), getAgreementHistory() (+46 more)
 
 ### Community 74 - "refresh_access_token"
-Cohesion: 0.09
-Nodes (4): _hash_refresh_token(), refresh_access_token(), RefreshRequest, RefreshToken
+Cohesion: 0.08
+Nodes (5): _hash_refresh_token(), refresh_access_token(), RefreshRequest, RefreshToken, User
 
 ### Community 75 - "SqlAlchemyReminderRepository"
 Cohesion: 0.16
 Nodes (3): DealReminderModel, SqlAlchemyReminderRepository, RemindersRoutesTests
 
-### Community 76 - "AgreementRepository"
-Cohesion: 0.06
-Nodes (17): AgreementRepository, assess_amendment_impact(), AuditEventDraft, AuditRepository, commit_agreement(), create_reviewed_agreement_draft(), get_current_agreement(), ObligationRepository (+9 more)
+### Community 76 - "repositories/agreements.py"
+Cohesion: 0.07
+Nodes (19): AgreementRepository, assess_amendment_impact(), AuditEventDraft, AuditRepository, commit_agreement(), create_reviewed_agreement_draft(), CreateReviewedAgreementDraftCommand, get_current_agreement() (+11 more)
 
 ### Community 77 - "IdentityBoundaryTests"
-Cohesion: 0.13
+Cohesion: 0.11
 Nodes (4): _is_loopback_temporal_address(), _is_weak_jwt_secret(), Settings, IdentityBoundaryTests
 
 ### Community 78 - "Optional AI Specification"
@@ -536,20 +548,20 @@ Cohesion: 0.11
 Nodes (17): compilerOptions, allowImportingTsExtensions, jsx, lib, module, moduleDetection, moduleResolution, noEmit (+9 more)
 
 ### Community 81 - "NegotiationPostgresRaceTests"
-Cohesion: 0.11
-Nodes (4): create_database_engine(), CounterpartyOnboardingMigrationTests, DemoFixtureMigrationTests, NegotiationSqliteRaceTests
+Cohesion: 0.08
+Nodes (8): create_database_engine(), CounterpartyOnboardingMigrationTests, DemoFixtureMigrationTests, NegotiationPostgresRaceTests, run(), failing(), succeed(), NegotiationSqliteRaceTests
 
-### Community 82 - "get_current_actor"
-Cohesion: 0.12
-Nodes (7): _decode_token(), _development_actor(), development_login(), get_current_actor(), _unauthorized(), _require_demo_admin(), resolve_actor()
+### Community 82 - "authorize_payment_intent"
+Cohesion: 0.19
+Nodes (4): authorize_payment_intent(), PaymentIntentRepository, SellerMembershipRepository, UnauthorizedPaymentAuthorization
 
 ### Community 83 - "uuid"
-Cohesion: 0.06
+Cohesion: 0.08
 Nodes (7): CommunicationMigrationTests, MessageIdempotencyMigrationTests, FulfillmentShippingMigrationTests, InvitingPartyMigrationTests, OrganizationIndexMigrationTests, OutboxDispatchMigrationTests, PaymentCreateStartedMigrationTests
 
 ### Community 84 - "SafeOperationsTests"
-Cohesion: 0.13
-Nodes (8): WorkflowStartError, WorkflowStartPermanentError, WorkflowStartTransientError, start_deal_workflow(), captured_output(), SafeOperationsTests, exercise(), failed_db()
+Cohesion: 0.15
+Nodes (6): WorkflowStartError, WorkflowStartPermanentError, captured_output(), SafeOperationsTests, exercise(), failed_db()
 
 ### Community 85 - "environment"
 Cohesion: 0.28
@@ -564,16 +576,16 @@ Cohesion: 0.14
 Nodes (12): Append-Only Fulfillment Observations and Confirmations, Canonical Hash and Legacy Export Preservation, Collection Schema Specification F10a, Versioned Item Shipment Payment Collections, Collections API and UI Specification F10b, Deterministic Version-Aware Export Downloads, Structured Collection Authoring and Review, Milestone Payment Intent State Machine (+4 more)
 
 ### Community 89 - "ApiError"
-Cohesion: 0.06
-Nodes (35): addOrganizationMember(), createOrganization(), getOrganizationProfile(), listOrganizations(), updateOrganizationProfile(), ContactVisibility, Organization, OrganizationContact (+27 more)
+Cohesion: 0.09
+Nodes (20): addOrganizationMember(), getOrganizationProfile(), updateOrganizationProfile(), ContactVisibility, Organization, OrganizationContact, MarketplacePageProps, Props (+12 more)
 
-### Community 92 - "ApprovalDecision"
-Cohesion: 0.16
-Nodes (9): ApprovalDecision, ApprovalRoutingMode, can_act(), evaluate_routing(), RoutingApproverSlot, RoutingDecisionRecord, RoutingEvaluation, RoutingOutcomeStatus (+1 more)
+### Community 92 - "maybe_complete_deal"
+Cohesion: 0.33
+Nodes (4): delivery_obligation_fulfilled(), _event_total(), maybe_complete_deal(), payments_reconciled()
 
 ### Community 94 - "InvalidTransition"
-Cohesion: 0.11
-Nodes (7): Proposal, PaymentIntent, VerifiedProviderPaymentState, InvalidTransition, transition(), PaymentReconciliationTests, get_invoice_reconciliation()
+Cohesion: 0.17
+Nodes (3): Proposal, PaymentIntent, InvalidTransition
 
 ### Community 95 - "lock_demo_deal_creation"
 Cohesion: 0.19
@@ -581,7 +593,7 @@ Nodes (8): _acquire_lock(), _is_demo_deal(), lock_demo_deal_creation(), lock_dem
 
 ### Community 96 - "application/conversations.py"
 Cohesion: 0.05
-Nodes (25): add_message(), AddMessageCommand, can_view_constraint(), CommunicationRepository, ConstraintRepository, correct_constraint(), create_manual_constraint(), CreateManualConstraintCommand (+17 more)
+Nodes (25): add_message(), AddMessageCommand, can_view_constraint(), can_view_message(), CommunicationRepository, ConstraintRepository, correct_constraint(), create_manual_constraint() (+17 more)
 
 ### Community 98 - "Master Execution Contract"
 Cohesion: 0.11
@@ -605,7 +617,7 @@ Nodes (9): get_deal_reminders(), ReminderResponse, _resolve_actor_deal_org(), su
 
 ### Community 104 - "ProposedTerms"
 Cohesion: 0.07
-Nodes (20): AIPermanentError, AIProviderError, AITransientError, FactExtractionRequest, parse_extracted_facts(), parse_proposed_terms(), ProposalDraftRequest, AiContext (+12 more)
+Nodes (20): AIConfigurationError, AIPermanentError, AIProviderError, AITransientError, FactExtractionRequest, parse_extracted_facts(), parse_proposed_terms(), ProposalDraftRequest (+12 more)
 
 ### Community 106 - "x-app-environment"
 Cohesion: 0.09
@@ -619,6 +631,10 @@ Nodes (20): environment, BIND_ON_IP, DB, DB_PORT, DBNAME, POSTGRES_DB, POSTGRES_
 Cohesion: 0.20
 Nodes (3): create_worker(), workflow_activities(), WorkflowWorkerTests
 
+### Community 111 - "OnboardingWizard.tsx"
+Cohesion: 0.15
+Nodes (14): createOrganization(), COUNTRY_NAMES, CountryOption, describeError(), isAmbiguousCreateFailure(), OnboardingWizard(), findExistingOrganization(), handleSubmit() (+6 more)
+
 ### Community 113 - "NegotiationCommand"
 Cohesion: 0.42
 Nodes (3): negotiate(), NegotiationCommand, NegotiationRepository
@@ -627,17 +643,13 @@ Nodes (3): negotiate(), NegotiationCommand, NegotiationRepository
 Cohesion: 0.16
 Nodes (18): healthcheck, healthcheck, image, restart, volumes, temporal-schema, interval, retries (+10 more)
 
-### Community 115 - "NegotiationPostgresRaceTests"
-Cohesion: 0.14
-Nodes (7): CreateReviewedAgreementDraftCommand, ProposalBase, create_reviewed_agreement_draft_in_transaction(), NegotiationPostgresRaceTests, failing(), succeed(), replace_candidate()
-
 ### Community 116 - "DealWorkflowInput"
-Cohesion: 0.18
-Nodes (3): RefreshDealStateActivity, RefreshDealStateActivityTests, factory()
+Cohesion: 0.13
+Nodes (4): RefreshDealStateActivity, _workflow_input_value(), RefreshDealStateActivityTests, factory()
 
-### Community 118 - ".add"
-Cohesion: 0.17
-Nodes (5): DuplicateActivePaymentIntent, PaymentModeChanged, _is_idempotency_key_violation(), _is_one_active_per_milestone_violation(), _violated_constraint_name()
+### Community 118 - "canonical_decimal"
+Cohesion: 0.18
+Nodes (4): _display(), _render(), _decimal(), canonical_decimal()
 
 ### Community 119 - "Final Gates and Truthful Completion Specification"
 Cohesion: 0.20
@@ -647,9 +659,9 @@ Nodes (9): Evidence-Free Projection and Safety Bounds, F12 Trade Pack Handoff Do
 Cohesion: 0.50
 Nodes (3): Repo Idea Thinker Skill, Repository-Grounded Ideation Discipline, Idea Quality Standards and Lightweight Validation
 
-### Community 122 - "authorize_payment_intent"
-Cohesion: 0.20
-Nodes (4): authorize_payment_intent(), PaymentIntentAuthorizationOutcome, PaymentIntentRepository, SellerMembershipRepository
+### Community 122 - "SqlAlchemyPaymentIntentRepository"
+Cohesion: 0.10
+Nodes (8): DuplicateActivePaymentIntent, IdempotencyKeyReused, PaymentIntentAuthorizationOutcome, PaymentModeChanged, PaymentStatusRecord, ExtendedPaymentStatusRecord, SqlAlchemyPaymentIntentRepository, _utc_timestamp()
 
 ### Community 134 - "temporal-schema"
 Cohesion: 0.15
@@ -659,9 +671,13 @@ Nodes (13): condition, db, command, depends_on, restart, migrate, temporal-schem
 Cohesion: 0.29
 Nodes (6): Customer contract, Customer journey: buyer and seller, Evidence and limits, Implementation constraints discovered during task mapping, Outcome, Task graph
 
+### Community 140 - "devDependencies"
+Cohesion: 0.15
+Nodes (13): devDependencies, eslint@^10.13.0, @testing-library/react@^16.3.3, @types/react@^19.0.0, @types/react-dom@^19.0.0, @types/three@^0.186.0, typescript@^6.0.0, vitest@^5.0.5 (+5 more)
+
 ### Community 141 - "sqlalchemy"
-Cohesion: 0.04
-Nodes (46): upgrade(), uuid_column(), upgrade(), upgrade(), upgrade(), upgrade(), downgrade(), upgrade() (+38 more)
+Cohesion: 0.03
+Nodes (50): upgrade(), uuid_column(), upgrade(), upgrade(), upgrade(), upgrade(), downgrade(), upgrade() (+42 more)
 
 ### Community 142 - "scaling"
 Cohesion: 0.10
@@ -675,17 +691,21 @@ Nodes (9): Deal, DealStatus, _to_domain(), DealAuthorizationTests, _domain_deal(
 Cohesion: 0.20
 Nodes (9): 1. Provision the VM and DNS, 2. Configure secrets, 3. Start the stack, Configure the Hostless App, Connect the Render frontend, Current $0 demo: Render + Hostless, OCI single-VM deployment, SyncAlly deployment (+1 more)
 
+### Community 145 - "comprehensive_verification.mjs"
+Cohesion: 0.23
+Nodes (6): @playwright/test@^1.65.0, pngjs@^7.0.0, unzipper@^0.12.5, @playwright/test, pngjs, unzipper
+
 ### Community 146 - "DealDetailPage.test.tsx"
 Cohesion: 0.05
-Nodes (61): addCaseEvidence(), getCurrentAgreement(), getDeal(), getDealFulfillment(), listDealCases(), listDealMessages(), raiseDealCase(), recordDealFulfillment() (+53 more)
+Nodes (51): addCaseEvidence(), getDealFulfillment(), listDealCases(), raiseDealCase(), recordDealFulfillment(), respondToDealCase(), BilateralDecision, CaseStatus (+43 more)
 
 ### Community 147 - "ProposalComparison.tsx"
 Cohesion: 0.19
-Nodes (20): paymentTimingLabel(), allocations(), Change, compareEntries(), comparisonChanges(), entries(), Entry, entrySignature() (+12 more)
+Nodes (19): allocations(), Change, compareEntries(), comparisonChanges(), entries(), Entry, entrySignature(), Field (+11 more)
 
 ### Community 148 - "api/fulfillment.py"
 Cohesion: 0.05
-Nodes (36): _event_response(), FulfillmentEventResponse, FulfillmentSnapshotResponse, get_fulfillment_repository(), _raise_fulfillment_error(), read_fulfillment_route(), _record_fulfillment_event(), record_fulfillment_route() (+28 more)
+Nodes (32): _event_response(), FulfillmentEventResponse, FulfillmentSnapshotResponse, get_fulfillment_repository(), _raise_fulfillment_error(), read_fulfillment_route(), _record_fulfillment_event(), record_fulfillment_route() (+24 more)
 
 ### Community 149 - "DealReminder"
 Cohesion: 0.17
@@ -693,7 +713,7 @@ Nodes (3): DealReminder, ensure_utc(), ReminderDomainTests
 
 ### Community 150 - "build_terms"
 Cohesion: 0.24
-Nodes (9): NegotiationSession, NegotiationSubmissionOutcome, ProposalStatus, NegotiationSessionId, build_proposal(), build_terms(), DecimalCanonicalizationTests, HumanNegotiationTests (+1 more)
+Nodes (7): NegotiationSession, NegotiationSubmissionOutcome, ProposalStatus, NegotiationSessionId, build_proposal(), HumanNegotiationTests, NegotiationTests
 
 ### Community 151 - "volumes"
 Cohesion: 0.50
@@ -707,13 +727,13 @@ Nodes (10): ARBITRATION LOG, CAPABILITY MATRIX, CONSTRAINTS, CONTRACTS, DIRECTIV
 Cohesion: 0.67
 Nodes (3): PGPASSWORD, setup-temporal-postgres.sh script, update_database_schema()
 
-### Community 157 - "current_user"
-Cohesion: 0.23
-Nodes (4): current_user(), CurrentUserResponse, OrganizationRegistrationRequest, SystemAdminBootstrapRequest
+### Community 156 - "simulate_deal_flow.py"
+Cohesion: 0.11
+Nodes (9): _clear_fixture(), _delete_scoped(), DemoCollisionError, _normalized_index_predicate(), _preflight(), seed_demo_data(), _is_live_backend_healthy(), main() (+1 more)
 
 ### Community 162 - "amendment.py"
-Cohesion: 0.26
-Nodes (4): compare_agreement_terms(), assess_amendment_impact(), FulfillmentObligationImpact, PaymentMilestoneImpact
+Cohesion: 0.13
+Nodes (10): AmendmentAlreadyCommitted, AmendmentConflict, AmendmentError, AmendmentImpact, AmendmentImpactBlocked, assess_amendment_impact(), FulfillmentObligationImpact, PaymentMilestoneImpact (+2 more)
 
 ### Community 163 - "ConversationUseCaseTests"
 Cohesion: 0.20
@@ -724,16 +744,12 @@ Cohesion: 0.20
 Nodes (6): build_deduplication_key(), ReminderChannel, ReminderScope, ReminderStatus, SuppressionReason, _to_domain()
 
 ### Community 165 - "DealWorkflowInput"
-Cohesion: 0.21
-Nodes (5): DealWorkflowInput, _require_uuid(), new_workflow_input(), RefreshActivity, RefreshCall
+Cohesion: 0.12
+Nodes (7): DealWorkflowInput, DealWorkflowStatus, _require_uuid(), new_workflow_input(), RefreshActivity, RefreshCall, WorkflowWorkerIntegrationTests
 
 ### Community 166 - "STATE LOG: developer"
 Cohesion: 0.25
 Nodes (7): BLOCKERS & ESCALATIONS, CURRENT_STATE, ENVIRONMENT_SNAPSHOT (ENV), GOAL & ACCEPTANCE CRITERIA, IDENTITY & ROLE, IMPLEMENTATION_LEDGER, STATE LOG: developer
-
-### Community 167 - "DealWorkflow"
-Cohesion: 0.18
-Nodes (3): DealWorkflow, DealWorkflowUnitTests, run()
 
 ### Community 168 - "0004_communication_sources_and_scope_indexes.py"
 Cohesion: 0.60
@@ -755,9 +771,9 @@ Nodes (6): Change rule, CONTRACT: cancel-disputes-contract v1   status: FROZEN, 
 Cohesion: 0.06
 Nodes (23): ContactVisibility, _normalize_string(), Organization, OrganizationCapability, OrganizationContact, OrganizationMember, OrganizationMemberRole, OrganizationMemberStatus (+15 more)
 
-### Community 176 - "simulate_payment"
-Cohesion: 0.22
-Nodes (4): DevRoleSwitchRequest, simulate_payment(), SimulatePaymentRequest, switch_role()
+### Community 176 - "eslint.config.js"
+Cohesion: 0.18
+Nodes (10): @eslint/js@^10.0.1, eslint-plugin-react-hooks@^7.1.1, eslint-plugin-react-refresh@^0.4.20, globals@^17.13.0, typescript-eslint@^8.71.2, @eslint/js, eslint-plugin-react-hooks, eslint-plugin-react-refresh (+2 more)
 
 ### Community 177 - "_register_shutdown_handlers"
 Cohesion: 0.27
@@ -771,21 +787,29 @@ Nodes (3): CommercialDocumentDraftResponse, get_commercial_document_draft_route(
 Cohesion: 0.07
 Nodes (4): Constraint, FakeCommunicationRepository, FakeCommunicationRepository, FakeCommunicationRepository
 
-### Community 180 - "CreateAgreementDraftCommand"
-Cohesion: 0.27
-Nodes (4): create_agreement_draft(), CreateAgreementDraftCommand, create_agreement_draft_in_transaction(), create_legacy_draft()
+### Community 180 - "scripts"
+Cohesion: 0.29
+Nodes (7): scripts, build, dev, lint, lint:check, preview, test
 
-### Community 185 - "0024_deal_display_name.py"
-Cohesion: 0.36
-Nodes (4): _deal_names_table(), downgrade(), _rollback_backup_table(), upgrade()
+### Community 181 - "FakePayPalInvoiceProvider"
+Cohesion: 0.21
+Nodes (4): PaymentInvoiceReconciliation, FakePayPalInvoiceProvider, get_invoice_reconciliation(), get_invoice_reconciliation()
+
+### Community 183 - "vite.config.ts"
+Cohesion: 0.33
+Nodes (5): vite@^8.1.0, @vitejs/plugin-react@^6.1.2, API_PATH_PREFIXES, vite, @vitejs/plugin-react
+
+### Community 184 - "VerifiedProviderPaymentState"
+Cohesion: 0.40
+Nodes (3): VerifiedProviderPaymentState, transition(), PaymentReconciliationTests
 
 ### Community 186 - "login"
-Cohesion: 0.33
-Nodes (4): CredentialsRequest, login(), fail(), scalar()
+Cohesion: 0.14
+Nodes (8): bootstrap_system_admin(), CredentialsRequest, login(), _accept_invitation(), hash_password(), verify_password(), fail(), scalar()
 
-### Community 188 - "typing"
+### Community 188 - "main.py"
 Cohesion: 0.05
-Nodes (10): _require_dev_environment(), OperationalFastAPI, _persist_paypal_webhook_event(), list_platform_organizations(), _organization_summary(), OrganizationStatusUpdate, update_platform_organization_status(), get_db() (+2 more)
+Nodes (11): _require_dev_environment(), database_health(), health(), OperationalFastAPI, list_platform_organizations(), _organization_summary(), OrganizationStatusUpdate, update_platform_organization_status() (+3 more)
 
 ### Community 189 - "SyncAlly: Confirmed Bugs and Feature Roadmap"
 Cohesion: 0.25
@@ -795,29 +819,37 @@ Nodes (7): Confirmed bugs, Core product capabilities, Feature roadmap, Hackathon
 Cohesion: 0.22
 Nodes (8): 1. Medium (P2) — Parallel Alembic Migration Heads Branching From 0024_amendments, 2. Reviewer's Guide, 3. Merge Gate, 4. Findings, 6. Empirical Verification Summary, 7. Review Verdict, Code Review: Step 08 Cancel Disputes (F8) — Work Package RV1, Control-flow diagram
 
+### Community 193 - "_is_one_active_per_milestone_violation"
+Cohesion: 0.43
+Nodes (3): _is_idempotency_key_violation(), _is_one_active_per_milestone_violation(), _violated_constraint_name()
+
 ### Community 200 - "Frontend product review"
 Cohesion: 0.50
 Nodes (3): Findings and fixes, Frontend product review, Walkthrough coverage
 
+### Community 202 - "DealWorkflowNotification"
+Cohesion: 0.14
+Nodes (5): DealWorkflowStarter, WorkflowStartOutcome, DealWorkflowNotification, TemporalDealWorkflowStarter, TemporalAdapterTests
+
 ## Knowledge Gaps
 - **48 isolated node(s):** `syncally`, `PGPASSWORD`, `F1a Curated Repeatable Demo Fixture`, `Editorial Dark Theme Design System`, `ZIP HTML and Print Export Verification` (+43 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1764 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **61 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1767 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **59 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `ActorContext` connect `Test Deal Routes & Identity` to `Conversations & Test Conversation Use`, `repositories/agreements.py`, `ai.py`, `repositories/agreements.py`, `api/agreements.py`, `Test Conversation Routes (ConversationRouteTests)`, `SqlAlchemyPaymentIntentRepository`, `Test Agreement Routes (AgreementRouteTests)`, `._seed`, `AISuggestionProviderTests`, `Deal`, `queue_simulated_reconciliation`, `OrganizationPermissionsTests`, `api/fulfillment.py`, `AmendmentTests`, `Simulate Deal Flow & Test`, `Test Organization Invitations & Organizations`, `repositories/communications.py`, `current_user`, `User`, `api/payments.py`, `ConversationUseCaseTests`, `ApprovalRoutingTestCase`, `PaymentIntentRepositoryTests`, `DealCasesTests`, `api/deals.py`, `Agreement`, `Session`, `organization.py`, `simulate_payment`, `create_deal`, `get_commercial_document_draft_route`, `auth.py`, `Constraint`, `authorize_payment_route`, `FakePayPalInvoiceProvider`, `Test Organization Directory & Organizations`, `_active_admin_membership`, `CommercialDocumentDraftTests`, `list_deals`, `typing`, `create_counterparty_invitation`, `api/negotiation.py`, `SqlAlchemyReminderRepository`, `AgreementRepository`, `IdentityBoundaryTests`, `get_current_actor`, `NegotiationRouteTests`, `application/conversations.py`, `api/reminders.py`, `confirm_constraint`, `ApprovalRoutingRouteTests`, `AiContextSelectionTests`?**
-  _High betweenness centrality (0.126) - this node is a cross-community bridge._
+- **Why does `ActorContext` connect `Test Deal Routes & Identity` to `Conversations & Test Conversation Use`, `AISuggestionProviderTests`, `repositories/agreements.py`, `api/agreements.py`, `Test Conversation Routes (ConversationRouteTests)`, `OutboxEvent`, `Test Agreement Routes (AgreementRouteTests)`, `draft_proposal_from_context`, `Deal`, `OrganizationPermissionsTests`, `api/fulfillment.py`, `Simulate Deal Flow & Test`, `Test Organization Invitations & Organizations`, `DealId`, `api/payments.py`, `repositories/payment_processing.py`, `ConversationUseCaseTests`, `ApprovalRoutingTestCase`, `PaymentIntentRepositoryTests`, `DealCasesTests`, `api/deals.py`, `add_organization_member`, `organization.py`, `Test Organization Directory & Organizations`, `create_deal`, `get_commercial_document_draft_route`, `auth.py`, `api/payments.py`, `_active_admin_membership`, `login`, `CommercialDocumentDraftTests`, `main.py`, `create_counterparty_invitation`, `api/negotiation.py`, `._seed`, `CommitAgreementCommand`, `simulate_payment`, `get_optional_actor`, `SqlAlchemyReminderRepository`, `repositories/agreements.py`, `IdentityBoundaryTests`, `NegotiationRouteTests`, `application/conversations.py`, `api/reminders.py`, `.test_generates_draft_from_schema_2_committed_terms`, `ApprovalRoutingRouteTests`, `queue_simulated_reconciliation`, `AiContextSelectionTests`?**
+  _High betweenness centrality (0.087) - this node is a cross-community bridge._
 - **Are the 157 inferred relationships involving `ActorContext` (e.g. with `approve_agreement_route()` and `commit_agreement_route()`) actually correct?**
   _`ActorContext` has 157 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `syncally`, `PGPASSWORD`, `F1a Curated Repeatable Demo Fixture` to the rest of the system?**
   _48 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Conversations & Test Conversation Use` be split into smaller, more focused modules?**
-  _Cohesion score 0.059096459096459095 - nodes in this community are weakly interconnected._
-- **Why does `OrganizationId` connect `ApprovalRoutingTestCase` to `AIContractError`, `repositories/agreements.py`, `ai.py`, `schedule_deal_reminders`, `repositories/agreements.py`, `api/agreements.py`, `Test Conversation Routes (ConversationRouteTests)`, `SqlAlchemyPaymentIntentRepository`, `Test Agreement Routes (AgreementRouteTests)`, `._seed`, `Deal`, `AISuggestionProviderTests`, `NegotiationTests`, `OrganizationPermissionsTests`, `api/fulfillment.py`, `DealReminder`, `AmendmentTests`, `build_terms`, `repositories/communications.py`, `Test Outbox Dispatcher & Outbox`, `api/payments.py`, `repositories/negotiation.py`, `application/deal_cases.py`, `repositories/reminders.py`, `PaymentIntentRepositoryTests`, `DealCasesTests`, `Agreement`, `NegotiationMigrationTests`, `Session`, `organization.py`, `create_deal`, `SqlAlchemyDealRepository`, `Constraint`, `CommercialDocumentDraftTests`, `create_counterparty_invitation`, `api/negotiation.py`, `CommitAgreementCommand`, `DealId`, `Money`, `AgreementRepository`, `NegotiationPostgresRaceTests`, `ApprovalDecision`, `InvalidTransition`, `application/conversations.py`, `ProposedTerms`, `confirm_constraint`, `ApprovalRoutingRouteTests`, `AiContextSelectionTests`, `.add`?**
-  _High betweenness centrality (0.053) - this node is a cross-community bridge._
+  _Cohesion score 0.05750350631136045 - nodes in this community are weakly interconnected._
+- **Why does `OrganizationId` connect `ApprovalRoutingTestCase` to `AIContractError`, `repositories/agreements.py`, `AISuggestionProviderTests`, `schedule_deal_reminders`, `repositories/agreements.py`, `api/agreements.py`, `Test Conversation Routes (ConversationRouteTests)`, `OutboxEvent`, `Test Agreement Routes (AgreementRouteTests)`, `Message`, `draft_proposal_from_context`, `Deal`, `NegotiationTests`, `OrganizationPermissionsTests`, `AgreementVersionId`, `DealReminder`, `build_terms`, `api/fulfillment.py`, `DealId`, `Test Outbox Dispatcher & Outbox`, `api/payments.py`, `repositories/payment_processing.py`, `repositories/negotiation.py`, `application/deal_cases.py`, `repositories/reminders.py`, `PaymentIntentRepositoryTests`, `DealCasesTests`, `build_terms`, `NegotiationMigrationTests`, `organization.py`, `create_deal`, `SqlAlchemyDealRepository`, `Constraint`, `repositories/agreements.py`, `VerifiedProviderPaymentState`, `CommercialDocumentDraftTests`, `create_counterparty_invitation`, `api/negotiation.py`, `._seed`, `CommitAgreementCommand`, `TradeTerms`, `repositories/agreements.py`, `NegotiationPostgresRaceTests`, `maybe_complete_deal`, `InvalidTransition`, `application/conversations.py`, `.test_generates_draft_from_schema_2_committed_terms`, `ApprovalRoutingRouteTests`, `AiContextSelectionTests`, `SqlAlchemyPaymentIntentRepository`?**
+  _High betweenness centrality (0.063) - this node is a cross-community bridge._
 - **Are the 74 inferred relationships involving `OrganizationId` (e.g. with `build_trade_terms_from_request()` and `create_reviewed_agreement_draft_route()`) actually correct?**
   _`OrganizationId` has 74 INFERRED edges - model-reasoned connections that need verification._
 - **Should `AIContractError` be split into smaller, more focused modules?**
-  _Cohesion score 0.0741745816372682 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07287784679089027 - nodes in this community are weakly interconnected._

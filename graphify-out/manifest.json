@@ -1620,10 +1620,10 @@
     "semantic_hash": ""
   },
   "docs/remaining-tasks/14-sandbox.md": {
-    "mtime": 1793505734.1811805,
-    "seen": 1793506638.526573,
-    "ast_hash": "d42f30f6dcbb2a7baa1045a295ed15ed",
-    "semantic_hash": "d42f30f6dcbb2a7baa1045a295ed15ed"
+    "mtime": 1794121794.384265,
+    "seen": 1794121903.3552022,
+    "ast_hash": "d0ba35caf88536f4989dedb386bf81fa",
+    "semantic_hash": ""
   },
   "docs/remaining-tasks/15-ai-optional.md": {
     "mtime": 1793505734.1811805,
@@ -1638,9 +1638,9 @@
     "semantic_hash": "7b840959494ccea9f1f1f25d26e4d056"
   },
   "docs/remaining-tasks/progress.md": {
-    "mtime": 1794080898.8433397,
-    "seen": 1794110559.2929482,
-    "ast_hash": "938b650e7d9386a84d9133ea155b3a3b",
+    "mtime": 1794121778.1009638,
+    "seen": 1794121903.3553083,
+    "ast_hash": "9d09893ccc21a4dd3b4311ac96491e2b",
     "semantic_hash": ""
   },
   "backend/alembic/versions/0018_organization_profiles.py": {
@@ -2215,13 +2215,13 @@
   },
   "infra/aws/temporal-sandbox-data.yaml": {
     "mtime": 1794066492.4332345,
-    "seen": 1794115294.1910427,
+    "seen": 1794119713.5226312,
     "ast_hash": "",
     "semantic_hash": ""
   },
   "infra/aws/temporal-workers.yaml": {
     "mtime": 1794066492.4332345,
-    "seen": 1794115294.191047,
+    "seen": 1794119713.5226347,
     "ast_hash": "",
     "semantic_hash": ""
   },

@@ -88,6 +88,7 @@ class GeminiGenerateContent(OpenAIChatCompletions):
             raise AITransientError("AI provider is temporarily unavailable") from None
         except (ValueError, TypeError, KeyError, AttributeError, UnicodeError,
                 RecursionError, httpx.HTTPError):
+            log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="PERMANENT", error_code="GEMINI_INVALID_RESPONSE")
             raise AIPermanentError("AI provider returned invalid output") from None
 
     async def _http(self, raw: bytes, timeout: float):
@@ -139,6 +140,8 @@ class GeminiGenerateContent(OpenAIChatCompletions):
                 candidate = candidates[0]
                 if (not isinstance(candidate, dict) or candidate.get("index") != 0
                         or candidate.get("finishReason") != "STOP"):
+                    if isinstance(candidate, dict) and candidate.get("finishReason") == "MAX_TOKENS":
+                        log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="PERMANENT", error_code="GEMINI_MAX_TOKENS")
                     raise ValueError("Incomplete Gemini response")
                 content = candidate.get("content")
                 parts = content.get("parts") if isinstance(content, dict) else None

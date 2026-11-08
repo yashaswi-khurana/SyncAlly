@@ -14,6 +14,18 @@ from syncally.operations import SafeOperationalFormatter
 
 
 class GeminiDiagnosticsTests(unittest.TestCase):
+    def test_token_limit_is_logged_without_response_content(self):
+        response = {"modelVersion": "model", "candidates": [{"index": 0, "finishReason": "MAX_TOKENS"}]}
+        provider = GeminiGenerateContent(
+            api_key=SecretStr("key"), model="gemini-3.5-flash",
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)),
+        )
+        with self.assertLogs("syncally.infrastructure.ai.gemini", level="INFO") as captured:
+            with self.assertRaises(ValueError):
+                asyncio.run(provider._http(b"{}", 1))
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertEqual(event["error_code"], "GEMINI_MAX_TOKENS")
+
     def test_request_uses_json_mode_and_includes_schema(self):
         provider = GeminiGenerateContent(api_key=SecretStr("key"), model="gemini-3.5-flash")
         context = SimpleNamespace(messages=(), constraints=())

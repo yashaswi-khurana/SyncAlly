@@ -518,7 +518,7 @@ export default function AISuggestionReview({
         <span className="communication-index" aria-hidden="true">03 / REVIEW</span>
       </div>
       <p className="muted">
-        The copilot reads this side’s authorized conversation, ties each suggested term to its source, and helps prepare a proposal. It never approves terms or moves money. OpenAI receives shareable context only unless an operator explicitly enables private context for this organization.
+        The copilot reads this side’s authorized conversation, ties each suggested term to its source, and helps prepare a proposal. It never approves terms or moves money. The configured AI provider receives shareable context only unless an operator explicitly enables private context for this organization.
       </p>
       <aside className="trade-copilot-action" aria-live="polite">
         <span className="eyebrow">Recommended next step</span>

@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import { ApiError, closeMarketplaceRFQ, createMarketplaceListing, createMarketplaceRFQ, deactivateMarketplaceListing, searchMarketplaceListings, searchMarketplaceRFQs } from "../api/client";
 import type { CreateMarketplaceListingInput, CreateMarketplaceRFQInput, MarketplaceListing, MarketplaceRFQ, Organization } from "../api/types";
+import { compactDecimal } from "../formatting";
 import { navigateToCreateDeal } from "../router";
 
 interface MarketplacePageProps {
@@ -11,13 +12,6 @@ interface MarketplacePageProps {
 
 function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "The marketplace is unavailable right now.";
-}
-
-function compactDecimal(value: string): string {
-  const [integer, fraction] = value.split(".");
-  if (fraction === undefined) return value;
-  const trimmedFraction = fraction.replace(/0+$/, "");
-  return trimmedFraction ? `${integer}.${trimmedFraction}` : integer;
 }
 
 export default function MarketplacePage({ organizations }: MarketplacePageProps) {

@@ -7,8 +7,10 @@ import type {
   NegotiationInput,
   NegotiationProposal,
   NegotiationView,
+  PaymentTrigger,
   ReviewedProposalTerms,
 } from "../api/types";
+import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import ProposalComparison from "./ProposalComparison";
 
 interface NegotiationReviewProps {
@@ -88,6 +90,7 @@ interface PaymentDraft {
 }
 
 function defaultDraft() {
+  const paymentTiming = SUPPORTED_PAYMENT_TIMING[0];
   return {
     items: [
       { id: "item-1", description: "", quantity: "", unit: "", unitPrice: "", currency: "", sku: "" },
@@ -96,9 +99,8 @@ function defaultDraft() {
       { id: "ship-1", destination: "", targetDate: "", allocations: [{ line_item_id: "item-1", quantity: "", unit: "" }] },
     ],
     payments: [
-      { id: "pay-1", amount: "", currency: "", trigger: "", dueCondition: "", allocations: [{ obligation_id: "ship-1", amount: "", currency: "" }] },
+      { id: "pay-1", amount: "", currency: "", trigger: paymentTiming.trigger, dueCondition: paymentTiming.dueCondition, allocations: [{ obligation_id: "ship-1", amount: "", currency: "" }] },
     ],
-    deliveryLocation: "",
     incoterm: "",
     cancellationTerms: "",
   };
@@ -127,6 +129,20 @@ function parseScaled(val: string): bigint {
   return BigInt(intPart + paddedFrac);
 }
 
+const DECIMAL_SCALE = BigInt("1000000000000000000");
+
+function formatScaled(value: bigint): string {
+  const whole = value / DECIMAL_SCALE;
+  const fraction = (value % DECIMAL_SCALE).toString().padStart(18, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
+function calculateOrderTotal(items: ItemDraft[]): string | null {
+  if (items.length === 0 || items.some((item) => !isValidDecimal(item.quantity) || !isValidDecimal(item.unitPrice))) return null;
+  const total = items.reduce((sum, item) => sum + (parseScaled(item.quantity) * parseScaled(item.unitPrice)) / DECIMAL_SCALE, BigInt(0));
+  return formatScaled(total);
+}
+
 export default function NegotiationReview({ deal, organizationId, reloadToken, onLoaded, onChanged }: NegotiationReviewProps) {
   const [loadedView, setView] = useState<NegotiationView | null>(null);
   const view = loadedView?.deal_id === deal.id && loadedView.organization_id === organizationId ? loadedView : null;
@@ -141,7 +157,6 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const [items, setItems] = useState<ItemDraft[]>(defaultDraft().items);
   const [shipments, setShipments] = useState<ShipmentDraft[]>(defaultDraft().shipments);
   const [payments, setPayments] = useState<PaymentDraft[]>(defaultDraft().payments);
-  const [deliveryLocation, setDeliveryLocation] = useState("");
   const [incoterm, setIncoterm] = useState("");
   const [cancellationTerms, setCancellationTerms] = useState("");
   const [isDirty, setIsDirty] = useState(false);
@@ -161,7 +176,6 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     setItems(draft.items);
     setShipments(draft.shipments);
     setPayments(draft.payments);
-    setDeliveryLocation(draft.deliveryLocation);
     setIncoterm(draft.incoterm);
     setCancellationTerms(draft.cancellationTerms);
     setIsDirty(false);
@@ -180,7 +194,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       })));
       setShipments((terms.shipments ?? []).map((s, idx) => ({
         id: s.id || `ship-${idx + 1}`,
-        destination: s.destination,
+        destination: s.destination || (idx === 0 ? terms.delivery_location ?? "" : ""),
         targetDate: s.target_date || "",
         allocations: (s.allocations || []).map(a => ({
           line_item_id: a.line_item_id,
@@ -192,15 +206,14 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
         id: p.id || `pay-${idx + 1}`,
         amount: p.amount.amount,
         currency: p.amount.currency,
-        trigger: p.trigger,
-        dueCondition: p.due_condition,
+        trigger: isPaymentTrigger(p.trigger) ? p.trigger : SUPPORTED_PAYMENT_TIMING[0].trigger,
+        dueCondition: isPaymentTrigger(p.trigger) ? p.due_condition : SUPPORTED_PAYMENT_TIMING[0].dueCondition,
         allocations: (p.allocations || []).map(a => ({
           obligation_id: a.obligation_id,
           amount: a.amount.amount,
           currency: a.amount.currency,
         })),
       })));
-      setDeliveryLocation(terms.delivery_location ?? "");
       setIncoterm(terms.incoterm ?? "");
       setCancellationTerms(terms.cancellation_terms ?? "");
     }
@@ -214,7 +227,6 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       setItems(draft.items);
       setShipments(draft.shipments);
       setPayments(draft.payments);
-      setDeliveryLocation(draft.deliveryLocation);
       setIncoterm(draft.incoterm);
       setCancellationTerms(draft.cancellationTerms);
     }
@@ -252,70 +264,69 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     return () => { controller.abort(); request.current?.abort(); };
   }, [deal.id, deal.version, organizationId, reloadToken, reload, loadContext]);
 
-  function validateCollections(): string | null {
+  function validateCollections(shipmentDrafts = shipments, paymentDrafts = payments): string | null {
     if (items.length === 0) return "At least one line item is required.";
-    if (shipments.length === 0) return "At least one shipment is required.";
-    if (payments.length === 0) return "At least one payment term is required.";
-    if (!deliveryLocation.trim()) return "Delivery location is required.";
+    if (shipmentDrafts.length === 0) return "Add at least one delivery.";
+    if (paymentDrafts.length === 0) return "Add at least one payment term.";
 
     const allIds = new Set<string>();
     const currencies = new Set<string>();
 
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
-      if (!it.id.trim()) return `Line item ${i + 1} requires an ID.`;
-      if (allIds.has(it.id)) return `Duplicate ID '${it.id}' across items, shipments, and payment terms.`;
+      if (!it.id.trim()) return `Product ${i + 1} is missing an internal reference. Reset the draft and try again.`;
+      if (allIds.has(it.id)) return `There is a duplicate product reference. Reset the draft and try again.`;
       allIds.add(it.id);
-      if (!it.description.trim()) return `Line item '${it.id}' requires a description.`;
-      if (!isValidDecimal(it.quantity)) return `Line item '${it.id}' quantity must be a positive decimal within limits.`;
-      if (!it.unit.trim()) return `Line item '${it.id}' requires a unit.`;
-      if (!isValidDecimal(it.unitPrice)) return `Line item '${it.id}' unit price must be a positive decimal within limits.`;
-      if (!it.currency || it.currency.length !== 3) return `Line item '${it.id}' requires a 3-letter currency code.`;
+      if (!it.description.trim()) return `Enter a name or description for product ${i + 1}.`;
+      if (!isValidDecimal(it.quantity)) return `Enter a valid quantity for ${it.description}.`;
+      if (!it.unit.trim()) return `Choose a unit for ${it.description}, such as boxes or kilograms.`;
+      if (!isValidDecimal(it.unitPrice)) return `Enter a valid price per unit for ${it.description}.`;
+      if (!it.currency || it.currency.length !== 3) return `Enter a 3-letter currency code for ${it.description}, such as INR or USD.`;
       currencies.add(it.currency);
     }
 
-    for (let i = 0; i < shipments.length; i++) {
-      const s = shipments[i];
-      if (!s.id.trim()) return `Shipment ${i + 1} requires an ID.`;
-      if (allIds.has(s.id)) return `Duplicate ID '${s.id}' across items, shipments, and payment terms.`;
+    for (let i = 0; i < shipmentDrafts.length; i++) {
+      const s = shipmentDrafts[i];
+      if (!s.id.trim()) return `Delivery ${i + 1} is missing an internal reference. Reset the draft and try again.`;
+      if (allIds.has(s.id)) return `There is a duplicate delivery reference. Reset the draft and try again.`;
       allIds.add(s.id);
-      if (!s.destination.trim()) return `Shipment '${s.id}' requires a destination.`;
-      if (!s.targetDate.trim()) return `Shipment '${s.id}' requires a target delivery date.`;
-      if (s.allocations.length === 0) return `Shipment '${s.id}' requires at least one allocation.`;
+      if (!s.destination.trim()) return `Enter a destination for delivery ${i + 1}.`;
+      if (!s.targetDate.trim()) return `Choose a requested arrival date for delivery ${i + 1}.`;
+      if (s.allocations.length === 0) return `Add at least one product to delivery ${i + 1}.`;
       for (const a of s.allocations) {
-        if (!a.line_item_id.trim()) return `Shipment '${s.id}' allocation requires a line item ID.`;
+        if (!a.line_item_id.trim()) return `Choose a product for delivery ${i + 1}.`;
         const targetItem = items.find(it => it.id === a.line_item_id);
-        if (!targetItem) return `Shipment '${s.id}' allocation references unknown line item '${a.line_item_id}'.`;
-        if (a.unit !== targetItem.unit) return `Shipment '${s.id}' allocation unit '${a.unit}' does not match line item unit '${targetItem.unit}'.`;
-        if (!isValidDecimal(a.quantity)) return `Shipment '${s.id}' allocation quantity must be a positive decimal within limits.`;
+        if (!targetItem) return `Choose a listed product for delivery ${i + 1}.`;
+        if (a.unit !== targetItem.unit) return `The unit for ${targetItem.description} must match the order details.`;
+        if (!isValidDecimal(a.quantity)) return `Enter a valid quantity of ${targetItem.description} for delivery ${i + 1}.`;
       }
     }
 
-    for (let i = 0; i < payments.length; i++) {
-      const p = payments[i];
-      if (!p.id.trim()) return `Payment term ${i + 1} requires an ID.`;
-      if (allIds.has(p.id)) return `Duplicate ID '${p.id}' across items, shipments, and payment terms.`;
+    for (let i = 0; i < paymentDrafts.length; i++) {
+      const p = paymentDrafts[i];
+      if (!p.id.trim()) return `Payment stage ${i + 1} is missing an internal reference. Reset the draft and try again.`;
+      if (allIds.has(p.id)) return `There is a duplicate payment reference. Reset the draft and try again.`;
       allIds.add(p.id);
-      if (!isValidDecimal(p.amount)) return `Payment term '${p.id}' amount must be a positive decimal within limits.`;
-      if (!p.currency || p.currency.length !== 3) return `Payment term '${p.id}' requires a 3-letter currency code.`;
+      if (!isValidDecimal(p.amount)) return `Enter a valid amount for payment stage ${i + 1}.`;
+      if (!p.currency || p.currency.length !== 3) return `Enter a 3-letter currency code for payment stage ${i + 1}.`;
       currencies.add(p.currency);
-      if (!p.trigger.trim()) return `Payment term '${p.id}' requires a trigger.`;
-      if (!p.dueCondition.trim()) return `Payment term '${p.id}' requires a due condition.`;
-      if (p.allocations.length === 0) return `Payment term '${p.id}' requires at least one allocation.`;
+      if (!isPaymentTrigger(p.trigger)) return `Choose when payment stage ${i + 1} is due.`;
+      if (!p.dueCondition.trim()) return `Choose when payment stage ${i + 1} is due.`;
+      if (p.allocations.length === 0) return `Link payment stage ${i + 1} to a delivery.`;
       for (const a of p.allocations) {
-        if (!a.obligation_id.trim()) return `Payment term '${p.id}' allocation requires an obligation ID.`;
-        const obligationExists = shipments.some(s => s.id === a.obligation_id) || items.some(it => it.id === a.obligation_id);
-        if (!obligationExists) return `Payment term '${p.id}' allocation references unknown obligation '${a.obligation_id}'.`;
-        if (!isValidDecimal(a.amount)) return `Payment term '${p.id}' allocation amount must be a positive decimal within limits.`;
-        if (a.currency !== p.currency) return `Payment term '${p.id}' allocation currency '${a.currency}' does not match payment term currency '${p.currency}'.`;
+        if (!a.obligation_id.trim()) return `Link payment stage ${i + 1} to a delivery.`;
+        const obligationExists = shipmentDrafts.some(s => s.id === a.obligation_id) || items.some(item => item.id === a.obligation_id);
+        if (!obligationExists) return `Choose one of the listed products or deliveries for payment stage ${i + 1}.`;
+        if (!isValidDecimal(a.amount)) return `Enter a valid amount for each delivery share in payment stage ${i + 1}.`;
+        if (a.currency !== p.currency) return `Use the same currency for payment stage ${i + 1} and its delivery shares.`;
       }
     }
 
-    if (currencies.size > 1) return "All line items, payment terms, and allocations must use the same single currency.";
+    if (currencies.size > 1) return "Use one currency throughout this proposal.";
 
     for (const it of items) {
       let totalAlloc = BigInt(0);
-      for (const s of shipments) {
+      for (const s of shipmentDrafts) {
         for (const a of s.allocations) {
           if (a.line_item_id === it.id) {
             totalAlloc += parseScaled(a.quantity);
@@ -324,17 +335,17 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       }
       const itemQty = parseScaled(it.quantity);
       if (totalAlloc !== itemQty) {
-        return `Line item '${it.id}' total allocated quantity must match line item quantity.`;
+        return `The quantities assigned across deliveries for ${it.description} must add up to the order quantity.`;
       }
     }
 
-    for (const p of payments) {
+    for (const p of paymentDrafts) {
       let termAlloc = BigInt(0);
       for (const a of p.allocations) {
         termAlloc += parseScaled(a.amount);
       }
       if (termAlloc !== parseScaled(p.amount)) {
-        return `Payment term '${p.id}' allocations must sum to payment term amount.`;
+        return `Delivery shares for a payment stage must add up to that stage's amount.`;
       }
     }
 
@@ -345,11 +356,11 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       totalItemsAmount += (q * p) / BigInt("1000000000000000000");
     }
     let totalPaymentsAmount = BigInt(0);
-    for (const p of payments) {
+    for (const p of paymentDrafts) {
       totalPaymentsAmount += parseScaled(p.amount);
     }
     if (totalItemsAmount !== totalPaymentsAmount) {
-      return "Total payment terms must equal total line items (zero-residual balance).";
+      return "Payment stages must add up to the full order total.";
     }
 
     return null;
@@ -359,7 +370,26 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     if (request.current || !view || stale || deal.pending_counterparty || !view.eligible_actions.includes(action)) return;
     if (view.current_candidate && !replacementConfirmed) return;
 
-    const validationErr = validateCollections();
+    const orderTotal = calculateOrderTotal(items);
+    const proposalShipments = shipments.map((shipment) => ({
+      ...shipment,
+      allocations: shipments.length === 1
+        ? items.map((item) => ({ line_item_id: item.id, quantity: item.quantity, unit: item.unit }))
+        : shipment.allocations,
+    }));
+    const proposalPayments = payments.map((payment) => {
+      const amount = payments.length === 1 && orderTotal !== null ? orderTotal : payment.amount;
+      const currency = payments.length === 1 ? payment.currency || items[0]?.currency || "" : payment.currency;
+      return {
+        ...payment,
+        amount,
+        currency,
+        allocations: payment.allocations.length > 1
+          ? payment.allocations
+          : [{ obligation_id: payment.allocations[0]?.obligation_id || proposalShipments[0]?.id || "", amount, currency }],
+      };
+    });
+    const validationErr = validateCollections(proposalShipments, proposalPayments);
     if (validationErr) {
       setAuthorError(validationErr);
       return;
@@ -376,7 +406,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
         unit_price: { amount: it.unitPrice, currency: it.currency },
         sku: it.sku ? it.sku : null,
       })),
-      shipments: shipments.map(s => ({
+      shipments: proposalShipments.map(s => ({
         id: s.id,
         destination: s.destination,
         target_date: s.targetDate || null,
@@ -387,7 +417,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
           unit: a.unit,
         })),
       })),
-      payment_terms: payments.map(p => ({
+      payment_terms: proposalPayments.map(p => ({
         id: p.id,
         amount: { amount: p.amount, currency: p.currency },
         trigger: p.trigger,
@@ -397,7 +427,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
           amount: { amount: a.amount, currency: a.currency },
         })),
       })),
-      delivery_location: deliveryLocation,
+      delivery_location: proposalShipments[0]?.destination ?? "",
       incoterm: incoterm ? incoterm : null,
       cancellation_terms: cancellationTerms,
     };
@@ -473,46 +503,6 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     }
   }
 
-  // Reorder helpers
-  function moveItem(from: number, to: number) {
-    if (to < 0 || to >= items.length) return;
-    const updated = [...items];
-    const [moved] = updated.splice(from, 1);
-    updated.splice(to, 0, moved);
-    setItems(updated);
-    setIsDirty(true);
-  }
-
-  function moveShipment(from: number, to: number) {
-    if (to < 0 || to >= shipments.length) return;
-    const updated = [...shipments];
-    const [moved] = updated.splice(from, 1);
-    updated.splice(to, 0, moved);
-    setShipments(updated);
-    setIsDirty(true);
-  }
-
-  function movePayment(from: number, to: number) {
-    if (to < 0 || to >= payments.length) return;
-    const updated = [...payments];
-    const [moved] = updated.splice(from, 1);
-    updated.splice(to, 0, moved);
-    setPayments(updated);
-    setIsDirty(true);
-  }
-
-  const authoringStatus = stale
-    ? "stale"
-    : pending
-    ? "pending"
-    : authorError || error
-    ? "error"
-    : items.length === 0
-    ? "empty"
-    : isDirty
-    ? "unsaved"
-    : view?.latest?.terms.schema_version === 2 ? "ready" : "draft";
-
   return (
     <section className="negotiation-review" aria-labelledby={`negotiation-heading-${deal.id}`}>
       <div className="panel-head">
@@ -580,136 +570,124 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
 
         {view.eligible_actions.includes("submit") || view.eligible_actions.includes("counter") ? (
           <details className="collection-authoring" aria-label="Create a trade proposal">
-            <summary><h3>Create a trade proposal</h3><span className="badge">Advanced manual entry</span></summary>
-            <p className="hint">Use the conversation and fact review above for most deals. Manual entry is for complex terms.</p>
+            <summary><h3>Set the trade terms</h3><span className="badge">Manual proposal</span></summary>
+            <p className="proposal-editor__intro">Review your conversation and any AI suggestions above. Use this proposal to put the agreed product, delivery, and payment terms in one place for both businesses.</p>
+            <ol className="proposal-workflow" aria-label="What happens after you send this proposal">
+              <li><span>1</span>Partner reviews or counters</li><li><span>2</span>Both sides approve the same agreement</li><li><span>3</span>Agreement is committed, then invoice, payment, and delivery are recorded</li>
+            </ol>
+            <p className="hint">Sending shares the proposal with your partner. It does not approve or commit the agreement, request payment, or arrange delivery.</p>
             {authorError ? <p role="alert" className="form-error">{authorError}</p> : null}
-            <p className="hint" aria-label="Authoring draft status">Draft status: <strong>{authoringStatus}</strong></p>
-            <button type="button" className="button secondary" onClick={resetEditor}>Reset draft</button>
+            <p className="proposal-editor__draft-note" aria-live="polite">{stale ? "This deal has changed. Reload before sending." : pending ? "Sending your proposal…" : isDirty ? "Unsaved draft changes" : "Draft only · nothing has been sent"}</p>
+            <button type="button" className="button secondary proposal-editor__reset" onClick={resetEditor}>Reset draft</button>
 
             <div className="authoring-items" aria-label="Authoring line items">
-              <h4>Line items</h4>
+              <div className="proposal-section__heading"><div><span className="proposal-section__step">01 / ORDER</span><h4>What is being traded?</h4></div><p>Add each product or service with its quantity and agreed unit price.</p></div>
               <button type="button" className="button secondary" onClick={() => {
                 const nextNum = items.length + 1;
                 setItems([...items, { id: `item-${nextNum}`, description: "", quantity: "", unit: "", unitPrice: "", currency: "", sku: "" }]);
                 setIsDirty(true);
-              }}>Add Line Item</button>
+              }}>Add product</button>
 
               {items.map((it, idx) => (
                 <div key={idx} className="collection-item-row">
                   <div>
-                    <label>ID: <input type="text" aria-label={`Item ID ${idx + 1}`} value={it.id} onChange={(e) => {
-                      const updated = [...items];
-                      updated[idx].id = e.target.value;
-                      setItems(updated);
-                      setIsDirty(true);
-                    }} /></label>
-                    <label>Description: <input type="text" aria-label={`Item description ${idx + 1}`} value={it.description} onChange={(e) => {
+                    <label>Product or service <input type="text" aria-label={`Product or service ${idx + 1}`} placeholder="e.g. Stainless steel bolts" value={it.description} onChange={(e) => {
                       const updated = [...items];
                       updated[idx].description = e.target.value;
                       setItems(updated);
                       setIsDirty(true);
                     }} /></label>
-                    <label>Quantity: <input type="text" aria-label={`Item quantity ${idx + 1}`} value={it.quantity} onChange={(e) => {
+                    <label>Quantity <input type="text" inputMode="decimal" aria-label={`Quantity ${idx + 1}`} placeholder="e.g. 120" value={it.quantity} onChange={(e) => {
                       const updated = [...items];
                       updated[idx].quantity = e.target.value;
                       setItems(updated);
                       setIsDirty(true);
                     }} /></label>
-                    <label>Unit: <input type="text" aria-label={`Item unit ${idx + 1}`} value={it.unit} onChange={(e) => {
+                    <label>Unit <input type="text" aria-label={`Unit ${idx + 1}`} placeholder="boxes, kg, units…" value={it.unit} onChange={(e) => {
                       const updated = [...items];
                       updated[idx].unit = e.target.value;
                       setItems(updated);
                       setIsDirty(true);
                     }} /></label>
-                    <label>Unit Price: <input type="text" aria-label={`Item unit price ${idx + 1}`} value={it.unitPrice} onChange={(e) => {
+                    <label>Price per unit <input type="text" inputMode="decimal" aria-label={`Price per unit ${idx + 1}`} placeholder="e.g. 25" value={it.unitPrice} onChange={(e) => {
                       const updated = [...items];
                       updated[idx].unitPrice = e.target.value;
                       setItems(updated);
                       setIsDirty(true);
                     }} /></label>
-                    <label>Currency: <input type="text" aria-label={`Item currency ${idx + 1}`} value={it.currency} onChange={(e) => {
+                    <label>Currency code <input type="text" aria-label={`Currency code ${idx + 1}`} placeholder="INR" maxLength={3} value={it.currency} onChange={(e) => {
                       const updated = [...items];
-                      updated[idx].currency = e.target.value;
-                      setItems(updated);
-                      setIsDirty(true);
-                    }} /></label>
-                    <label>SKU: <input type="text" aria-label={`Item SKU ${idx + 1}`} value={it.sku} onChange={(e) => {
-                      const updated = [...items];
-                      updated[idx].sku = e.target.value;
+                      updated[idx].currency = e.target.value.toUpperCase();
                       setItems(updated);
                       setIsDirty(true);
                     }} /></label>
                   </div>
-                  <div>
-                    <button type="button" aria-label={`Move item ${idx + 1} up`} disabled={idx === 0} onClick={() => moveItem(idx, idx - 1)}>↑</button>
-                    <button type="button" aria-label={`Move item ${idx + 1} down`} disabled={idx === items.length - 1} onClick={() => moveItem(idx, idx + 1)}>↓↓</button>
-                    <button type="button" aria-label={`Remove item ${idx + 1}`} onClick={() => {
+                  {items.length > 1 ? <div>
+                    <button type="button" className="button secondary" aria-label={`Remove product ${idx + 1}`} onClick={() => {
                       const updated = items.filter((_, i) => i !== idx);
                       setItems(updated);
                       setIsDirty(true);
-                    }}>Remove</button>
-                  </div>
+                    }}>Remove product</button>
+                  </div> : null}
+                  <details className="proposal-editor__optional"><summary>Optional product reference</summary><label>SKU or seller reference <input type="text" aria-label={`SKU or seller reference ${idx + 1}`} placeholder="Optional" value={it.sku} onChange={(e) => {
+                    const updated = [...items];
+                    updated[idx].sku = e.target.value;
+                    setItems(updated);
+                    setIsDirty(true);
+                  }} /></label></details>
                 </div>
               ))}
+              <div className="proposal-order-total" aria-live="polite">
+                <span>Order total</span><strong>{calculateOrderTotal(items) !== null && items[0]?.currency ? `${calculateOrderTotal(items)} ${items[0].currency.toUpperCase()}` : "Add quantity and price to calculate"}</strong>
+              </div>
             </div>
 
             <div className="authoring-shipments" aria-label="Authoring shipments">
-              <h4>Shipments</h4>
+              <div className="proposal-section__heading"><div><span className="proposal-section__step">02 / DELIVERY</span><h4>Where and when will it arrive?</h4></div><p>Use the destination and requested arrival date both sides can plan around.</p></div>
               <button type="button" className="button secondary" onClick={() => {
                 const nextNum = shipments.length + 1;
-                setShipments([...shipments, { id: `ship-${nextNum}`, destination: "", targetDate: "", allocations: [] }]);
+                setShipments([...shipments, { id: `ship-${nextNum}`, destination: "", targetDate: "", allocations: items.map((item) => ({ line_item_id: item.id, quantity: "", unit: item.unit })) }]);
                 setIsDirty(true);
-              }}>Add Shipment</button>
+              }}>Add delivery</button>
 
               {shipments.map((s, idx) => (
                 <div key={idx} className="collection-shipment-row">
                   <div>
-                    <label>ID: <input type="text" aria-label={`Shipment ID ${idx + 1}`} value={s.id} onChange={(e) => {
-                      const updated = [...shipments];
-                      updated[idx].id = e.target.value;
-                      setShipments(updated);
-                      setIsDirty(true);
-                    }} /></label>
-                    <label>Destination: <input type="text" aria-label={`Shipment destination ${idx + 1}`} value={s.destination} onChange={(e) => {
+                    <label>{shipments.length > 1 ? `Delivery ${idx + 1} destination` : "Delivery destination"}<input type="text" aria-label={`Delivery destination ${idx + 1}`} placeholder="City, region, country" value={s.destination} onChange={(e) => {
                       const updated = [...shipments];
                       updated[idx].destination = e.target.value;
                       setShipments(updated);
                       setIsDirty(true);
                     }} /></label>
-                    <label>Target Date: <input type="text" aria-label={`Shipment target date ${idx + 1}`} value={s.targetDate} onChange={(e) => {
+                    <label>Requested arrival date<input type="date" aria-label={`Requested arrival date ${idx + 1}`} value={s.targetDate} onChange={(e) => {
                       const updated = [...shipments];
                       updated[idx].targetDate = e.target.value;
                       setShipments(updated);
                       setIsDirty(true);
                     }} /></label>
                   </div>
-                  <div>
-                    <h5>Allocations</h5>
-                    <button type="button" aria-label={`Add allocation to shipment ${idx + 1}`} onClick={() => {
+                  {shipments.length > 1 ? <div className="proposal-editor__allocations">
+                    <h5>Products in this delivery</h5>
+                    <button type="button" className="button secondary" aria-label={`Add product to delivery ${idx + 1}`} onClick={() => {
                       const updated = [...shipments];
                       const firstItemId = items[0]?.id || "";
                       const firstItemUnit = items[0]?.unit || "pieces";
                       updated[idx].allocations.push({ line_item_id: firstItemId, quantity: "", unit: firstItemUnit });
                       setShipments(updated);
                       setIsDirty(true);
-                    }}>Add Allocation</button>
+                    }}>Add product to delivery</button>
                     {s.allocations.map((a, aIdx) => (
                       <div key={aIdx} className="collection-allocation-row">
-                        <label>Item: <input type="text" aria-label={`Shipment ${idx + 1} allocation line item ${aIdx + 1}`} value={a.line_item_id} onChange={(e) => {
+                        <label>Product<select aria-label={`Product in delivery ${idx + 1}, row ${aIdx + 1}`} value={a.line_item_id} onChange={(e) => {
                           const updated = [...shipments];
                           updated[idx].allocations[aIdx].line_item_id = e.target.value;
+                          updated[idx].allocations[aIdx].unit = items.find((item) => item.id === e.target.value)?.unit ?? "";
                           setShipments(updated);
                           setIsDirty(true);
-                        }} /></label>
-                        <label>Quantity: <input type="text" aria-label={`Shipment ${idx + 1} allocation quantity ${aIdx + 1}`} value={a.quantity} onChange={(e) => {
+                        }}>{items.map((item, itemIdx) => <option key={item.id} value={item.id}>{item.description || `Product ${itemIdx + 1}`}</option>)}</select></label>
+                        <label>Quantity ({items.find((item) => item.id === a.line_item_id)?.unit || "unit"})<input type="text" inputMode="decimal" aria-label={`Quantity in delivery ${idx + 1}, row ${aIdx + 1}`} value={a.quantity} onChange={(e) => {
                           const updated = [...shipments];
                           updated[idx].allocations[aIdx].quantity = e.target.value;
-                          setShipments(updated);
-                          setIsDirty(true);
-                        }} /></label>
-                        <label>Unit: <input type="text" aria-label={`Shipment ${idx + 1} allocation unit ${aIdx + 1}`} value={a.unit} onChange={(e) => {
-                          const updated = [...shipments];
-                          updated[idx].allocations[aIdx].unit = e.target.value;
                           setShipments(updated);
                           setIsDirty(true);
                         }} /></label>
@@ -718,125 +696,130 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                           updated[idx].allocations = updated[idx].allocations.filter((_, i) => i !== aIdx);
                           setShipments(updated);
                           setIsDirty(true);
-                        }}>Remove Allocation</button>
+                        }}>Remove product</button>
                       </div>
                     ))}
-                  </div>
-                  <div>
-                    <button type="button" aria-label={`Move shipment ${idx + 1} up`} disabled={idx === 0} onClick={() => moveShipment(idx, idx - 1)}>↑</button>
-                    <button type="button" aria-label={`Move shipment ${idx + 1} down`} disabled={idx === shipments.length - 1} onClick={() => moveShipment(idx, idx + 1)}>↓</button>
-                    <button type="button" aria-label={`Remove shipment ${idx + 1}`} onClick={() => {
+                  </div> : <p className="proposal-editor__auto-note">All listed products and quantities are assigned to this delivery automatically.</p>}
+                  {shipments.length > 1 ? <div>
+                    <button type="button" className="button secondary" aria-label={`Remove delivery ${idx + 1}`} onClick={() => {
                       const updated = shipments.filter((_, i) => i !== idx);
                       setShipments(updated);
                       setIsDirty(true);
-                    }}>Remove</button>
-                  </div>
+                    }}>Remove delivery</button>
+                  </div> : null}
                 </div>
               ))}
             </div>
 
             <div className="authoring-payments" aria-label="Authoring payment terms">
-              <h4>Payment terms</h4>
+              <div className="proposal-section__heading"><div><span className="proposal-section__step">03 / PAYMENT</span><h4>When should payment be made?</h4></div><p>A single payment defaults to the full order total. Add stages to split it into separate amounts.</p></div>
               <button type="button" className="button secondary" onClick={() => {
                 const nextNum = payments.length + 1;
-                setPayments([...payments, { id: `pay-${nextNum}`, amount: "", currency: "", trigger: "", dueCondition: "", allocations: [] }]);
+                const timing = SUPPORTED_PAYMENT_TIMING[0];
+                const orderTotal = calculateOrderTotal(items);
+                const existing = payments.length === 1 && orderTotal !== null
+                  ? [{ ...payments[0], amount: orderTotal, currency: payments[0].currency || items[0]?.currency || "" }]
+                  : payments;
+                setPayments([...existing, { id: `pay-${nextNum}`, amount: "", currency: items[0]?.currency ?? "", trigger: timing.trigger, dueCondition: timing.dueCondition, allocations: [{ obligation_id: shipments[0]?.id ?? items[0]?.id ?? "", amount: "", currency: items[0]?.currency ?? "" }] }]);
                 setIsDirty(true);
-              }}>Add Payment Term</button>
+              }}>Add payment stage</button>
 
               {payments.map((p, idx) => (
                 <div key={idx} className="collection-payment-row">
                   <div>
-                    <label>ID: <input type="text" aria-label={`Payment term ID ${idx + 1}`} value={p.id} onChange={(e) => {
-                      const updated = [...payments];
-                      updated[idx].id = e.target.value;
-                      setPayments(updated);
-                      setIsDirty(true);
-                    }} /></label>
-                    <label>Amount: <input type="text" aria-label={`Payment term amount ${idx + 1}`} value={p.amount} onChange={(e) => {
+                    {payments.length === 1 ? <div className="proposal-payment-amount"><span>Payment amount</span><strong>{calculateOrderTotal(items) !== null && items[0]?.currency ? `${calculateOrderTotal(items)} ${items[0].currency.toUpperCase()}` : "Complete the order details first"}</strong><small>Calculated from the products above.</small></div> : <label>Payment amount<input type="text" inputMode="decimal" aria-label={`Payment amount ${idx + 1}`} placeholder="e.g. 1500" value={p.amount} onChange={(e) => {
                       const updated = [...payments];
                       updated[idx].amount = e.target.value;
                       setPayments(updated);
                       setIsDirty(true);
-                    }} /></label>
-                    <label>Currency: <input type="text" aria-label={`Payment term currency ${idx + 1}`} value={p.currency} onChange={(e) => {
+                    }} /></label>}
+                    {payments.length > 1 ? <label>Currency code<input type="text" aria-label={`Payment currency code ${idx + 1}`} placeholder={items[0]?.currency || "INR"} maxLength={3} value={p.currency} onChange={(e) => {
                       const updated = [...payments];
-                      updated[idx].currency = e.target.value;
+                      const currency = e.target.value.toUpperCase();
+                      updated[idx].currency = currency;
+                      updated[idx].allocations = updated[idx].allocations.map((allocation) => ({ ...allocation, currency }));
                       setPayments(updated);
                       setIsDirty(true);
-                    }} /></label>
-                    <label>Trigger: <input type="text" aria-label={`Payment term trigger ${idx + 1}`} value={p.trigger} onChange={(e) => {
+                    }} /></label> : null}
+                    {SUPPORTED_PAYMENT_TIMING.length === 1 ? <div className="proposal-payment-timing"><span>Payment timing</span><strong>{SUPPORTED_PAYMENT_TIMING[0].label}</strong><small>{SUPPORTED_PAYMENT_TIMING[0].dueCondition}</small></div> : <label>Payment timing<select aria-label={`Payment timing ${idx + 1}`} value={isPaymentTrigger(p.trigger) ? p.trigger : ""} onChange={(e) => {
+                      if (!isPaymentTrigger(e.target.value)) return;
                       const updated = [...payments];
-                      updated[idx].trigger = e.target.value;
+                      const timing = SUPPORTED_PAYMENT_TIMING.find((option) => option.trigger === e.target.value);
+                      updated[idx].trigger = e.target.value as PaymentTrigger;
+                      updated[idx].dueCondition = timing?.dueCondition ?? "";
                       setPayments(updated);
                       setIsDirty(true);
-                    }} /></label>
-                    <label>Due condition: <input type="text" aria-label={`Payment term due condition ${idx + 1}`} value={p.dueCondition} onChange={(e) => {
-                      const updated = [...payments];
-                      updated[idx].dueCondition = e.target.value;
-                      setPayments(updated);
-                      setIsDirty(true);
-                    }} /></label>
+                    }}>
+                      <option value="">Choose when payment is due</option>
+                      {SUPPORTED_PAYMENT_TIMING.map((timing) => <option key={timing.trigger} value={timing.trigger}>{timing.label}</option>)}
+                    </select></label>}
                   </div>
-                  <div>
-                    <h5>Allocations</h5>
-                    <button type="button" aria-label={`Add allocation to payment term ${idx + 1}`} onClick={() => {
-                      const updated = [...payments];
-                      const firstObligationId = shipments[0]?.id || items[0]?.id || "";
-                      updated[idx].allocations.push({ obligation_id: firstObligationId, amount: "", currency: p.currency });
-                      setPayments(updated);
-                      setIsDirty(true);
-                    }}>Add Allocation</button>
-                    {p.allocations.map((a, aIdx) => (
-                      <div key={aIdx} className="collection-allocation-row">
-                        <label>Obligation: <input type="text" aria-label={`Payment term ${idx + 1} allocation obligation ${aIdx + 1}`} value={a.obligation_id} onChange={(e) => {
-                          const updated = [...payments];
-                          updated[idx].allocations[aIdx].obligation_id = e.target.value;
-                          setPayments(updated);
-                          setIsDirty(true);
-                        }} /></label>
-                        <label>Amount: <input type="text" aria-label={`Payment term ${idx + 1} allocation amount ${aIdx + 1}`} value={a.amount} onChange={(e) => {
-                          const updated = [...payments];
-                          updated[idx].allocations[aIdx].amount = e.target.value;
-                          setPayments(updated);
-                          setIsDirty(true);
-                        }} /></label>
-                        <label>Currency: <input type="text" aria-label={`Payment term ${idx + 1} allocation currency ${aIdx + 1}`} value={a.currency} onChange={(e) => {
-                          const updated = [...payments];
-                          updated[idx].allocations[aIdx].currency = e.target.value;
-                          setPayments(updated);
-                          setIsDirty(true);
-                        }} /></label>
-                        <button type="button" aria-label={`Remove allocation ${aIdx + 1} from payment term ${idx + 1}`} onClick={() => {
-                          const updated = [...payments];
-                          updated[idx].allocations = updated[idx].allocations.filter((_, i) => i !== aIdx);
-                          setPayments(updated);
-                          setIsDirty(true);
-                        }}>Remove Allocation</button>
-                      </div>
-                    ))}
-                  </div>
-                  <div>
-                    <button type="button" aria-label={`Move payment term ${idx + 1} up`} disabled={idx === 0} onClick={() => movePayment(idx, idx - 1)}>↑</button>
-                    <button type="button" aria-label={`Move payment term ${idx + 1} down`} disabled={idx === payments.length - 1} onClick={() => movePayment(idx, idx + 1)}>↓</button>
-                    <button type="button" aria-label={`Remove payment term ${idx + 1}`} onClick={() => {
+                  {shipments.length > 1 ? <div className="proposal-editor__allocations">
+                    {p.allocations.length <= 1 ? <>
+                      <label>Applies to<select aria-label={`Product or delivery for payment stage ${idx + 1}`} value={p.allocations[0]?.obligation_id ?? shipments[0].id} onChange={(e) => {
+                        const updated = [...payments];
+                        updated[idx].allocations = [{ obligation_id: e.target.value, amount: updated[idx].amount, currency: updated[idx].currency }];
+                        setPayments(updated);
+                        setIsDirty(true);
+                      }}>{shipments.map((shipment, shipmentIdx) => <option key={shipment.id} value={shipment.id}>{shipment.destination || `Delivery ${shipmentIdx + 1}`}</option>)}{items.map((item, itemIdx) => <option key={item.id} value={item.id}>{item.description || `Product ${itemIdx + 1}`}</option>)}</select></label>
+                      <button type="button" className="button secondary" aria-label={`Split payment ${idx + 1} across deliveries`} onClick={() => {
+                        const updated = [...payments];
+                        const first = updated[idx].allocations[0]?.obligation_id ?? shipments[0].id;
+                        const second = shipments.find((shipment) => shipment.id !== first)?.id ?? first;
+                        const currency = p.currency || items[0]?.currency || "";
+                        updated[idx].allocations = [
+                          { obligation_id: first, amount: "", currency },
+                          { obligation_id: second, amount: "", currency },
+                        ];
+                        setPayments(updated);
+                        setIsDirty(true);
+                      }}>Split across deliveries</button>
+                    </> : <>
+                      <h5>Payment share for each delivery</h5>
+                      {p.allocations.map((a, aIdx) => (
+                        <div key={aIdx} className="collection-allocation-row">
+                          <label>Product or delivery<select aria-label={`Payment ${idx + 1}, product or delivery share ${aIdx + 1}`} value={a.obligation_id} onChange={(e) => {
+                            const updated = [...payments];
+                            updated[idx].allocations[aIdx].obligation_id = e.target.value;
+                            setPayments(updated);
+                            setIsDirty(true);
+                          }}>{shipments.map((shipment, shipmentIdx) => <option key={shipment.id} value={shipment.id}>{shipment.destination || `Delivery ${shipmentIdx + 1}`}</option>)}{items.map((item, itemIdx) => <option key={item.id} value={item.id}>{item.description || `Product ${itemIdx + 1}`}</option>)}</select></label>
+                          <label>Amount<input type="text" inputMode="decimal" aria-label={`Payment ${idx + 1}, delivery amount ${aIdx + 1}`} value={a.amount} onChange={(e) => {
+                            const updated = [...payments];
+                            updated[idx].allocations[aIdx].amount = e.target.value;
+                            setPayments(updated);
+                            setIsDirty(true);
+                          }} /></label>
+                          <button type="button" className="button secondary" onClick={() => {
+                            const updated = [...payments];
+                            updated[idx].allocations = updated[idx].allocations.filter((_, i) => i !== aIdx);
+                            setPayments(updated);
+                            setIsDirty(true);
+                          }}>Remove share</button>
+                        </div>
+                      ))}
+                    </>}
+                  </div> : <p className="proposal-editor__auto-note">Payment is linked to the delivery automatically.</p>}
+                  {payments.length > 1 ? <div>
+                    <button type="button" className="button secondary" aria-label={`Remove payment stage ${idx + 1}`} onClick={() => {
                       const updated = payments.filter((_, i) => i !== idx);
                       setPayments(updated);
                       setIsDirty(true);
-                    }}>Remove</button>
-                  </div>
+                    }}>Remove payment stage</button>
+                  </div> : null}
                 </div>
               ))}
             </div>
 
-            <div className="authoring-conditions">
-              <h4>Trade conditions</h4>
-              <label>Delivery location: <input type="text" aria-label="Delivery location" value={deliveryLocation} onChange={(e) => { setDeliveryLocation(e.target.value); setIsDirty(true); }} /></label>
-              <label>Incoterm: <input type="text" aria-label="Incoterm" value={incoterm} onChange={(e) => { setIncoterm(e.target.value); setIsDirty(true); }} /></label>
-              <label>Cancellation terms: <input type="text" aria-label="Cancellation terms" value={cancellationTerms} onChange={(e) => { setCancellationTerms(e.target.value); setIsDirty(true); }} /></label>
-              <p className="hint">Taxes, freight, customs classification, and other fees: Not recorded in committed terms</p>
-            </div>
+            <details className="proposal-editor__optional">
+              <summary>Optional trade terms</summary>
+              <p className="hint">Only add terms both businesses have discussed and agreed on.</p>
+              <label>Delivery responsibility (Incoterm) <input type="text" aria-label="Delivery responsibility Incoterm" placeholder="e.g. FOB, CIF, EXW" value={incoterm} onChange={(e) => { setIncoterm(e.target.value); setIsDirty(true); }} /></label>
+              <label>Cancellation terms <input type="text" aria-label="Cancellation terms" placeholder="Optional; enter agreed terms" value={cancellationTerms} onChange={(e) => { setCancellationTerms(e.target.value); setIsDirty(true); }} /></label>
+              <p className="hint">Taxes, freight, and customs fees are not captured here.</p>
+            </details>
 
-            <div className="fact-actions" style={{ marginTop: "12px" }}>
+            <div className="fact-actions proposal-editor__actions">
               {view.eligible_actions.includes("counter") ? (
                 <button
                   type="button"
@@ -844,7 +827,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                   disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed)}
                   onClick={() => void submitAuthoring("counter")}
                 >
-                  {pending ? "Submitting counter-proposal…" : "Submit counter-proposal"}
+                  {pending ? "Sending counterproposal…" : "Send counterproposal"}
                 </button>
               ) : view.eligible_actions.includes("submit") ? (
                 <button
@@ -853,7 +836,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                   disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed)}
                   onClick={() => void submitAuthoring("submit")}
                 >
-                  {pending ? "Submitting proposal…" : "Submit proposal"}
+                  {pending ? "Sending proposal…" : "Send proposal for review"}
                 </button>
               ) : null}
             </div>

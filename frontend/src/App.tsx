@@ -277,7 +277,7 @@ export default function App() {
           ) : null}
         </nav>
         <div className="site-nav__meta">
-          <span className="site-nav__environment">LOCAL DEMO</span>
+          {import.meta.env.DEV ? <span className="site-nav__environment">LOCAL DEMO</span> : null}
           <button type="button" className="button ghost" onClick={handleSignOut}>
             Sign out
           </button>

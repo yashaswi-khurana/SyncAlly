@@ -136,6 +136,21 @@ function displayAmount(amount: string, currency: string): string {
   return `${currency} ${amount}`;
 }
 
+function canonicalAmount(value: string): string | null {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!match) return null;
+  const whole = match[1].replace(/^0+(?=\d)/, "");
+  const fraction = (match[2] ?? "").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
+}
+
+function invoiceMismatch(payment: PaymentStatus, milestone: PaymentMilestoneSummary): boolean {
+  return payment.currency.toUpperCase() !== milestone.currency.toUpperCase() ||
+    canonicalAmount(payment.amount) === null ||
+    canonicalAmount(milestone.amount) === null ||
+    canonicalAmount(payment.amount) !== canonicalAmount(milestone.amount);
+}
+
 interface PaymentStatusPanelProps {
   dealId: string;
   sellerOrganizationId: string;
@@ -540,6 +555,9 @@ export default function PaymentStatusPanel({
                 p.milestone_sequence === milestone.sequence_number,
             );
             const effectivePayment = matchingPayment;
+            const paymentDisagreesWithTerms = Boolean(
+              effectivePayment && invoiceMismatch(effectivePayment, milestone),
+            );
             const effectiveStatus =
               effectivePayment?.status ?? milestone.intent_status ?? milestone.lifecycle_state;
             const presentation = describeStatus(effectiveStatus);
@@ -627,6 +645,21 @@ export default function PaymentStatusPanel({
                   </span>
                 </div>
                 <p className="muted">{presentation.detail}</p>
+                {paymentDisagreesWithTerms && effectivePayment ? (
+                  <div className="payment-status__mismatch" role="alert">
+                    <strong>Payment request differs from the committed terms</strong>
+                    <span>Agreement: {displayAmount(milestone.amount, milestone.currency)}</span>
+                    <span>Payment request: {displayAmount(effectivePayment.amount, effectivePayment.currency)}</span>
+                    <span>Do not pay this invoice. Ask the seller to resolve the amount or currency against the agreement.</span>
+                  </div>
+                ) : null}
+                {effectivePayment?.invoice_url && sandbox && !paymentDisagreesWithTerms ? (
+                  <div className="payment-status__match" role="status">
+                    <strong>PayPal Sandbox invoice matches the agreement milestone</strong>
+                    <span>Verified amount: {displayAmount(milestone.amount, milestone.currency)}</span>
+                    <span>Payment status still changes only after PayPal confirms it.</span>
+                  </div>
+                ) : null}
                 <p>
                   Trigger: {milestone.trigger_type} | Due: {milestone.due_condition}
                 </p>
@@ -754,7 +787,7 @@ export default function PaymentStatusPanel({
                       </div>
                     ) : null}
 
-                    {sandbox && invoiceUrl && isBuyer ? (
+                    {sandbox && invoiceUrl && isBuyer && !paymentDisagreesWithTerms ? (
                       <div className="payment-status__invoice-card">
                         <div className="payment-status__invoice-card-header">
                           <span className="eyebrow">PayPal Sandbox invoice ready</span>
@@ -782,7 +815,7 @@ export default function PaymentStatusPanel({
                       </div>
                     ) : null}
 
-                    {sandbox && invoiceUrl && isSeller && !isBuyer ? (
+                    {sandbox && invoiceUrl && isSeller && !isBuyer && !paymentDisagreesWithTerms ? (
                       <div className="payment-status__seller-invoice">
                         <p>
                           Invoice #: <strong>{invoiceNum}</strong> issued to buyer.

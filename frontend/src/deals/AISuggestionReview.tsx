@@ -274,6 +274,13 @@ export default function AISuggestionReview({
   const currentFactGuidance = hasFactSuggestionRun
     ? guidanceForMissingTradeFields(missingFields)
     : factSuggestionGuidance;
+  const tradeCopilotAction = conflictingFields.size > 0
+    ? "Resolve the confirmed term conflicts before preparing a proposal."
+    : missingFields.length > 0
+      ? `Clarify ${missingFields.map((field) => REQUIRED_TRADE_FIELDS.find((item) => item.key === field)?.label.toLowerCase()).filter(Boolean).join(", ")} before asking both parties to approve terms.`
+      : proposal
+        ? "Review the sourced draft, then submit it for the other party to accept or counter."
+        : "Review the extracted facts, then draft a proposal from the terms both sides can support.";
 
   async function runFactSuggestion() {
     const revisionAtStart = factStateRevisionRef.current;
@@ -501,14 +508,19 @@ export default function AISuggestionReview({
     <section className="card communication-card ai-review-card" aria-labelledby="ai-review-heading">
       <div className="panel-head">
         <div>
-          <span className="eyebrow">Human review required</span>
-          <h2 id="ai-review-heading">Suggestion review</h2>
+          <span className="eyebrow">AI trade copilot · evidence first</span>
+          <h2 id="ai-review-heading">From negotiation to payment</h2>
         </div>
         <span className="communication-index" aria-hidden="true">03 / REVIEW</span>
       </div>
       <p className="muted">
-        AI suggestions are unreviewed. If OpenAI is enabled, requesting them sends this organization’s shareable deal messages and terms to OpenAI; private context is excluded unless an operator enables it for this organization. AI cannot approve an agreement, request payment, or arrange shipment.
+        The copilot reads this side’s authorized conversation, ties each suggested term to its source, and helps prepare a proposal. It never approves terms or moves money. OpenAI receives shareable context only unless an operator explicitly enables private context for this organization.
       </p>
+      <aside className="trade-copilot-action" aria-live="polite">
+        <span className="eyebrow">Recommended next step</span>
+        <p>{tradeCopilotAction}</p>
+        <span className="trade-copilot-action__scope">Negotiation evidence → reviewed terms → human-approved agreement → PayPal invoice check</span>
+      </aside>
       {hasFactSuggestionRun ? <p className="hint" aria-label="Fact invocation provenance">Last fact invocation: {invocationLabel(factProvenance)}</p>
         : knownFactsById.size > 0 ? <p className="hint">Stored fact provenance: Unknown (legacy)</p> : null}
       <section className="terms-readiness" aria-labelledby={`terms-readiness-heading-${dealId}`}>

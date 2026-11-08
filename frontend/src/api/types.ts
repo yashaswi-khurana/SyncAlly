@@ -838,6 +838,7 @@ export interface CreateDealInput {
   seller_organization_id: string;
   display_name?: string;
   initiator_party?: "BUYER" | "SELLER";
+  opening_request?: string | null;
 }
 
 /**
@@ -998,4 +999,43 @@ export interface DealReminder {
   last_error?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface NormalizedTradeRequirements {
+  category?: string | null;
+  item_description?: string | null;
+  quantity?: string | null;
+  unit?: string | null;
+  target_unit_price?: string | null;
+  budget?: string | null;
+  currency?: string | null;
+  destination_country_code?: string | null;
+  destination_name?: string | null;
+  delivery_destination?: string | null;
+  target_delivery_date?: string | null;
+  delivery_date?: string | null;
+  capabilities_required?: string[];
+  payment_terms?: string | null;
+  raw_text: string;
+}
+
+export interface SuggestedSeller {
+  id: string;
+  organization_id?: string;
+  legal_name: string;
+  country_code: string;
+  match_score?: number;
+  match_reasons?: string[];
+  capabilities?: string[];
+  products?: string[];
+  regions?: string[];
+  matched_products?: string[];
+  matched_capabilities?: string[];
+  matched_listing_ids?: string[];
+}
+
+export interface OpeningRequestAnalysisResult {
+  requirements: NormalizedTradeRequirements;
+  suggested_sellers: SuggestedSeller[];
+  provenance?: AIProvenance;
 }

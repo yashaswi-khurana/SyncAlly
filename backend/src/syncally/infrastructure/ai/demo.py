@@ -10,11 +10,13 @@ from syncally.application.ai import (
     AIPermanentError,
     FactExtractionRequest,
     ProposalDraftRequest,
+    extract_normalized_requirement,
 )
 from syncally.domain.ai.contracts import (
     AI_SCHEMA_VERSION,
     ExtractedFact,
     FactField,
+    NormalizedRequirement,
     ProposedTerms,
     SourceReference,
 )
@@ -211,6 +213,10 @@ class DemoAISuggestionProvider:
                 )
                 break
         return tuple(extracted)
+
+    def normalize_opening_request(self, text: str) -> NormalizedRequirement:
+        """Parse natural language opening request into a normalized requirement."""
+        return extract_normalized_requirement(text)
 
     def draft_proposal(
         self, request: ProposalDraftRequest, *, timeout_seconds: float

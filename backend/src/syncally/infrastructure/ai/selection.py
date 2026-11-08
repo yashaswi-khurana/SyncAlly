@@ -13,7 +13,7 @@ from syncally.application.ai import (
 )
 from syncally.application.conversations import AiContext
 from syncally.config import Settings
-from syncally.domain.ai.contracts import ExtractedFact, ProposedTerms
+from syncally.domain.ai.contracts import ExtractedFact, NormalizedRequirement, ProposedTerms
 from syncally.domain.conversations import Visibility
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions, transmitted_context
@@ -88,3 +88,20 @@ class ConfiguredAIProvider:
     def fallback_proposal(self, request: ProposalDraftRequest, *, timeout_seconds: float) -> ProposedTerms:
         self._fallback()
         return self._offline.draft_proposal(request, timeout_seconds=timeout_seconds)
+
+    def normalize_opening_request(
+        self, text: str, *, timeout_seconds: float = 10.0
+    ) -> NormalizedRequirement:
+        try:
+            if self._remote is not None and hasattr(self._remote, "normalize_opening_request"):
+                return self._remote.normalize_opening_request(text, timeout_seconds=timeout_seconds)  # type: ignore[no-any-return]
+            return self._offline.normalize_opening_request(text)
+        finally:
+            self._record_model()
+
+    def fallback_normalize_opening_request(
+        self, text: str, *, timeout_seconds: float = 10.0
+    ) -> NormalizedRequirement:
+        del timeout_seconds
+        self._fallback()
+        return self._offline.normalize_opening_request(text)

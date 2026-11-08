@@ -14,6 +14,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.application.ai import (
+    AIProvenance,
+    AISuggestionProvider,
+    normalize_opening_request,
+)
 from syncally.application.deal_cases import (
     AddCaseEvidenceCommand,
     CaseUnauthorizedError,
@@ -36,6 +41,12 @@ from syncally.application.deals import (
     list_deals,
 )
 from syncally.application.identity import ActorContext
+from syncally.application.seller_suggestions import (
+    SellerSuggestionItem,
+    SellerSuggestionService,
+)
+from syncally.config import settings
+from syncally.domain.ai.contracts import NormalizedRequirement
 from syncally.domain.deals.cases import (
     BilateralDecision,
     CaseError,
@@ -46,6 +57,7 @@ from syncally.domain.deals.cases import (
 )
 from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
+from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
 from syncally.infrastructure.repositories import SqlAlchemyDealRepository
@@ -61,6 +73,22 @@ class CreateDealRequest(BaseModel):
     seller_organization_id: UUID
     display_name: str | None = Field(default=None, max_length=160)
     initiator_party: Literal["BUYER", "SELLER"] = "BUYER"
+    opening_request: str | None = Field(default=None, max_length=8000)
+
+
+class AnalyzeOpeningRequestRequest(BaseModel):
+    """Payload for analyzing natural language opening requests."""
+
+    text: str = Field(..., min_length=1, max_length=8000)
+    buyer_organization_id: UUID | None = None
+
+
+class AnalyzeOpeningRequestResponse(BaseModel):
+    """Analysis outcome containing normalized requirements, matching sellers, and provenance."""
+
+    requirements: NormalizedRequirement
+    suggested_sellers: list[SellerSuggestionItem]
+    provenance: AIProvenance
 
 
 class DealResponse(BaseModel):
@@ -273,6 +301,7 @@ def create_deal_route(
                 seller_organization_id=payload.seller_organization_id,
                 display_name=payload.display_name,
                 initiator_party=payload.initiator_party,
+                opening_request=payload.opening_request,
             ),
             repository,
         )
@@ -283,6 +312,42 @@ def create_deal_route(
     except InvariantViolation as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _to_response(deal)
+
+
+@router.post("/opening-request/analyze", response_model=AnalyzeOpeningRequestResponse)
+def analyze_opening_request_route(
+    payload: AnalyzeOpeningRequestRequest,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> AnalyzeOpeningRequestResponse:
+    """Analyze and normalize a buyer opening request, and suggest matching active sellers."""
+    if not payload.text.strip():
+        return AnalyzeOpeningRequestResponse(
+            requirements=NormalizedRequirement(raw_text=payload.text),
+            suggested_sellers=[],
+            provenance=AIProvenance(provider="offline", mode="offline", context_scope="authorized"),
+        )
+
+    provider: AISuggestionProvider | None = None
+    try:
+        provider = ConfiguredAIProvider(settings)
+    except Exception:
+        provider = None
+
+    norm_result = normalize_opening_request(payload.text, provider=provider)
+
+    suggested_sellers = SellerSuggestionService.suggest_sellers(
+        db,
+        norm_result.requirements,
+        buyer_organization_id=payload.buyer_organization_id,
+    )
+
+    return AnalyzeOpeningRequestResponse(
+        requirements=norm_result.requirements,
+        suggested_sellers=suggested_sellers,
+        provenance=norm_result.provenance,
+    )
+
 
 
 @router.get("/{deal_id}", response_model=DealResponse)

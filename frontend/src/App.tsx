@@ -148,9 +148,9 @@ export default function App() {
     signIn(tokens);
   }
 
-  function handleDealCreated(dealId: string, draft?: OpeningMessageDraftInput) {
+  function handleDealCreated(dealId: string, draft?: OpeningMessageDraftInput | { text: string; source: string }) {
     if (!currentSessionKey || sessionRef.current !== currentSessionKey || getAccessToken() !== accessToken) return;
-    if (draft?.body.trim()) {
+    if (draft && "body" in draft && draft.body.trim()) {
       const openingMessageDraft = { ...draft, dealId };
       setOpeningMessageDrafts((current) => [
         ...current.filter((item) => item.dealId !== dealId || item.organizationId !== draft.organizationId),

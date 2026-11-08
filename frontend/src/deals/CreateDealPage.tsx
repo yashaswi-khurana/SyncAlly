@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, apiRequest, createCounterpartyInvitation, createDeal, getMarketplaceListing, getMarketplaceRFQ, getOrganization, listOrganizations } from "../api/client";
-import type { Invitation, Organization } from "../api/types";
+import { ApiError, apiRequest, analyzeOpeningRequest, createCounterpartyInvitation, createDeal, getMarketplaceListing, getMarketplaceRFQ, getOrganization, listOrganizations } from "../api/client";
+import type { Invitation, OpeningRequestAnalysisResult, Organization, SuggestedSeller } from "../api/types";
 import { compactDecimal } from "../formatting";
 import Reveal from "../ui/Reveal";
 import type { OpeningMessageDraftInput } from "./openingMessageDraft";
@@ -25,7 +25,7 @@ interface FieldErrors {
 }
 
 interface CreateDealPageProps {
-  onCreated: (dealId: string, openingMessageDraft?: OpeningMessageDraftInput) => void;
+  onCreated: (dealId: string, openingMessageDraft?: OpeningMessageDraftInput | { text: string; source: string }) => void;
   onOpeningMessageDraftReady?: (dealId: string, draft: OpeningMessageDraftInput) => void;
   initialCounterpartyId?: string;
   initialInitiatorParty?: "BUYER" | "SELLER";
@@ -111,6 +111,9 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
   const [showFullInvitationLink, setShowFullInvitationLink] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [openingMessage, setOpeningMessage] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<OpeningRequestAnalysisResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -245,6 +248,33 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
     setFieldErrors({});
   }
 
+  async function handleAnalyzeOpeningRequest() {
+    const textToAnalyze = openingMessage.trim();
+    if (!textToAnalyze || analyzing || submitting) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      const result = await analyzeOpeningRequest({
+        text: textToAnalyze,
+        buyer_organization_id: buyerOrganizationId || undefined,
+      });
+      setAnalysisResult(result);
+    } catch (caught) {
+      setAnalysisError(describeError(caught));
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  function handleSelectSuggestedSeller(suggested: SuggestedSeller) {
+    setMode("directory");
+    selectSeller({
+      id: suggested.id,
+      legal_name: suggested.legal_name,
+      country_code: suggested.country_code,
+    });
+  }
+
   function retryOrganizations() {
     setOrganizationsState({ status: "loading" });
     setReloadCount((count) => count + 1);
@@ -320,14 +350,25 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
         return;
       }
       if (!seller) return;
-      const deal = await createDeal({
+      const dealPayload = analysisResult ? {
+        buyer_organization_id: initiatorParty === "BUYER" ? buyerOrganizationId : seller.id,
+        seller_organization_id: initiatorParty === "SELLER" ? buyerOrganizationId : seller.id,
+        initiator_party: initiatorParty,
+        display_name: displayName.trim() || undefined,
+      } : {
         buyer_organization_id: initiatorParty === "BUYER" ? buyerOrganizationId : seller.id,
         seller_organization_id: initiatorParty === "SELLER" ? buyerOrganizationId : seller.id,
         ...(displayName.trim() ? { display_name: displayName.trim() } : {}),
         ...(initiatorParty === "SELLER" ? { initiator_party: "SELLER" as const } : {}),
-      });
-      if (openingMessageDraft) onCreated(deal.id, openingMessageDraft);
-      else onCreated(deal.id);
+      };
+      const deal = await createDeal(dealPayload);
+      if (analysisResult && openingMessageText) {
+        onCreated(deal.id, { text: openingMessageText, source: "BUYER_QUOTE" });
+      } else if (openingMessageDraft) {
+        onCreated(deal.id, openingMessageDraft);
+      } else {
+        onCreated(deal.id);
+      }
     } catch (caught) {
       setSubmitError(describeCreateError(caught, initiatorParty));
     } finally {
@@ -502,14 +543,146 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                 value={openingMessage}
                 maxLength={8000}
                 rows={initialListingId ? 8 : 4}
-                disabled={submitting}
+                disabled={submitting || analyzing}
                 placeholder={initiatorParty === "BUYER"
                   ? "We need [product/specification], [quantity and unit], delivered to [destination] by [date]. Please quote in [currency] and include your payment terms."
                   : "We can offer [product/specification], [available quantity and unit] at [price and currency], delivered to [destination] by [date]. Our payment terms are [terms]."}
-                onChange={(event) => setOpeningMessage(event.target.value)}
+                onChange={(event) => {
+                  setOpeningMessage(event.target.value);
+                  if (analysisResult) setAnalysisResult(null);
+                  if (analysisError) setAnalysisError(null);
+                }}
               />
-              <p className="hint">{marketplaceContext ? "The deal stays a draft until you send this message." : "The deal stays a draft until you send this message. If you invite a company, it will be ready after they join."}</p>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, flexWrap: "wrap", gap: 8 }}>
+                <p className="hint" style={{ margin: 0 }}>
+                  {marketplaceContext ? "The deal stays a draft until you send this message." : "The deal stays a draft until you send this message. If you invite a company, it will be ready after they join."}
+                </p>
+                {initiatorParty === "BUYER" && !marketplaceContext ? (
+                  <button
+                    type="button"
+                    className="button secondary"
+                    disabled={submitting || analyzing || !openingMessage.trim()}
+                    onClick={handleAnalyzeOpeningRequest}
+                  >
+                    {analyzing ? "Analyzing request…" : "Analyze & suggest sellers"}
+                  </button>
+                ) : null}
+              </div>
             </div>
+
+            {analysisError ? (
+              <div className="form-error" role="alert" style={{ marginBottom: 16 }}>
+                {analysisError}
+              </div>
+            ) : null}
+
+            {analysisResult ? (
+              <div className="card normalized-requirements-card" style={{ marginBottom: 20, padding: 16, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface-sunken)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 style={{ margin: 0, fontSize: "1rem" }}>Structured Requirements</h3>
+                  {analysisResult.provenance ? (
+                    <span className="badge" style={{ fontSize: "0.75rem" }}>
+                      {analysisResult.provenance.provider === "openai" || analysisResult.provenance.mode === "openai"
+                        ? "AI Extracted (OpenAI)"
+                        : "Offline Normalization"}
+                    </span>
+                  ) : null}
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 16 }}>
+                  {analysisResult.requirements.category ? (
+                    <div><small className="muted">Category</small><div><strong>{analysisResult.requirements.category}</strong></div></div>
+                  ) : null}
+                  {analysisResult.requirements.item_description ? (
+                    <div><small className="muted">Item / Specification</small><div><strong>{analysisResult.requirements.item_description}</strong></div></div>
+                  ) : null}
+                  {analysisResult.requirements.quantity ? (
+                    <div><small className="muted">Quantity</small><div><strong>{analysisResult.requirements.quantity} {analysisResult.requirements.unit || ""}</strong></div></div>
+                  ) : null}
+                  {analysisResult.requirements.target_unit_price || analysisResult.requirements.budget ? (
+                    <div><small className="muted">Target Price / Budget</small><div><strong>{analysisResult.requirements.target_unit_price || analysisResult.requirements.budget} {analysisResult.requirements.currency || ""}</strong></div></div>
+                  ) : null}
+                  {analysisResult.requirements.destination_name || analysisResult.requirements.destination_country_code || analysisResult.requirements.delivery_destination ? (
+                    <div><small className="muted">Destination</small><div><strong>{analysisResult.requirements.destination_name || analysisResult.requirements.destination_country_code || analysisResult.requirements.delivery_destination}</strong></div></div>
+                  ) : null}
+                  {analysisResult.requirements.target_delivery_date || analysisResult.requirements.delivery_date ? (
+                    <div><small className="muted">Timeline</small><div><strong>{analysisResult.requirements.target_delivery_date || analysisResult.requirements.delivery_date}</strong></div></div>
+                  ) : null}
+                  {analysisResult.requirements.capabilities_required && analysisResult.requirements.capabilities_required.length > 0 ? (
+                    <div><small className="muted">Required Capabilities</small><div><strong>{analysisResult.requirements.capabilities_required.join(", ")}</strong></div></div>
+                  ) : null}
+                </div>
+
+                {(() => {
+                  const buyerOrg = organizationsState.status === "ready"
+                    ? organizationsState.organizations.find((org) => org.id === buyerOrganizationId)
+                    : null;
+                  const candidateSellers = (analysisResult.suggested_sellers || []).filter(
+                    (s) => s.id !== buyerOrganizationId && (!buyerOrg || s.legal_name !== buyerOrg.legal_name)
+                  );
+
+                  if (candidateSellers.length > 0) {
+                    return (
+                      <div className="suggested-sellers-list">
+                        <h4 style={{ margin: "12px 0 8px 0", fontSize: "0.9rem" }}>
+                          Suggested Matching Sellers ({candidateSellers.length})
+                        </h4>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {candidateSellers.map((suggested) => {
+                            const isSelected = seller?.id === suggested.id;
+                            return (
+                              <div
+                                key={suggested.id}
+                                data-testid="suggested-seller-card"
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  padding: "10px 14px",
+                                  borderRadius: 6,
+                                  border: isSelected ? "1px solid var(--accent)" : "1px solid var(--border)",
+                                  background: isSelected ? "var(--accent-soft)" : "var(--surface)",
+                                }}
+                              >
+                                <div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    <strong>{suggested.legal_name}</strong>
+                                    <span className="badge">{suggested.country_code}</span>
+                                    {suggested.match_score != null ? (
+                                      <span className="badge">{Math.round(suggested.match_score * 100)}%</span>
+                                    ) : null}
+                                    {isSelected ? <span className="badge badge--shareable">Selected</span> : null}
+                                  </div>
+                                  {suggested.match_reasons && suggested.match_reasons.length > 0 ? (
+                                    <small className="muted" style={{ display: "block", marginTop: 4 }}>
+                                      {suggested.match_reasons.join(" • ")}
+                                    </small>
+                                  ) : null}
+                                </div>
+                                <button
+                                  type="button"
+                                  className={`button ${isSelected ? "primary" : "secondary"}`}
+                                  style={{ fontSize: "0.85rem", padding: "6px 12px" }}
+                                  onClick={() => handleSelectSuggestedSeller(suggested)}
+                                >
+                                  {isSelected ? "Selected" : "Select Seller"}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <p className="muted" role="status" style={{ margin: "12px 0 0", fontSize: "0.9rem" }}>
+                      No registered sellers matched your requirements. You can search manually below or invite a counterparty.
+                    </p>
+                  );
+                })()}
+              </div>
+            ) : null}
             {!marketplaceContext ? (
               <fieldset disabled={submitting}>
                 <legend>Counterparty</legend>

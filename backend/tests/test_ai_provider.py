@@ -176,6 +176,33 @@ def _fact_payload(**updates: object) -> dict[str, object]:
 
 
 class AISuggestionProviderTests(unittest.TestCase):
+    def test_gemini_retries_ungrounded_facts_without_accepting_them(self) -> None:
+        calls = []
+        valid = self._remote_facts()
+        invalid = self._remote_facts()
+        invalid["facts"][0]["source"]["quote"] = "fabricated 12 boxes"
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            calls.append(json.loads(request.content))
+            payload = invalid if len(calls) == 1 else valid
+            return httpx.Response(200, json={
+                "modelVersion": "gemini-test", "candidates": [{
+                    "index": 0, "finishReason": "STOP", "content": {
+                        "role": "model", "parts": [{"text": json.dumps(payload)}],
+                    },
+                }],
+            })
+
+        provider = ConfiguredAIProvider(self._remote_config(
+            ai_provider="gemini", gemini_model="gemini-3.5-flash", google_api_key="test-key",
+        ), transport=httpx.MockTransport(respond))
+        public = replace(self.buyer_private_message, visibility=Visibility.SHAREABLE)
+        result = extract_facts_from_context(replace(self._remote_context(), messages=(public,)), provider)
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(len(result.candidates), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("previous extraction failed validation", calls[1]["contents"][0]["parts"][0]["text"])
+
     def _remote_config(self, **updates: object) -> Settings:
         values = dict(
             app_env="test", ai_provider="openai", ai_remote_egress_enabled=True,

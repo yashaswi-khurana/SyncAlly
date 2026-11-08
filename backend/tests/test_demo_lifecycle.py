@@ -32,6 +32,7 @@ from syncally.application.payments import (
     PAYMENT_INTENT_AUTHORIZED_EVENT_TYPE,
     PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
 )
+from syncally.config import settings
 from syncally.domain.ai.contracts import ProposedTerms
 from syncally.domain.payments.intent import (
     VerifiedProviderPaymentState,
@@ -163,6 +164,8 @@ class DemoLifecycleTests(unittest.TestCase):
             self.assertEqual(run_simulation(in_process=True), 1)
 
     def setUp(self) -> None:
+        self.original_payment_mode = settings.payment_mode
+        settings.payment_mode = "PAYPAL_SANDBOX"
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -239,6 +242,7 @@ class DemoLifecycleTests(unittest.TestCase):
         self.session_local_patch.start()
 
     def tearDown(self) -> None:
+        settings.payment_mode = self.original_payment_mode
         app.dependency_overrides.clear()
         self.session_local_patch.stop()
         self.session.close()

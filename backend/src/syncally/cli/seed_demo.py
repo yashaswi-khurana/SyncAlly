@@ -52,6 +52,7 @@ from syncally.infrastructure.models import (
     Obligation,
     Organization,
     OrganizationMember,
+    OrganizationProfile,
     OutboxEvent,
     PaymentIntent,
     PaymentMilestone,
@@ -140,14 +141,74 @@ def _seed_identities(
                     user_id=user.id,
                     role="ADMIN",
                     status="ACTIVE",
-                    capabilities=["FINANCE"],
+                    capabilities=["FINANCE", "FULFILLMENT"],
                 )
             )
         else:
             membership.role = "ADMIN"
             membership.status = "ACTIVE"
-            if "FINANCE" not in (membership.capabilities or []):
-                membership.capabilities = list(set(membership.capabilities or []) | {"FINANCE"})
+            caps = set(membership.capabilities or []) | {"FINANCE", "FULFILLMENT"}
+            membership.capabilities = sorted(caps)
+
+        profile = db.scalar(
+            select(OrganizationProfile).where(
+                OrganizationProfile.organization_id == organization.id
+            )
+        )
+        if identity.email == "buyer@syncally.demo":
+            prof_caps = ["Procurement", "Global Logistics"]
+            prof_prods = ["Fasteners", "Structural Components"]
+            prof_regs = ["US", "CA"]
+            contact = {
+                "id": str(fixture_id(f"{organization.id}-contact-1")),
+                "name": "Jane Buyer",
+                "purpose": "Procurement inquiries",
+                "consent_obtained": True,
+                "visibility": "PRIVATE",
+                "role_title": "Head of Procurement",
+                "email": "procurement@syncally.demo",
+                "phone": "+15551234567",
+                "created_at": None,
+                "updated_at": None,
+            }
+        else:
+            prof_caps = ["Manufacturing", "Precision Machining"]
+            prof_prods = ["Stainless Steel Hardware", "Bolts"]
+            prof_regs = ["CA", "US"]
+            contact = {
+                "id": str(fixture_id(f"{organization.id}-contact-1")),
+                "name": "John Seller",
+                "purpose": "Sales and fulfillment",
+                "consent_obtained": True,
+                "visibility": "PRIVATE",
+                "role_title": "Director of Sales",
+                "email": "sales@syncally.demo",
+                "phone": "+15559876543",
+                "created_at": None,
+                "updated_at": None,
+            }
+
+        if profile is None:
+            profile = OrganizationProfile(
+                organization_id=organization.id,
+                capabilities=prof_caps,
+                products=prof_prods,
+                regions=prof_regs,
+                contacts=[contact],
+                verification_status="UNVERIFIED",
+                version=1,
+                updated_by_user_id=user.id,
+            )
+            db.add(profile)
+        else:
+            profile.capabilities = prof_caps
+            profile.products = prof_prods
+            profile.regions = prof_regs
+            profile.contacts = [contact]
+            profile.verification_status = "UNVERIFIED"
+            profile.version = 1
+            profile.updated_by_user_id = user.id
+
         users.append(user)
         organizations.append(organization)
     db.flush()

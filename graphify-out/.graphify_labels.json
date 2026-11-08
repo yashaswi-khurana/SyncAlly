@@ -1,6 +1,5 @@
 {
   "0": "Conversations & Test Conversation Use",
-  "4": "Test Ai Provider & Ai",
   "10": "Test Conversation Routes (ConversationRouteTests)",
   "12": "Test Agreement Routes (AgreementRouteTests)",
   "17": "Types & Client",
@@ -21,8 +20,6 @@
   "65": "Compose.Yaml (volumes)",
   "79": "Tsconfig (tsconfig.json)",
   "80": "Test Paypal Webhooks (FakeWebhookVerifier)",
-  "81": "Test Counterparty Onboarding Migration &",
-  "83": "Test Operations & Test Outbox",
   "86": "Main & Test Identity Boundary",
   "90": "Test Organization Index Migration (OrganizationIndexPostgresMigrationTests)",
   "99": "0005 Conversation Party Unique (Enforce",

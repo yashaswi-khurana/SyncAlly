@@ -136,8 +136,8 @@ export default function DealDetailPage({
     ]).then(([buyerResult, sellerResult]) => {
       if (cancelled) return;
       setPartyNames({
-        buyer: buyerResult.status === "fulfilled" ? buyerResult.value.legal_name : "",
-        seller: sellerResult.status === "fulfilled" ? sellerResult.value.legal_name : "",
+        buyer: buyerResult.status === "fulfilled" ? buyerResult.value?.legal_name || "" : "",
+        seller: sellerResult.status === "fulfilled" ? sellerResult.value?.legal_name || "" : "",
       });
     });
     return () => { cancelled = true; };

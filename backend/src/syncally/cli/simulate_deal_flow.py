@@ -1,13 +1,18 @@
-"""Standalone CLI simulation script for the full two-sided SyncAlly deal lifecycle.
+"""Standalone CLI simulation script for the full two-sided SyncAlly judge demo lifecycle.
 
 Performs end-to-end verification across Buyer and Seller roles:
 1. Authenticates as Buyer and Seller via JWT credentials.
-2. Discovers counterparty in organization directory and creates a draft deal.
-3. Posts buyer proposal message into deal conversation.
-4. Triggers AI fact suggestion and confirms all extracted terms.
+2. Discovers counterparty in directory, validates profile & private contact isolation, and creates deal.
+3. Posts buyer proposal message and private internal note, validating counterparty message isolation.
+4. Triggers AI fact suggestion and confirms all extracted terms (human authority).
 5. Generates proposal draft, records bilateral approvals from both parties.
 6. Commits agreement and verifies committed state.
-7. Authorizes payment and prints persisted mode, reference, and unpaid state.
+7. Authorizes payment milestone and prints persisted mode, reference, and unpaid state.
+8. Simulates offline payment reconciliation via dev route to PAID with OFFLINE_DEMO source tag.
+9. Records partial shipment and confirmed arrival facts, validating dual completion logic.
+10. Proposes, evaluates operational impact, bilaterally approves, and commits Version 2 amendment.
+11. Raises dispute deal case with evidence and resolves via bilateral counterparty consent.
+12. Syncs reminders with counterparty isolation and exports commercial draft disclaimer & trade pack ZIP.
 
 Executable directly via:
     python -m syncally.cli.simulate_deal_flow
@@ -95,6 +100,7 @@ class DealFlowContext:
     buyer_org_id: str = ""
     seller_org_id: str = ""
     deal_id: str = ""
+    agreement_version_id: str = ""
     version_number: int = 1
     terms_hash: str = ""
     payment_intent_id: str = ""
@@ -102,6 +108,14 @@ class DealFlowContext:
     execution_mode: str = ""
     invoice_reference: str = ""
     payment_status: str = ""
+    payment_amount: str = "30.00"
+    payment_intent_version: int = 0
+    reconciled_payment_status: str = ""
+    reconciliation_source: str = ""
+    v2_version_number: int = 2
+    v2_agreement_version_id: str = ""
+    v2_terms_hash: str = ""
+    dispute_case_id: str = ""
 
 
 class DealFlowSimulator:
@@ -116,6 +130,7 @@ class DealFlowSimulator:
         seller_email: str = DEFAULT_SELLER_EMAIL,
         seller_password: str = DEFAULT_SELLER_PASSWORD,
         dispatch_payment: Callable[[], None] | None = None,
+        mark_fixture: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.client = client
         self.fmt = fmt
@@ -126,6 +141,7 @@ class DealFlowSimulator:
         self.ctx = DealFlowContext()
         self.step_records: list[StepRecord] = []
         self.dispatch_payment = dispatch_payment
+        self.mark_fixture = mark_fixture
 
     def _auth_header(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
@@ -166,7 +182,7 @@ class DealFlowSimulator:
 
     def _execute_step(self, number: int, name: str, action: Callable[[], str]) -> None:
         start_time = time.perf_counter()
-        print(f"  {self.fmt.cyan(f'[{number}/7]')} {name.ljust(48)}", end="", flush=True)
+        print(f"  {self.fmt.cyan(f'[{number}/12]')} {name.ljust(48)}", end="", flush=True)
         try:
             details = action()
             duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -256,6 +272,36 @@ class DealFlowSimulator:
             raise SimulationError("Search Counterparty Directory", "No counterparty organization found")
         self.ctx.seller_org_id = seller_org_id
 
+        # Verify Buyer organization profile (UNVERIFIED authority)
+        buyer_profile_resp = self._request(
+            "GET",
+            f"/organizations/{self.ctx.buyer_org_id}/profile",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Read Buyer Profile",
+        )
+        buyer_profile = buyer_profile_resp.json()
+        if buyer_profile.get("verification_status") != "UNVERIFIED":
+            raise SimulationError(
+                "Read Buyer Profile",
+                f"Expected UNVERIFIED status, got {buyer_profile.get('verification_status')}",
+            )
+
+        # Counterparty privacy: Seller querying Buyer profile must not see Buyer's private contacts
+        counterparty_profile_resp = self._request(
+            "GET",
+            f"/organizations/{self.ctx.buyer_org_id}/profile",
+            headers=self._auth_header(self.ctx.seller_token),
+            expected_status=200,
+            step_name="Verify Contact Isolation (Seller viewing Buyer)",
+        )
+        counterparty_profile = counterparty_profile_resp.json()
+        if counterparty_profile.get("contacts"):
+            raise SimulationError(
+                "Verify Contact Isolation",
+                f"Buyer private contacts leaked to Seller counterparty: {counterparty_profile.get('contacts')}",
+            )
+
         # Buyer creates deal
         deal_resp = self._request(
             "POST",
@@ -270,9 +316,13 @@ class DealFlowSimulator:
         )
         deal_data = deal_resp.json()
         self.ctx.deal_id = str(deal_data["id"])
-        return f"Deal {self.ctx.deal_id} created with {seller_org_name}"
+        if self.mark_fixture is not None:
+            self.mark_fixture(self.ctx.deal_id, self.ctx.buyer_org_id, self.ctx.seller_org_id)
+
+        return f"Deal {self.ctx.deal_id} created with {seller_org_name} (UNVERIFIED status & private contact isolation verified)"
 
     def step_3_post_proposal_message(self) -> str:
+        # Buyer posts shareable commercial terms
         message_body = "Item: Widget, 12 boxes at USD 2.50, deliver to Toronto by 2026-12-01."
         msg_resp = self._request(
             "POST",
@@ -283,7 +333,31 @@ class DealFlowSimulator:
             step_name="Post Buyer Proposal Message",
         )
         msg_id = msg_resp.json().get("id")
-        return f"Message {msg_id} posted with terms: '{message_body}'"
+
+        # Buyer posts internal private note
+        private_body = "Internal procurement memo: target gross margin USD 0.50 per unit."
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/messages",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={"body": private_body, "visibility": "PRIVATE"},
+            expected_status=201,
+            step_name="Post Buyer Private Note",
+        )
+
+        # Seller lists messages; verify private message is not visible to Seller
+        seller_msgs_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/messages",
+            headers=self._auth_header(self.ctx.seller_token),
+            expected_status=200,
+            step_name="Verify Seller Message Isolation",
+        )
+        seller_msgs = seller_msgs_resp.json()
+        if any(m.get("visibility") == "PRIVATE" for m in seller_msgs):
+            raise SimulationError("Verify Seller Message Isolation", "Private note leaked to seller counterparty")
+
+        return f"Message {msg_id} posted with terms; private note isolated from counterparty"
 
     def step_4_suggest_and_confirm_facts(self) -> str:
         # Trigger fact suggestion
@@ -353,6 +427,7 @@ class DealFlowSimulator:
         draft_data = draft_resp.json()
         self.ctx.version_number = draft_data["version_number"]
         self.ctx.terms_hash = draft_data["terms_hash"]
+        self.ctx.agreement_version_id = str(draft_data.get("id") or "")
 
         # Buyer approves
         self._request(
@@ -402,13 +477,19 @@ class DealFlowSimulator:
         if current_data.get("status") != "COMMITTED":
             raise SimulationError("Verify Agreement Commitment", f"Agreement status read is {current_data.get('status')}")
 
+        self.ctx.agreement_version_id = str(current_data["id"])
         committed_at = current_data.get("committed_at", "N/A")
         return f"Agreement v{self.ctx.version_number} committed successfully at {committed_at}"
 
     def step_7_authorize_payment_milestone(self) -> str:
         idempotency_key = f"sim-pay-{uuid4()}"
-        preview = self._request("GET", f"/deals/{self.ctx.deal_id}/payments/preview",
-            headers=self._auth_header(self.ctx.seller_token), expected_status=200, step_name="Preview Payment Mode").json()
+        preview = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/payments/preview",
+            headers=self._auth_header(self.ctx.seller_token),
+            expected_status=200,
+            step_name="Preview Payment Mode",
+        ).json()
         pay_resp = self._request(
             "POST",
             f"/deals/{self.ctx.deal_id}/payments",
@@ -438,7 +519,396 @@ class DealFlowSimulator:
         self.ctx.invoice_url = saved.get("invoice_url") or ""
         self.ctx.invoice_reference = saved.get("invoice_reference") or ""
         self.ctx.payment_status = saved["status"]
+        self.ctx.payment_amount = saved.get("amount") or "30.00"
+        self.ctx.payment_intent_version = saved.get("version", 0)
         return f"PaymentIntent: {self.ctx.payment_intent_id} | Mode: {self.ctx.execution_mode} | Reference: {self.ctx.invoice_reference or 'not issued'} | State: {self.ctx.payment_status}"
+
+    def step_8_offline_payment_reconciliation(self) -> str:
+        recon_idempotency = f"sim-recon-{uuid4()}"
+        self._request(
+            "POST",
+            f"/dev/payments/{self.ctx.payment_intent_id}/simulate-reconciliation",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={
+                "idempotency_key": recon_idempotency,
+                "expected_version": self.ctx.payment_intent_version,
+                "outcome": "PAID",
+                "paid_amount": self.ctx.payment_amount,
+            },
+            expected_status=202,
+            step_name="Simulate Payment Reconciliation",
+        )
+        if self.dispatch_payment is not None:
+            self.dispatch_payment()
+
+        status_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/payments",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Read Reconciled Payment Status",
+        )
+        statuses = status_resp.json()
+        saved = next((payment for payment in statuses if payment["id"] == self.ctx.payment_intent_id), None)
+        if saved is None:
+            raise SimulationError("Read Reconciled Payment Status", "Reconciled intent missing from saved statuses")
+        if saved["status"] != "PAID":
+            raise SimulationError(
+                "Read Reconciled Payment Status",
+                f"Expected status PAID, got {saved['status']}",
+            )
+        if saved.get("reconciliation_source") != "OFFLINE_DEMO":
+            raise SimulationError(
+                "Read Reconciled Payment Status",
+                f"Expected reconciliation_source OFFLINE_DEMO, got {saved.get('reconciliation_source')}",
+            )
+        self.ctx.reconciled_payment_status = saved["status"]
+        self.ctx.reconciliation_source = saved["reconciliation_source"]
+        return f"PaymentIntent {self.ctx.payment_intent_id} reconciled to PAID (source: {self.ctx.reconciliation_source}, amount: {saved.get('reconciled_amount')})"
+
+    def step_9_partial_fulfillment(self) -> str:
+        snapshot_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/fulfillment",
+            headers=self._auth_header(self.ctx.seller_token),
+            expected_status=200,
+            step_name="Read Fulfillment Snapshot (Seller)",
+        )
+        snapshot = snapshot_resp.json()
+        obligation_id = snapshot.get("obligation_id")
+        if not obligation_id:
+            raise SimulationError("Read Fulfillment Snapshot", "Missing obligation_id in snapshot")
+
+        # Seller reports shipment of 5 units
+        ship_idempotency = f"sim-ship-{uuid4()}"
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/fulfillment/shipments",
+            headers=self._auth_header(self.ctx.seller_token),
+            json={
+                "agreement_version_id": self.ctx.agreement_version_id,
+                "terms_hash": self.ctx.terms_hash,
+                "obligation_id": obligation_id,
+                "organization_id": self.ctx.seller_org_id,
+                "event_type": "SHIPPED",
+                "quantity": "5.0",
+                "carrier": "FedEx",
+                "tracking_number": "TRK-SIM-9876",
+                "dispatch_date": "2026-11-10",
+                "expected_delivery_date": "2026-11-15",
+                "expected_version": snapshot.get("fulfillment_version", 0),
+                "idempotency_key": ship_idempotency,
+            },
+            expected_status=201,
+            step_name="Record Seller Shipment",
+        )
+
+        # Buyer reads snapshot to get updated fulfillment version
+        snap_after_ship = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/fulfillment",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Read Snapshot After Shipment",
+        ).json()
+
+        # Buyer records arrival observation of 5 units
+        obs_idempotency = f"sim-obs-{uuid4()}"
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/fulfillment/events",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={
+                "agreement_version_id": self.ctx.agreement_version_id,
+                "terms_hash": self.ctx.terms_hash,
+                "obligation_id": obligation_id,
+                "organization_id": self.ctx.buyer_org_id,
+                "event_type": "OBSERVED",
+                "quantity": "5.0",
+                "expected_version": snap_after_ship.get("fulfillment_version", 1),
+                "idempotency_key": obs_idempotency,
+            },
+            expected_status=201,
+            step_name="Record Buyer Arrival Observation",
+        )
+
+        snap_after_obs = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/fulfillment",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Read Snapshot After Observation",
+        ).json()
+
+        # Buyer confirms delivery of 5 units
+        conf_idempotency = f"sim-conf-{uuid4()}"
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/fulfillment/events",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={
+                "agreement_version_id": self.ctx.agreement_version_id,
+                "terms_hash": self.ctx.terms_hash,
+                "obligation_id": obligation_id,
+                "organization_id": self.ctx.buyer_org_id,
+                "event_type": "CONFIRMED",
+                "quantity": "5.0",
+                "expected_version": snap_after_obs.get("fulfillment_version", 2),
+                "idempotency_key": conf_idempotency,
+            },
+            expected_status=201,
+            step_name="Record Buyer Delivery Confirmation",
+        )
+
+        final_snap = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/fulfillment",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Verify Dual Completion Condition",
+        ).json()
+
+        if final_snap.get("deal_completed"):
+            raise SimulationError(
+                "Verify Dual Completion Condition",
+                "Deal should not be completed after partial fulfillment (5/12 confirmed)",
+            )
+
+        return f"Partial fulfillment verified: 5.0 shipped and confirmed; deal_completed is False (planned: {final_snap.get('planned_quantity')})"
+
+    def step_10_agreement_amendment(self) -> str:
+        # Propose Version 2 referencing prior committed version 1 and prior hash
+        amend_resp = self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/agreements/amendments/propose",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={
+                "schema_version": 1,
+                "description": "Widget",
+                "quantity": "12",
+                "unit": "box",
+                "unit_price": "2.50",
+                "currency": "USD",
+                "delivery_destination": "Toronto East Logistics Center",
+                "delivery_date": "2026-12-15",
+                "payment_trigger": "seller_invoice",
+                "organization_id": self.ctx.buyer_org_id,
+                "prior_version_number": self.ctx.version_number,
+                "prior_terms_hash": self.ctx.terms_hash,
+                "rationale": "Updated delivery hub destination to Toronto East Logistics Center",
+            },
+            expected_status=201,
+            step_name="Propose Agreement Amendment v2",
+        )
+        amend_data = amend_resp.json()
+        self.ctx.v2_version_number = amend_data["version_number"]
+        self.ctx.v2_terms_hash = amend_data["terms_hash"]
+        self.ctx.v2_agreement_version_id = str(amend_data["id"])
+
+        # Assess amendment impact for candidate version 2
+        impact_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/agreements/amendments/impact?version_number={self.ctx.v2_version_number}",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Assess Amendment Impact",
+        )
+        impact = impact_resp.json()
+        if not impact.get("can_commit"):
+            raise SimulationError(
+                "Assess Amendment Impact",
+                f"Amendment blocked from committing: {impact.get('blockers')}",
+            )
+
+        # Bilateral approval of Version 2
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/agreements/{self.ctx.v2_version_number}/approve",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={"terms_hash": self.ctx.v2_terms_hash},
+            expected_status=200,
+            step_name="Approve Amendment v2 (Buyer)",
+        )
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/agreements/{self.ctx.v2_version_number}/approve",
+            headers=self._auth_header(self.ctx.seller_token),
+            json={"terms_hash": self.ctx.v2_terms_hash},
+            expected_status=200,
+            step_name="Approve Amendment v2 (Seller)",
+        )
+
+        # Commit Version 2
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/agreements/{self.ctx.v2_version_number}/commit",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={"terms_hash": self.ctx.v2_terms_hash},
+            expected_status=200,
+            step_name="Commit Agreement Amendment v2",
+        )
+
+        current_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/agreements/current",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Verify Current Agreement v2",
+        )
+        current = current_resp.json()
+        if current.get("version_number") != self.ctx.v2_version_number or current.get("status") != "COMMITTED":
+            raise SimulationError(
+                "Verify Current Agreement v2",
+                f"Expected version {self.ctx.v2_version_number} COMMITTED, got {current}",
+            )
+
+        return f"Amendment v{self.ctx.v2_version_number} proposed, bilaterally approved, and committed (hash: {self.ctx.v2_terms_hash[:12]}...)"
+
+    def step_11_cancellation_dispute_case(self) -> str:
+        # Buyer raises a dispute case with mutual visibility
+        case_resp = self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/cases",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={
+                "case_type": "DISPUTE",
+                "reason": "Carton exterior scuffing noted during partial delivery inspection",
+                "agreement_version_id": self.ctx.v2_agreement_version_id,
+                "agreement_terms_hash": self.ctx.v2_terms_hash,
+                "evidence_visibility": "MUTUAL_VISIBLE",
+                "evidence_notes": "Internal inspection confirms goods intact; logging packaging condition.",
+                "acting_organization_id": self.ctx.buyer_org_id,
+            },
+            expected_status=201,
+            step_name="Raise Dispute Deal Case",
+        )
+        case_data = case_resp.json()
+        self.ctx.dispute_case_id = str(case_data["id"])
+        if case_data.get("status") != "OPEN":
+            raise SimulationError(
+                "Raise Dispute Deal Case",
+                f"Expected status OPEN, got {case_data.get('status')}",
+            )
+
+        # Buyer adds photographic evidence
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/cases/{self.ctx.dispute_case_id}/evidence",
+            headers=self._auth_header(self.ctx.buyer_token),
+            json={
+                "notes": "Inspector photo attached: external carton label scuff only.",
+                "visibility": "MUTUAL_VISIBLE",
+                "metadata": {"inspector": "Jane Buyer"},
+                "acting_organization_id": self.ctx.buyer_org_id,
+            },
+            expected_status=201,
+            step_name="Add Case Evidence",
+        )
+
+        # Seller queries cases and sees the OPEN dispute
+        cases_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/cases",
+            headers=self._auth_header(self.ctx.seller_token),
+            expected_status=200,
+            step_name="Read Cases (Seller)",
+        )
+        seller_cases = cases_resp.json()
+        matching_case = next((c for c in seller_cases if c["id"] == self.ctx.dispute_case_id), None)
+        if not matching_case:
+            raise SimulationError("Read Cases (Seller)", "Dispute case not visible to Seller counterparty")
+
+        # Seller responds with CONSENT decision
+        resp_case = self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/cases/{self.ctx.dispute_case_id}/respond",
+            headers=self._auth_header(self.ctx.seller_token),
+            json={
+                "decision": "CONSENT",
+                "rationale": "Seller acknowledges scuffing and confirms packaging guarantee on subsequent shipment.",
+                "acting_organization_id": self.ctx.seller_org_id,
+            },
+            expected_status=200,
+            step_name="Respond to Deal Case",
+        ).json()
+
+        if resp_case.get("status") != "RESOLVED":
+            raise SimulationError(
+                "Respond to Deal Case",
+                f"Expected case status RESOLVED, got {resp_case.get('status')}",
+            )
+
+        return f"Dispute case {self.ctx.dispute_case_id} raised, evidence attached, and consensually resolved"
+
+    def step_12_reminders_and_trade_pack(self) -> str:
+        # Sync reminders
+        self._request(
+            "POST",
+            f"/deals/{self.ctx.deal_id}/reminders/sync",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Sync Deal Reminders",
+        )
+
+        # Read Buyer reminders: counterparty isolation verification
+        buyer_reminders_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/reminders",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Read Buyer Reminders",
+        )
+        buyer_reminders = buyer_reminders_resp.json()
+        if any(r.get("recipient_organization_id") != self.ctx.buyer_org_id for r in buyer_reminders):
+            raise SimulationError("Read Buyer Reminders", "Buyer received reminders for foreign organization")
+
+        # Read Seller reminders: verify isolation
+        seller_reminders_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/reminders",
+            headers=self._auth_header(self.ctx.seller_token),
+            expected_status=200,
+            step_name="Read Seller Reminders",
+        )
+        seller_reminders = seller_reminders_resp.json()
+        if any(r.get("recipient_organization_id") != self.ctx.seller_org_id for r in seller_reminders):
+            raise SimulationError("Read Seller Reminders", "Seller received reminders for foreign organization")
+
+        # Download commercial draft and verify unrecorded terms disclaimer
+        draft_resp = self._request(
+            "GET",
+            f"/deals/{self.ctx.deal_id}/documents/commercial-draft",
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Download Commercial Document Draft",
+        )
+        draft_data = draft_resp.json()
+        draft_content = draft_data.get("content", "")
+        if "Not specified in committed terms" not in draft_content:
+            raise SimulationError(
+                "Download Commercial Document Draft",
+                "Draft missing mandatory unrecorded terms disclaimer",
+            )
+
+        # Download Trade Pack ZIP and verify valid ZIP binary
+        pack_url = (
+            f"/deals/{self.ctx.deal_id}/documents/versions/{self.ctx.v2_version_number}/trade-pack"
+            f"?agreement_version_id={self.ctx.v2_agreement_version_id}"
+            f"&organization_id={self.ctx.buyer_org_id}"
+            f"&terms_hash={self.ctx.v2_terms_hash}"
+            f"&format=zip"
+        )
+        pack_resp = self._request(
+            "GET",
+            pack_url,
+            headers=self._auth_header(self.ctx.buyer_token),
+            expected_status=200,
+            step_name="Download F12 Trade Pack ZIP",
+        )
+        if not pack_resp.content.startswith(b"PK\x03\x04"):
+            raise SimulationError("Download F12 Trade Pack ZIP", "Trade pack response is not a valid ZIP archive")
+
+        return f"Reminders synced with counterparty isolation; commercial draft disclaimer and {len(pack_resp.content)} byte ZIP verified"
 
     def run(self) -> int:
         print(f"\n{self.fmt.bold('======================================================================')}")
@@ -455,6 +925,11 @@ class DealFlowSimulator:
             (5, "Generate Proposal & Approve Agreement", self.step_5_draft_and_approve_agreement),
             (6, "Commit Agreement & Verify Status", self.step_6_commit_and_verify_agreement),
             (7, "Authorize Payment & Read Stored Invoice", self.step_7_authorize_payment_milestone),
+            (8, "Simulate Offline Payment Reconciliation", self.step_8_offline_payment_reconciliation),
+            (9, "Record Partial Fulfillment & Verify Completion", self.step_9_partial_fulfillment),
+            (10, "Assess Impact & Commit Agreement Amendment v2", self.step_10_agreement_amendment),
+            (11, "Raise Dispute Deal Case & Record Consent", self.step_11_cancellation_dispute_case),
+            (12, "Sync Reminders & Export F12 Trade Pack", self.step_12_reminders_and_trade_pack),
         ]
 
         try:
@@ -488,6 +963,10 @@ class DealFlowSimulator:
         print(f"  Payment Mode:        {self.ctx.execution_mode}")
         print(f"  Invoice Reference:   {self.ctx.invoice_reference or 'not issued'}")
         print(f"  Payment State:       {self.ctx.payment_status} (queued/sent is not paid)")
+        print(f"  Reconciled State:    {self.ctx.reconciled_payment_status} (reconciliation_source={self.ctx.reconciliation_source})")
+        print(f"  Amended Version:     {self.fmt.cyan(str(self.ctx.v2_version_number))}")
+        print(f"  Amended Terms Hash:  {self.fmt.cyan(self.ctx.v2_terms_hash)}")
+        print(f"  Dispute Case ID:     {self.fmt.cyan(self.ctx.dispute_case_id)}")
         if self.ctx.invoice_url:
             print(f"  Invoice URL:         {self.ctx.invoice_url}")
 
@@ -504,7 +983,7 @@ class DealFlowSimulator:
 
 def _build_in_process_client(
     buyer_password: str, seller_password: str
-) -> tuple[httpx.Client, Callable[[], None], Callable[[], None]]:
+) -> tuple[httpx.Client, Callable[[], None], Callable[[], None], Callable[[str, str, str], None]]:
     """Construct an in-process ASGI test harness with an isolated SQLite database."""
     from secrets import token_urlsafe
 
@@ -518,6 +997,7 @@ def _build_in_process_client(
     from syncally.config import settings
     from syncally.infrastructure.database import get_db
     from syncally.infrastructure.models import Base
+    from syncally.infrastructure.models.demo import DemoFixture
     from syncally.infrastructure.payment_outbox import dispatch_pending_payment_events
     from syncally.infrastructure.repositories.payment_processing import (
         SqlAlchemyPaymentProcessingRepository,
@@ -565,7 +1045,21 @@ def _build_in_process_client(
     def dispatch_payment() -> None:
         dispatch_pending_payment_events(session_factory, SqlAlchemyPaymentProcessingRepository(session_factory), batch_size=25)
 
-    return client, cleanup, dispatch_payment
+    def mark_fixture(deal_id: str, buyer_org_id: str, seller_org_id: str) -> None:
+        from uuid import UUID
+
+        session.add(
+            DemoFixture(
+                fixture_key=f"sim-{deal_id[:32]}",
+                fixture_version=1,
+                buyer_organization_id=UUID(buyer_org_id),
+                seller_organization_id=UUID(seller_org_id),
+                deal_id=UUID(deal_id),
+            )
+        )
+        session.commit()
+
+    return client, cleanup, dispatch_payment, mark_fixture
 
 
 def _is_live_backend_healthy(base_url: str) -> bool:
@@ -592,13 +1086,14 @@ def run_simulation(
     fmt = TerminalFormatter(enable_color=enable_color)
     cleanup_fn: Callable[[], None] | None = None
     dispatch_payment = None
+    mark_fixture = None
 
     if in_process and not offline:
         print("Isolated execution requires explicit offline=True or --offline. No automatic fallback is permitted.")
         return 1
     if offline:
         print(fmt.cyan("[Mode] Running via in-process ASGI engine (isolated SQLite test harness)..."))
-        client, cleanup_fn, dispatch_payment = _build_in_process_client(buyer_password, seller_password)
+        client, cleanup_fn, dispatch_payment, mark_fixture = _build_in_process_client(buyer_password, seller_password)
     else:
         # Check if live server is reachable
         print(fmt.cyan(f"[Mode] Probing target backend at {base_url}..."))
@@ -619,6 +1114,7 @@ def run_simulation(
             seller_email=seller_email,
             seller_password=seller_password,
             dispatch_payment=dispatch_payment,
+            mark_fixture=mark_fixture,
         )
         return simulator.run()
     finally:

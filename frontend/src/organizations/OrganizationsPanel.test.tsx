@@ -85,7 +85,7 @@ describe("OrganizationsPanel", () => {
       workspace_name: null,
       granted_scopes: [],
       connected_at: null,
-      messaging_enabled: false,
+      messaging_enabled: true,
     };
     mockedGetSlackConnection.mockResolvedValue(slackConnection);
     window.location.hash = "#/settings/organizations?integration=connected";
@@ -93,7 +93,7 @@ describe("OrganizationsPanel", () => {
     render(<OrganizationsPanel />);
 
     expect(await screen.findByRole("heading", { name: "Integrations" })).toBeInTheDocument();
-    expect(await screen.findByText(/slack workspace connected\. messaging is not enabled yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/slack workspace connected\. members can link accounts and ask for deal status/i)).toBeInTheDocument();
     expect(mockedGetSlackConnection).toHaveBeenCalledWith(ORG_ID);
   });
 

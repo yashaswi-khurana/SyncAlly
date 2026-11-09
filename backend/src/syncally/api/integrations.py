@@ -31,7 +31,9 @@ from syncally.infrastructure.integrations.slack import (
 from syncally.infrastructure.models import (
     AuditEvent,
     SlackInstallation,
+    SlackLinkChallenge,
     SlackOAuthState,
+    SlackUserLink,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
 
@@ -56,6 +58,7 @@ def _configured() -> bool:
         settings.slack_client_id.strip()
         and settings.slack_client_secret.get_secret_value()
         and settings.slack_redirect_uri.strip()
+        and settings.slack_signing_secret.get_secret_value().strip()
         and settings.integration_token_encryption_key.get_secret_value()
     )
 
@@ -146,7 +149,7 @@ def _connection_response(installation: SlackInstallation | None) -> SlackConnect
         workspace_name=installation.workspace_name,
         granted_scopes=list(installation.granted_scopes or []),
         connected_at=installation.connected_at,
-        messaging_enabled=False,
+        messaging_enabled=True,
     )
 
 
@@ -383,6 +386,10 @@ async def disconnect_slack(
             detail="Slack disconnection could not be confirmed. Please retry.",
         ) from error
 
+    # Identity bindings and unused pairing codes are valid only for this
+    # confirmed installation. Reconnection must establish new user links.
+    db.execute(delete(SlackUserLink).where(SlackUserLink.installation_id == installation.id))
+    db.execute(delete(SlackLinkChallenge).where(SlackLinkChallenge.installation_id == installation.id))
     installation.status = "DISCONNECTED"
     installation.encrypted_bot_token = None
     installation.disconnected_at = datetime.now(UTC)

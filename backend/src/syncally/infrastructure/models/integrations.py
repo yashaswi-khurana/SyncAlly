@@ -5,7 +5,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE, Base
@@ -77,3 +88,83 @@ class SlackOAuthState(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SlackEvent(Base):
+    """Minimal durable queue record for one verified Slack event."""
+
+    __tablename__ = "slack_events"
+    __table_args__ = (
+        CheckConstraint("status IN ('PENDING', 'PROCESSING', 'DELIVERED', 'FAILED')", name="ck_slack_event_status"),
+        Index("ix_slack_events_pending", "status", "available_at"),
+        Index("ix_slack_events_retention", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("slack_installations.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    slack_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_ts: Mapped[str] = mapped_column(String(32), nullable=False)
+    thread_ts: Mapped[str] = mapped_column(String(32), nullable=False)
+    command: Mapped[str] = mapped_column(String(32), nullable=False)
+    deal_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SlackUserLink(Base):
+    """Explicit mapping between one Slack identity and one SyncAlly actor."""
+
+    __tablename__ = "slack_user_links"
+    __table_args__ = (
+        UniqueConstraint("installation_id", "slack_user_id", name="uq_slack_user_link_slack_identity"),
+        UniqueConstraint("installation_id", "user_id", name="uq_slack_user_link_syncally_identity"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("slack_installations.id", ondelete="CASCADE"), nullable=False
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    slack_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SlackLinkChallenge(Base):
+    """Short-lived hashed pairing challenge; encrypted code enables safe retries."""
+
+    __tablename__ = "slack_link_challenges"
+    __table_args__ = (
+        Index("ix_slack_link_challenges_expires_at", "expires_at"),
+        UniqueConstraint("event_id", name="uq_slack_link_challenge_event"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("slack_installations.id", ondelete="CASCADE"), nullable=False
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    slack_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    encrypted_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

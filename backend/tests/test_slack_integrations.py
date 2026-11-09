@@ -35,7 +35,9 @@ from syncally.infrastructure.models import (
     Organization,
     OrganizationMember,
     SlackInstallation,
+    SlackLinkChallenge,
     SlackOAuthState,
+    SlackUserLink,
     User,
 )
 from syncally.infrastructure.models.base import UUID_TYPE
@@ -301,6 +303,35 @@ class SlackIntegrationTests(unittest.TestCase):
         self.assertFalse(response.connected)
         self.assertIsNotNone(self.db.scalar(select(AuditEvent).where(AuditEvent.event_type == "integration.disconnected")))
 
+    def test_disconnect_clears_user_links_and_challenges_only_after_revoke(self) -> None:
+        installation = self._installation(self.org.id)
+        now = datetime.now(UTC)
+        link = SlackUserLink(
+            id=uuid4(), installation_id=installation.id, organization_id=self.org.id,
+            workspace_id=installation.workspace_id, slack_user_id="U-person",
+            user_id=self.user.id, created_at=now,
+        )
+        challenge = SlackLinkChallenge(
+            id=uuid4(), event_id="Ev-link", installation_id=installation.id,
+            organization_id=self.org.id, workspace_id=installation.workspace_id,
+            slack_user_id="U-person", code_hash=hashlib.sha256(b"pending").hexdigest(),
+            encrypted_code=SlackTokenCipher(FERNET_KEY).encrypt("pending-code"),
+            expires_at=now + timedelta(minutes=5), attempts=0,
+        )
+        self.db.add_all([link, challenge])
+        self.db.commit()
+
+        self.fake_oauth.revoke_error = SlackIntegrationError("provider details")
+        with self.assertRaises(HTTPException):
+            asyncio.run(integrations.disconnect_slack(self.org.id, self.admin, self.db))
+        self.assertIsNotNone(self.db.get(SlackUserLink, link.id))
+        self.assertIsNotNone(self.db.get(SlackLinkChallenge, challenge.id))
+
+        self.fake_oauth.revoke_error = None
+        asyncio.run(integrations.disconnect_slack(self.org.id, self.admin, self.db))
+        self.assertIsNone(self.db.get(SlackUserLink, link.id))
+        self.assertIsNone(self.db.get(SlackLinkChallenge, challenge.id))
+
     def test_schema_rejects_invalid_lifecycle_and_duplicate_active_mappings(self) -> None:
         self._installation(self.org.id)
         invalid = SlackInstallation(
@@ -364,6 +395,67 @@ class SlackIntegrationTests(unittest.TestCase):
         self.assertNotIn("slack_oauth_states", inspect(engine).get_table_names())
         engine.dispose()
 
+    def test_slack_events_migration_upgrades_0033_and_downgrades_to_0033(self) -> None:
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        metadata = MetaData()
+        Table("organizations", metadata, Column("id", UUID_TYPE, primary_key=True))
+        Table("users", metadata, Column("id", UUID_TYPE, primary_key=True))
+        metadata.create_all(engine)
+        versions = Path(__file__).parents[1] / "alembic" / "versions"
+        migration_0033 = runpy.run_path(str(versions / "0033_slack_integrations.py"))
+        migration_0034 = runpy.run_path(str(versions / "0034_slack_events_and_links.py"))
+
+        for migration in (migration_0033, migration_0034):
+            with engine.begin() as connection:
+                context = MigrationContext.configure(connection)
+                with Operations.context(context):
+                    migration["upgrade"]()
+
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        self.assertTrue({"slack_events", "slack_user_links", "slack_link_challenges"}.issubset(tables))
+        self.assertEqual(
+            {index["name"] for index in inspector.get_indexes("slack_events")},
+            {"ix_slack_events_pending", "ix_slack_events_retention"},
+        )
+        self.assertIn(
+            {"event_id"},
+            [set(constraint["column_names"]) for constraint in inspector.get_unique_constraints("slack_events")],
+        )
+        self.assertEqual(
+            {constraint["name"] for constraint in inspector.get_check_constraints("slack_events")},
+            {"ck_slack_event_status"},
+        )
+        self.assertEqual(
+            {constraint["name"] for constraint in inspector.get_unique_constraints("slack_user_links")},
+            {"uq_slack_user_link_slack_identity", "uq_slack_user_link_syncally_identity"},
+        )
+        self.assertEqual(
+            {index["name"] for index in inspector.get_indexes("slack_link_challenges")},
+            {"ix_slack_link_challenges_expires_at"},
+        )
+        challenge_uniques = inspector.get_unique_constraints("slack_link_challenges")
+        self.assertEqual(
+            {frozenset(constraint["column_names"]) for constraint in challenge_uniques},
+            {frozenset({"code_hash"}), frozenset({"event_id"})},
+        )
+        encrypted_code_column = next(
+            column for column in inspector.get_columns("slack_link_challenges")
+            if column["name"] == "encrypted_code"
+        )
+        self.assertTrue(encrypted_code_column["nullable"])
+        for table in ("slack_events", "slack_user_links", "slack_link_challenges"):
+            self.assertTrue(inspector.get_foreign_keys(table), table)
+
+        with engine.begin() as connection:
+            context = MigrationContext.configure(connection)
+            with Operations.context(context):
+                migration_0034["downgrade"]()
+        tables_after = set(inspect(engine).get_table_names())
+        self.assertTrue({"slack_installations", "slack_oauth_states"}.issubset(tables_after))
+        self.assertFalse({"slack_events", "slack_user_links", "slack_link_challenges"} & tables_after)
+        engine.dispose()
+
     def test_token_cipher_does_not_expose_plaintext_and_rejects_wrong_key(self) -> None:
         cipher = SlackTokenCipher(FERNET_KEY)
         encrypted = cipher.encrypt("xoxb-secret-token")
@@ -384,6 +476,7 @@ class SlackIntegrationTests(unittest.TestCase):
                 _env_file=None, app_env="test", database_url="sqlite://",
                 slack_client_id="client", slack_client_secret="secret",
                 slack_redirect_uri="http://localhost/callback", integration_token_encryption_key="invalid",
+                slack_signing_secret="signing-secret",
             )
         valid = Settings(
             _env_file=None, app_env="test", database_url="sqlite://",
@@ -391,6 +484,7 @@ class SlackIntegrationTests(unittest.TestCase):
             slack_redirect_uri="http://localhost/callback", integration_token_encryption_key=FERNET_KEY,
         )
         self.assertEqual(valid.slack_client_id, "client")
+        self.assertEqual(valid.slack_signing_secret.get_secret_value(), "")
 
     def test_slack_callback_redirects_provider_denial_without_attempting_exchange(self) -> None:
         state = self._state()

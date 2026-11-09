@@ -4,15 +4,19 @@ Use this guide for the local/demo API, Temporal workflow worker, Temporal outbox
 and PayPal Sandbox payment worker. PostgreSQL is the commercial source of truth.
 A workflow outcome, browser redirect or webhook body does not prove payment.
 
-## Slack connection (OAuth only)
+## Slack mentions and deal status
 
-Slice 1 connects one Slack workspace to one SyncAlly organization. It does not
-receive messages or send deal updates yet. In the Slack app configuration, add
-the exact OAuth redirect URL
-`https://<APP_DOMAIN>/integrations/slack/oauth/callback` and request only the
-`app_mentions:read` and `chat:write` bot scopes. Do not configure message-history
-scopes. In this release the `app_mentions:read` scope is recorded for the next
-slice; no Slack event subscriptions are enabled yet.
+Slack connects one workspace to one SyncAlly organization. In the Slack app
+configuration, set the OAuth redirect URL to
+`https://<APP_DOMAIN>/integrations/slack/oauth/callback`, add only the
+`app_mentions:read` and `chat:write` bot scopes, subscribe to the `app_mention`
+bot event, and set the Events API request URL to
+`https://<APP_DOMAIN>/integrations/slack/events`. Do not configure message-history
+scopes. Mentions are delivered only in conversations where the bot is a member;
+DMs and message history are not supported. The bot's private link-code response
+uses Slack ephemeral delivery, which requires the user to be in that channel and
+may not appear in Slack. If no private response appears, repeat `@SyncAlly link`
+or repeat the exact `@SyncAlly status <deal-id>` request.
 
 Set these API environment values from the Slack app's OAuth & Permissions page
 and a deployment secret manager:
@@ -21,6 +25,7 @@ and a deployment secret manager:
 SLACK_CLIENT_ID=<Slack app client ID>
 SLACK_CLIENT_SECRET=<Slack app client secret>
 SLACK_REDIRECT_URI=https://<APP_DOMAIN>/integrations/slack/oauth/callback
+SLACK_SIGNING_SECRET=<Slack app signing secret>
 INTEGRATION_TOKEN_ENCRYPTION_KEY=<Fernet key held as a deployment secret>
 ```
 
@@ -30,23 +35,48 @@ then place it directly in the secret manager. Do not commit it, paste it into
 chat, or reuse the JWT, PayPal, or Slack signing secret. The API encrypts the
 Slack bot token before persisting it. Rotating this encryption key requires
 disconnecting and reconnecting existing Slack installations; do this before
-removing the old key. The API fails closed when Slack credentials or a valid
+removing the old key. Keep the signing secret separate from the OAuth client
+secret and Fernet key. The API fails closed when Slack credentials or a valid
 encryption key are missing.
 
-After deployment and migration `0033_slack_integrations`, an active organization
-administrator can connect Slack from Settings → Organizations → Integrations.
+After deployment and migrations `0033_slack_integrations` and
+`0034_slack_events_and_links`, an active organization administrator can connect
+Slack from Settings -> Organizations -> Integrations. Start the dedicated
+`python -m syncally.cli.slack_events_worker` process (Compose service
+`slack-events-worker`) to deliver queued replies. Slack event requests are signed,
+freshness-checked and acknowledged after a durable event insert; `event_id`
+deduplicates intake only. The worker retries known transient failures with bounded
+attempts and honors Slack's `Retry-After` rate limit. Ambiguous outbound timeouts
+are recorded as `delivery_uncertain` and are not automatically retried, since
+Slack may already have accepted the message. A worker crash leaves a leased
+`PROCESSING` event; after its lease expires it becomes `FAILED` with
+`delivery_uncertain` and is not automatically replayed. Only failures explicitly
+known to be retryable return to `PENDING`. Outbound delivery is best-effort and
+does not guarantee exactly-once replies. Monitor failed rows in `slack_events`.
+The worker deletes expired link challenges and removes terminal (`DELIVERED` or
+`FAILED`) event rows 30 days after receipt. It preserves `PENDING` and
+`PROCESSING` work; expired processing leases are marked uncertain and are not
+replayed.
+
+Members link their own SyncAlly identity by mentioning `@SyncAlly link`, then
+redeeming the short-lived private code in the organization Integrations tab. The
+link establishes identity only. Each `@SyncAlly status <deal-id>` request resolves
+the active SyncAlly actor again and returns only deal status when existing deal
+permissions allow it. Missing and unauthorized deal IDs receive the same reply.
+Invoice/payment data, deal creation, fuzzy lookup and Slack history are outside
+this release.
+
 The authorization callback is single-use and expires after ten minutes. The
-connection view shows the workspace and granted scopes; it explicitly states
-that messaging is not enabled. Disconnect revokes the Slack token before the
-local credential is cleared. If Slack cannot confirm revocation, the connection
-remains active in SyncAlly and the admin can retry.
+connection view shows the workspace and granted scopes. Disconnect revokes the
+Slack token before the local credential is cleared. If Slack cannot confirm
+revocation, the connection remains active in SyncAlly and the admin can retry.
 
 The OAuth state table contains only a SHA-256 hash of the short-lived state.
 Audit events contain organization/workspace identifiers and outcome categories,
-never OAuth codes, state values, access tokens, or message content. Keep the
-database and deployment secret store access restricted; ordinary application
-logs do not contain provider credentials.
-
+never OAuth codes, link codes, state values, access tokens, or message content.
+The event queue stores only normalized command and routing fields, not raw message
+bodies. Keep the database and deployment secret store access restricted; ordinary
+application logs do not contain provider credentials.
 ## F11a explicit payment modes
 
 Back up the intended database, stop/drain API payment writers and payment workers,

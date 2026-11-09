@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { disconnectSlack, getSlackConnection, startSlackConnection } from "../api/client";
+import { disconnectSlack, getSlackConnection, redeemSlackLink, startSlackConnection } from "../api/client";
 import type { Organization, SlackConnection } from "../api/types";
 import SlackIntegrationSection from "./SlackIntegrationSection";
 
@@ -11,12 +11,14 @@ vi.mock("../api/client", async (importOriginal) => {
     ...actual,
     disconnectSlack: vi.fn(),
     getSlackConnection: vi.fn(),
+    redeemSlackLink: vi.fn(),
     startSlackConnection: vi.fn(),
   };
 });
 
 const mockedDisconnectSlack = vi.mocked(disconnectSlack);
 const mockedGetSlackConnection = vi.mocked(getSlackConnection);
+const mockedRedeemSlackLink = vi.mocked(redeemSlackLink);
 const mockedStartSlackConnection = vi.mocked(startSlackConnection);
 const ORG_ID = "33333333-3333-3333-3333-333333333333";
 
@@ -110,7 +112,7 @@ describe("SlackIntegrationSection", () => {
     render(<SlackIntegrationSection organization={organization()} />);
 
     expect(await screen.findByText(/connected to acme slack/i)).toBeInTheDocument();
-    expect(screen.getByText(/messaging is not enabled yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/members can ask about a deal by exact id/i)).toBeInTheDocument();
     expect(screen.getByText(/app_mentions:read, chat:write/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Disconnect Slack" }));
@@ -124,6 +126,33 @@ describe("SlackIntegrationSection", () => {
     await waitFor(() => expect(mockedDisconnectSlack).toHaveBeenCalledWith(ORG_ID));
     expect(await screen.findByText(/slack was disconnected/i)).toBeInTheDocument();
     expect(mockedGetSlackConnection).toHaveBeenCalledTimes(2);
+  });
+
+  it("redeems the private Slack code and confirms linking without granting permissions", async () => {
+    mockedRedeemSlackLink.mockResolvedValue({ linked: true });
+
+    render(<SlackIntegrationSection organization={organization("MEMBER")} />);
+    fireEvent.change(screen.getByLabelText("Temporary link code"), {
+      target: { value: "AbCdEfGh1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Link Slack account" }));
+
+    await waitFor(() => expect(mockedRedeemSlackLink).toHaveBeenCalledWith("AbCdEfGh1234"));
+    expect(await screen.findByText(/your slack account is linked. deal access still follows your syncally permissions/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Temporary link code")).toHaveValue("");
+  });
+
+  it("shows a safe error and preserves the code after a failed redemption", async () => {
+    mockedRedeemSlackLink.mockRejectedValue(new Error("Slack link code is invalid or expired"));
+
+    render(<SlackIntegrationSection organization={organization("MEMBER")} />);
+    fireEvent.change(screen.getByLabelText("Temporary link code"), {
+      target: { value: "AbCdEfGh1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Link Slack account" }));
+
+    expect(await screen.findByText("Slack link code is invalid or expired")).toBeInTheDocument();
+    expect(screen.getByLabelText("Temporary link code")).toHaveValue("AbCdEfGh1234");
   });
 
   it("explains deployment setup and prevents an unavailable connect action", async () => {

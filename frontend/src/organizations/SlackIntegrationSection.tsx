@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import type { FormEvent } from "react";
 
-import { ApiError, disconnectSlack, getSlackConnection, startSlackConnection } from "../api/client";
+import { ApiError, disconnectSlack, getSlackConnection, redeemSlackLink, startSlackConnection } from "../api/client";
 import type { Organization, SlackConnection } from "../api/types";
 
 type LoadState =
@@ -22,7 +23,7 @@ function callbackMessage(): string | null {
   const [, query] = rawPath.split("?");
   const result = new URLSearchParams(query || "").get("integration");
   switch (result) {
-    case "connected": return "Slack workspace connected. Messaging is not enabled yet.";
+    case "connected": return "Slack workspace connected. Members can link accounts and ask for deal status.";
     case "cancelled": return "Slack authorization was cancelled.";
     case "workspace_in_use": return "That Slack workspace is already connected to another SyncAlly organization.";
     case "already_connected": return "A Slack workspace is already connected to this organization.";
@@ -40,6 +41,8 @@ export default function SlackIntegrationSection({ organization }: { organization
   const [notice, setNotice] = useState<string | null>(() => callbackMessage());
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const [linkCode, setLinkCode] = useState("");
+  const [linking, setLinking] = useState(false);
 
   const loadConnection = useCallback(async () => {
     setState({ status: "loading" });
@@ -91,6 +94,21 @@ export default function SlackIntegrationSection({ organization }: { organization
     }
   }
 
+  async function linkAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setNotice(null);
+    setLinking(true);
+    try {
+      await redeemSlackLink(linkCode.trim());
+      setLinkCode("");
+      setNotice("Your Slack account is linked. Deal access still follows your SyncAlly permissions.");
+    } catch (error) {
+      setNotice(describeError(error));
+    } finally {
+      setLinking(false);
+    }
+  }
+
   return (
     <section className="org-tab-panel" id="org-integrations-panel" role="tabpanel" aria-labelledby="org-integrations-tab">
       <div className="org-section-heading">
@@ -106,7 +124,7 @@ export default function SlackIntegrationSection({ organization }: { organization
           <div>
             <span className="eyebrow">Collaboration</span>
             <h4 id="slack-integration-heading">Slack</h4>
-            <p className="muted">Use a Slack workspace to ask about SyncAlly deals and receive selected updates in a later release.</p>
+            <p className="muted">Connect a workspace so members can ask SyncAlly for deal status in Slack. Selected updates will follow in a later release.</p>
           </div>
           {state.status === "ready" && !state.connection.connected && canManage ? (
             <button type="button" className="button" onClick={() => void connect()} disabled={busy || !state.connection.configured}>
@@ -127,11 +145,27 @@ export default function SlackIntegrationSection({ organization }: { organization
             <p className="muted">Workspace ID: <code>{state.connection.workspace_id}</code></p>
             <p className="muted">Granted access: {state.connection.granted_scopes.join(", ") || "No scopes reported"}</p>
             <p className="muted">Connected {state.connection.connected_at ? new Date(state.connection.connected_at).toLocaleString() : "recently"}</p>
-            <p className="hint">Connected; messaging is not enabled yet. Slack will not read messages or send deal updates in this slice.</p>
+          <p className="hint">Members can ask about a deal by exact ID after linking their own SyncAlly account. Slack does not read message history.</p>
             {canManage ? <button type="button" className="button danger" onClick={() => setConfirmingDisconnect(true)} disabled={busy}>Disconnect Slack</button> : null}
           </div>
         ) : null}
-        {notice ? <p className="form-error" role="status">{notice}</p> : null}
+        {notice ? <p className={notice.startsWith("Your Slack account is linked") ? "success" : "form-error"} role="status">{notice}</p> : null}
+      </article>
+
+      <article className="card" aria-labelledby="slack-account-link-heading">
+        <h4 id="slack-account-link-heading">Link your Slack account</h4>
+        <p className="muted">In Slack, mention <code>@SyncAlly link</code>. Enter the private, temporary code the bot sends you. Linking confirms identity and does not grant deal permissions.</p>
+        <form className="org-add-member" onSubmit={(event) => void linkAccount(event)} noValidate>
+          <div className="org-add-member__controls">
+            <div className="field">
+              <label htmlFor="slack-link-code">Temporary link code</label>
+              <input id="slack-link-code" name="slack-link-code" type="text" autoComplete="off" maxLength={64} value={linkCode} onChange={(event) => setLinkCode(event.target.value)} disabled={linking} />
+            </div>
+            <button type="submit" className="button secondary" disabled={linking || linkCode.trim().length < 8}>
+              {linking ? "Linking…" : "Link Slack account"}
+            </button>
+          </div>
+        </form>
       </article>
 
       {confirmingDisconnect && canManage ? (

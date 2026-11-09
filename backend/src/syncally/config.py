@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     slack_client_id: str = ""
     slack_client_secret: SecretStr = SecretStr("")
     slack_redirect_uri: str = ""
+    slack_signing_secret: SecretStr = SecretStr("")
+    slack_events_poll_interval_seconds: float = 2.0
+    slack_events_batch_size: int = 20
     integration_token_encryption_key: SecretStr = SecretStr("")
 
     @model_validator(mode="after")
@@ -194,6 +197,10 @@ class Settings(BaseSettings):
             raise ValueError("OUTBOX_BATCH_SIZE must be positive")
         if self.outbox_poll_interval_seconds <= 0:
             raise ValueError("OUTBOX_POLL_INTERVAL_SECONDS must be positive")
+        if self.slack_events_batch_size <= 0:
+            raise ValueError("SLACK_EVENTS_BATCH_SIZE must be positive")
+        if self.slack_events_poll_interval_seconds <= 0:
+            raise ValueError("SLACK_EVENTS_POLL_INTERVAL_SECONDS must be positive")
         if (
             not local_environment
             and not self.temporal_tls

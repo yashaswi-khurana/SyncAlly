@@ -313,6 +313,13 @@ export function disconnectSlack(organizationId: string): Promise<SlackConnection
   });
 }
 
+export function redeemSlackLink(code: string): Promise<{ linked: boolean }> {
+  return apiRequest<{ linked: boolean }>("/integrations/slack/link", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
 export function getOrganization(organizationId: string, options?: { signal?: AbortSignal }): Promise<OrganizationDirectoryItem> {
   return apiRequest<OrganizationDirectoryItem>(`/organizations/${encodeURIComponent(organizationId)}`, { signal: options?.signal });
 }

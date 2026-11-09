@@ -129,7 +129,9 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 15s
@@ -173,6 +175,17 @@ services:
         condition: service_completed_successfully
     environment: *app-environment
     command: ["python", "-m", "syncally.cli.payment_worker"]
+
+  slack-events-worker:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment: *app-environment
+    command: ["python", "-m", "syncally.cli.slack_events_worker"]
 
   web:
     build:

@@ -25,6 +25,7 @@ from syncally.api.payments import router as payments_router
 from syncally.api.paypal_webhooks import router as paypal_webhooks_router
 from syncally.api.platform import router as platform_router
 from syncally.api.reminders import router as reminders_router
+from syncally.api.slack_events import router as slack_events_router
 from syncally.api.sourcing import router as sourcing_router
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
@@ -44,6 +45,8 @@ class RequestBodyLimitMiddleware:
             return
 
         headers = dict(scope.get("headers", []))
+        path = scope.get("path", "")
+        max_body_bytes = 256 * 1024 if path == "/integrations/slack/events" else self.max_body_bytes
         content_length = headers.get(b"content-length")
         try:
             declared_body_size = int(content_length) if content_length is not None else None
@@ -52,7 +55,7 @@ class RequestBodyLimitMiddleware:
                 scope, receive, send
             )
             return
-        if declared_body_size is not None and declared_body_size > self.max_body_bytes:
+        if declared_body_size is not None and declared_body_size > max_body_bytes:
             await JSONResponse(
                 {"detail": "Request body too large"}, status_code=413
             )(scope, receive, send)
@@ -66,7 +69,7 @@ class RequestBodyLimitMiddleware:
                 messages.append(message)
                 break
             body_size += len(message.get("body", b""))
-            if body_size > self.max_body_bytes:
+            if body_size > max_body_bytes:
                 await JSONResponse(
                     {"detail": "Request body too large"}, status_code=413
                 )(scope, receive, send)
@@ -122,6 +125,7 @@ app.include_router(auth_router)
 app.include_router(dev_router)
 app.include_router(organizations_router)
 app.include_router(integrations_router)
+app.include_router(slack_events_router)
 app.include_router(platform_router)
 app.include_router(deals_router)
 app.include_router(deals_api_v1_router)

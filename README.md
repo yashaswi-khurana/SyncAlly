@@ -310,6 +310,22 @@ npm run build
 
 ---
 
+## Contributor Metadata
+
+Commit messages in this repository do not credit an automated agent as a co-author. GitHub derives its contributor list from `Co-authored-by:` trailers, so the agent tooling that helps produce changes commits under the human author only.
+
+If a trailer ever slips into history, remove it without touching any code:
+
+```bash
+scripts/scrub-arena-coauthor.sh            # dry run: list the affected commits
+scripts/scrub-arena-coauthor.sh --apply    # rewrite the current branch
+git push --force-with-lease origin main    # publish the rewrite
+```
+
+History rewriting changes commit ids from the first patched commit onward, so coordinate with anyone holding a clone or an open pull request. File trees are identical before and after, and GitHub may keep the stale contributor entry cached for a few hours.
+
+---
+
 ## License
 
 [MIT](LICENSE)

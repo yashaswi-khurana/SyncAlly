@@ -589,36 +589,487 @@ legend {
   align-items: start;
 }
 
-/* ---------- forms ---------- */
+/* ---------- forms: one control system ---------- */
 
 .form {
   display: grid;
   gap: 20px;
 }
 
+/* A field is a vertical stack of label, control and hint, always in that order
+   and always with the same 7px rhythm and the same label treatment. */
 .field {
   display: grid;
   gap: 7px;
+  min-width: 0;
+  align-content: start;
 }
 
-.field label {
+.field label,
+.field legend {
+  color: var(--ink-soft);
   font-size: 0.82rem;
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+.field > .hint,
+.field > .field-error {
+  max-width: 60ch;
+}
+
+/* One control surface for every text input, textarea and select in the app:
+   the same paper fill, 1px frame, 44px minimum height, radius, type size and
+   focus ring. Written with :where() so this base layer carries zero
+   specificity — any component class can still refine a control, and nothing
+   can accidentally fall back to the browser's default box. Native selects keep
+   the system option list but share the frame. */
+:where(input, textarea, select):where(:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="submit"], [type="button"], [type="reset"], [type="image"], [type="color"])) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 11px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  accent-color: var(--accent);
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease),
+    background-color 0.16s var(--ease);
+}
+
+:where(textarea) {
+  min-height: 92px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+/* Native selects get one consistent chevron instead of three different ones. */
+:where(select) {
+  padding-right: 40px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%2362716a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  cursor: pointer;
+}
+
+:where(input, textarea, select):disabled {
+  background-color: var(--surface-2);
+  color: var(--ink-soft);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+/* Read-only values still read as paper, never as an editable box. */
+:where(input:read-only):not(:focus) {
+  background-color: var(--surface-2);
   color: var(--ink-soft);
 }
 
-.field input,
-.field select {
-  width: 100%;
-  padding: 12px 14px;
+/* Any control that opted into the shared surface keeps the same hard geometry
+   with component-level specificity, so a later layout rule cannot shrink it. */
+.input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 44px;
+}
+
+.input--textarea {
+  min-height: 84px;
+  line-height: 1.55;
+  resize: vertical;
+}
+/* Case and dispute panels keep a paper surface on the light canvas; the old
+   translucent-white overlays read as unreadable grey boxes. */
+.deal-case-item.card,
+.deal-cases-list .card {
+  border-color: var(--line);
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+.deal-case-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.deal-case-form__row,
+.deal-case-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.deal-case-form__actions {
+  justify-content: flex-end;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.deal-case-form__row .input {
+  flex: 1 1 200px;
+}
+
+.deal-case-form > .banner {
+  margin: 0;
+}
+
+.deal-case-item__evidence {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.deal-case-item__evidence h4 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 0.95rem;
+}
+
+.deal-case-evidence {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deal-case-evidence__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--surface);
+}
+
+.deal-case-evidence__item p {
+  flex: 1 1 220px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.deal-case-evidence__item .mono {
+  font-size: 0.75rem;
+}
+
+.deal-case-item__resolution {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.86rem;
+}
+
+.deal-case-item__timestamp {
+  font-size: 0.78rem;
+}
+
+.deal-case-item__reason {
+  margin: 8px 0 0;
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+.deal-cases-blocker-banner ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-size: 0.84rem;
+}
+
+.deal-case-item__actions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.deal-case-item__actions small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+/* invite team member modal */
+.invite-modal__intro {
+  margin-bottom: 18px;
+}
+
+.invite-modal__form {
+  gap: 16px;
+}
+
+.invite-modal__actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.invite-modal__link {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.invite-modal__link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.invite-modal__link-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.invite-modal__link .badge {
+  justify-self: start;
+  width: fit-content;
+}
+
+/* header row used by panel sections with a trailing action */
+.panel-head--row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px 20px;
+  flex-wrap: wrap;
+}
+
+.panel-head--row h2,
+.panel-head--row h3 {
+  font-size: clamp(1.15rem, 2vw, 1.4rem);
+}
+
+.reminders-panel__item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.reminders-panel__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.reminders-panel__badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* reminders panel meta line */
+.reminders-panel__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.reminders-panel__meta--warning {
+  color: #7d5518;
+}
+
+.reminders-panel__meta--danger {
+  color: var(--danger);
+}
+
+/* organization profile: read-only dimensions */
+.profile-dimension__label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* approval routing (organization settings) */
+.approval-routing-section {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.approval-routing-section__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0;
+}
+
+.approval-routing-section__head h4 {
+  margin: 4px 0 0;
+  font-family: var(--display);
+  font-size: 1.05rem;
+}
+
+.approval-routing-section .form {
+  gap: 14px;
+}
+
+.approval-routing-section .success,
+.approval-routing-section .form-error {
+  margin: 0;
+}
+
+/* Any remaining bare textarea (no class, or .input) still reads as paper. */
+textarea:not([class]) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 84px;
+  padding: 11px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   color: var(--ink);
   font: inherit;
-  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease),
-    background 0.2s var(--ease);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+/* Checkbox and radio rows: aligned, comfortable targets, accent-tinted. */
+.control-rows {
+  display: grid;
+  gap: 4px;
+  margin: 2px 0 0;
+}
+
+.control-rows label,
+.check-row {
+  display: flex;
+  font-weight: 500;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease);
+}
+
+.control-rows label:hover,
+.check-row:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.control-rows input[type="checkbox"],
+.control-rows input[type="radio"],
+.check-row input[type="checkbox"],
+.check-row input[type="radio"] {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.control-rows input:disabled,
+.check-row input:disabled {
+  cursor: not-allowed;
+}
+
+/* Radio/checkbox groups rendered as a bare fieldset (role, counterparty,
+   case type) become an inline segmented row instead of loose text. The
+   :where() wrapper keeps this base layer at zero specificity so component
+   styles always win. */
+:where(fieldset:not([class])) > :where(label) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 0 10px 0 0;
+  padding: 8px 14px 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), background 0.16s var(--ease),
+    color 0.16s var(--ease);
+}
+
+:where(fieldset:not([class])) > :where(legend) {
+  margin-bottom: 8px;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+:where(fieldset:not([class])) > label:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+:where(fieldset:not([class])) > label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+:where(fieldset:not([class])) input[type="radio"],
+:where(fieldset:not([class])) input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+:where(fieldset:disabled) > :where(label) {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* modal forms (add a term, raise a case, seller inquiry) share one rhythm */
+.manual-fact-form,
+.modal-dialog form {
+  display: grid;
+  gap: 16px;
+}
+
+.modal-dialog .field {
+  gap: 7px;
 }
 
 .collection-authoring,
@@ -729,21 +1180,6 @@ legend {
   font-weight: 600;
 }
 
-.collection-item-row input,
-.collection-shipment-row input,
-.collection-payment-row input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  height: 38px;
-  padding: 8px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: #fbf9f3;
-  color: var(--ink);
-  font: inherit;
-}
-
 .collection-item-row > div:last-child,
 .collection-shipment-row > div:last-child,
 .collection-payment-row > div:last-child {
@@ -780,19 +1216,6 @@ legend {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 600;
-}
-
-.collection-allocation-row input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  height: 38px;
-  padding: 8px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: #fbf9f3;
-  color: var(--ink);
-  font: inherit;
 }
 
 .deal-list__title {
@@ -867,7 +1290,7 @@ legend {
 .collection-shipment-row,
 .collection-payment-row { border-color: var(--line); border-radius: 8px; background: var(--surface); }
 .collection-item-row > div:first-child > label:first-child { grid-column: span 2; }
-.collection-authoring select { box-sizing: border-box; width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; }
+.collection-authoring select { width: 100%; }
 .collection-authoring input:focus-visible,
 .collection-authoring select:focus-visible,
 .collection-authoring button:focus-visible,
@@ -901,25 +1324,26 @@ legend {
   .collection-item-row > div:first-child > label:first-child { grid-column: auto; }
 }
 
-.field input:focus-visible,
-.field select:focus-visible,
+:where(input, textarea, select):focus-visible,
+:where(fieldset:not([class])) > label:has(input:focus-visible),
+.control-rows label:has(input:focus-visible),
+.check-row:has(input:focus-visible),
 .button:focus-visible,
 .nav-link:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.field input[aria-invalid="true"],
-.field select[aria-invalid="true"] {
+:where(input, textarea, select)[aria-invalid="true"] {
   border-color: var(--danger);
-  box-shadow: 0 0 0 4px var(--danger-soft);
+  box-shadow: 0 0 0 3px var(--danger-soft);
 }
 
 .field-error,
 .form-error {
   margin: 0;
-  color: #ff8f8f;
+  color: var(--danger);
   font-size: 0.84rem;
   line-height: 1.5;
 }
@@ -927,17 +1351,50 @@ legend {
 .form-error {
   padding: 12px 14px;
   background: var(--danger-soft);
-  border: 1px solid rgba(255, 73, 73, 0.35);
+  border: 1px solid rgba(185, 54, 45, 0.28);
   border-radius: var(--radius-sm);
 }
 
 .success {
+  margin: 0;
   padding: 12px 14px;
-  background: rgba(56, 211, 159, 0.12);
-  border: 1px solid rgba(56, 211, 159, 0.35);
+  background: rgba(46, 125, 91, 0.1);
+  border: 1px solid rgba(46, 125, 91, 0.28);
   border-radius: var(--radius-sm);
-  color: #7ff0c4;
+  color: #25664a;
   font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+/* status banners (cases, reminders, profile notices) */
+.banner {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.banner--error,
+.banner--danger {
+  border-color: rgba(185, 54, 45, 0.3);
+  background: var(--danger-soft);
+  color: #8f2b23;
+}
+
+.banner--warning {
+  border-color: rgba(180, 121, 39, 0.32);
+  background: rgba(194, 139, 56, 0.12);
+  color: #7d5518;
+}
+
+.banner--info {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+  color: var(--ink-soft);
 }
 
 /* ---------- buttons ---------- */
@@ -1009,6 +1466,20 @@ legend {
   background: transparent;
   color: var(--ink-soft);
   border-color: var(--line);
+}
+
+.button.danger,
+.button--danger {
+  border-color: var(--danger);
+  background: transparent;
+  color: var(--danger);
+}
+
+.button.danger:hover:not(:disabled),
+.button--danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: #8f2b23;
+  box-shadow: none;
 }
 
 .button.ghost:hover:not(:disabled),
@@ -1539,18 +2010,12 @@ legend {
 
 .communication-context select {
   width: 100%;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-3);
-  color: var(--ink);
-  font: inherit;
 }
 
 .communication-context select:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .message-list,
@@ -2174,25 +2639,9 @@ body {
   font-weight: 600;
 }
 
-.field label {
-  color: var(--ink-soft);
-}
-
-.field input,
-.field select,
-.communication-context select {
-  border-color: var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: #fbf9f3;
-  color: var(--ink);
-}
-
-.field input::placeholder {
-  color: var(--muted);
-}
-
-.auth-card .field input::placeholder {
-  color: rgba(255, 255, 255, 0.62);
+.auth-card .field input::placeholder,
+.auth-card .field textarea::placeholder {
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .button {
@@ -2737,16 +3186,38 @@ body {
   font-size: 0.75rem;
 }
 
-.auth-card .field input {
+.auth-card .field input:not([type="checkbox"]):not([type="radio"]),
+.auth-card .field select,
+.auth-card .field textarea {
   min-height: 48px;
-  border-color: rgba(247, 244, 236, 0.24);
-  background: rgba(247, 244, 236, 0.06);
+  border-color: rgba(247, 244, 236, 0.22);
+  background: rgba(247, 244, 236, 0.07);
   color: #fffdf7;
 }
 
-.auth-card .field input:focus-visible {
+.auth-card .field input:not([type="checkbox"]):not([type="radio"]):hover:not(:disabled),
+.auth-card .field select:hover:not(:disabled),
+.auth-card .field textarea:hover:not(:disabled) {
+  border-color: rgba(247, 244, 236, 0.4);
+}
+
+.auth-card .field input:not([type="checkbox"]):not([type="radio"]):focus-visible,
+.auth-card .field select:focus-visible,
+.auth-card .field textarea:focus-visible {
   border-color: #ef9a78;
-  box-shadow: 0 0 0 3px rgba(239, 154, 120, 0.17);
+  background: rgba(247, 244, 236, 0.11);
+  box-shadow: 0 0 0 3px rgba(239, 154, 120, 0.2);
+}
+
+.auth-card .field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23f7f4ec' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+}
+
+.auth-card option {
+  background: #1b2b26;
+  color: #f7f4ec;
 }
 
 .auth-card .field-error,
@@ -3616,7 +4087,75 @@ body {
 .fulfillment-panel__form select,
 .fulfillment-panel__form textarea {
   min-width: 180px;
-  padding: 10px 12px;
+}
+
+.fulfillment-panel__form label,
+.marketplace-page__publish label,
+.marketplace-page__filters label,
+.counterparty-invitation__full-link label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fulfillment-panel__form input:not([type="checkbox"]):not([type="radio"]),
+.fulfillment-panel__form select,
+.fulfillment-panel__form textarea,
+.marketplace-page input:not([type="checkbox"]):not([type="radio"]),
+.marketplace-page select,
+.marketplace-page textarea,
+.counterparty-invitation__full-link textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 11px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+
+.marketplace-page textarea,
+.counterparty-invitation__full-link textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.marketplace-page select,
+.fulfillment-panel__form select {
+  padding-right: 40px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%2362716a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  cursor: pointer;
+}
+
+.fulfillment-panel__form input:focus-visible,
+.fulfillment-panel__form select:focus-visible,
+.fulfillment-panel__form textarea:focus-visible,
+.marketplace-page input:focus-visible,
+.marketplace-page select:focus-visible,
+.marketplace-page textarea:focus-visible,
+.counterparty-invitation__full-link textarea:focus-visible,
+.message-composer__visibility label:has(input:focus-visible) {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.counterparty-invitation__full-link textarea {
+  font: 0.85rem/1.6 var(--mono);
+  overflow-wrap: anywhere;
 }
 
 .payment-status__item {
@@ -4194,18 +4733,6 @@ body {
   padding-top: 20px;
   border-top: 1px solid var(--line-strong);
 }
-.message-composer textarea {
-  width: 100%;
-  min-width: 0;
-  resize: vertical;
-  padding: 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-}
-.message-composer textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message-composer__visibility {
   display: flex;
   flex-wrap: wrap;
@@ -4216,7 +4743,6 @@ body {
 }
 .message-composer__visibility legend { margin-bottom: 8px; }
 .message-composer__visibility label { display: flex; align-items: flex-start; gap: 8px; }
-.message-composer__visibility input { margin-top: 4px; accent-color: var(--accent); }
 .message-composer__visibility small { display: block; color: var(--ink-soft); }
 .message-composer__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .message-entry .badge--private { border-style: dashed; }
@@ -4485,29 +5011,38 @@ body {
 
 .message-composer label[for="deal-message-input"] {
   display: block;
+  margin-bottom: 8px;
+  color: var(--ink-soft);
   font-size: 0.82rem;
   font-weight: 600;
-  color: var(--ink);
-  margin-bottom: 6px;
+  letter-spacing: 0.02em;
 }
 
 .message-composer textarea {
-  width: 100%;
   box-sizing: border-box;
-  padding: 10px 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 116px;
+  padding: 12px 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
-  font-family: inherit;
-  font-size: 0.88rem;
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.6;
   resize: vertical;
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
 
-.message-composer textarea:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.message-composer textarea:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.message-composer textarea:focus-visible {
+  outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .message-composer__controls {
@@ -4620,19 +5155,6 @@ body {
 .counterparty-invitation__full-link label {
   color: var(--ink);
   font-weight: 600;
-}
-
-.counterparty-invitation__full-link textarea {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--ink);
-  font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
-  overflow-wrap: anywhere;
-  resize: vertical;
 }
 
 .counterparty-invitation__expiry {
@@ -5000,7 +5522,7 @@ body {
 }
 
 .org-add-member__controls .button {
-  margin-bottom: 1px;
+  margin-bottom: 0;
 }
 
 .org-empty-state {
@@ -5066,6 +5588,14 @@ body {
 
 .org-create-form__country input {
   text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: var(--mono);
+}
+
+/* The country control is one line tall; keep its label on the same baseline
+   as the neighbouring legal-name field instead of floating above it. */
+.org-create-form__fields .field {
+  align-self: stretch;
 }
 
 .org-create-form__actions {
@@ -5153,9 +5683,48 @@ body {
 
 .marketplace-page__filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
   align-items: end;
   gap: 16px;
+}
+
+.marketplace-page__filters .button {
+  align-self: end;
+  white-space: nowrap;
+}
+
+.marketplace-page__publish {
+  gap: 14px;
+}
+
+.marketplace-page__publish .button {
+  justify-self: start;
+}
+
+@media (max-width: 760px) {
+  .marketplace-page__filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* mobile text inputs never trigger iOS zoom (>=16px computed) */
+@media (max-width: 600px) {
+  .field input:not([type="checkbox"]):not([type="radio"]),
+  .field select,
+  .field textarea,
+  .marketplace-page input:not([type="checkbox"]):not([type="radio"]),
+  .marketplace-page select,
+  .marketplace-page textarea,
+  .fulfillment-panel__form input:not([type="checkbox"]):not([type="radio"]),
+  .fulfillment-panel__form select,
+  .fulfillment-panel__form textarea,
+  .auth-card .field input:not([type="checkbox"]):not([type="radio"]),
+  .auth-card .field textarea,
+  .sourcing-hub-container input:not([type="checkbox"]):not([type="radio"]),
+  .sourcing-hub-container select,
+  .sourcing-hub-container textarea {
+    font-size: 1rem;
+  }
 }
 
 .marketplace-page__filters label {

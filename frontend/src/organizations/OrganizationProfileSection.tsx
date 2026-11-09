@@ -417,11 +417,11 @@ export default function OrganizationProfileSection({ organization }: Props) {
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {/* Dimensions */}
           <div>
-            <span style={{ fontSize: "0.85rem", fontWeight: 600, display: "block", marginBottom: 4 }}>
+            <span className="profile-dimension__label">
               Capabilities
             </span>
             {profile.capabilities.length === 0 ? (
-              <span className="muted" style={{ fontSize: "0.9rem" }}>No capabilities listed</span>
+              <span className="muted">No capabilities listed</span>
             ) : (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {profile.capabilities.map((cap) => (
@@ -434,11 +434,11 @@ export default function OrganizationProfileSection({ organization }: Props) {
           </div>
 
           <div>
-            <span style={{ fontSize: "0.85rem", fontWeight: 600, display: "block", marginBottom: 4 }}>
+            <span className="profile-dimension__label">
               Products
             </span>
             {profile.products.length === 0 ? (
-              <span className="muted" style={{ fontSize: "0.9rem" }}>No products listed</span>
+              <span className="muted">No products listed</span>
             ) : (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {profile.products.map((prod) => (
@@ -451,11 +451,11 @@ export default function OrganizationProfileSection({ organization }: Props) {
           </div>
 
           <div>
-            <span style={{ fontSize: "0.85rem", fontWeight: 600, display: "block", marginBottom: 4 }}>
+            <span className="profile-dimension__label">
               Operating Regions
             </span>
             {profile.regions.length === 0 ? (
-              <span className="muted" style={{ fontSize: "0.9rem" }}>No regions listed</span>
+              <span className="muted">No regions listed</span>
             ) : (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {profile.regions.map((reg) => (
@@ -468,7 +468,7 @@ export default function OrganizationProfileSection({ organization }: Props) {
           </div>
 
           <div>
-            <span style={{ fontSize: "0.85rem", fontWeight: 600, display: "block", marginBottom: 4 }}>
+            <span className="profile-dimension__label">
               Contacts
             </span>
             {profile.contacts.length === 0 ? (

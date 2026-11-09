@@ -395,10 +395,10 @@ function ThreadImporter({ deal, organization, onImported }: {
             <label><input type="radio" name={`import-visibility-${deal.id}`} checked={visibility === "SHAREABLE"}
               onChange={() => { setVisibility("SHAREABLE"); setSharingConfirmed(false); }} />Shareable</label>
           </fieldset>
-          <label><input type="checkbox" checked={confirmed} disabled={pending}
+          <label className="check-row"><input type="checkbox" checked={confirmed} disabled={pending}
             onChange={(event) => setConfirmed(event.target.checked)} />I confirm importing this exact text as {organization.legal_name}</label>
           {visibility === "SHAREABLE" ? (
-            <label><input type="checkbox" checked={sharingConfirmed} disabled={pending}
+            <label className="check-row"><input type="checkbox" checked={sharingConfirmed} disabled={pending}
               onChange={(event) => setSharingConfirmed(event.target.checked)} />I confirm sharing this thread with the counterparty</label>
           ) : null}
         </>

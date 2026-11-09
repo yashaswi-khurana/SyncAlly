@@ -1006,12 +1006,23 @@ export default function DealDetailPage({
                 </button>
               </div>
 
-              <p className="muted" style={{ marginBottom: 16 }}>
+              <p className="muted invite-modal__intro">
                 Team membership invitation
               </p>
 
-              <form onSubmit={handleGenerateInvite} className="form" style={{ gap: 14 }}>
-                <div className="field"><label htmlFor="deal-team-email">Team member email</label><input id="deal-team-email" type="email" maxLength={320} value={teamRecipientEmail} disabled={generatingInvite} onChange={(event) => setTeamRecipientEmail(event.target.value)} /></div>
+              <form onSubmit={handleGenerateInvite} className="form invite-modal__form">
+                <div className="field">
+                  <label htmlFor="deal-team-email">Team member email</label>
+                  <input
+                    id="deal-team-email"
+                    type="email"
+                    maxLength={320}
+                    placeholder="colleague@company.com"
+                    value={teamRecipientEmail}
+                    disabled={generatingInvite}
+                    onChange={(event) => setTeamRecipientEmail(event.target.value)}
+                  />
+                </div>
                 <div className="field">
                   <label htmlFor="deal-invite-org-select">Inviting Organization</label>
                   <select
@@ -1046,7 +1057,7 @@ export default function DealDetailPage({
                   </p>
                 ) : null}
 
-                <div style={{ marginTop: 8 }}>
+                <div className="invite-modal__actions">
                   <button
                     type="submit"
                     className="button"
@@ -1058,15 +1069,15 @@ export default function DealDetailPage({
               </form>
 
               {generatedInvite ? (
-                <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--line)" }}>
-                  <span className="eyebrow">Shareable Invitation Link</span>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <div className="invite-modal__link">
+                  <span className="eyebrow">Shareable invitation link</span>
+                  <div className="invite-modal__link-row">
                     <input
                       type="text"
                       readOnly
+                      aria-label="Shareable invitation link"
                       value={generatedInvite.invite_url}
                       className="mono"
-                      style={{ flex: 1, fontSize: "0.85rem" }}
                     />
                     <button
                       type="button"
@@ -1079,21 +1090,7 @@ export default function DealDetailPage({
                       {cancelingInvite ? "Revoking…" : "Revoke invitation"}
                     </button>
                   </div>
-                  <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        padding: "2px 8px",
-                        borderRadius: "4px",
-                        background: "rgba(56, 211, 159, 0.15)",
-                        color: "#38d39f",
-                        fontSize: "0.75rem",
-                        fontWeight: 600,
-                      }}
-                    >
-                      Expires in 7 days · Single use
-                    </span>
-                  </div>
+                  <span className="badge badge--status-confirmed">Expires in 7 days · Single use</span>
                 </div>
               ) : null}
             </div>

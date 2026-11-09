@@ -777,7 +777,7 @@ export default function AISuggestionReview({
             <input id={`proposal-expiry-${dealId}`} type="datetime-local" value={expiresAt} disabled={pendingAction !== null}
               onChange={(event) => { proposalEditRevisionRef.current += 1; setExpiresAt(event.target.value); }} />
           </div>
-          {negotiation?.current_candidate ? <label>
+          {negotiation?.current_candidate ? <label className="check-row">
             <input type="checkbox" checked={replacementConfirmed} disabled={pendingAction !== null}
               onChange={(event) => setReplacementAcknowledgement(event.target.checked ? candidateSignature : "")} />
             Replace candidate version {negotiation.current_candidate.version_number} and invalidate its approvals

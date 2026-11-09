@@ -125,14 +125,16 @@
   width: 100%;
   min-height: 44px;
   padding: 0.6875rem 0.875rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
   background: var(--surface);
   color: var(--ink);
   font-family: var(--body);
   font-size: 0.9375rem;
   line-height: 1.45;
-  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease),
+    background-color 0.18s var(--ease);
 }
 
 .sourcing-hub-container select {
@@ -507,13 +509,14 @@
   min-width: 0;
   min-height: 44px;
   padding: 0.6875rem 0.875rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
   background: var(--surface);
   color: var(--ink);
   font-family: var(--body);
   font-size: 0.9375rem;
   line-height: 1.45;
+  box-shadow: var(--shadow-sm);
 }
 
 .modal-dialog textarea {

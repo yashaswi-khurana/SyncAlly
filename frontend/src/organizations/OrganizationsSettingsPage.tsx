@@ -125,7 +125,9 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
           method: "POST",
           body: JSON.stringify({
             recipient_email: recipientEmail.trim().toLowerCase(),
-            ...inviteGrants,
+            ...(inviteGrants.role_bundles.length > 0 ? { role_bundles: inviteGrants.role_bundles } : {}),
+            ...(inviteGrants.permissions.length > 0 ? { permissions: inviteGrants.permissions } : {}),
+            ...(inviteGrants.deal_ids.length > 0 ? { deal_ids: inviteGrants.deal_ids } : {}),
           }),
         },
       );
@@ -222,6 +224,11 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
           Manage your organizations, their profiles and team members. Search for a trading
           partner when you create a deal.
         </p>
+        <div className="actions">
+          <button type="button" className="button" onClick={() => void handleOpenInviteModal()}>
+            Invite team member
+          </button>
+        </div>
       </Reveal>
 
       <Reveal delay={80}>
@@ -252,7 +259,9 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
                 onClick={() => setShowInviteModal(false)}
                 aria-label="Close"
               >
-                ✕
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                  <path d="M3 3 9 9 M9 3 3 9" />
+                </svg>
               </button>
             </div>
 
@@ -388,7 +397,9 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
                 onClick={handleDismissAcceptModal}
                 aria-label="Close"
               >
-                ✕
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                  <path d="M3 3 9 9 M9 3 3 9" />
+                </svg>
               </button>
             </div>
 
@@ -456,7 +467,10 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
             ) : (
               <div style={{ marginTop: 12 }}>
                 <p className="success" role="status" style={{ marginBottom: 20 }}>
-                  ✓ Successfully joined {acceptedResult.organization_legal_name}! You are now an active member.
+                  <svg className="inline-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 8.5 6.5 12 13 4.5" />
+                  </svg>
+                  {" "}Successfully joined {acceptedResult.organization_legal_name}! You are now an active member.
                 </p>
                 <div style={{ display: "flex", gap: 12 }}>
                   {acceptedResult.deal_id ? (

@@ -534,7 +534,15 @@ export default function AISuggestionReview({
             const missing = missingFields.includes(key);
             return (
               <li className={missing ? "terms-readiness__item terms-readiness__item--missing" : "terms-readiness__item terms-readiness__item--ready"} key={key}>
-                <span className="terms-readiness__icon" aria-hidden="true">{missing ? "●" : "✓"}</span>
+                <span className="terms-readiness__icon" aria-hidden="true">
+                  {missing ? (
+                    "●"
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 8.5 6.5 12 13 4.5" />
+                    </svg>
+                  )}
+                </span>
                 <span>{label}</span>
                 <span className="visually-hidden">{missing ? "Missing" : "Detected"}</span>
               </li>
@@ -602,7 +610,7 @@ export default function AISuggestionReview({
               ))}
             </ul>
           ) : (
-            <p className="ai-change-radar__clear" role="status">
+            <p className="ai-change-radar__clear">
               No differences surfaced among extracted shared values. This does not check every message or establish agreement.
             </p>
           )}

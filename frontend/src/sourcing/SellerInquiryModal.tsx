@@ -57,7 +57,9 @@ export const SellerInquiryModal: React.FC<SellerInquiryModalProps> = ({
             <h2 id="inquiry-modal-title">Seller Inquiry: {candidate.seller_organization_name}</h2>
           </div>
           <button type="button" className="deal-modal-close" onClick={onClose} aria-label="Close modal">
-            ✕
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+              <path d="M3 3 9 9 M9 3 3 9" />
+            </svg>
           </button>
         </div>
 

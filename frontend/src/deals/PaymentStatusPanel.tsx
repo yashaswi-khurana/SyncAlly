@@ -453,19 +453,22 @@ export default function PaymentStatusPanel({
             milestoneId: chosenMilestone.milestoneId,
           }
         : undefined;
+    const options = {
+      ...milestoneOptions,
+      ...(selectedOrganizationId ? { organizationId: selectedOrganizationId } : {}),
+    };
     try {
-      const result = await (milestoneOptions
+      const result = await (Object.keys(options).length > 0
         ? authorizeDealPayment(
             dealId,
             idempotencyKey.current,
             paymentPreview?.execution_mode,
-            { ...milestoneOptions, organizationId: selectedOrganizationId },
+            options,
           )
         : authorizeDealPayment(
             dealId,
             idempotencyKey.current,
             paymentPreview?.execution_mode,
-            { organizationId: selectedOrganizationId },
           ));
       idempotencyKey.current = null;
       setTargetMilestone(null);
@@ -513,7 +516,15 @@ export default function PaymentStatusPanel({
         </button>
       </div>
 
-      {state.status === "loading" ? <p role="status">Loading payment status…</p> : null}
+      {state.status === "loading" ? (
+        <>
+          <p role="status">Loading payment status…</p>
+          <div className="skeleton-stack" aria-hidden="true">
+            <span className="skeleton-bar skeleton-bar--mid" />
+            <span className="skeleton-bar skeleton-bar--short" />
+          </div>
+        </>
+      ) : null}
       {state.status === "error" ? (
         <div className="payment-status__message" role="alert">
           <p>Payment status is unavailable. {state.message}</p>
@@ -1024,7 +1035,9 @@ export default function PaymentStatusPanel({
                 onClick={cancelRecipientConfirmation}
                 aria-label="Close recipient confirmation"
               >
-                ✕
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                  <path d="M3 3 9 9 M9 3 3 9" />
+                </svg>
               </button>
             </div>
 

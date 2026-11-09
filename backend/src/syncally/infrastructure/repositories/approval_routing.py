@@ -17,10 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from syncally.domain.organizations.approval_routing import ApprovalRoutingPolicy
-from syncally.domain.organizations.organization import (
-    OrganizationCapability,
-    resolve_effective_capabilities,
-)
+from syncally.domain.organizations.authorization import expand_grants
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId, UserId
 from syncally.infrastructure.models import (
@@ -72,7 +69,7 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
         if not user_ids:
             return frozenset()
         stmt = (
-            select(OrganizationMember.user_id, OrganizationMember.role, OrganizationMember.capabilities)
+            select(OrganizationMember.user_id, OrganizationMember.role_bundles, OrganizationMember.permissions, OrganizationMember.is_owner)
             .join(Organization, Organization.id == OrganizationMember.organization_id)
             .join(User, User.id == OrganizationMember.user_id)
             .where(
@@ -87,8 +84,8 @@ class SqlAlchemyApprovalRoutingPolicyRepository:
             stmt = stmt.with_for_update(read=True, of=OrganizationMember)
         rows = self._db.execute(stmt).all()
         eligible: set[UserId] = set()
-        for user_id, role, capabilities in rows:
-            if OrganizationCapability.AGREEMENT_APPROVAL in resolve_effective_capabilities(role, capabilities):
+        for user_id, role_bundles, permissions, is_owner in rows:
+            if "agreement.approve" in expand_grants(role_bundles, permissions, owner=is_owner):
                 eligible.add(UserId(user_id))
         return frozenset(eligible)
 

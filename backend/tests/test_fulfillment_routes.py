@@ -161,10 +161,16 @@ class FulfillmentRouteTests(unittest.TestCase):
         self.deal_repository = SqlAlchemyDealRepository(self.db)
         self.fulfillment_repository = SqlAlchemyFulfillmentRepository(self.db)
         self.buyer_actor = ActorContext(
-            self.buyer_user.id, frozenset({self.buyer.id})
+            user_id=self.buyer_user.id,
+            organization_ids=frozenset({self.buyer.id}),
+            permissions_by_organization={self.buyer.id: frozenset({"deal.read_assigned", "fulfillment.read", "fulfillment.record"})},
+            assigned_deals=frozenset({(self.buyer.id, self.deal.id)}),
         )
         self.seller_actor = ActorContext(
-            self.seller_user.id, frozenset({self.seller.id})
+            user_id=self.seller_user.id,
+            organization_ids=frozenset({self.seller.id}),
+            permissions_by_organization={self.seller.id: frozenset({"deal.read_assigned", "fulfillment.read", "fulfillment.record"})},
+            assigned_deals=frozenset({(self.seller.id, self.deal.id)}),
         )
 
     def _payload(
@@ -238,6 +244,31 @@ class FulfillmentRouteTests(unittest.TestCase):
         )
         self.assertEqual(snapshot.state, "EMPTY")
         self.assertEqual(snapshot.planned_quantity, "1")
+
+    def test_dual_party_member_must_select_party_to_read_fulfillment(self) -> None:
+        actor = ActorContext(
+            user_id=self.buyer_user.id,
+            organization_ids=frozenset({self.buyer.id, self.seller.id}),
+            permissions_by_organization={
+                self.buyer.id: frozenset({"deal.read_assigned", "fulfillment.read"}),
+                self.seller.id: frozenset({"deal.read_assigned", "fulfillment.read"}),
+            },
+            assigned_deals=frozenset({
+                (self.buyer.id, self.deal.id),
+                (self.seller.id, self.deal.id),
+            }),
+        )
+        with self.assertRaises(HTTPException) as missing_selection:
+            read_fulfillment_route(
+                self.deal.id, actor, self.deal_repository, self.fulfillment_repository
+            )
+        self.assertEqual(missing_selection.exception.status_code, 422)
+
+        snapshot = read_fulfillment_route(
+            self.deal.id, actor, self.deal_repository, self.fulfillment_repository,
+            organization_id=self.buyer.id,
+        )
+        self.assertEqual(snapshot.state, "EMPTY")
 
         shipped = self._payload("SHIPPED", "1", 0, "ship-1")
         first = self._record(self.seller_actor, shipped)

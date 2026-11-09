@@ -131,7 +131,12 @@ class AgreementRouteTests(unittest.TestCase):
         app.dependency_overrides[get_current_actor] = lambda: actor
 
     def _actor(self, user: User, *organizations: Organization) -> ActorContext:
-        return ActorContext(user.id, frozenset(org.id for org in organizations))
+        organization_ids = frozenset(org.id for org in organizations)
+        return ActorContext(
+            user.id,
+            organization_ids,
+            owned_organization_ids=organization_ids,
+        )
 
     def _request(
         self, method: str, path: str, *, json: dict[str, Any] | None = None
@@ -145,11 +150,14 @@ class AgreementRouteTests(unittest.TestCase):
 
         return asyncio.run(send())
 
-    def _create_draft(self) -> httpx.Response:
+    def _create_draft(self, organization_id: UUID | None = None) -> httpx.Response:
+        payload: dict[str, Any] = {"proposal_id": str(self.proposal.id)}
+        if organization_id is not None:
+            payload["organization_id"] = str(organization_id)
         return self._request(
             "POST",
             f"/deals/{self.deal.id}/agreements",
-            json={"proposal_id": str(self.proposal.id)},
+            json=payload,
         )
 
     def _approve(self, version_number: int, *, organization_id: str | None = None):
@@ -610,10 +618,12 @@ class AgreementRouteTests(unittest.TestCase):
         self._authenticate(self._actor(self.buyer_user, self.buyer))
         self.session.add(OrganizationMember(user_id=self.buyer_user.id, organization_id=self.seller.id, status="ACTIVE"))
         self.session.commit()
+        self._authenticate(self._actor(self.buyer_user, self.buyer, self.seller))
         self.assertEqual(self._request("GET", f"/deals/{self.deal.id}/negotiation").status_code, 422)
         self.assertEqual(self._request("GET", f"/deals/{self.deal.id}/negotiation?organization_id={self.buyer.id}").status_code, 200)
         self.buyer_user.status = "INACTIVE"
         self.session.commit()
+        self._authenticate(ActorContext(self.buyer_user.id, frozenset()))
         self.assertEqual(self._request("GET", f"/deals/{self.deal.id}/negotiation?organization_id={self.buyer.id}").status_code, 404)
 
     def test_negotiation_http_rejects_naive_deadline_and_unknown_authority_fields(self) -> None:
@@ -771,7 +781,7 @@ class AgreementRouteTests(unittest.TestCase):
         self.assertEqual(self._create_draft().status_code, 201)
 
         impersonation = self._approve(1, organization_id=str(self.seller.id))
-        self.assertEqual(impersonation.status_code, 403)
+        self.assertEqual(impersonation.status_code, 404)
 
         response = self._approve(1)
 
@@ -837,7 +847,8 @@ class AgreementRouteTests(unittest.TestCase):
         )
         self.session.commit()
         self._authenticate(self._actor(self.buyer_user, self.buyer, self.seller))
-        self.assertEqual(self._create_draft().status_code, 201)
+        self.assertEqual(self._create_draft().status_code, 422)
+        self.assertEqual(self._create_draft(self.buyer.id).status_code, 201)
 
         ambiguous = self._approve(1)
         self.assertEqual(ambiguous.status_code, 422)

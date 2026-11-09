@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.api.authorization import require_deal_action, resolve_actor_party
 from syncally.api.deals import get_deal_repository
 from syncally.application.agreements import AgreementNotFound, get_current_agreement
 from syncally.application.deals import DealNotFound, DealRepository, get_deal
@@ -28,7 +29,6 @@ from syncally.config import settings
 from syncally.domain.agreements.agreement import AgreementStatus
 from syncally.domain.agreements.fulfillment import FulfillmentStage
 from syncally.domain.agreements.trade_terms import TradeTerms
-from syncally.domain.organizations.organization import OrganizationCapability
 from syncally.domain.payments.intent import (
     DELIVERY_TRIGGERS,
     PaymentExecutionMode,
@@ -43,10 +43,6 @@ from syncally.domain.shared.money import (
 )
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.deal_completion import _event_total, _scaled
-from syncally.infrastructure.identity import (
-    repair_organization_finance_membership,
-    verify_member_capability,
-)
 from syncally.infrastructure.models import (
     FulfillmentEvent,
     Obligation,
@@ -286,31 +282,12 @@ def _check_milestone_delivery_confirmed(
 
 
 @router.get("/preview", response_model=PaymentPreviewResponse)
-def preview_payment_route(deal_id: UUID, actor: ActorContext = Depends(get_current_actor),
+def preview_payment_route(deal_id: UUID, organization_id: UUID | None = None, actor: ActorContext = Depends(get_current_actor),
                           deal_repository: DealRepository = Depends(get_deal_repository), db: Session = Depends(get_db)) -> PaymentPreviewResponse:
     try:
         deal = get_deal(actor, deal_id, deal_repository)
-        if not SqlAlchemyPaymentIntentRepository(db).is_active_seller_member(deal.seller_organization_id, actor.user_id):
-            raise HTTPException(status_code=403, detail="Only an active seller member can preview payment authorization")
-        try:
-            verify_member_capability(
-                db,
-                deal.seller_organization_id,
-                actor.user_id,
-                OrganizationCapability.FINANCE,
-                for_update=False,
-            )
-        except HTTPException as exc:
-            if exc.status_code == status.HTTP_403_FORBIDDEN and "FINANCE" in str(exc.detail):
-                repaired = repair_organization_finance_membership(
-                    db, deal.seller_organization_id, actor.user_id
-                )
-                if repaired:
-                    db.commit()
-                else:
-                    raise
-            else:
-                raise
+        selected_org = resolve_actor_party(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "payments.read")
         agreement = get_current_agreement(actor, deal_id, deal_repository, SqlAlchemyAgreementRepository(db))
         if agreement.status is not AgreementStatus.COMMITTED:
             raise HTTPException(status_code=409, detail="The agreement must be committed before payment preview")
@@ -329,6 +306,7 @@ def get_payment_status_repository(db: Session = Depends(get_db)) -> PaymentStatu
 def authorize_payment_route(
     deal_id: UUID,
     payload: AuthorizePaymentRequest,
+    organization_id: UUID | None = None,
     actor: ActorContext = Depends(get_current_actor),
     deal_repository: DealRepository = Depends(get_deal_repository),
     db: Session = Depends(get_db),
@@ -336,28 +314,13 @@ def authorize_payment_route(
     """Let an authenticated seller queue one payment request after agreement commit."""
     try:
         deal = get_deal(actor, deal_id, deal_repository)
-        if deal.seller_organization_id not in actor.organization_ids:
+        selected_org = resolve_actor_party(actor, deal, organization_id)
+        if selected_org != deal.seller_organization_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only an active seller member can authorize a payment request",
+                detail="Payment authorization must be performed for the seller organization",
             )
-        try:
-            verify_member_capability(
-                db,
-                deal.seller_organization_id,
-                actor.user_id,
-                OrganizationCapability.FINANCE,
-                for_update=True,
-            )
-        except HTTPException as exc:
-            if exc.status_code == status.HTTP_403_FORBIDDEN and "FINANCE" in str(exc.detail):
-                repaired = repair_organization_finance_membership(
-                    db, deal.seller_organization_id, actor.user_id
-                )
-                if not repaired:
-                    raise
-            else:
-                raise
+        require_deal_action(actor, deal, selected_org, "payments.authorize")
         agreement = get_current_agreement(
             actor,
             deal_id,
@@ -594,6 +557,7 @@ def authorize_payment_route(
 @router.get("", response_model=list[PaymentStatusResponse])
 def list_payment_statuses_route(
     deal_id: UUID,
+    organization_id: UUID | None = None,
     actor: ActorContext = Depends(get_current_actor),
     deal_repository: DealRepository = Depends(get_deal_repository),
     payment_repository: PaymentStatusRepository = Depends(get_payment_status_repository),
@@ -601,6 +565,9 @@ def list_payment_statuses_route(
 ) -> list[PaymentStatusResponse]:
     """Return current-agreement payment state to either active deal participant."""
     try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        selected_org = resolve_actor_party(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "payments.read")
         payments = list_current_payment_statuses(
             actor,
             deal_id,
@@ -652,13 +619,16 @@ def list_payment_statuses_route(
 @router.get("/milestones", response_model=list[MilestonePaymentSummaryResponse])
 def list_payment_milestones_route(
     deal_id: UUID,
+    organization_id: UUID | None = None,
     actor: ActorContext = Depends(get_current_actor),
     deal_repository: DealRepository = Depends(get_deal_repository),
     db: Session = Depends(get_db),
 ) -> list[MilestonePaymentSummaryResponse]:
     """Return all payment milestones and their current lifecycle states for the committed agreement."""
     try:
-        get_deal(actor, deal_id, deal_repository)
+        deal = get_deal(actor, deal_id, deal_repository)
+        selected_org = resolve_actor_party(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "payments.read")
         agreement = get_current_agreement(
             actor,
             deal_id,

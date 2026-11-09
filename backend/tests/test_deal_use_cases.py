@@ -46,7 +46,10 @@ class DealUseCaseTests(unittest.TestCase):
     def test_create_deal_starts_a_draft_for_the_buyer_organization(self) -> None:
         buyer_id, seller_id = uuid4(), uuid4()
         repository = FakeDealRepository({buyer_id, seller_id})
-        actor = ActorContext(user_id=uuid4(), organization_ids=frozenset({buyer_id}))
+        actor = ActorContext(
+            user_id=uuid4(), organization_ids=frozenset({buyer_id}),
+            owned_organization_ids=frozenset({buyer_id}),
+        )
         now = datetime(2026, 10, 18, tzinfo=UTC)
 
         deal = create_deal(
@@ -77,7 +80,8 @@ class DealUseCaseTests(unittest.TestCase):
         organization_id = uuid4()
         repository = FakeDealRepository({organization_id})
         actor = ActorContext(
-            user_id=uuid4(), organization_ids=frozenset({organization_id})
+            user_id=uuid4(), organization_ids=frozenset({organization_id}),
+            owned_organization_ids=frozenset({organization_id}),
         )
 
         with self.assertRaises(InvariantViolation):
@@ -91,7 +95,10 @@ class DealUseCaseTests(unittest.TestCase):
 
     def test_create_deal_rejects_unknown_organizations(self) -> None:
         buyer_id, seller_id = uuid4(), uuid4()
-        actor = ActorContext(user_id=uuid4(), organization_ids=frozenset({buyer_id}))
+        actor = ActorContext(
+            user_id=uuid4(), organization_ids=frozenset({buyer_id}),
+            owned_organization_ids=frozenset({buyer_id}),
+        )
 
         with self.assertRaises(DealNotFound):
             create_deal(
@@ -103,7 +110,10 @@ class DealUseCaseTests(unittest.TestCase):
     def test_get_deal_returns_a_deal_for_a_participant(self) -> None:
         buyer_id, seller_id = uuid4(), uuid4()
         repository = FakeDealRepository({buyer_id, seller_id})
-        actor = ActorContext(user_id=uuid4(), organization_ids=frozenset({buyer_id}))
+        actor = ActorContext(
+            user_id=uuid4(), organization_ids=frozenset({buyer_id}),
+            owned_organization_ids=frozenset({buyer_id}),
+        )
         deal = create_deal(actor, CreateDealCommand(buyer_id, seller_id), repository)
 
         loaded = get_deal(actor, deal.id, repository)
@@ -120,7 +130,10 @@ class DealUseCaseTests(unittest.TestCase):
     def test_list_deals_scopes_to_the_actors_user_id(self) -> None:
         buyer_id, seller_id, other_seller_id = uuid4(), uuid4(), uuid4()
         repository = FakeDealRepository({buyer_id, seller_id, other_seller_id})
-        actor = ActorContext(user_id=uuid4(), organization_ids=frozenset({buyer_id}))
+        actor = ActorContext(
+            user_id=uuid4(), organization_ids=frozenset({buyer_id}),
+            owned_organization_ids=frozenset({buyer_id}),
+        )
         first = create_deal(actor, CreateDealCommand(buyer_id, seller_id), repository)
         second = create_deal(actor, CreateDealCommand(buyer_id, other_seller_id), repository)
 
@@ -128,6 +141,28 @@ class DealUseCaseTests(unittest.TestCase):
 
         self.assertEqual(repository.listed_for, actor.user_id)
         self.assertCountEqual(deals, [first, second])
+
+    def test_dual_party_listing_keeps_deal_scope_separate_per_organization(self) -> None:
+        buyer_id, seller_id = uuid4(), uuid4()
+        repository = FakeDealRepository({buyer_id, seller_id})
+        owner = ActorContext(
+            user_id=uuid4(), organization_ids=frozenset({buyer_id}),
+            owned_organization_ids=frozenset({buyer_id}),
+        )
+        deal = create_deal(owner, CreateDealCommand(buyer_id, seller_id), repository)
+        dual_party_actor = ActorContext(
+            user_id=uuid4(),
+            organization_ids=frozenset({buyer_id, seller_id}),
+            permissions_by_organization={
+                buyer_id: frozenset({"deal.read_assigned"}),
+                seller_id: frozenset({"deal.read_assigned"}),
+            },
+            assigned_deals=frozenset({(buyer_id, deal.id)}),
+        )
+
+        self.assertEqual(list_deals(dual_party_actor, repository), [deal])
+        self.assertEqual(list_deals(dual_party_actor, repository, buyer_id), [deal])
+        self.assertEqual(list_deals(dual_party_actor, repository, seller_id), [])
 
 
 if __name__ == "__main__":

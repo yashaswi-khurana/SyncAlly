@@ -10,6 +10,7 @@ import {
   getOrganization,
   listOrganizationMembers,
   updateMemberPermissions,
+  updateMemberDealAssignments,
   revokeOrganizationMember,
   listPaymentStatuses,
   suggestDealFacts,
@@ -732,34 +733,37 @@ describe("organization member permissions client", () => {
     expect(new Headers(lastRequest().init.headers).get("Authorization")).toBe("Bearer access-token");
   });
 
-  it("updates member role and capabilities with optimistic locking payload", async () => {
+  it("updates member role bundles, permissions, and deal assignments with optimistic locking", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
         user_id: userId,
         email: "member@example.com",
         display_name: "Member User",
-        role: "ADMIN",
         status: "ACTIVE",
-        capabilities: ["ADMINISTRATION", "DRAFTING", "AGREEMENT_APPROVAL", "FINANCE"],
-        assigned_capabilities: ["FINANCE"],
+        role_bundles: ["FINANCE"],
+        permissions: ["payments.read"],
+        deal_ids: ["deal-1"],
+        is_owner: false,
         version: 3,
       }),
     );
 
     const updated = await updateMemberPermissions(orgId, userId, {
       expected_version: 2,
-      role: "ADMIN",
-      capabilities: ["FINANCE"],
+      role_bundles: ["FINANCE"],
+      permissions: ["payments.read"],
+      deal_ids: ["deal-1"],
     });
 
     expect(updated.version).toBe(3);
-    expect(updated.role).toBe("ADMIN");
+    expect(updated.role_bundles).toEqual(["FINANCE"]);
     expect(lastRequest().url).toBe(`/organizations/${orgId}/members/${userId}`);
     expect(lastRequest().init.method).toBe("PATCH");
     expect(JSON.parse(lastRequest().init.body as string)).toEqual({
       expected_version: 2,
-      role: "ADMIN",
-      capabilities: ["FINANCE"],
+      role_bundles: ["FINANCE"],
+      permissions: ["payments.read"],
+      deal_ids: ["deal-1"],
     });
   });
 
@@ -772,6 +776,28 @@ describe("organization member permissions client", () => {
     expect(lastRequest().init.method).toBe("DELETE");
   });
 
+  it("updates only a member's explicit deal assignments", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      organization_id: orgId,
+      user_id: userId,
+      deal_ids: ["deal-1"],
+      version: 4,
+    }));
+
+    const result = await updateMemberDealAssignments(orgId, userId, {
+      expected_version: 3,
+      deal_ids: ["deal-1"],
+    });
+
+    expect(result.version).toBe(4);
+    expect(lastRequest().url).toBe(`/organizations/${orgId}/members/${userId}/deal-assignments`);
+    expect(lastRequest().init.method).toBe("PUT");
+    expect(JSON.parse(lastRequest().init.body as string)).toEqual({
+      expected_version: 3,
+      deal_ids: ["deal-1"],
+    });
+  });
+
   it("propagates 403 Forbidden on self-escalation or unauthorized attempt", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ detail: "Cannot modify your own membership role or capabilities" }, 403),
@@ -780,7 +806,7 @@ describe("organization member permissions client", () => {
     await expect(
       updateMemberPermissions(orgId, userId, {
         expected_version: 1,
-        capabilities: ["FINANCE"],
+        permissions: ["payments.authorize"],
       }),
     ).rejects.toThrow("Cannot modify your own membership role or capabilities");
   });
@@ -793,7 +819,7 @@ describe("organization member permissions client", () => {
     await expect(
       updateMemberPermissions(orgId, userId, {
         expected_version: 1,
-        role: "MEMBER",
+        deal_ids: [],
       }),
     ).rejects.toThrow("Cannot demote the last remaining admin of the organization");
   });

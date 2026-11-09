@@ -22,6 +22,7 @@ import FulfillmentPanel from "./FulfillmentPanel";
 import DealOverview from "./DealOverview";
 import type { OverviewSnapshot } from "./DealOverview";
 import type { OpeningMessageDraft } from "./openingMessageDraft";
+import MemberGrantFields, { type MemberGrants } from "../organizations/MemberGrantFields";
 
 type DealState =
   | { status: "loading" }
@@ -91,14 +92,18 @@ export default function DealDetailPage({
   const [selectedInviteOrgId, setSelectedInviteOrgId] = useState("");
   const [teamRecipientEmail, setTeamRecipientEmail] = useState("");
   const [generatingInvite, setGeneratingInvite] = useState(false);
+  const [cancelingInvite, setCancelingInvite] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [generatedInvite, setGeneratedInvite] = useState<{
+    invitation_id: string;
     token: string;
     invite_url: string;
     organization_id: string;
     deal_id: string | null;
   } | null>(null);
   const [copiedInvite, setCopiedInvite] = useState(false);
+  const [inviteGrants, setInviteGrants] = useState<MemberGrants>({ role_bundles: [], permissions: [], deal_ids: [] });
+  const updateInviteGrants = useCallback((grants: MemberGrants) => setInviteGrants(grants), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,7 +174,7 @@ export default function DealDetailPage({
     void (async () => {
       try {
         const [agreementResult, organizationsResult] = await Promise.allSettled([
-          getCurrentAgreement(deal.id),
+          getCurrentAgreement(deal.id, { organizationId: selectedOrganizationId || undefined }),
           listOrganizations(),
         ]);
 
@@ -454,6 +459,7 @@ export default function DealDetailPage({
     setInviteError(null);
     setGeneratedInvite(null);
     setCopiedInvite(false);
+    setInviteGrants({ role_bundles: [], permissions: [], deal_ids: [] });
     setTeamRecipientEmail("");
     try {
       const orgs = await listOrganizations();
@@ -489,6 +495,7 @@ export default function DealDetailPage({
     setInviteError(null);
     try {
       const res = await apiRequest<{
+        invitation_id: string;
         token: string;
         invite_url: string;
         organization_id: string;
@@ -500,6 +507,7 @@ export default function DealDetailPage({
         method: "POST",
         body: JSON.stringify({
           recipient_email: teamRecipientEmail.trim().toLowerCase(),
+          ...inviteGrants,
         }),
       });
       setGeneratedInvite(res);
@@ -521,6 +529,21 @@ export default function DealDetailPage({
       setTimeout(() => setCopiedInvite(false), 2500);
     } catch {
       setCopiedInvite(false);
+    }
+  }
+
+  async function handleCancelInvite() {
+    if (!generatedInvite || cancelingInvite) return;
+    setCancelingInvite(true);
+    setInviteError(null);
+    try {
+      await apiRequest<void>(`/organizations/${encodeURIComponent(generatedInvite.organization_id)}/invitations/${encodeURIComponent(generatedInvite.invitation_id)}`, { method: "DELETE" });
+      setGeneratedInvite(null);
+      setInviteError("Invitation revoked. Its link can no longer be accepted.");
+    } catch (caught) {
+      setInviteError(describeError(caught));
+    } finally {
+      setCancelingInvite(false);
     }
   }
 
@@ -911,6 +934,15 @@ export default function DealDetailPage({
                   </select>
                 </div>
 
+                {selectedInviteOrgId && state.status === "ready" ? <MemberGrantFields
+                  key={selectedInviteOrgId}
+                  organizationId={selectedInviteOrgId}
+                  isOwner={Boolean(adminOrganizations.find((org) => org.id === selectedInviteOrgId)?.is_owner)}
+                  disabled={generatingInvite}
+                  initialDealId={state.deal.id}
+                  onChange={updateInviteGrants}
+                /> : null}
+
                 {inviteError ? (
                   <p className="form-error" role="alert">
                     {inviteError}
@@ -945,6 +977,9 @@ export default function DealDetailPage({
                       onClick={handleCopyInviteLink}
                     >
                       {copiedInvite ? "Copied!" : "Copy Link"}
+                    </button>
+                    <button type="button" className="button danger" disabled={cancelingInvite} onClick={() => void handleCancelInvite()}>
+                      {cancelingInvite ? "Revoking…" : "Revoke invitation"}
                     </button>
                   </div>
                   <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>

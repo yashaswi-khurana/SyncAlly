@@ -351,6 +351,9 @@ def register_organization(
         role="ADMIN",
         status="ACTIVE",
         capabilities=["FINANCE"],
+        role_bundles=[],
+        permissions=[],
+        is_owner=True,
     ))
     now = datetime.now(UTC)
     db.add(AuditEvent(

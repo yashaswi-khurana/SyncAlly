@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   getApprovalRoutingPolicy,
+  listAssignableOrganizationDeals,
   listOrganizationMembers,
   revokeOrganizationMember,
   updateMemberPermissions,
@@ -20,6 +21,7 @@ vi.mock("../api/client", async (importOriginal) => {
     updateMemberPermissions: vi.fn(),
     revokeOrganizationMember: vi.fn(),
     getApprovalRoutingPolicy: vi.fn(),
+    listAssignableOrganizationDeals: vi.fn(),
   };
 });
 
@@ -27,6 +29,7 @@ const mockedListMembers = vi.mocked(listOrganizationMembers);
 const mockedUpdatePermissions = vi.mocked(updateMemberPermissions);
 const mockedRevokeMember = vi.mocked(revokeOrganizationMember);
 const mockedGetApprovalRoutingPolicy = vi.mocked(getApprovalRoutingPolicy);
+const mockedListAssignableDeals = vi.mocked(listAssignableOrganizationDeals);
 
 const ORG_ID = "org-1111-1111";
 const CURRENT_USER_ID = "user-self-9999";
@@ -51,6 +54,7 @@ describe("OrganizationMembersSection", () => {
   beforeEach(() => {
     mockAuthToken(CURRENT_USER_ID);
     mockedGetApprovalRoutingPolicy.mockResolvedValue(null);
+    mockedListAssignableDeals.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -58,7 +62,7 @@ describe("OrganizationMembersSection", () => {
     clearAccessToken();
   });
 
-  it("renders members list with capability badges and version", async () => {
+  it("renders member role bundles and grant version", async () => {
     const members: OrganizationMember[] = [
       {
         user_id: CURRENT_USER_ID,
@@ -66,7 +70,11 @@ describe("OrganizationMembersSection", () => {
         display_name: "Admin Self",
         role: "ADMIN",
         status: "ACTIVE",
-        capabilities: ["ADMINISTRATION", "DRAFTING", "AGREEMENT_APPROVAL"],
+        capabilities: [],
+        role_bundles: ["ORG_ADMIN"],
+        permissions: [],
+        deal_ids: [],
+        is_owner: false,
         version: 1,
       },
       {
@@ -75,8 +83,11 @@ describe("OrganizationMembersSection", () => {
         display_name: "Colleague",
         role: "MEMBER",
         status: "ACTIVE",
-        capabilities: ["DRAFTING", "FINANCE"],
-        assigned_capabilities: ["FINANCE"],
+        capabilities: [],
+        role_bundles: ["FINANCE"],
+        permissions: [],
+        deal_ids: [],
+        is_owner: false,
         version: 2,
       },
     ];
@@ -94,14 +105,20 @@ describe("OrganizationMembersSection", () => {
     expect(screen.getByText("v2")).toBeInTheDocument();
   });
 
-  it("allows admin to edit other member permissions and submit updates", async () => {
+  it("allows an admin to grant a bundle and an individual deal assignment", async () => {
+    mockedListAssignableDeals.mockResolvedValue([
+      { id: "deal-1", display_name: "Deal One", status: "OPEN" },
+    ]);
     const member: OrganizationMember = {
       user_id: OTHER_USER_ID,
       email: "colleague@test.com",
       role: "MEMBER",
       status: "ACTIVE",
-      capabilities: ["DRAFTING"],
-      assigned_capabilities: [],
+      capabilities: [],
+      role_bundles: [],
+      permissions: [],
+      deal_ids: [],
+      is_owner: false,
       version: 1,
     };
     mockedListMembers.mockResolvedValue([
@@ -110,7 +127,11 @@ describe("OrganizationMembersSection", () => {
         email: "admin@test.com",
         role: "ADMIN",
         status: "ACTIVE",
-        capabilities: ["ADMINISTRATION", "DRAFTING", "AGREEMENT_APPROVAL"],
+        capabilities: [],
+        role_bundles: ["ORG_ADMIN"],
+        permissions: [],
+        deal_ids: [],
+        is_owner: false,
         version: 1,
       },
       member,
@@ -118,8 +139,10 @@ describe("OrganizationMembersSection", () => {
 
     mockedUpdatePermissions.mockResolvedValue({
       ...member,
-      capabilities: ["DRAFTING", "FINANCE"],
-      assigned_capabilities: ["FINANCE"],
+      role_bundles: ["FINANCE"],
+      permissions: [],
+      deal_ids: ["deal-1"],
+      is_owner: false,
       version: 2,
     });
 
@@ -130,9 +153,8 @@ describe("OrganizationMembersSection", () => {
 
     expect(screen.getByText(/Editing permissions for colleague@test.com/)).toBeInTheDocument();
 
-    // Toggle Finance capability
-    const financeCheckbox = screen.getByLabelText(/Finance/);
-    fireEvent.click(financeCheckbox);
+    fireEvent.click(await screen.findByLabelText("FINANCE"));
+    fireEvent.click(screen.getByLabelText("Deal One (OPEN)"));
 
     // Save changes
     fireEvent.click(screen.getByText("Save changes"));
@@ -140,8 +162,9 @@ describe("OrganizationMembersSection", () => {
     await waitFor(() => {
       expect(mockedUpdatePermissions).toHaveBeenCalledWith(ORG_ID, OTHER_USER_ID, {
         expected_version: 1,
-        role: "MEMBER",
-        capabilities: ["FINANCE"],
+        role_bundles: ["FINANCE"],
+        permissions: [],
+        deal_ids: ["deal-1"],
       });
     });
 
@@ -154,7 +177,10 @@ describe("OrganizationMembersSection", () => {
       email: "colleague@test.com",
       role: "MEMBER",
       status: "ACTIVE",
-      capabilities: ["DRAFTING"],
+      capabilities: [],
+      role_bundles: [],
+      permissions: [],
+      deal_ids: [],
       version: 1,
     };
     mockedListMembers.mockResolvedValue([
@@ -163,7 +189,11 @@ describe("OrganizationMembersSection", () => {
         email: "admin@test.com",
         role: "ADMIN",
         status: "ACTIVE",
-        capabilities: ["ADMINISTRATION", "DRAFTING", "AGREEMENT_APPROVAL"],
+        capabilities: [],
+        role_bundles: ["ORG_ADMIN"],
+        permissions: [],
+        deal_ids: [],
+        is_owner: false,
         version: 1,
       },
       member,

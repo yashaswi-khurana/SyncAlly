@@ -86,7 +86,9 @@ class CommercialDocumentDraftTests(TestCase):
                     created_at=now,
                 )
             )
-        self.actor = ActorContext(uuid4(), frozenset({buyer_id}))
+        self.actor = ActorContext(
+            uuid4(), frozenset({buyer_id}), owned_organization_ids=frozenset({buyer_id})
+        )
         self.deal_repository = FakeDealRepository(self.deal)
         self.agreement_repository = FakeAgreementRepository(self.agreement)
 
@@ -297,7 +299,9 @@ class CommercialDocumentDraftTests(TestCase):
                 )
             )
         agreement.commit(terms.terms_hash, datetime(2030, 1, 2, tzinfo=UTC))
-        actor = ActorContext(uuid4(), frozenset({buyer_id}))
+        actor = ActorContext(
+            uuid4(), frozenset({buyer_id}), owned_organization_ids=frozenset({buyer_id})
+        )
         draft = generate_commercial_document_draft(
             actor,
             deal_id,

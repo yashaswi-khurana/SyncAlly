@@ -27,6 +27,7 @@ from syncally.api.organizations import (
     create_organization_invitation,
     get_db,
     get_optional_actor,
+    revoke_organization_invitation,
 )
 from syncally.application.conversations import AddMessageCommand, add_message
 from syncally.application.identity import ActorContext
@@ -39,6 +40,7 @@ from syncally.infrastructure.models import (
     Conversation,
     CounterpartyOnboarding,
     Deal,
+    DealAssignment,
     Message,
     NegotiationSession,
     Organization,
@@ -93,6 +95,7 @@ class OrganizationInvitationTests(unittest.TestCase):
                 user_id=admin.id,
                 role="ADMIN",
                 status="ACTIVE",
+                is_owner=True,
             )
         )
         self.db.commit()
@@ -1283,7 +1286,9 @@ class OrganizationInvitationTests(unittest.TestCase):
             )
         )
         self.assertIsNotNone(membership)
-        membership.role = "MEMBER"
+        membership.is_owner = False
+        membership.role_bundles = []
+        membership.permissions = []
         self.db.commit()
 
         actor_invitee = ActorContext(user_id=invitee.id, organization_ids=frozenset())
@@ -1294,7 +1299,108 @@ class OrganizationInvitationTests(unittest.TestCase):
                 db=self.db,
             )
         self.assertEqual(ctx.exception.status_code, 403)
-        self.assertIn("Inviter is no longer an active organization admin", ctx.exception.detail)
+        self.assertIn("Inviter no longer has member administration authority", ctx.exception.detail)
+
+    def test_invitation_grant_snapshot_is_immutable_and_revocation_prevents_acceptance(self) -> None:
+        admin = self._user("snapshot-admin@example.com")
+        invitee = self._user("snapshot-invitee@example.com")
+        org = self._organization(admin)
+        actor = ActorContext(user_id=admin.id, organization_ids=frozenset({org.id}))
+        invitation = create_organization_invitation(
+            organization_id=org.id,
+            payload=CreateInvitationRequest(recipient_email=invitee.email),
+            actor=actor,
+            db=self.db,
+        )
+        invitation_id = UUID(jwt.decode(
+            invitation["token"], settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )["jti"])
+        created = self.db.scalar(select(AuditEvent).where(
+            AuditEvent.aggregate_id == invitation_id,
+            AuditEvent.event_type == "invitation.created",
+        ))
+        self.assertEqual(created.payload["role_bundles"], [])
+        self.assertEqual(created.payload["permissions"], [])
+        self.assertEqual(created.payload["deal_ids"], [])
+
+        revoke_organization_invitation(org.id, invitation_id, actor, self.db)
+        with self.assertRaises(HTTPException) as revoked:
+            accept_invitation(
+                AcceptInvitationRequest(token=invitation["token"]),
+                ActorContext(user_id=invitee.id, organization_ids=frozenset()),
+                self.db,
+            )
+        self.assertEqual(revoked.exception.status_code, 409)
+        self.assertIn("revoked", revoked.exception.detail.lower())
+
+    def test_org_admin_invitation_can_delegate_ordinary_bundle_and_assigned_deal(self) -> None:
+        admin = self._user("granting-admin@example.com")
+        invitee = self._user("granting-invitee@example.com")
+        org = self._organization(admin)
+        counterparty = self._placeholder_organization("Grant Partner")
+        membership = self.db.scalar(select(OrganizationMember).where(
+            OrganizationMember.organization_id == org.id,
+            OrganizationMember.user_id == admin.id,
+        ))
+        membership.is_owner = False
+        membership.role_bundles = ["ORG_ADMIN"]
+        deal = self._deal(org, counterparty)
+        self.db.commit()
+
+        invitation = create_organization_invitation(
+            org.id,
+            CreateInvitationRequest(
+                recipient_email=invitee.email,
+                role_bundles=["FINANCE"],
+                deal_ids=[deal.id],
+            ),
+            ActorContext(admin.id, frozenset({org.id})),
+            self.db,
+        )
+        accepted = accept_invitation(
+            AcceptInvitationRequest(token=invitation["token"]),
+            ActorContext(invitee.id, frozenset()),
+            self.db,
+        )
+        self.assertEqual(accepted["status"], "ACCEPTED")
+        member = self.db.scalar(select(OrganizationMember).where(
+            OrganizationMember.organization_id == org.id,
+            OrganizationMember.user_id == invitee.id,
+        ))
+        self.assertEqual(member.role_bundles, ["FINANCE"])
+        self.assertEqual(self.db.scalar(select(DealAssignment.deal_id).where(
+            DealAssignment.organization_id == org.id,
+            DealAssignment.user_id == invitee.id,
+            DealAssignment.status == "ACTIVE",
+        )), deal.id)
+
+    def test_inviter_permission_loss_before_acceptance_is_denied(self) -> None:
+        admin = self._user("permission-admin@example.com")
+        invitee = self._user("permission-invitee@example.com")
+        org = self._organization(admin)
+        invitation = create_organization_invitation(
+            org.id,
+            CreateInvitationRequest(recipient_email=invitee.email),
+            ActorContext(admin.id, frozenset({org.id})),
+            self.db,
+        )
+        membership = self.db.scalar(select(OrganizationMember).where(
+            OrganizationMember.organization_id == org.id,
+            OrganizationMember.user_id == admin.id,
+        ))
+        membership.is_owner = False
+        membership.role_bundles = []
+        membership.permissions = []
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as denied:
+            accept_invitation(
+                AcceptInvitationRequest(token=invitation["token"]),
+                ActorContext(invitee.id, frozenset()),
+                self.db,
+            )
+        self.assertEqual(denied.exception.status_code, 403)
+        self.assertIn("no longer", denied.exception.detail.lower())
 
     def test_accept_invitation_rejects_when_inviter_is_deactivated_or_removed(self) -> None:
         admin = self._user("admin@example.com")

@@ -22,6 +22,7 @@ from syncally.infrastructure.models.deals import (
 from syncally.infrastructure.models.demo import DemoFixture
 from syncally.infrastructure.models.fulfillment import FulfillmentEvent
 from syncally.infrastructure.models.identity import (
+    DealAssignment,
     Organization,
     OrganizationApprovalRoutingPolicy,
     OrganizationMember,
@@ -49,6 +50,7 @@ __all__ = [
     "Conversation",
     "CounterpartyOnboarding",
     "Deal",
+    "DealAssignment",
     "DealCaseEvidenceModel",
     "DealCaseModel",
     "DealReminderModel",

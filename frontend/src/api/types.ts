@@ -16,6 +16,23 @@ export interface PlatformOrganization {
   country_code: string;
   status: string;
   created_at: string;
+  owner_user_id: string | null;
+}
+
+export interface PlatformOrganizationMember {
+  user_id: string;
+  email: string;
+  display_name: string;
+  is_owner: boolean;
+}
+
+export interface PlatformUser {
+  id: string;
+  email: string;
+  display_name: string;
+  status: "ACTIVE" | "LOCKED" | string;
+  system_role: string;
+  created_at: string;
 }
 
 export type OrganizationCapability =
@@ -30,6 +47,7 @@ export interface Organization {
   legal_name: string;
   country_code: string;
   role: string;
+  is_owner?: boolean;
   capabilities?: OrganizationCapability[] | string[];
   products?: string[];
   regions?: string[];
@@ -163,6 +181,7 @@ export interface CounterpartyInvitationInput {
 }
 
 export interface Invitation {
+  invitation_id?: string | null;
   token: string;
   invite_url: string;
   organization_id: string;
@@ -878,14 +897,21 @@ export interface OrganizationMember {
   status: "ACTIVE" | "INACTIVE" | "REVOKED" | string;
   capabilities: OrganizationCapability[];
   assigned_capabilities?: OrganizationCapability[];
+  role_bundles?: string[];
+  permissions?: string[];
+  deal_ids?: string[];
+  is_owner?: boolean;
   version: number;
 }
 
 export interface UpdateMemberPermissionsInput {
   expected_version: number;
-  role?: "ADMIN" | "MEMBER" | string;
-  capabilities?: OrganizationCapability[];
+  role_bundles?: string[];
+  permissions?: string[];
+  deal_ids?: string[];
 }
+
+export interface AssignableDeal { id: string; display_name: string; status: string }
 
 export type CaseType = "CANCELLATION" | "DISPUTE";
 export type CaseStatus = "OPEN" | "UNDER_REVIEW" | "RESOLVED" | "REJECTED" | "WITHDRAWN";

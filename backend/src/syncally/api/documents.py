@@ -9,11 +9,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.api.authorization import require_deal_action
 from syncally.api.deals import get_deal_repository
 from syncally.application.agreements import (
     AgreementNotFound,
 )
-from syncally.application.deals import DealNotFound, DealRepository
+from syncally.application.deals import DealNotFound, DealRepository, get_deal
 from syncally.application.documents import (
     AgreementNotCommitted,
     CommercialDocumentDraft,
@@ -24,6 +25,7 @@ from syncally.application.documents import (
 from syncally.application.identity import ActorContext
 from syncally.domain.shared.errors import DomainError
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.models import Deal
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 
 router = APIRouter(prefix="/deals/{deal_id}/documents", tags=["documents"])
@@ -41,12 +43,19 @@ class CommercialDocumentDraftResponse(BaseModel):
 @router.get("/commercial-draft", response_model=CommercialDocumentDraftResponse)
 def get_commercial_document_draft_route(
     deal_id: UUID,
+    organization_id: UUID | None = Query(default=None),
     actor: ActorContext = Depends(get_current_actor),
     deal_repository: DealRepository = Depends(get_deal_repository),
     db: Session = Depends(get_db),
 ) -> CommercialDocumentDraftResponse:
     """Generate a read-only document from the deal's committed agreement."""
     try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        party_ids = {deal.buyer_organization_id, deal.seller_organization_id} & actor.organization_ids
+        if organization_id is None and len(party_ids) != 1:
+            raise HTTPException(status_code=422, detail="Select the organization you are acting for")
+        selected_org = organization_id or next(iter(party_ids))
+        require_deal_action(actor, deal, selected_org, "deal.read_assigned")
         draft: CommercialDocumentDraft = generate_commercial_document_draft(
             actor,
             deal_id,
@@ -82,6 +91,10 @@ def get_trade_pack_route(
     actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db),
 ) -> Response:
     try:
+        deal = db.get(Deal, deal_id)
+        if deal is None:
+            raise HTTPException(404, "Deal not found")
+        require_deal_action(actor, deal, organization_id, "deal.read_assigned")
         result = SqlAlchemyAgreementRepository(db).read_versions(
             deal_id, actor.user_id, organization_id, (number,), commitment_only=True,
         )

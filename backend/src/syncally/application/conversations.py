@@ -200,7 +200,7 @@ def can_view_message(
         or conversation.participant_organization_id
         not in (deal.buyer_organization_id, deal.seller_organization_id)
         or message.conversation_id != conversation.id
-        or not actor.can_access_deal(deal)
+        or not actor.can_read_deal(deal)
     ):
         return False
     return visible_to_viewer(
@@ -214,7 +214,7 @@ def can_view_constraint(actor: ActorContext, deal: Deal, constraint: Constraint)
         constraint.deal_id != deal.id
         or constraint.owner_organization_id
         not in (deal.buyer_organization_id, deal.seller_organization_id)
-        or not actor.can_access_deal(deal)
+        or not actor.can_read_deal(deal)
     ):
         return False
     return visible_to_viewer(
@@ -240,6 +240,8 @@ def resolve_participant_organization(
             deal.seller_organization_id,
         ):
             raise CommunicationNotFound("Deal not found")
+        if not actor.has_deal_authority(deal, requested_organization_id, "deal.read_assigned"):
+            raise CommunicationNotFound("Deal not found")
         return requested_organization_id
 
     participant_organizations = [
@@ -250,8 +252,10 @@ def resolve_participant_organization(
         )
         if organization_id in actor.organization_ids
     ]
-    if len(participant_organizations) == 1:
-        return participant_organizations[0]
+    readable = [organization_id for organization_id in participant_organizations
+                if actor.has_deal_authority(deal, organization_id, "deal.read_assigned")]
+    if len(readable) == 1:
+        return readable[0]
     raise AmbiguousOrganization("Actor must name one of its deal organizations")
 
 
@@ -260,7 +264,7 @@ def _load_deal_for_participant(
 ) -> Deal:
     """Load a deal the actor participates in, hiding missing and forbidden deals alike."""
     deal = repository.get_deal_for_participant(deal_id, actor.user_id)
-    if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
+    if deal is None or deal.id != deal_id or not actor.can_read_deal(deal):
         raise CommunicationNotFound("Deal not found")
     return deal
 
@@ -375,6 +379,8 @@ def add_message(
     """Store a message authored by the authenticated user for its deal party."""
     deal = _load_deal_for_participant(actor, deal_id, repository)
     organization_id = resolve_participant_organization(actor, deal, command.organization_id)
+    if not actor.has_deal_authority(deal, organization_id, "deal.edit_assigned"):
+        raise OrganizationAccessDenied("Deal edit permission required")
     conversation = repository.get_or_create_conversation(deal_id, organization_id)
     message = Message(
         id=MessageId(uuid4()),
@@ -414,6 +420,8 @@ def create_manual_constraint(
     """Create an auditable fact sourced from a message authored by the actor."""
     deal = _load_deal_for_participant(actor, deal_id, repository)
     organization_id = resolve_participant_organization(actor, deal, command.organization_id)
+    if not actor.has_deal_authority(deal, organization_id, "deal.edit_assigned"):
+        raise OrganizationAccessDenied("Deal edit permission required")
     timestamp = now or datetime.now(UTC)
     if deal.pending_counterparty:
         repository.lock_deal_for_fact_persistence(deal_id, actor.user_id)
@@ -484,11 +492,7 @@ def deal_has_any_message(
     private-message boundary; content and metadata stay with their owner.
     """
     deal = _load_deal_for_participant(actor, deal_id, repository)
-    party_organization_id = next(
-        organization_id
-        for organization_id in (deal.buyer_organization_id, deal.seller_organization_id)
-        if organization_id in actor.organization_ids
-    )
+    party_organization_id = resolve_participant_organization(actor, deal)
     return repository.has_any_message(deal_id, party_organization_id)
 
 
@@ -572,7 +576,7 @@ def review_constraint(
 ) -> Constraint:
     """Apply a human review decision to a fact for a member of its owning party."""
     deal = repository.get_deal_for_participant(deal_id, actor.user_id)
-    if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
+    if deal is None or deal.id != deal_id or not actor.can_read_deal(deal):
         raise ConstraintNotFound("Constraint not found")
 
     constraint = repository.get_constraint_for_deal(deal_id, constraint_id, actor.user_id)
@@ -589,6 +593,8 @@ def review_constraint(
         raise ConstraintNotFound("Constraint not found")
     if constraint.owner_organization_id not in actor.organization_ids:
         raise ConstraintNotFound("Constraint not found")
+    if not actor.has_deal_authority(deal, constraint.owner_organization_id, "deal.edit_assigned"):
+        raise OrganizationAccessDenied("Deal edit permission required")
 
     target_status = _REVIEW_TARGET_STATUS[action]
     if constraint.status is target_status:
@@ -628,13 +634,15 @@ def correct_constraint(
 ) -> tuple[Constraint, Constraint]:
     """Replace an unreviewed candidate with a corrected private fact, atomically."""
     deal = repository.get_deal_for_participant(deal_id, actor.user_id)
-    if deal is None or not actor.can_access_deal(deal):
+    if deal is None or not actor.can_read_deal(deal):
         raise ConstraintNotFound("Constraint not found")
     original = repository.get_constraint_for_deal(deal_id, constraint_id, actor.user_id)
     if original is None or original.deal_id != deal.id:
         raise ConstraintNotFound("Constraint not found")
     if original.version != expected_version:
         raise ConcurrentConstraintUpdate("Constraint was changed by another request")
+    if not actor.has_deal_authority(deal, original.owner_organization_id, "deal.edit_assigned"):
+        raise OrganizationAccessDenied("Deal edit permission required")
     if original.status not in {
         ConstraintStatus.EXTRACTED,
         ConstraintStatus.NEEDS_CLARIFICATION,

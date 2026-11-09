@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 
 import {
   ApiError,
+  listAssignableOrganizationDeals,
   listOrganizationMembers,
   revokeOrganizationMember,
   updateMemberPermissions,
@@ -10,8 +11,8 @@ import {
 import { getCurrentUserId } from "../api/tokenStore";
 import type {
   Organization,
-  OrganizationCapability,
   OrganizationMember,
+  AssignableDeal,
 } from "../api/types";
 import ApprovalRoutingSection from "./ApprovalRoutingSection";
 
@@ -19,33 +20,7 @@ interface Props {
   organization: Organization;
 }
 
-const ALL_CAPABILITIES: { key: OrganizationCapability; label: string; description: string }[] = [
-  {
-    key: "ADMINISTRATION",
-    label: "Administration",
-    description: "Manage organization profile, settings, and team members",
-  },
-  {
-    key: "DRAFTING",
-    label: "Drafting",
-    description: "Create and edit deal proposals and agreement drafts",
-  },
-  {
-    key: "AGREEMENT_APPROVAL",
-    label: "Agreement Approval",
-    description: "Formally approve and bind bilateral trade agreements",
-  },
-  {
-    key: "FINANCE",
-    label: "Finance",
-    description: "Authorize payment requests and handle settlement operations",
-  },
-  {
-    key: "FULFILLMENT",
-    label: "Fulfillment",
-    description: "Verify delivery and handle trade execution milestones",
-  },
-];
+const BUNDLES = ["DEAL_MANAGER", "DEAL_MEMBER", "APPROVER", "FINANCE", "FULFILLMENT"];
 
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
@@ -80,10 +55,10 @@ export default function OrganizationMembersSection({ organization }: Props) {
 
   // Edit permissions state
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
-  const [draftRole, setDraftRole] = useState<"ADMIN" | "MEMBER">("MEMBER");
-  const [draftAssignedCaps, setDraftAssignedCaps] = useState<Set<OrganizationCapability>>(
-    new Set()
-  );
+  const [draftBundles, setDraftBundles] = useState<Set<string>>(new Set());
+  const [draftPermissions, setDraftPermissions] = useState<Set<string>>(new Set());
+  const [draftDealIds, setDraftDealIds] = useState<Set<string>>(new Set());
+  const [availableDeals, setAvailableDeals] = useState<AssignableDeal[]>([]);
   const [draftExpectedVersion, setDraftExpectedVersion] = useState<number>(1);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -120,13 +95,15 @@ export default function OrganizationMembersSection({ organization }: Props) {
   }
 
   const activeAdminsCount = members.filter(
-    (m) => m.role === "ADMIN" && m.status === "ACTIVE"
+    (m) => (m.role_bundles || []).includes("ORG_ADMIN") || m.is_owner
   ).length;
 
   function handleStartEdit(member: OrganizationMember) {
     setEditingUserId(member.user_id);
-    setDraftRole(member.role === "ADMIN" ? "ADMIN" : "MEMBER");
-    setDraftAssignedCaps(new Set(member.assigned_capabilities || member.capabilities || []));
+    setDraftBundles(new Set(member.role_bundles || []));
+    setDraftPermissions(new Set(member.permissions || []));
+    setDraftDealIds(new Set(member.deal_ids || []));
+    void listAssignableOrganizationDeals(organization.id).then(setAvailableDeals).catch(() => setAvailableDeals([]));
     setDraftExpectedVersion(member.version);
     setActionError(null);
     setActionNotice(null);
@@ -137,13 +114,13 @@ export default function OrganizationMembersSection({ organization }: Props) {
     setActionError(null);
   }
 
-  function handleToggleCapability(cap: OrganizationCapability) {
-    setDraftAssignedCaps((prev) => {
+  function handleToggle(setter: Dispatch<SetStateAction<Set<string>>>, key: string) {
+    setter((prev) => {
       const next = new Set(prev);
-      if (next.has(cap)) {
-        next.delete(cap);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(cap);
+        next.add(key);
       }
       return next;
     });
@@ -161,19 +138,15 @@ export default function OrganizationMembersSection({ organization }: Props) {
     const targetMember = members.find((m) => m.user_id === editingUserId);
     if (!targetMember) return;
 
-    if (targetMember.role === "ADMIN" && draftRole === "MEMBER" && activeAdminsCount <= 1) {
-      setActionError("Cannot demote the last remaining admin of the organization.");
-      return;
-    }
-
     setSaving(true);
     setActionError(null);
     setActionNotice(null);
     try {
       const updated = await updateMemberPermissions(organization.id, editingUserId, {
         expected_version: draftExpectedVersion,
-        role: draftRole,
-        capabilities: Array.from(draftAssignedCaps),
+        role_bundles: Array.from(draftBundles),
+        permissions: Array.from(draftPermissions),
+        deal_ids: Array.from(draftDealIds),
       });
       setMembers((prev) =>
         prev.map((m) => (m.user_id === updated.user_id ? updated : m))
@@ -274,7 +247,7 @@ export default function OrganizationMembersSection({ organization }: Props) {
           {members.map((member) => {
             const isSelf = member.user_id === currentUserId;
             const isEditing = editingUserId === member.user_id;
-            const isLastAdmin = member.role === "ADMIN" && activeAdminsCount <= 1;
+            const isLastAdmin = ((member.role_bundles || []).includes("ORG_ADMIN") || member.is_owner) && activeAdminsCount <= 1;
 
             return (
               <li
@@ -297,10 +270,10 @@ export default function OrganizationMembersSection({ organization }: Props) {
                           <span className="muted" style={{ fontSize: "0.85rem" }}>({member.email})</span>
                         )}
                         <span
-                          className={`badge ${member.role === "ADMIN" ? "badge--status-confirmed" : ""}`}
+                          className={`badge ${(member.is_owner || (member.role_bundles || []).includes("ORG_ADMIN")) ? "badge--status-confirmed" : ""}`}
                           style={{ fontSize: "0.75rem", fontWeight: 600 }}
                         >
-                          {member.role}
+                          {member.is_owner ? "ORG OWNER · FULL ACCESS" : (member.role_bundles || []).join(" + ") || "No access"}
                         </span>
                         {isSelf && (
                           <span
@@ -316,7 +289,7 @@ export default function OrganizationMembersSection({ organization }: Props) {
                       </div>
 
                       <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        {(member.capabilities || []).map((cap) => (
+                        {[...(member.permissions || []), ...(member.deal_ids?.length ? [`${member.deal_ids.length} assigned deals`] : [])].map((cap) => (
                           <span
                             key={cap}
                             style={{
@@ -336,9 +309,9 @@ export default function OrganizationMembersSection({ organization }: Props) {
 
                     {isAdmin && (
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        {isSelf ? (
+                        {isSelf || member.is_owner ? (
                           <span className="hint" style={{ fontSize: "0.75rem" }}>
-                            Cannot self-modify
+                            {member.is_owner ? "Ownership must be transferred first" : "Cannot self-modify"}
                           </span>
                         ) : (
                           <>
@@ -356,8 +329,8 @@ export default function OrganizationMembersSection({ organization }: Props) {
                               className="button danger"
                               style={{ fontSize: "0.8rem", padding: "4px 10px" }}
                               onClick={() => void handleRevoke(member)}
-                              disabled={isLastAdmin || saving || revokingUserId === member.user_id}
-                              title={isLastAdmin ? "Cannot revoke the last admin" : "Revoke membership"}
+                              disabled={member.is_owner || isLastAdmin || saving || revokingUserId === member.user_id}
+                              title={member.is_owner ? "Transfer ownership before revoking" : isLastAdmin ? "Cannot revoke the last admin" : "Revoke membership"}
                             >
                               {revokingUserId === member.user_id ? "Revoking…" : "Revoke"}
                             </button>
@@ -396,67 +369,37 @@ export default function OrganizationMembersSection({ organization }: Props) {
                       </div>
                     </div>
 
-                    <div className="field" style={{ marginBottom: 12 }}>
-                      <label htmlFor={`edit-role-${member.user_id}`}>Role</label>
-                      <select
-                        id={`edit-role-${member.user_id}`}
-                        value={draftRole}
-                        onChange={(e) => setDraftRole(e.target.value as "ADMIN" | "MEMBER")}
-                        disabled={saving || (isLastAdmin && draftRole === "ADMIN")}
-                      >
-                        <option value="MEMBER">MEMBER (Safe default: Drafting)</option>
-                        <option value="ADMIN">ADMIN (Safe default: Administration, Drafting, Agreement Approval)</option>
-                      </select>
-                      {isLastAdmin && (
-                        <p className="hint">This is the only admin of the organization. Demotion is disabled.</p>
-                      )}
-                    </div>
+                    <fieldset className="field" style={{ marginBottom: 12 }}>
+                      <legend>Access bundles</legend>
+                      <p className="muted">Bundles can be combined. Each bundle grants the actions listed in its description.</p>
+                      {BUNDLES.map((bundle) => <label key={bundle} style={{ display: "block", margin: "6px 0" }}>
+                        <input type="checkbox" checked={draftBundles.has(bundle)} disabled={saving}
+                          onChange={() => handleToggle(setDraftBundles, bundle)} /> {bundle.replaceAll("_", " ")}
+                      </label>)}
+                      {organization.is_owner ? <label style={{ display: "block", margin: "6px 0" }}>
+                        <input type="checkbox" checked={draftBundles.has("ORG_ADMIN")} disabled={saving}
+                          onChange={() => handleToggle(setDraftBundles, "ORG_ADMIN")} /> Organization administrator
+                      </label> : null}
+                    </fieldset>
 
-                    <div className="field">
-                      <label>Additional Capabilities</label>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
-                        {ALL_CAPABILITIES.map((cap) => {
-                          const isAssigned = draftAssignedCaps.has(cap.key);
-                          const isDefaultInRole =
-                            draftRole === "ADMIN"
-                              ? ["ADMINISTRATION", "DRAFTING", "AGREEMENT_APPROVAL"].includes(cap.key)
-                              : cap.key === "DRAFTING";
+                    <fieldset className="field" style={{ marginBottom: 12 }}>
+                      <legend>Additional permissions</legend>
+                      {["deal.create", "deal.read_all", "deal.edit_assigned", "agreement.approve", "payments.read", "payments.authorize", "fulfillment.read", "fulfillment.record", "marketplace.manage", "approval_routing.manage"].map((permission) => {
+                        const ownerOnly = permission === "deal.read_all";
+                        return <label key={permission} style={{ display: "block", margin: "6px 0" }}>
+                          <input type="checkbox" checked={draftPermissions.has(permission)} disabled={saving || (ownerOnly && !organization.is_owner)}
+                            onChange={() => handleToggle(setDraftPermissions, permission)} /> {permission}{ownerOnly ? " (owner delegated)" : ""}
+                        </label>;
+                      })}
+                    </fieldset>
 
-                          return (
-                            <label
-                              key={cap.key}
-                              style={{
-                                display: "flex",
-                                alignItems: "flex-start",
-                                gap: 8,
-                                fontSize: "0.85rem",
-                                cursor: "pointer",
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isAssigned || isDefaultInRole}
-                                disabled={saving || isDefaultInRole}
-                                onChange={() => handleToggleCapability(cap.key)}
-                              />
-                              <div>
-                                <span>
-                                  <strong>{cap.label}</strong> ({cap.key})
-                                  {isDefaultInRole ? (
-                                    <span className="muted" style={{ marginLeft: 6, fontSize: "0.75rem" }}>
-                                      [Role default]
-                                    </span>
-                                  ) : null}
-                                </span>
-                                <div className="muted" style={{ fontSize: "0.75rem" }}>
-                                  {cap.description}
-                                </div>
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    <fieldset className="field">
+                      <legend>Deal access</legend>
+                      {availableDeals.length === 0 ? <p className="muted">No assignable deals are available.</p> : availableDeals.map((deal) => <label key={deal.id} style={{ display: "block", margin: "6px 0" }}>
+                        <input type="checkbox" checked={draftDealIds.has(deal.id)} disabled={saving}
+                          onChange={() => handleToggle(setDraftDealIds, deal.id)} /> {deal.display_name} ({deal.status})
+                      </label>)}
+                    </fieldset>
                   </form>
                 )}
               </li>

@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
-from syncally.api.organizations import _active_admin_membership
 from syncally.application.identity import ActorContext
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import MarketplaceListing, MarketplaceRFQ, Organization
@@ -65,6 +64,11 @@ def _response(
         "unit_price": format(listing.unit_price, "f"),
         "currency": listing.currency,
     }
+
+
+def _require_marketplace_manage(actor: ActorContext, organization_id: UUID) -> None:
+    if not actor.has_permission(organization_id, "marketplace.manage"):
+        raise HTTPException(status_code=403, detail="Organization marketplace permission required")
 
 
 @router.get("/listings", response_model=list[MarketplaceListingResponse])
@@ -130,7 +134,10 @@ def create_marketplace_listing(
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    organization, _ = _active_admin_membership(db, payload.organization_id, actor.user_id)
+    organization = db.scalar(select(Organization).where(Organization.id == payload.organization_id, Organization.status == "ACTIVE"))
+    if organization is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    _require_marketplace_manage(actor, organization.id)
     listing = MarketplaceListing(
         organization_id=organization.id,
         title=payload.title,
@@ -156,7 +163,7 @@ def deactivate_marketplace_listing(
     listing = db.get(MarketplaceListing, listing_id)
     if listing is None:
         raise HTTPException(status_code=404, detail="Listing not found")
-    _active_admin_membership(db, listing.organization_id, actor.user_id)
+    _require_marketplace_manage(actor, listing.organization_id)
     listing.status = "INACTIVE"
     db.commit()
     return {"status": "INACTIVE"}
@@ -229,7 +236,7 @@ def search_marketplace_rfqs(
     category: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=10000),
-    _actor: ActorContext = Depends(get_current_actor),
+    actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     statement = (
@@ -240,6 +247,10 @@ def search_marketplace_rfqs(
         .limit(limit)
         .offset(offset)
     )
+    allowed_organization_ids = [org_id for org_id in actor.organization_ids if actor.has_permission(org_id, "marketplace.manage")]
+    if not allowed_organization_ids:
+        return []
+    statement = statement.where(MarketplaceRFQ.organization_id.in_(allowed_organization_ids))
     if destination_country_code:
         statement = statement.where(
             MarketplaceRFQ.destination_country_code == destination_country_code.upper()
@@ -263,7 +274,10 @@ def create_marketplace_rfq(
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    organization, _ = _active_admin_membership(db, payload.organization_id, actor.user_id)
+    organization = db.scalar(select(Organization).where(Organization.id == payload.organization_id, Organization.status == "ACTIVE"))
+    if organization is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    _require_marketplace_manage(actor, organization.id)
     rfq = MarketplaceRFQ(
         organization_id=organization.id,
         title=payload.title,
@@ -285,12 +299,14 @@ def create_marketplace_rfq(
 @router.get("/rfqs/{rfq_id}", response_model=MarketplaceRFQResponse)
 def get_marketplace_rfq(
     rfq_id: UUID,
-    _actor: ActorContext = Depends(get_current_actor),
+    actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     rfq = db.get(MarketplaceRFQ, rfq_id)
     organization = db.get(Organization, rfq.organization_id) if rfq else None
     if rfq is None or rfq.status != "ACTIVE" or organization is None or organization.status != "ACTIVE":
+        raise HTTPException(status_code=404, detail="Request for quote not found")
+    if organization.id not in actor.organization_ids or not actor.has_permission(organization.id, "marketplace.manage"):
         raise HTTPException(status_code=404, detail="Request for quote not found")
     return _rfq_response(rfq, organization)
 
@@ -304,7 +320,7 @@ def close_marketplace_rfq(
     rfq = db.get(MarketplaceRFQ, rfq_id)
     if rfq is None:
         raise HTTPException(status_code=404, detail="Request for quote not found")
-    _active_admin_membership(db, rfq.organization_id, actor.user_id)
+    _require_marketplace_manage(actor, rfq.organization_id)
     rfq.status = "CLOSED"
     db.commit()
     return {"status": "CLOSED"}

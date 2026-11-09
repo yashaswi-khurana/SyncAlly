@@ -13,6 +13,7 @@ from syncally.api.agreements import (
     build_trade_terms_from_request,
 )
 from syncally.api.auth import get_current_actor
+from syncally.api.authorization import require_deal_action, resolve_actor_party
 from syncally.application.identity import ActorContext
 from syncally.application.negotiation import (
     CandidateAcknowledgement,
@@ -143,6 +144,11 @@ def read_negotiation(deal_id: UUID, organization_id: UUID | None = None,
                      limit: int = Query(default=100, ge=1, le=100), offset: int = Query(default=0, ge=0, le=10_000),
                      actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
+        deal = db.get(Deal, deal_id)
+        if deal is None:
+            raise HTTPException(status_code=404, detail="Deal not found")
+        selected_org = resolve_actor_party(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "deal.read_assigned")
         return SqlAlchemyNegotiationRepository(db).read(deal_id, actor.user_id, organization_id, limit=limit, offset=offset)
     except Exception as error:
         _raise_error(error)
@@ -154,6 +160,9 @@ def write_negotiation(deal_id: UUID, action: NegotiationActionKind, payload: Neg
     try:
         repository = SqlAlchemyNegotiationRepository(db)
         deal = db.get(Deal, deal_id)
+        if deal is None:
+            raise HTTPException(status_code=404, detail="Deal not found")
+        require_deal_action(actor, deal, payload.organization_id, "deal.edit_assigned")
         repository._authorize(deal, actor.user_id, payload.organization_id)
         terms = None
         if payload.terms is not None:

@@ -91,7 +91,7 @@ export default function FulfillmentPanel({
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
-    void getDealFulfillment(dealId, controller.signal).then(
+    void getDealFulfillment(dealId, selectedOrganizationId, controller.signal).then(
       (snapshot) => {
         if (active) setLoaded({ key: requestKey, state: { status: "ready", snapshot } });
       },
@@ -108,7 +108,7 @@ export default function FulfillmentPanel({
       active = false;
       controller.abort();
     };
-  }, [dealId, reloadCount, reloadToken, requestKey]);
+  }, [dealId, selectedOrganizationId, reloadCount, reloadToken, requestKey]);
 
   const state = loaded?.key === requestKey ? loaded.state : { status: "loading" as const };
   const snapshot = state.status === "ready" ? state.snapshot : null;

@@ -398,6 +398,12 @@ def persist_fact_candidates(
     )
     if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
         raise CommunicationNotFound("Deal not found")
+    if any(
+        owner_id not in {deal.buyer_organization_id, deal.seller_organization_id}
+        or not actor.has_deal_authority(deal, owner_id, "deal.edit_assigned")
+        for owner_id in {candidate.owner_organization_id for candidate in result.candidates}
+    ):
+        raise CommunicationNotFound("Deal not found")
     if result.result.status is not ValidationStatus.VALID:
         return ()
 

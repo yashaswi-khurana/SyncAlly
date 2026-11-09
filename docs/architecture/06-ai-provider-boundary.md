@@ -1,21 +1,21 @@
 # AI Provider Boundary
 
-**Status:** F2 OpenAI HTTP boundary implemented and evaluated with mocked transports only
+**Status:** OpenAI and Gemini HTTP boundaries implemented; provider transports require live evaluation
 **Scope:** `backend/src/syncally/application/ai.py` and `backend/src/syncally/infrastructure/ai/`
 
-This document records the S4-03/F2 boundary. The approved choice is one OpenAI
-Chat Completions HTTP adapter behind the existing port, without a provider SDK.
-No real provider was called during implementation. Account/model availability,
-live output quality, and provider retention configuration are not verified.
+This document records the S4-03/F2 boundary. OpenAI Chat Completions and Google
+Gemini GenerateContent use HTTP adapters behind the existing port, without provider
+SDKs. Gemini support has not been live-evaluated. Account/model availability, live
+output quality, and provider retention configuration must be verified by operators.
 
 ## Decision
 
 - Keep the existing provider port and deterministic offline behavior; tests need
   neither network nor credentials. `AI_PROVIDER=offline` is the default.
-- Promote the existing `httpx>=0.27,<1.0` dependency from dev to runtime. Exactly
-  one adapter calls the fixed `https://api.openai.com/v1/chat/completions` endpoint.
-  TLS verification is enabled; redirects, environment proxies, tools, URL fetching,
-  and arbitrary endpoint configuration are disabled.
+- Promote the existing `httpx>=0.27,<1.0` dependency from dev to runtime. Fixed
+  OpenAI and Gemini HTTPS endpoints have TLS verification enabled; redirects,
+  environment proxies, tools, URL fetching, and arbitrary endpoint configuration
+  are disabled.
 - Business and domain code never import a provider SDK. Adapters translate
   provider output into the versioned S4-01 contracts.
 - A small LangGraph proposal flow checks required trade fields before routing
@@ -79,27 +79,29 @@ Strict JSON schemas require every key, including nullable optional values, with
 `additionalProperties=false` at every object. Ordinary code validates again:
 facts must ground against exact transmitted messages; each populated proposal
 field requires a locally grounded citation or an exact transmitted term citation.
-USD, decimal bounds, canonical dates, and plain decimal strings are enforced.
+Three-letter currency codes, decimal bounds, canonical dates, and plain decimal
+strings are enforced.
 Missing required terms must return an insufficient-context failure, not invented defaults.
 
-Remote monetary facts and message-backed proposal price citations require the
-explicit `USD` code adjacent to the exact amount in the exact authorized,
-transmitted quote. `$`, `dollars`, and currency evidence elsewhere in context
-cannot establish USD. The accepted strict policy requires one monetary amount
-in the quote and its original message clause, associated with `unit price`,
-`per unit`, `/unit`, `each`, or a quantity-at-price form such as `12 boxes at
-USD 2.50`. Budget, payment, total, deposit, balance, and subtotal clauses cannot
-authorize a unit price. Compound monetary quotes are rejected rather than
-interpreted: `Budget USD 2.50; actual unit price $2.50.` is invalid. Cropping
-that quote to `USD 2.50` or `2.50` cannot hide its original budget role; repeated
-quote occurrences must all satisfy the policy. An unambiguous `actual unit
-price USD 2.50` or `USD 2.50 per unit` citation remains valid and is preserved
-verbatim. These are conservative accepted forms, not a universal natural-language
-grounding guarantee. Recognized non-USD codes, names, or symbols anywhere in
-the cited source message conservatively invalidate that monetary evidence, even
-when the quote omits the contradictory qualifier. No currency conversion is
-allowed. An exact authorized transmitted price term with currency `USD` remains
-valid evidence for a proposal. Invalid currency evidence is permanent: one HTTP
+Remote monetary facts and message-backed proposal price citations require an
+explicit three-letter currency code adjacent to the exact amount in the exact
+authorized, transmitted quote. A symbol, currency name, or currency evidence
+elsewhere in context cannot establish a code. The accepted strict policy requires
+one monetary amount in the quote and its original message clause, associated
+with `unit price`, `per unit`, `/unit`, `each`, or a quantity-at-price form such
+as `12 boxes at INR 2.50`. Budget, payment, total, deposit, balance, and subtotal
+clauses cannot authorize a unit price. Compound monetary quotes are rejected
+rather than interpreted: `Budget INR 2.50; actual unit price $2.50.` is invalid.
+Cropping that quote to `INR 2.50` or `2.50` cannot hide its original budget role;
+repeated quote occurrences must all satisfy the policy. An unambiguous `actual
+unit price INR 2.50` or `INR 2.50 per unit` citation remains valid and is
+preserved verbatim. These are conservative accepted forms, not a universal
+natural-language grounding guarantee. Recognized conflicting currency codes,
+names, or symbols anywhere in the cited source message conservatively invalidate
+that monetary evidence, even when the quote omits the contradictory qualifier.
+No currency conversion is allowed. An exact authorized transmitted price term
+with the same explicit currency code remains valid evidence for a proposal.
+Invalid currency evidence is permanent: one HTTP
 attempt, no offline fallback, no candidates or draft, and no database writes.
 This stricter remote policy does not change the permissive offline demo helpers.
 
@@ -118,10 +120,14 @@ This stricter remote policy does not change the permissive offline demo helpers.
   unconfigured 503 outside those environments. A stray key cannot enable remote mode.
 - `AI_PROVIDER=openai`: requires `AI_REMOTE_EGRESS_ENABLED=true`, a nonblank
   `OPENAI_MODEL`, and `OPENAI_API_KEY` loaded as `SecretStr` from environment/secret store.
+- `AI_PROVIDER=gemini`: requires `AI_REMOTE_EGRESS_ENABLED=true`, a nonblank
+  `GEMINI_MODEL`, and `GOOGLE_API_KEY` loaded as `SecretStr` from environment/secret store.
 - `AI_PROVIDER=openai_with_offline_fallback`: same egress/model requirements;
   missing credentials may fall back with `missing_credentials`. Only exhausted
   transient attempts may fall back with `transient_exhausted`. Transient fallback
   uses the same filtered context, not newly restored private context.
+- `AI_PROVIDER=gemini_with_offline_fallback`: applies the same explicit fallback
+  rules to the Gemini adapter.
 - Disabled egress or missing model always gives generic configuration 503 and
   zero HTTP calls, even when fallback is selected.
 - `OPENAI_MODEL` has no default. `gpt-4.1-mini` is a documentation example only;
@@ -130,6 +136,9 @@ This stricter remote policy does not change the permissive offline demo helpers.
 `store=false` opts out of completion storage; it does **not** promise zero retention
 or disable provider abuse monitoring. Operators must approve provider contractual
 retention/data handling before enabling any egress, especially private egress.
+Google's Gemini free tier may use submitted prompts and responses to improve Google
+products. Use paid Gemini service for deal data and verify the project billing tier
+before configuring its key.
 
 ## Authority
 
@@ -154,9 +163,7 @@ The LangGraph graph only controls readiness and routing; grounding, retries,
 provider selection, and validation remain in the existing application/provider
 boundary. It cannot confirm facts, approve terms, or create agreements.
 
-Evaluation uses `httpx.MockTransport`, existing AI/context/conversation tests and
-frontend review/client tests for privacy gates, grounding, strict parsing, size
-limits, error classification, attempt counts, elapsed cancellation, revocation,
-safe errors, provenance and unchanged human review. This is a mocked boundary
-evaluation, not a real-provider quality benchmark. No new provider, credentials,
-or live availability claims are added.
+The existing `httpx.MockTransport` coverage exercises the OpenAI boundary and
+common privacy, grounding, parsing, size-limit, retry and provenance behavior.
+It does not exercise the new Gemini HTTP adapter. Gemini compiles but still needs
+transport-level contract coverage and a live request using a paid Google AI project.

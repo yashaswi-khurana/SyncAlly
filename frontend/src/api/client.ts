@@ -66,12 +66,44 @@ import type {
   RaiseCaseInput,
   RespondCaseInput,
   AddCaseEvidenceInput,
+  OpeningRequestAnalysisResult,
+  MarketplaceListingDetail,
+  InquiryDraft,
+  InterpretSourcingRequest,
+  InterpretSourcingResponse,
+  CompareSourcingRequest,
+  CompareSourcingResponse,
+  GapAnalysisSourcingRequest,
+  GapAnalysisSourcingResponse,
+  DraftInquirySourcingRequest,
+  EvaluateSourcingRequest,
+  EvaluateSourcingResponse,
+} from "./types";
+
+export type {
+  NormalizedTradeRequirements,
+  SuggestedSeller,
+  OpeningRequestAnalysisResult,
+  BuyerRequirements,
+  MarketplaceListingDetail,
+  ComparisonResult,
+  CommercialGap,
+  InquiryDraft,
+  InterpretSourcingRequest,
+  InterpretSourcingResponse,
+  CompareSourcingRequest,
+  CompareSourcingResponse,
+  GapAnalysisSourcingRequest,
+  GapAnalysisSourcingResponse,
+  DraftInquirySourcingRequest,
+  EvaluateSourcingRequest,
+  EvaluateSourcingResponse,
 } from "./types";
 
 const DEFAULT_ERROR_MESSAGE = "Something went wrong. Please try again.";
 
 /**
- * Upper bound for any API call, above the AI boundary's 20.5-second remote budget.
+ * Default upper bound for API calls.
  */
 export const API_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -137,6 +169,7 @@ export async function apiRequest<T>(
   init: RequestInit = {},
   responseType: "json" | "blob" = "json",
   authRequired = true,
+  timeoutMs = API_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", responseType === "blob" ? "application/zip, text/html" : "application/json");
@@ -161,7 +194,7 @@ export async function apiRequest<T>(
   const deadline = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, API_REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
 
   try {
     const response = await fetch(`${apiBaseUrl()}${path}`, {
@@ -854,7 +887,7 @@ export function suggestDealFacts(
   return apiRequest<FactSuggestionResult>(`/deals/${encodeURIComponent(dealId)}/ai/facts`, {
     method: "POST",
     body: JSON.stringify({ organization_id: organizationId }),
-  });
+  }, "json", true, 60_000);
 }
 
 export function draftDealProposal(
@@ -864,7 +897,7 @@ export function draftDealProposal(
   return apiRequest<ProposalSuggestion>(`/deals/${encodeURIComponent(dealId)}/ai/proposal`, {
     method: "POST",
     body: JSON.stringify({ organization_id: organizationId }),
-  });
+  }, "json", true, 60_000);
 }
 
 export function correctDealFact(
@@ -979,3 +1012,117 @@ export function suppressDealReminder(
     },
   );
 }
+
+export function analyzeOpeningRequest(
+  input: string | { text: string; buyer_organization_id?: string },
+  buyerOrgOrOptions?: string | { signal?: AbortSignal },
+  options?: { signal?: AbortSignal },
+): Promise<OpeningRequestAnalysisResult> {
+  let text: string;
+  let buyer_organization_id: string | undefined;
+  let signal: AbortSignal | undefined;
+
+  if (typeof input === "string") {
+    text = input;
+    if (typeof buyerOrgOrOptions === "string") {
+      buyer_organization_id = buyerOrgOrOptions;
+      signal = options?.signal;
+    } else {
+      signal = buyerOrgOrOptions?.signal;
+    }
+  } else {
+    text = input.text;
+    buyer_organization_id = input.buyer_organization_id;
+    if (typeof buyerOrgOrOptions === "object" && buyerOrgOrOptions !== null && "signal" in buyerOrgOrOptions) {
+      signal = buyerOrgOrOptions.signal;
+    } else if (options?.signal) {
+      signal = options.signal;
+    }
+  }
+
+  return apiRequest<OpeningRequestAnalysisResult>("/deals/opening-request/analyze", {
+    method: "POST",
+    body: JSON.stringify({
+      text,
+      ...(buyer_organization_id ? { buyer_organization_id } : {}),
+    }),
+    signal,
+  }).then((res) => ({
+    ...res,
+    suggested_sellers: (res.suggested_sellers || []).map((seller) => ({
+      ...seller,
+      id: seller.id || seller.organization_id || "",
+    })),
+  }));
+}
+
+export function interpretSourcingRequirements(
+  input: InterpretSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<InterpretSourcingResponse> {
+  return apiRequest<InterpretSourcingResponse>("/sourcing/interpret", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function getSourcingListings(
+  params: { category?: string; completeness?: string; q?: string } = {},
+  options?: { signal?: AbortSignal },
+): Promise<{ listings: MarketplaceListingDetail[]; total: number }> {
+  const query = new URLSearchParams();
+  if (params.category) query.set("category", params.category);
+  if (params.completeness) query.set("completeness", params.completeness);
+  if (params.q) query.set("q", params.q);
+  const qs = query.toString();
+  return apiRequest<{ listings: MarketplaceListingDetail[]; total: number }>(
+    `/sourcing/listings${qs ? `?${qs}` : ""}`,
+    { signal: options?.signal },
+  );
+}
+
+export function compareSourcingListings(
+  input: CompareSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<CompareSourcingResponse> {
+  return apiRequest<CompareSourcingResponse>("/sourcing/compare", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function analyzeSourcingGaps(
+  input: GapAnalysisSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<GapAnalysisSourcingResponse> {
+  return apiRequest<GapAnalysisSourcingResponse>("/sourcing/gap-analysis", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function draftSourcingInquiry(
+  input: DraftInquirySourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<InquiryDraft> {
+  return apiRequest<InquiryDraft>("/sourcing/draft-inquiry", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+export function evaluateSourcing(
+  input: EvaluateSourcingRequest,
+  options?: { signal?: AbortSignal },
+): Promise<EvaluateSourcingResponse> {
+  return apiRequest<EvaluateSourcingResponse>("/sourcing/evaluate", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+

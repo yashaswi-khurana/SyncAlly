@@ -13,6 +13,7 @@ correlation_id: ContextVar[UUID | None] = ContextVar("correlation_id", default=N
 
 
 class Operation(StrEnum):
+    AI_PROVIDER_FAILURE = "ai.provider_failure"
     HTTP_COMPLETED = "http.completed"
     OUTBOX_COMPLETED = "outbox.completed"
     PAYMENT_OUTBOX_COMPLETED = "payment_outbox.completed"
@@ -102,6 +103,13 @@ _ERROR_CODES = frozenset(
         "PAYMENT_STATE_CHANGED",
         "PAYPAL_TEMPORARILY_UNAVAILABLE",
         "GMAIL_TEMPORARILY_UNAVAILABLE",
+        "GEMINI_TIMEOUT",
+        "GEMINI_NETWORK",
+        "GEMINI_MAX_TOKENS",
+        "GEMINI_INVALID_RESPONSE",
+        "AI_FACT_SHAPE",
+        "AI_FACT_CONTRACT",
+        "AI_FACT_GROUNDING",
         "PAYPAL_OUTCOME_UNKNOWN",
     }
 )

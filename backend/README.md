@@ -155,7 +155,7 @@ See [F5 rollout and verification](../docs/operations.md#f5-persisted-human-negot
 
 `AI_PROVIDER` defaults to `offline`: deterministic suggestions in development/test,
 and the existing generic unconfigured 503 elsewhere. An environment API key alone
-never enables HTTP. To opt into the single OpenAI Chat Completions adapter, set:
+never enables HTTP. To opt into OpenAI, set:
 
 ```text
 AI_PROVIDER=openai
@@ -165,12 +165,20 @@ AI_REMOTE_ALLOW_PRIVATE=false
 AI_REMOTE_PRIVATE_ORGANIZATION_IDS=[]
 ```
 
+To use Gemini instead, set `AI_PROVIDER=gemini`, `GEMINI_MODEL`, and
+`GOOGLE_API_KEY`, while keeping remote egress enabled. The adapter calls Google's
+GenerateContent API and uses the same locally validated fact and proposal
+contracts. Use Google's paid service for deal data. Its free tier may use
+submitted prompts and responses to improve Google products.
+
 `OPENAI_MODEL` is required with no default; the example is not live-verified and
 operators must verify their account's model support. Supply `OPENAI_API_KEY` through
 the environment or secret store; it is loaded as `SecretStr`, never sent to the UI
-or put into prompts. No real provider was called during implementation/evaluation.
+or put into prompts. Gemini is not yet live-verified; the deployment must be
+configured with a paid Gemini API key and an available model before use.
 
-`openai_with_offline_fallback` is an explicit alternative mode: missing credentials
+`openai_with_offline_fallback` and `gemini_with_offline_fallback` are explicit
+alternative modes: missing credentials
 can produce offline suggestions with a credential fallback reason; only exhausted
 transient network/429/5xx failures allow transient fallback. Quota exhaustion,
 authentication/refusal, invalid output, grounding failure and incomplete terms do
@@ -221,20 +229,24 @@ first active admin. `GET /organizations` lists only the caller's active membersh
 For existing accounts, an organization admin can use
 `POST /organizations/{organization_id}/members` with an existing active user's email to
 add that account as a regular member. The endpoint does not create accounts or allow callers
-to choose another user's role. The only in-app account provisioning currently available is
-the trusted operator's seed command for the two fixed demo identities; users cannot claim an
-email through public registration. A future invitation flow must verify the invited address
-before granting membership.
-Organization admins generate invitation links through
-`POST /organizations/{organization_id}/invitations`. Set `PUBLIC_FRONTEND_URL` to the
-frontend base URL; it defaults to `http://localhost:5173` only in development/test.
-Every other environment requires an explicit HTTPS URL with a public host, for example
-`https://app.syncally.trade` or `https://app.syncally.trade/portal` for a base-path deployment.
-Trailing slashes are normalized; links append `/#/invite?token=<signed-token>` without
-changing the token. Credentials, query strings, fragments, malformed URLs, controls,
-backslashes, traversal and encoded path separators are rejected at startup. Nonlocal
-environments also reject local/private IP literals and local hostnames. Request `Host`
-and forwarded headers never determine the invitation destination.
+to choose another user's role. It emails the added member a sign-in link.
+Organization admins can also invite a new team member through
+`POST /organizations/{organization_id}/invitations`, and counterparty invitations are created
+through `POST /deals/counterparty-invitations`. All three paths send email through Gmail SMTP.
+Set `GMAIL_SMTP_USERNAME`, `GMAIL_APP_PASSWORD` (a Google App Password), and optionally
+`GMAIL_FROM_EMAIL`. Delivery status is returned to the frontend; when SMTP is unavailable,
+the invitation remains available as a copyable link and the UI reports that delivery failed.
+
+`PUBLIC_FRONTEND_URL` tells the API which frontend address to put in invitation emails. The
+recipient opens that address to reach the app's invitation screen; it can differ from the API
+address. In development/test, `http://localhost:5173` is allowed for same-machine testing.
+That link works only in a browser on the machine running the frontend. Use an HTTPS tunnel
+when another device or person needs to open the invite. Deployed environments require a public
+HTTPS frontend URL, for example `https://app.syncally.trade` or
+`https://app.syncally.trade/portal` for a base-path deployment; localhost is rejected there.
+Credentials, query strings, fragments, malformed URLs and private IPs are rejected. Links
+append `/#/invite?token=<signed-token>`; request `Host` and forwarded headers never determine
+the invitation destination.
 Organization creation is limited to five active organizations per user by default. Set
 `MAX_ORGANIZATIONS_PER_USER` to a positive integer to change the limit.
 After signing in, `POST /deals` creates a draft deal. The request body names the
@@ -342,8 +354,11 @@ For a persistent, provider-free demo, set these variables in the backend termina
 ```powershell
 $env:APP_ENV = "development"
 $env:DATABASE_URL = "sqlite:///C:/Proj/SyncAlly/backend/syncally-demo.db"
-$env:PUBLIC_FRONTEND_URL = "http://localhost:5173"
 ```
+
+Invitations require Gmail SMTP credentials. Local development defaults to a localhost link for
+same-machine testing; set `PUBLIC_FRONTEND_URL` to an HTTPS tunnel if another device needs to
+open invitation emails. Deployed environments must use a public HTTPS frontend URL.
 
 One command sets up a fresh demo or restores the existing marked demo:
 
@@ -429,7 +444,8 @@ python -m pip install -e ".[dev]"
 authority is read from the database, not supplied roles. A single transaction creates a
 private INACTIVE shell, DRAFT deal, durable 0015 binding, audit and identifier-only outbox
 wakeup. The result contains the deal ID, copyable invitation URL, expiry and pending flag;
-no email is sent. Public directory/ID and ordinary membership/deal creation reject shells.
+the invitation is also emailed to the recipient. Public directory/ID and ordinary
+membership/deal creation reject shells.
 
 Recipient-bound TEAM issuance uses `POST /organizations/{id}/invitations` with
 `recipient_email` and server-selected MEMBER. Counterparty acceptance creates a separate

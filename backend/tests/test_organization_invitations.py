@@ -132,7 +132,7 @@ class OrganizationInvitationTests(unittest.TestCase):
     def _invitation_for_deal(self, admin: User, org: Organization, deal: Deal) -> str:
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(deal_id=deal.id),
+            payload=CreateInvitationRequest(deal_id=deal.id, recipient_email="invitee@example.com"),
             actor=ActorContext(user_id=admin.id, organization_ids=frozenset({org.id})),
             db=self.db,
         )
@@ -496,7 +496,7 @@ class OrganizationInvitationTests(unittest.TestCase):
         admin = self._user("admin@example.com")
         org = self._organization(admin)
         result = create_organization_invitation(
-            org.id, CreateInvitationRequest(), ActorContext(admin.id, frozenset({org.id})), self.db
+            org.id, CreateInvitationRequest(recipient_email="invitee@example.com"), ActorContext(admin.id, frozenset({org.id})), self.db
         )
         legacy = jwt.decode(result["token"], settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         self.assertEqual(_decode_invitation_token(result["token"])["org_id"], str(org.id))
@@ -517,7 +517,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         result = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor,
             db=self.db,
         )
@@ -627,7 +627,7 @@ class OrganizationInvitationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             create_organization_invitation(
                 organization_id=org.id,
-                payload=CreateInvitationRequest(),
+                payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
                 actor=actor,
                 db=self.db,
             )
@@ -648,7 +648,7 @@ class OrganizationInvitationTests(unittest.TestCase):
         # Valid deal participation succeeds
         result = create_organization_invitation(
             organization_id=buyer_org.id,
-            payload=CreateInvitationRequest(deal_id=deal.id),
+            payload=CreateInvitationRequest(deal_id=deal.id, recipient_email="invitee@example.com"),
             actor=actor,
             db=self.db,
         )
@@ -659,7 +659,7 @@ class OrganizationInvitationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             create_organization_invitation(
                 organization_id=third_org.id,
-                payload=CreateInvitationRequest(deal_id=deal.id),
+                payload=CreateInvitationRequest(deal_id=deal.id, recipient_email="invitee@example.com"),
                 actor=third_actor,
                 db=self.db,
             )
@@ -673,7 +673,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )
@@ -725,7 +725,7 @@ class OrganizationInvitationTests(unittest.TestCase):
                     with self.subTest(length=length):
                         invitation = create_organization_invitation(
                             organization_id=org.id,
-                            payload=CreateInvitationRequest(),
+                            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
                             actor=actor_admin,
                             db=self.db,
                         )
@@ -752,7 +752,7 @@ class OrganizationInvitationTests(unittest.TestCase):
         org = self._organization(admin)
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=ActorContext(user_id=admin.id, organization_ids=frozenset({org.id})),
             db=self.db,
         )
@@ -803,7 +803,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )
@@ -834,7 +834,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )
@@ -1124,7 +1124,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )
@@ -1151,7 +1151,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=buyer_org.id,
-            payload=CreateInvitationRequest(deal_id=deal.id),
+            payload=CreateInvitationRequest(deal_id=deal.id, recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )
@@ -1221,7 +1221,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )
@@ -1273,7 +1273,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )
@@ -1410,7 +1410,7 @@ class OrganizationInvitationTests(unittest.TestCase):
 
         invitation = create_organization_invitation(
             organization_id=org.id,
-            payload=CreateInvitationRequest(),
+            payload=CreateInvitationRequest(recipient_email="invitee@example.com"),
             actor=actor_admin,
             db=self.db,
         )

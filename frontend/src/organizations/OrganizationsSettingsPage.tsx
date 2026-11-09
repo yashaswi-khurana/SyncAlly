@@ -257,7 +257,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
             </div>
 
             <p className="muted" style={{ fontSize: "0.9rem", marginBottom: 16 }}>
-              Send a single-use link. The invited person can sign in or create their account before joining this organization.
+              Send a single-use link. New invitees accept first, then set a password before entering the organization. Existing users can sign in and accept with their account.
             </p>
 
             <form className="form" onSubmit={handleGenerateInvite} noValidate>
@@ -320,7 +320,12 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
 
             {generatedInvite && (
               <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--line)" }}>
-                <span className="eyebrow">Shareable Invitation Link</span>
+                <span className="eyebrow">{generatedInvite.email_sent ? "Invitation email sent" : "Invitation link"}</span>
+                <p className="hint" role={generatedInvite.email_sent ? "status" : "alert"}>
+                  {generatedInvite.email_sent
+                    ? `A single use invitation was emailed to ${recipientEmail.trim().toLowerCase()}.`
+                    : generatedInvite.email_error || "The invitation email could not be sent. Copy the link and share it securely."}
+                </p>
                 <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                   <input
                     type="text"

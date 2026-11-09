@@ -7,6 +7,7 @@ import {
   REQUIRED_TRADE_FIELDS,
   guidanceForMissingTradeFields,
   missingRequiredTradeFields,
+  findSharedTermDrift,
   requiredTradeField,
   toFactSuggestionDraft,
   toProposalDraft,
@@ -47,7 +48,8 @@ function describeError(caught: unknown): string {
 function invocationLabel(provenance: AIProvenance | undefined): string {
   if (!provenance || provenance.provider === "unknown") return "Unknown (legacy)";
   const label = provenance.provider === "openai" ? "OpenAI"
-    : provenance.fallback_reason ? "Offline fallback" : "Offline";
+    : provenance.provider === "gemini" ? "Google Gemini"
+      : provenance.fallback_reason ? "Offline fallback" : "Offline";
   const scopes = {
     authorized: "Authorized local context", shareable_only: "Shareable context only",
     authorized_private: "Private context permitted", unknown: "Unknown context scope",
@@ -187,6 +189,8 @@ export default function AISuggestionReview({
   useEffect(() => { submissionContext.current = contextSignature; }, [contextSignature]);
   const missingFields = missingRequiredTradeFields([...knownFactsById.values()],
     serverFactsSignature === factsSignature ? serverMissingFields : null);
+  const sharedFacts = [...knownFactsById.values()].filter((fact) => fact.visibility === "SHAREABLE");
+  const sharedTermDrift = findSharedTermDrift(sharedFacts);
   const confirmedValues: Partial<Record<keyof ProposalSuggestionDraft, string>> = {};
   const confirmedSignatures: Partial<Record<keyof ProposalSuggestionDraft, string>> = {};
   const conflictingFields = new Set<keyof ProposalSuggestionDraft>();
@@ -274,6 +278,13 @@ export default function AISuggestionReview({
   const currentFactGuidance = hasFactSuggestionRun
     ? guidanceForMissingTradeFields(missingFields)
     : factSuggestionGuidance;
+  const tradeCopilotAction = conflictingFields.size > 0
+    ? "Resolve the confirmed term conflicts before preparing a proposal."
+    : missingFields.length > 0
+      ? `Clarify ${missingFields.map((field) => REQUIRED_TRADE_FIELDS.find((item) => item.key === field)?.label.toLowerCase()).filter(Boolean).join(", ")} before asking both parties to approve terms.`
+      : proposal
+        ? "Review the sourced draft, then submit it for the other party to accept or counter."
+        : "Review the extracted facts, then draft a proposal from the terms both sides can support.";
 
   async function runFactSuggestion() {
     const revisionAtStart = factStateRevisionRef.current;
@@ -501,14 +512,19 @@ export default function AISuggestionReview({
     <section className="card communication-card ai-review-card" aria-labelledby="ai-review-heading">
       <div className="panel-head">
         <div>
-          <span className="eyebrow">Human review required</span>
-          <h2 id="ai-review-heading">Suggestion review</h2>
+          <span className="eyebrow">AI trade copilot · evidence first</span>
+          <h2 id="ai-review-heading">From negotiation to payment</h2>
         </div>
         <span className="communication-index" aria-hidden="true">03 / REVIEW</span>
       </div>
       <p className="muted">
-        AI suggestions are unreviewed. If OpenAI is enabled, requesting them sends this organization’s shareable deal messages and terms to OpenAI; private context is excluded unless an operator enables it for this organization. AI cannot approve an agreement, request payment, or arrange shipment.
+        The copilot reads this side’s authorized conversation, ties each suggested term to its source, and helps prepare a proposal. It never approves terms or moves money. The configured AI provider receives shareable context only unless an operator explicitly enables private context for this organization.
       </p>
+      <aside className="trade-copilot-action" aria-live="polite">
+        <span className="eyebrow">Recommended next step</span>
+        <p>{tradeCopilotAction}</p>
+        <span className="trade-copilot-action__scope">Negotiation evidence → reviewed terms → human-approved agreement → PayPal invoice check</span>
+      </aside>
       {hasFactSuggestionRun ? <p className="hint" aria-label="Fact invocation provenance">Last fact invocation: {invocationLabel(factProvenance)}</p>
         : knownFactsById.size > 0 ? <p className="hint">Stored fact provenance: Unknown (legacy)</p> : null}
       <section className="terms-readiness" aria-labelledby={`terms-readiness-heading-${dealId}`}>
@@ -543,6 +559,55 @@ export default function AISuggestionReview({
           </div>
         ) : null}
       </section>
+      {hasFactSuggestionRun ? (
+        <section className="ai-change-radar" aria-labelledby={`ai-change-radar-heading-${dealId}`}>
+          <div className="ai-change-radar__header">
+            <div>
+              <span className="eyebrow">Cross-message intelligence</span>
+              <h3 id={`ai-change-radar-heading-${dealId}`}>Negotiation change radar</h3>
+            </div>
+            <span className={`ai-change-radar__count${sharedTermDrift.length ? " is-alert" : ""}`}>
+              {sharedTermDrift.length ? `${sharedTermDrift.length} term${sharedTermDrift.length === 1 ? "" : "s"} to review` : "No differences surfaced"}
+            </span>
+          </div>
+          <p className="ai-change-radar__intro">
+            SyncAlly compares extracted shared values. Differences may be counteroffers, and equivalent values may be written differently.
+          </p>
+          {sharedTermDrift.length ? (
+            <ul className="ai-change-radar__list">
+              {sharedTermDrift.map((change) => (
+                <li key={change.field} className="ai-change-radar__item">
+                  <div className="ai-change-radar__item-heading">
+                    <strong>{change.label}</strong>
+                    <span>{change.values.length} values found in shared messages</span>
+                  </div>
+                  <div className="ai-change-radar__values">
+                    {change.values.map(({ value, facts: sources }) => (
+                      <div key={`${change.field}:${value}`} className="ai-change-radar__value">
+                        <strong>{value}</strong>
+                        {sources.slice(0, 2).map((source) => (
+                          <div key={source.id} className="ai-change-radar__source">
+                            {source.source_span ? <blockquote>“{source.source_span}”</blockquote> : null}
+                            {source.source_message_id ? (
+                              <button type="button" onClick={() => onTraceSource(source.source_message_id!)}>
+                                View source message
+                              </button>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="ai-change-radar__clear" role="status">
+              No differences surfaced among extracted shared values. This does not check every message or establish agreement.
+            </p>
+          )}
+        </section>
+      ) : null}
       <div className="ai-review-actions">
         <button ref={factSuggestionButtonRef} type="button" className="button" disabled={pendingAction !== null} onClick={() => void runFactSuggestion()}>
           {pendingAction === "facts" ? "Extracting facts..." : "Suggest facts from this side's messages"}
@@ -583,7 +648,7 @@ export default function AISuggestionReview({
               </div>
               <div className="field">
                 <label htmlFor={`manual-fact-unit-${dealId}`}>Currency or unit (optional)</label>
-                <input id={`manual-fact-unit-${dealId}`} value={manualCurrencyOrUnit} maxLength={32} onChange={(event) => setManualCurrencyOrUnit(event.target.value)} placeholder="For example, USD or bags" />
+                <input id={`manual-fact-unit-${dealId}`} value={manualCurrencyOrUnit} maxLength={32} onChange={(event) => setManualCurrencyOrUnit(event.target.value)} placeholder="For example, INR or bags" />
               </div>
               <div className="field">
                 <label htmlFor={`manual-fact-visibility-${dealId}`}>Visibility</label>

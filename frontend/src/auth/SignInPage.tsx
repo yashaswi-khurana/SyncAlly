@@ -34,6 +34,22 @@ function getInviteTokenFromHash(): string | null {
   return null;
 }
 
+function readPendingPasswordSetup(invitationToken: string | null): { setupToken: string; dealId: string | null } | null {
+  if (!invitationToken) return null;
+  try {
+    const raw = window.sessionStorage.getItem("syncally.pendingPasswordSetup");
+    if (!raw) return null;
+    const pending = JSON.parse(raw) as { invitationToken?: unknown; setupToken?: unknown; dealId?: unknown };
+    if (pending.invitationToken === invitationToken && typeof pending.setupToken === "string") {
+      return { setupToken: pending.setupToken, dealId: typeof pending.dealId === "string" ? pending.dealId : null };
+    }
+    window.sessionStorage.removeItem("syncally.pendingPasswordSetup");
+  } catch {
+    // Storage can be disabled; password setup remains available in the current page state.
+  }
+  return null;
+}
+
 export default function SignInPage({ onSignIn }: SignInPageProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,8 +62,10 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
   const [mode, setMode] = useState<"signin" | "invite">(() =>
     getInviteTokenFromHash() ? "invite" : "signin",
   );
-  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteEmail, setInviteEmail] = useState(() => invitationPresentation(getInviteTokenFromHash()).recipientEmail ?? "");
   const [invitePassword, setInvitePassword] = useState("");
+  const [pendingSetup, setPendingSetup] = useState(() => readPendingPasswordSetup(getInviteTokenFromHash()));
+  const inviteSetupToken = pendingSetup?.setupToken ?? null;
   const [inviteDisplayName, setInviteDisplayName] = useState("");
   const [inviteOrgName, setInviteOrgName] = useState("");
   const [inviteCountryCode, setInviteCountryCode] = useState("US");
@@ -59,10 +77,16 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       const token = getInviteTokenFromHash();
       if (currentInviteRef.current === token) return;
       currentInviteRef.current = token;
+      try {
+        window.sessionStorage.removeItem("syncally.pendingPasswordSetup");
+      } catch {
+        // Ignore unavailable browser storage.
+      }
       setInviteToken(token);
       setMode(token ? "invite" : "signin");
-      setInviteEmail("");
+      setInviteEmail(invitationPresentation(token).recipientEmail ?? "");
       setInvitePassword("");
+      setPendingSetup(null);
       setInviteDisplayName("");
       setInviteOrgName("");
       setInviteCountryCode("US");
@@ -122,16 +146,41 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
     const acceptingToken = inviteToken;
 
     const nextErrors: FieldErrors = {};
+    if (inviteSetupToken) {
+      const passwordLength = Array.from(invitePassword).length;
+      if (passwordLength < 12) nextErrors.password = "Password must be at least 12 characters.";
+      else if (passwordLength > 128) nextErrors.password = "Password must be at most 128 characters.";
+      setFieldErrors(nextErrors);
+      setFormError(null);
+      if (Object.keys(nextErrors).length > 0) return;
+
+      setSubmitting(true);
+      try {
+        const tokens = await apiRequest<TokenResponse>("/auth/set-password", {
+          method: "POST",
+          body: JSON.stringify({ setup_token: inviteSetupToken, password: invitePassword }),
+        });
+        if (currentInviteRef.current !== acceptingToken) return;
+        try {
+          window.sessionStorage.removeItem("syncally.pendingPasswordSetup");
+        } catch {
+          // Ignore unavailable browser storage.
+        }
+        onSignIn(tokens);
+        const acceptedDealId = pendingSetup?.dealId ?? new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("dealId");
+        if (acceptedDealId) navigateToDeal(acceptedDealId);
+        else navigateToDeals();
+      } catch (caught) {
+        if (currentInviteRef.current !== acceptingToken) return;
+        setFormError(caught instanceof ApiError ? caught.message : "Unable to set your password. Please try again.");
+      } finally {
+        if (currentInviteRef.current === acceptingToken) setSubmitting(false);
+      }
+      return;
+    }
+
     if (inviteEmail.trim() === "") {
       nextErrors.email = "Email is required.";
-    }
-    const passwordLength = Array.from(invitePassword).length;
-    if (invitePassword === "") {
-      nextErrors.password = "Password is required.";
-    } else if (passwordLength < 12) {
-      nextErrors.password = "Password must be at least 12 characters.";
-    } else if (passwordLength > 128) {
-      nextErrors.password = "Password must be at most 128 characters.";
     }
 
     setFieldErrors(nextErrors);
@@ -149,7 +198,6 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       const payload: InvitationAcceptanceInput = {
         token: inviteToken,
         email: inviteEmail.trim(),
-        password: invitePassword,
         display_name: inviteDisplayName.trim() || undefined,
       };
       // A legal name creates a counterparty organization; team invitees join
@@ -165,6 +213,21 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       });
 
       if (currentInviteRef.current !== acceptingToken) return;
+
+      if (res.password_setup_token) {
+        setPendingSetup({ setupToken: res.password_setup_token, dealId: res.deal_id ?? null });
+        setInvitePassword("");
+        try {
+          window.sessionStorage.setItem("syncally.pendingPasswordSetup", JSON.stringify({
+            invitationToken: acceptingToken,
+            setupToken: res.password_setup_token,
+            dealId: res.deal_id ?? null,
+          }));
+        } catch {
+          // The current page can still complete password setup without storage.
+        }
+        return;
+      }
 
       if (res.access_token && res.refresh_token) {
         onSignIn({
@@ -271,36 +334,76 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
         <aside className="card auth-card" aria-labelledby="invite-onboarding-heading">
           <div className="auth-card__topline">
             <span className="eyebrow">{intent.kind === "TEAM" ? "Team invitation" : "Counterparty Onboarding"}</span>
-            <span className="auth-card__number">01 / 01</span>
+            <span className="auth-card__number">{inviteSetupToken ? "02 / 02" : "01 / 02"}</span>
           </div>
-          <h2 id="invite-onboarding-heading">{intent.kind === "TEAM" ? "Join your team." : "Join via counterparty invite."}</h2>
+          <h2 id="invite-onboarding-heading">
+            {inviteSetupToken ? "Set your password." : intent.kind === "TEAM" ? "Join your team." : "Join via counterparty invite."}
+          </h2>
           <p className="auth-card__intro">
-            {intent.kind === "TEAM"
-              ? "Create your account to join your organization."
-              : "Create your account and add your company details to join the deal."}
+            {inviteSetupToken
+              ? "Your invitation is accepted. Create a password to finish setting up your account before entering your workspace."
+              : intent.kind === "TEAM"
+                ? "Accept the invitation first. Then create a password before entering your organization."
+                : "Accept the invitation and add your company details. You’ll create a password before entering the deal."}
           </p>
           <form className="form" onSubmit={handleInviteSubmit} noValidate>
-            {intent.recipientEmail ? <p>Addressed to {intent.recipientEmail}</p> : null}
+            {intent.recipientEmail ? <p>Invitation for {intent.recipientEmail}</p> : null}
             {intent.kind === "INVALID" ? <p role="alert">Invalid invitation token</p> : null}
-            <div className="field">
-              <label htmlFor="invite-email">Email</label>
-              <input
-                id="invite-email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                maxLength={320}
-                value={inviteEmail}
-                aria-invalid={fieldErrors.email ? true : undefined}
-                onChange={(e) => setInviteEmail(e.target.value)}
-              />
-              {fieldErrors.email ? (
-                <p className="field-error" role="alert">
-                  {fieldErrors.email}
-                </p>
-              ) : null}
-            </div>
-            <div className="field">
+            {!inviteSetupToken ? <>
+              <div className="field">
+                <label htmlFor="invite-email">Email</label>
+                <input
+                  id="invite-email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  maxLength={320}
+                  value={inviteEmail}
+                  readOnly={Boolean(intent.recipientEmail)}
+                  aria-invalid={fieldErrors.email ? true : undefined}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                />
+                {fieldErrors.email ? <p className="field-error" role="alert">{fieldErrors.email}</p> : null}
+              </div>
+              <div className="field">
+                <label htmlFor="invite-display-name">Your Name</label>
+                <input
+                  id="invite-display-name"
+                  name="displayName"
+                  type="text"
+                  autoComplete="name"
+                  maxLength={200}
+                  placeholder="e.g. Kenji Sato"
+                  value={inviteDisplayName}
+                  onChange={(e) => setInviteDisplayName(e.target.value)}
+                />
+              </div>
+              {intent.kind !== "TEAM" ? <div className="field">
+                <label htmlFor="invite-org-name">{intent.kind === "COUNTERPARTY" ? "Company Legal Name" : "Company Legal Name (Optional)"}</label>
+                <input
+                  id="invite-org-name"
+                  name="orgName"
+                  type="text"
+                  maxLength={200}
+                  placeholder="e.g. Tokyo Exporters Ltd"
+                  value={inviteOrgName}
+                  onChange={(e) => setInviteOrgName(e.target.value)}
+                />
+              </div> : null}
+              {intent.kind !== "TEAM" ? <div className="field">
+                <label htmlFor="invite-country-code">Country Code (2 letters)</label>
+                <input
+                  id="invite-country-code"
+                  name="countryCode"
+                  type="text"
+                  maxLength={2}
+                  placeholder="JP"
+                  value={inviteCountryCode}
+                  onChange={(e) => setInviteCountryCode(e.target.value.toUpperCase())}
+                />
+              </div> : null}
+            </> : null}
+            {inviteSetupToken ? <div className="field">
               <label htmlFor="invite-password">Password (12–128 characters)</label>
               <input
                 id="invite-password"
@@ -316,43 +419,6 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                   {fieldErrors.password}
                 </p>
               ) : null}
-            </div>
-            <div className="field">
-              <label htmlFor="invite-display-name">Your Name</label>
-              <input
-                id="invite-display-name"
-                name="displayName"
-                type="text"
-                autoComplete="name"
-                maxLength={200}
-                placeholder="e.g. Kenji Sato"
-                value={inviteDisplayName}
-                onChange={(e) => setInviteDisplayName(e.target.value)}
-              />
-            </div>
-            {intent.kind !== "TEAM" ? <div className="field">
-              <label htmlFor="invite-org-name">{intent.kind === "COUNTERPARTY" ? "Company Legal Name" : "Company Legal Name (Optional)"}</label>
-              <input
-                id="invite-org-name"
-                name="orgName"
-                type="text"
-                maxLength={200}
-                placeholder="e.g. Tokyo Exporters Ltd"
-                value={inviteOrgName}
-                onChange={(e) => setInviteOrgName(e.target.value)}
-              />
-            </div> : null}
-            {intent.kind !== "TEAM" ? <div className="field">
-              <label htmlFor="invite-country-code">Country Code (2 letters)</label>
-              <input
-                id="invite-country-code"
-                name="countryCode"
-                type="text"
-                maxLength={2}
-                placeholder="JP"
-                value={inviteCountryCode}
-                onChange={(e) => setInviteCountryCode(e.target.value.toUpperCase())}
-              />
             </div> : null}
             {formError ? (
               <p className="form-error" role="alert">
@@ -360,7 +426,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
               </p>
             ) : null}
             <button type="submit" className="button auth-card__submit" disabled={submitting || intent.kind === "INVALID"}>
-              <span>{submitting ? "Joining deal…" : intent.kind === "TEAM" ? "Accept team invitation" : "Create Account & Join Deal"}</span>
+              <span>{submitting ? (inviteSetupToken ? "Saving password…" : "Accepting invitation…") : inviteSetupToken ? "Set password and continue" : "Accept invitation"}</span>
               <span aria-hidden="true">↗</span>
             </button>
             <div style={{ marginTop: 12, textAlign: "center" }}>

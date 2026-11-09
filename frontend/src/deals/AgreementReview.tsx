@@ -451,7 +451,7 @@ export default function AgreementReview({
         request.quantity = terms.line_items[0]?.quantity;
         request.unit = terms.line_items[0]?.unit;
         request.unit_price = terms.line_items[0]?.unit_price.amount;
-        request.currency = terms.line_items[0]?.unit_price.currency as "USD";
+        request.currency = terms.line_items[0]?.unit_price.currency;
         request.delivery_destination = terms.shipments[0]?.destination;
         request.delivery_date = terms.shipments[0]?.target_date ?? null;
         request.payment_trigger = terms.payment_terms[0]?.trigger as PaymentTrigger;

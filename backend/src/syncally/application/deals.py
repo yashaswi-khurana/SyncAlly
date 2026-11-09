@@ -14,9 +14,25 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from syncally.application.identity import ActorContext
+from syncally.application.seller_suggestions import (
+    SellerSuggestionItem,
+    SellerSuggestionService,
+)
 from syncally.domain.deals.deal import Deal
 from syncally.domain.shared.errors import DomainError
 from syncally.domain.shared.identifiers import DealId, OrganizationId
+
+__all__ = [
+    "CreateDealCommand",
+    "DealAccessDenied",
+    "DealNotFound",
+    "DealRepository",
+    "SellerSuggestionItem",
+    "SellerSuggestionService",
+    "create_deal",
+    "get_deal",
+    "list_deals",
+]
 
 
 class DealRepository(Protocol):
@@ -55,6 +71,7 @@ class CreateDealCommand:
     seller_organization_id: UUID
     initiator_party: str = "BUYER"
     display_name: str | None = None
+    opening_request: str | None = None
 
 
 def create_deal(

@@ -4,6 +4,7 @@ export type Route =
   | { name: "deal"; dealId: string }
   | { name: "organizations"; inviteToken?: string; dealId?: string }
   | { name: "marketplace" }
+  | { name: "sourcing"; listingId?: string }
   | { name: "platform" }
   | { name: "organizationSignup" }
   | { name: "invite"; token: string; dealId?: string };
@@ -11,6 +12,7 @@ export type Route =
 const DEAL_ROUTE = /^\/deals\/([^/]+)$/;
 const CREATE_DEAL_PATH = "/deals/new";
 const MARKETPLACE_PATH = "/marketplace";
+const SOURCING_PATH = "/sourcing";
 const ORGANIZATIONS_PATH = "/settings/organizations";
 const PLATFORM_PATH = "/platform/organizations";
 const ORGANIZATION_SIGNUP_PATH = "/create-organization";
@@ -29,7 +31,7 @@ export function parseRoute(hash: string): Route {
     const initiatorParty = params.get("initiatorParty");
     return {
       name: "create",
-      sellerOrganizationId: params.get("sellerId") || undefined,
+      sellerOrganizationId: params.get("sellerOrganizationId") || params.get("sellerId") || undefined,
       initiatorParty: initiatorParty === "SELLER" ? "SELLER" : "BUYER",
       rfqId: params.get("rfqId") || undefined,
       listingId: params.get("listingId") || undefined,
@@ -37,6 +39,10 @@ export function parseRoute(hash: string): Route {
   }
   if (path === MARKETPLACE_PATH || path === `${MARKETPLACE_PATH}/`) {
     return { name: "marketplace" };
+  }
+  if (path === SOURCING_PATH || path === `${SOURCING_PATH}/`) {
+    const params = new URLSearchParams(queryString || "");
+    return { name: "sourcing", listingId: params.get("listingId") || undefined };
   }
   if (path === PLATFORM_PATH || path === `${PLATFORM_PATH}/`) {
     return { name: "platform" };
@@ -87,6 +93,16 @@ export function navigateToCreateDeal(
 
 export function navigateToMarketplace(): void {
   window.location.hash = `#${MARKETPLACE_PATH}`;
+}
+
+export function sourcingPath(listingId?: string): string {
+  const params = new URLSearchParams();
+  if (listingId) params.set("listingId", listingId);
+  return `#${SOURCING_PATH}${params.size ? `?${params.toString()}` : ""}`;
+}
+
+export function navigateToSourcing(listingId?: string): void {
+  window.location.hash = sourcingPath(listingId);
 }
 
 export function organizationsPath(): string {

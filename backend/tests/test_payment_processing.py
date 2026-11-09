@@ -770,6 +770,23 @@ class PayPalSandboxAdapterTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "PAYPAL_INVOICE_ITEM_INVALID")
 
+    def test_inr_trade_terms_are_preserved_but_paypal_invoice_is_rejected_before_send(self) -> None:
+        request = _request()
+        item = replace(request.line_items[0], unit_price=Money(Decimal("5"), "INR"))
+        request = replace(
+            request,
+            amount=Money(Decimal("10"), "INR"),
+            line_items=(item,),
+        )
+        provider = PayPalSandboxInvoiceProvider("sandbox-client", "sandbox-secret")
+
+        with self.assertRaises(PaymentNeedsAction) as raised:
+            provider._invoice_payload(request)
+
+        self.assertEqual(raised.exception.code, "PAYPAL_CURRENCY_UNSUPPORTED")
+        self.assertIn("INR", raised.exception.detail)
+        self.assertIn("agreed currency and amount unchanged", raised.exception.detail)
+
     def test_invoice_search_accepts_empty_results_with_zero_total(self) -> None:
         request = _request()
         responses = [

@@ -176,6 +176,33 @@ def _fact_payload(**updates: object) -> dict[str, object]:
 
 
 class AISuggestionProviderTests(unittest.TestCase):
+    def test_gemini_retries_ungrounded_facts_without_accepting_them(self) -> None:
+        calls = []
+        valid = self._remote_facts()
+        invalid = self._remote_facts()
+        invalid["facts"][0]["source"]["quote"] = "fabricated 12 boxes"
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            calls.append(json.loads(request.content))
+            payload = invalid if len(calls) == 1 else valid
+            return httpx.Response(200, json={
+                "modelVersion": "gemini-test", "candidates": [{
+                    "index": 0, "finishReason": "STOP", "content": {
+                        "role": "model", "parts": [{"text": json.dumps(payload)}],
+                    },
+                }],
+            })
+
+        provider = ConfiguredAIProvider(self._remote_config(
+            ai_provider="gemini", gemini_model="gemini-3.5-flash", google_api_key="test-key",
+        ), transport=httpx.MockTransport(respond))
+        public = replace(self.buyer_private_message, visibility=Visibility.SHAREABLE)
+        result = extract_facts_from_context(replace(self._remote_context(), messages=(public,)), provider)
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(len(result.candidates), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("previous extraction failed validation", calls[1]["contents"][0]["parts"][0]["text"])
+
     def _remote_config(self, **updates: object) -> Settings:
         values = dict(
             app_env="test", ai_provider="openai", ai_remote_egress_enabled=True,
@@ -453,22 +480,24 @@ class AISuggestionProviderTests(unittest.TestCase):
             if index == 0:
                 self.assertEqual(result.proposal, self.proposal)
 
-    def test_remote_currency_requires_explicit_noncontradictory_cited_usd(self) -> None:
+    def test_remote_currency_requires_explicit_noncontradictory_cited_currency(self) -> None:
         for price, valid in (
             ("CAD $2.50", False), ("EUR $2.50", False),
             ("AUD 2.50 dollars", False), ("$2.50", False),
             ("2.50 dollars", False), ("USD 2.50", True),
             ("USD $2.50", True), ("2.50 USD", True),
+            ("INR 2.50", True), ("2.50 INR", True),
             ("CAD USD 2.50", False),
         ):
             with self.subTest(price=price):
+                currency = "INR" if "INR" in price else "USD"
                 context = self._demo_context(f"Item: Widget, 12 boxes at {price}, deliver to Toronto by 2026-12-01.")
                 context = replace(context, messages=tuple(replace(message, visibility=Visibility.SHAREABLE) for message in context.messages))
                 baseline = self._demo_context("Item: Widget, 12 boxes at USD 2.50, deliver to Toronto by 2026-12-01.")
                 facts = DemoAISuggestionProvider().extract_facts(FactExtractionRequest(baseline), timeout_seconds=1)
                 citations = [{
                     "schema_version": 1, "field": fact.field.value, "value": fact.value,
-                    "currency_or_unit": fact.currency_or_unit,
+                    "currency_or_unit": currency if fact.field.value == "unit_price" else fact.currency_or_unit,
                     "source": {"schema_version": 1, "message_id": str(context.messages[0].id),
                                "quote": price if fact.field.value == "unit_price" else fact.source.quote,
                                "unknown_reason": None},
@@ -477,7 +506,7 @@ class AISuggestionProviderTests(unittest.TestCase):
                     calls = []
                     output = {"schema_version": 1, "facts": citations} if operation == "facts" else {
                         "schema_version": 1, "insufficient_context": False,
-                        "proposal": _proposal_payload(), "citations": citations,
+                        "proposal": _proposal_payload(currency=currency), "citations": citations,
                     }
                     def respond(request: httpx.Request) -> httpx.Response:
                         calls.append(request)
@@ -525,11 +554,28 @@ class AISuggestionProviderTests(unittest.TestCase):
                 self.assertEqual(len(calls), 1)
                 self.assertIsNone(result.provenance.fallback_reason)
 
+    def test_billing_error_preserves_safe_project_limit_diagnostic(self) -> None:
+        response = httpx.Response(
+            429,
+            json={"error": {"code": "project_spend_limit_exceeded", "type": "insufficient_quota"}},
+        )
+        provider = ConfiguredAIProvider(
+            self._remote_config(ai_provider="openai_with_offline_fallback"),
+            transport=httpx.MockTransport(lambda _: response),
+        )
+
+        result = extract_facts_from_context(self._remote_context(), provider)
+
+        self.assertIs(result.result.status, ValidationStatus.INVALID)
+        self.assertIn("project_spend_limit_exceeded", result.result.issues[0].message)
+        self.assertIn("hard spend limit", result.result.issues[0].message)
+        self.assertIsNone(result.provenance.fallback_reason)
+
     def test_retry_elapsed_budget_disallows_late_success(self) -> None:
         from syncally.application.ai import call_with_bounded_retry
         with patch("syncally.application.ai.monotonic", side_effect=[0, 0, 21, 21, 21]):
             with self.assertRaises(AITransientError):
-                call_with_bounded_retry(lambda: "late", AIRetryPolicy(), sleep=lambda _: None)
+                call_with_bounded_retry(lambda: "late", AIRetryPolicy(timeout_seconds=10), sleep=lambda _: None)
 
     def test_remote_envelope_finish_model_and_choices_are_strict(self) -> None:
         for mutate in (
@@ -1109,8 +1155,9 @@ class AISuggestionProviderTests(unittest.TestCase):
 
         with self.assertRaises(AIPermanentError):
             parse_extracted_facts([_fact_payload(field="bank_account")])
+        self.assertEqual(parse_proposed_terms(_proposal_payload(currency="INR")).currency, "INR")
         with self.assertRaises(AIPermanentError):
-            parse_proposed_terms(_proposal_payload(currency="CAD"))
+            parse_proposed_terms(_proposal_payload(currency="US"))
 
     def test_parse_errors_do_not_echo_provider_payload_content(self) -> None:
         secret = "sk-live-do-not-log-1234567890"

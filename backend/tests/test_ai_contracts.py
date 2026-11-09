@@ -76,7 +76,7 @@ class AIContractTests(unittest.TestCase):
             ExtractedFact.from_mapping(
                 self.fact_payload(field="unit_price", value="twelve", currency_or_unit="USD")
             )
-        with self.assertRaisesRegex(AIContractError, "requires currency_or_unit USD"):
+        with self.assertRaisesRegex(AIContractError, "three-letter currency code"):
             ExtractedFact.from_mapping(
                 self.fact_payload(field="unit_price", value="12.50", currency_or_unit=None)
             )
@@ -145,12 +145,13 @@ class AIContractTests(unittest.TestCase):
                 )
             )
 
-    def test_terms_require_supported_exact_decimal_usd_shape(self) -> None:
+    def test_terms_require_supported_exact_decimal_and_accept_non_usd_currency(self) -> None:
         terms = ProposedTerms.from_mapping(self.terms_payload())
         self.assertEqual(terms.quantity, Decimal("2"))
         self.assertEqual(terms.unit_price, Decimal("12.50"))
-        with self.assertRaisesRegex(AIContractError, "only USD"):
-            ProposedTerms.from_mapping(self.terms_payload(currency="CAD"))
+        self.assertEqual(ProposedTerms.from_mapping(self.terms_payload(currency="inr")).currency, "INR")
+        with self.assertRaisesRegex(AIContractError, "three-letter currency code"):
+            ProposedTerms.from_mapping(self.terms_payload(currency="US"))
         with self.assertRaisesRegex(AIContractError, "decimal string"):
             ProposedTerms.from_mapping(self.terms_payload(quantity=2.0))
         with self.assertRaisesRegex(AIContractError, "positive"):
@@ -202,17 +203,19 @@ class AIContractTests(unittest.TestCase):
                 source=source,
             )
         valid = ProposedTerms.from_mapping(self.terms_payload())
-        with self.assertRaisesRegex(AIContractError, "only USD"):
-            ProposedTerms(
-                schema_version=valid.schema_version,
-                description=valid.description,
-                quantity=valid.quantity,
-                unit=valid.unit,
-                unit_price=valid.unit_price,
-                currency="CAD",
-                delivery_destination=valid.delivery_destination,
-                delivery_date=valid.delivery_date,
-            )
+        cad_terms = ProposedTerms(
+            schema_version=valid.schema_version,
+            description=valid.description,
+            quantity=valid.quantity,
+            unit=valid.unit,
+            unit_price=valid.unit_price,
+            currency="CAD",
+            delivery_destination=valid.delivery_destination,
+            delivery_date=valid.delivery_date,
+        )
+        self.assertEqual(cad_terms.to_trade_terms(
+            buyer_id=OrganizationId(uuid4()), seller_id=OrganizationId(uuid4())
+        ).total.currency, "CAD")
         with self.assertRaisesRegex(AIContractError, "schema_version"):
             ProposedTerms(
                 schema_version=2,

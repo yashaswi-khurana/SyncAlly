@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApiError, apiRequest, listOrganizations } from "../api/client";
@@ -6,6 +6,7 @@ import type { Invitation as CreateInvitationResponse, InvitationAcceptance as Ac
 import { invitationPresentation } from "../auth/invitationPresentation";
 import { navigateToDeal, navigateToDeals, navigateToOrganizations, parseRoute } from "../router";
 import OrganizationsPanel from "./OrganizationsPanel";
+import MemberGrantFields, { type MemberGrants } from "./MemberGrantFields";
 import Reveal from "../ui/Reveal";
 
 function describeError(caught: unknown): string {
@@ -33,6 +34,9 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generatedInvite, setGeneratedInvite] = useState<CreateInvitationResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [cancelingInvite, setCancelingInvite] = useState(false);
+  const [inviteGrants, setInviteGrants] = useState<MemberGrants>({ role_bundles: [], permissions: [], deal_ids: [] });
+  const updateInviteGrants = useCallback((grants: MemberGrants) => setInviteGrants(grants), []);
 
   // Accept Invitation Flow State
   const [inviteToken, setInviteToken] = useState<string | null>(null);
@@ -81,6 +85,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
     setGenerateError(null);
     setGeneratedInvite(null);
     setCopied(false);
+    setInviteGrants({ role_bundles: [], permissions: [], deal_ids: [] });
     try {
       const orgs = await listOrganizations();
       const admins = orgs.filter((org) => org.role === "ADMIN");
@@ -120,6 +125,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
           method: "POST",
           body: JSON.stringify({
             recipient_email: recipientEmail.trim().toLowerCase(),
+            ...inviteGrants,
           }),
         },
       );
@@ -140,6 +146,21 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
       setTimeout(() => setCopied(false), 2500);
     } catch {
       setCopied(false);
+    }
+  }
+
+  async function handleCancelInvite() {
+    if (!generatedInvite?.invitation_id || cancelingInvite) return;
+    setCancelingInvite(true);
+    setGenerateError(null);
+    try {
+      await apiRequest<void>(`/organizations/${encodeURIComponent(generatedInvite.organization_id)}/invitations/${encodeURIComponent(generatedInvite.invitation_id)}`, { method: "DELETE" });
+      setGeneratedInvite(null);
+      setGenerateError("Invitation revoked. Its link can no longer be accepted.");
+    } catch (caught) {
+      setGenerateError(describeError(caught));
+    } finally {
+      setCancelingInvite(false);
     }
   }
 
@@ -260,6 +281,14 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
                 </select>
               </div>
 
+              {selectedOrgId ? <MemberGrantFields
+                key={selectedOrgId}
+                organizationId={selectedOrgId}
+                isOwner={Boolean(adminOrganizations.find((org) => org.id === selectedOrgId)?.is_owner)}
+                disabled={generating}
+                onChange={updateInviteGrants}
+              /> : null}
+
               <div className="field">
                 <label htmlFor="invite-modal-email">Team member email</label>
                 <input
@@ -312,6 +341,9 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
                   >
                     {copied ? "Copied!" : "Copy Link"}
                   </button>
+                  {generatedInvite.invitation_id ? <button type="button" className="button danger" disabled={cancelingInvite} onClick={() => void handleCancelInvite()}>
+                    {cancelingInvite ? "Revoking…" : "Revoke invitation"}
+                  </button> : null}
                 </div>
                 <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
                   <span

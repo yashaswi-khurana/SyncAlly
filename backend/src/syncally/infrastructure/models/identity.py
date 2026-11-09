@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -75,7 +76,31 @@ class OrganizationMember(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="MEMBER")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
     capabilities: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, server_default="[]", default=list)
+    role_bundles: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, server_default="[]", default=list)
+    permissions: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, server_default="[]", default=list)
+    is_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+
+
+class DealAssignment(Base):
+    __tablename__ = "deal_assignments"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "deal_id", "user_id"),
+        Index("ix_deal_assignments_user_org", "user_id", "organization_id"),
+        Index("ix_deal_assignments_org_deal", "organization_id", "deal_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    deal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("deals.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE", server_default="ACTIVE")
 
 
 class RefreshToken(Base):

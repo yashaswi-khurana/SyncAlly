@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import smtplib
 import ssl
-from email.utils import getaddresses
 from datetime import UTC, datetime
 from email.message import EmailMessage
+from email.utils import getaddresses
 from html import escape
 from urllib.parse import urlsplit
 

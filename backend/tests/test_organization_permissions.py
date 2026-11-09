@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 from syncally.api.organizations import (
     AddOrganizationMemberRequest,
     CreateOrganizationRequest,
+    DealAssignmentUpdate,
     UpdateMemberPermissionsRequest,
     _compute_effective_capabilities,
     add_organization_member,
@@ -20,6 +21,7 @@ from syncally.api.organizations import (
     list_organization_members,
     repair_organization_finance_route,
     revoke_organization_member,
+    update_member_deal_assignments,
     update_member_permissions,
 )
 from syncally.application.identity import ActorContext
@@ -34,7 +36,15 @@ from syncally.domain.organizations.organization import (
 from syncally.domain.shared.errors import InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId, UserId
 from syncally.infrastructure.identity import resolve_actor, verify_member_capability
-from syncally.infrastructure.models import AuditEvent, Base, Organization, OrganizationMember, User
+from syncally.infrastructure.models import (
+    AuditEvent,
+    Base,
+    Deal,
+    DealAssignment,
+    Organization,
+    OrganizationMember,
+    User,
+)
 
 
 class OrganizationPermissionsTests(unittest.TestCase):
@@ -656,4 +666,142 @@ class OrganizationPermissionsTests(unittest.TestCase):
         self.assertIsNotNone(member)
         assert member is not None
         self.assertEqual(member.role, "ADMIN")
-        self.assertEqual(member.capabilities, ["FINANCE"])
+        self.assertTrue(member.is_owner)
+        self.assertEqual(member.role_bundles, [])
+        self.assertEqual(member.permissions, [])
+
+    def test_org_admin_can_delegate_ordinary_bundles_but_not_admin_or_protected_permission(self) -> None:
+        org = self._organization("Delegation Corp")
+        counterparty = self._organization("Counterparty Corp")
+        admin = self._user("delegating-admin@example.com")
+        owner = self._user("delegating-owner@example.com")
+        recipient = self._user("delegated-member@example.com")
+        admin_row = self._member(org, admin)
+        admin_row.role_bundles = ["ORG_ADMIN"]
+        owner_row = self._member(org, owner)
+        owner_row.is_owner = True
+        recipient_row = self._member(org, recipient)
+        deal = Deal(buyer_organization_id=org.id, seller_organization_id=counterparty.id, status="OPEN", version=1)
+        self.db.add(deal)
+        self.db.commit()
+
+        result = update_member_permissions(
+            org.id,
+            recipient.id,
+            UpdateMemberPermissionsRequest(
+                expected_version=recipient_row.version,
+                role_bundles=["FINANCE", "APPROVER"],
+                permissions=[],
+                deal_ids=[deal.id],
+            ),
+            self._actor(admin),
+            self.db,
+        )
+        self.assertEqual(result["role_bundles"], ["APPROVER", "FINANCE"])
+        self.assertEqual(result["deal_ids"], [deal.id])
+
+        with self.assertRaises(HTTPException) as custom_admin:
+            update_member_permissions(
+                org.id,
+                recipient.id,
+                UpdateMemberPermissionsRequest(
+                    expected_version=2,
+                    role_bundles=["FINANCE"],
+                    permissions=["org.members.manage"],
+                    deal_ids=[deal.id],
+                ),
+                self._actor(admin),
+                self.db,
+            )
+        self.assertEqual(custom_admin.exception.status_code, 422)
+
+        with self.assertRaises(HTTPException) as admin_bundle:
+            update_member_permissions(
+                org.id,
+                recipient.id,
+                UpdateMemberPermissionsRequest(
+                    expected_version=2,
+                    role_bundles=["ORG_ADMIN"],
+                    permissions=[],
+                    deal_ids=[deal.id],
+                ),
+                self._actor(admin),
+                self.db,
+            )
+        self.assertEqual(admin_bundle.exception.status_code, 403)
+
+        owner_result = update_member_permissions(
+            org.id,
+            recipient.id,
+            UpdateMemberPermissionsRequest(
+                expected_version=2,
+                role_bundles=["ORG_ADMIN"],
+                permissions=[],
+                deal_ids=[deal.id],
+            ),
+            self._actor(owner),
+            self.db,
+        )
+        self.assertEqual(owner_result["role_bundles"], ["ORG_ADMIN"])
+
+        direct_user = self._user("direct-grant@example.com")
+        added = add_organization_member(
+            org.id,
+            AddOrganizationMemberRequest(
+                email=direct_user.email,
+                role_bundles=["FINANCE"],
+                deal_ids=[deal.id],
+            ),
+            self._actor(admin),
+            self.db,
+        )
+        self.assertEqual(added["user_id"], str(direct_user.id))
+        direct_row = self.db.scalar(select(OrganizationMember).where(
+            OrganizationMember.organization_id == org.id,
+            OrganizationMember.user_id == direct_user.id,
+        ))
+        self.assertEqual(direct_row.role_bundles, ["FINANCE"])
+        self.assertEqual(self.db.scalar(select(DealAssignment.deal_id).where(
+            DealAssignment.organization_id == org.id,
+            DealAssignment.user_id == direct_user.id,
+            DealAssignment.status == "ACTIVE",
+        )), deal.id)
+
+    def test_deal_manager_assignment_write_is_limited_to_its_delegated_deals(self) -> None:
+        org = self._organization("Deal Manager Corp")
+        counterparty = self._organization("Deal Manager Partner")
+        manager = self._user("deal-manager@example.com")
+        recipient = self._user("deal-assignee@example.com")
+        manager_row = self._member(org, manager)
+        manager_row.role_bundles = ["DEAL_MANAGER"]
+        target_row = self._member(org, recipient)
+        assigned_deal = Deal(buyer_organization_id=org.id, seller_organization_id=counterparty.id, status="OPEN", version=1)
+        unrelated_deal = Deal(buyer_organization_id=org.id, seller_organization_id=counterparty.id, status="OPEN", version=1)
+        self.db.add_all([assigned_deal, unrelated_deal])
+        self.db.flush()
+        self.db.add_all([
+            DealAssignment(organization_id=org.id, deal_id=assigned_deal.id, user_id=manager.id, status="ACTIVE"),
+            DealAssignment(organization_id=org.id, deal_id=unrelated_deal.id, user_id=recipient.id, status="ACTIVE"),
+        ])
+        self.db.commit()
+
+        with self.assertRaises(HTTPException) as overreach:
+            update_member_deal_assignments(
+                org.id,
+                recipient.id,
+                DealAssignmentUpdate(expected_version=target_row.version, deal_ids=[unrelated_deal.id]),
+                self._actor(manager),
+                self.db,
+            )
+        self.assertEqual(overreach.exception.status_code, 403)
+
+        result = update_member_deal_assignments(
+            org.id,
+            recipient.id,
+            DealAssignmentUpdate(expected_version=target_row.version, deal_ids=[assigned_deal.id]),
+            self._actor(manager),
+            self.db,
+        )
+        self.assertEqual(set(result["deal_ids"]), {str(assigned_deal.id), str(unrelated_deal.id)})
+        self.assertEqual(result["version"], target_row.version)
+        self.assertEqual(result["version"], 2)

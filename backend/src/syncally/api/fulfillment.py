@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.api.authorization import require_deal_action
 from syncally.api.deals import get_deal_repository
 from syncally.application.deals import DealNotFound, get_deal
 from syncally.application.fulfillment import (
@@ -214,8 +215,18 @@ def read_fulfillment_route(
     actor: ActorContext = Depends(get_current_actor),
     deal_repository=Depends(get_deal_repository),
     fulfillment_repository: FulfillmentRepository = Depends(get_fulfillment_repository),
+    organization_id: UUID | None = None,
 ) -> FulfillmentSnapshotResponse:
     try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        parties = {deal.buyer_organization_id, deal.seller_organization_id} & actor.organization_ids
+        selected_org = organization_id if isinstance(organization_id, UUID) else None
+        if selected_org is None and len(parties) != 1:
+            raise HTTPException(status_code=422, detail="Select the organization you are acting for")
+        acting_org = selected_org or next(iter(parties))
+        if acting_org not in parties:
+            raise HTTPException(status_code=403, detail="Selected organization is not a party to this deal")
+        require_deal_action(actor, deal, acting_org, "fulfillment.read")
         return _snapshot_response(
             get_fulfillment_snapshot(actor, deal_id, deal_repository, fulfillment_repository)
         )
@@ -274,12 +285,9 @@ def _record_fulfillment_event(
             deal.seller_organization_id,
         ):
             raise FulfillmentAccessDenied("Select an active organization that belongs to this deal")
+        require_deal_action(actor, deal, payload.organization_id, "fulfillment.record")
         verify_member_capability(
-            db,
-            payload.organization_id,
-            actor.user_id,
-            OrganizationCapability.FULFILLMENT,
-            for_update=True,
+            db, payload.organization_id, actor.user_id, OrganizationCapability.FULFILLMENT
         )
         event = record_fulfillment_event(
             actor,

@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.api.authorization import require_deal_action
 from syncally.application.agreements import (
     AgreementAccessDenied,
     AgreementAlreadyCommitted,
@@ -71,12 +72,10 @@ from syncally.domain.agreements.trade_terms import (
     TradeTerms,
 )
 from syncally.domain.ai.contracts import AIContractError, ProposedTerms
-from syncally.domain.organizations.organization import OrganizationCapability
 from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.domain.shared.identifiers import OrganizationId
 from syncally.domain.shared.money import Money
 from syncally.infrastructure.database import get_db
-from syncally.infrastructure.identity import verify_member_capability
 from syncally.infrastructure.repositories import (
     SqlAlchemyAgreementRepository,
     SqlAlchemyApprovalRoutingPolicyRepository,
@@ -101,6 +100,7 @@ class CreateAgreementDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     proposal_id: UUID
+    organization_id: UUID | None = None
 
 
 class MoneyRequest(BaseModel):
@@ -476,14 +476,22 @@ def get_agreement_repository(db: Session = Depends(get_db)) -> SqlAlchemyAgreeme
     return SqlAlchemyAgreementRepository(db)
 
 
+def get_deal_repository(db: Session = Depends(get_db)) -> DealRepository:
+    return SqlAlchemyDealRepository(db)
+
+
 @router.get("/history")
 def read_agreement_history_route(
     deal_id: UUID, organization_id: UUID | None = None,
     actor: ActorContext = Depends(get_current_actor),
     repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+    deal_repository: DealRepository = Depends(get_deal_repository),
 ) -> dict[str, Any]:
     try:
-        return repository.read_versions(deal_id, actor.user_id, organization_id)
+        deal = get_deal(actor, deal_id, deal_repository)
+        selected_org = resolve_party_organization(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "deal.read_assigned")
+        return repository.read_versions(deal_id, actor.user_id, selected_org)
     except Exception as exc:
         _raise_agreement_error(exc)
 
@@ -493,9 +501,13 @@ def read_exact_agreement_route(
     deal_id: UUID, number: int = Path(ge=1), organization_id: UUID | None = None,
     actor: ActorContext = Depends(get_current_actor),
     repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+    deal_repository: DealRepository = Depends(get_deal_repository),
 ) -> AgreementVersionResponse:
     try:
-        result = repository.read_versions(deal_id, actor.user_id, organization_id, (number,))
+        deal = get_deal(actor, deal_id, deal_repository)
+        selected_org = resolve_party_organization(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "deal.read_assigned")
+        result = repository.read_versions(deal_id, actor.user_id, selected_org, (number,))
         return AgreementVersionResponse.model_validate(result["versions"][0])
     except Exception as exc:
         _raise_agreement_error(exc)
@@ -506,9 +518,13 @@ def compare_agreements_route(
     deal_id: UUID, before: int = Query(ge=1), after: int = Query(ge=1), organization_id: UUID | None = None,
     actor: ActorContext = Depends(get_current_actor),
     repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
+    deal_repository: DealRepository = Depends(get_deal_repository),
 ) -> dict[str, Any]:
     try:
-        result = repository.read_versions(deal_id, actor.user_id, organization_id, (before, after))
+        deal = get_deal(actor, deal_id, deal_repository)
+        selected_org = resolve_party_organization(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "deal.read_assigned")
+        result = repository.read_versions(deal_id, actor.user_id, selected_org, (before, after))
         versions = {version["version_number"]: version for version in result["versions"]}
         return {"before": versions[before], "after": versions[after],
                 "changes": compare_agreement_terms(versions[before]["terms"], versions[after]["terms"])}
@@ -570,23 +586,18 @@ def read_current_agreement_route(
 ) -> AgreementVersionResponse:
     """Return the current saved agreement only to an active deal participant."""
     try:
+        deal = get_deal(actor, deal_id, deal_repository)
+        selected_org = resolve_party_organization(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "deal.read_assigned")
         agreement = get_current_agreement(
             actor,
             deal_id,
             deal_repository,
             agreement_repository,
         )
-        result = agreement_repository.read_versions(deal_id, actor.user_id, organization_id,
+        result = agreement_repository.read_versions(deal_id, actor.user_id, selected_org,
                                                      (agreement.version_number,))
         return AgreementVersionResponse.model_validate(result["versions"][0])
-    except AmbiguousAgreementOrganization:
-        if organization_id is not None:
-            _raise_agreement_error(AmbiguousAgreementOrganization("Choose the acting organization"))
-        # The actor is an active member of both deal parties and did not
-        # disambiguate: fall back to the unscoped projection (no per-party
-        # routing detail) rather than failing a request that worked before
-        # organization-scoped routing status existed.
-        return _to_agreement_response(agreement)
     except Exception as exc:
         _raise_agreement_error(exc)
 
@@ -652,7 +663,9 @@ def create_agreement_draft_route(
 ) -> AgreementVersionResponse:
     """Snapshot a saved proposal into the deal's next pending agreement version."""
     try:
-        get_deal(actor, deal_id, deal_repository)
+        deal = get_deal(actor, deal_id, deal_repository)
+        organization_id = resolve_party_organization(actor, deal, payload.organization_id)
+        require_deal_action(actor, deal, organization_id, "deal.edit_assigned")
         agreement = create_agreement_draft_in_transaction(
             db,
             CreateAgreementDraftCommand(
@@ -684,6 +697,7 @@ def create_reviewed_agreement_draft_route(
         author_organization_id = resolve_party_organization(
             actor, deal, payload.organization_id
         )
+        require_deal_action(actor, deal, author_organization_id, "deal.edit_assigned")
         terms = build_trade_terms_from_request(
             payload,
             buyer_id=OrganizationId(deal.buyer_organization_id),
@@ -749,14 +763,7 @@ def _record_decision(
     try:
         deal = get_deal(actor, deal_id, deal_repository)
         organization_id = resolve_party_organization(actor, deal, payload.organization_id)
-        if decision == ApprovalDecision.APPROVE:
-            verify_member_capability(
-                db,
-                organization_id,
-                actor.user_id,
-                OrganizationCapability.AGREEMENT_APPROVAL,
-                for_update=True,
-            )
+        require_deal_action(actor, deal, organization_id, "agreement.approve")
         # Locked so an admin can't create/update/remove this org's policy
         # between this branch decision and the write below; record_routing_decision
         # re-reads under the same lock, so the response built from `policy`
@@ -866,6 +873,7 @@ def commit_agreement_route(
     try:
         deal = get_deal(actor, deal_id, deal_repository)
         organization_id = resolve_party_organization(actor, deal, payload.organization_id)
+        require_deal_action(actor, deal, organization_id, "agreement.approve")
         agreement = commit_agreement_in_transaction(
             db,
             CommitAgreementCommand(
@@ -899,6 +907,7 @@ def propose_amendment_route(
         author_organization_id = resolve_party_organization(
             actor, deal, payload.organization_id
         )
+        require_deal_action(actor, deal, author_organization_id, "deal.edit_assigned")
         terms = build_trade_terms_from_request(
             payload,
             buyer_id=OrganizationId(deal.buyer_organization_id),
@@ -935,6 +944,7 @@ def propose_amendment_route(
 )
 def read_amendment_impact_route(
     deal_id: UUID,
+    organization_id: UUID | None = Query(default=None),
     version_number: int | None = Query(default=None, ge=1),
     actor: ActorContext = Depends(get_current_actor),
     repository: SqlAlchemyAgreementRepository = Depends(get_agreement_repository),
@@ -942,7 +952,9 @@ def read_amendment_impact_route(
 ) -> AmendmentImpactResponse:
     """Assess operational fulfillment, payment, and policy impact of a pending amendment."""
     try:
-        get_deal(actor, deal_id, deal_repository)
+        deal = get_deal(actor, deal_id, deal_repository)
+        selected_org = resolve_party_organization(actor, deal, organization_id)
+        require_deal_action(actor, deal, selected_org, "deal.read_assigned")
         impact = repository.assess_amendment_impact(
             deal_id,
             pending_version_number=version_number,
@@ -966,6 +978,7 @@ def preview_amendment_impact_route(
     """Preview operational impact of proposed terms before submitting an amendment candidate."""
     try:
         deal = get_deal(actor, deal_id, deal_repository)
+        require_deal_action(actor, deal, payload.organization_id, "deal.edit_assigned")
         terms = build_trade_terms_from_request(
             payload,
             buyer_id=OrganizationId(deal.buyer_organization_id),
@@ -1003,6 +1016,7 @@ def withdraw_amendment_route(
         organization_id = resolve_party_organization(
             actor, deal, payload.organization_id
         )
+        require_deal_action(actor, deal, organization_id, "deal.edit_assigned")
         agreement = withdraw_amendment_in_transaction(
             db,
             WithdrawAmendmentCommand(

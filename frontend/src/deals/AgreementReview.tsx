@@ -387,7 +387,7 @@ export default function AgreementReview({
     }
     const currentAgreement = viewedVersion ? versionView?.agreement : state.agreement;
     if (currentAgreement && currentAgreement.version_number > 1 && currentAgreement.status === "PENDING_APPROVAL") {
-      void getAmendmentImpact(dealId, { versionNumber: currentAgreement.version_number, signal: controller.signal })
+      void getAmendmentImpact(dealId, { versionNumber: currentAgreement.version_number, organizationId: actingOrganizationId || undefined, signal: controller.signal })
         .then((impact) => {
           if (!controller.signal.aborted) setAmendmentImpact(impact);
         })
@@ -401,7 +401,7 @@ export default function AgreementReview({
       });
       return () => controller.abort();
     }
-  }, [dealId, state, viewedVersion, versionView]);
+  }, [actingOrganizationId, dealId, state, viewedVersion, versionView]);
 
   async function withdrawCurrentAmendment() {
     const agreement = getActiveAgreement();

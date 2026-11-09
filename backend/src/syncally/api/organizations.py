@@ -12,7 +12,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import ColumnElement, String, cast, func, select
+from sqlalchemy import ColumnElement, String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -31,9 +31,14 @@ from syncally.domain.organizations.approval_routing import ApprovalRoutingMode
 from syncally.domain.organizations.approval_routing import (
     ApprovalRoutingPolicy as DomainApprovalRoutingPolicy,
 )
+from syncally.domain.organizations.authorization import (
+    OWNER_ONLY_BUNDLES,
+    OWNER_ONLY_PERMISSIONS,
+    expand_grants,
+    validate_grants,
+)
 from syncally.domain.organizations.organization import (
     ContactVisibility,
-    OrganizationCapability,
     OrganizationVerificationStatus,
     resolve_effective_capabilities,
 )
@@ -56,6 +61,7 @@ from syncally.infrastructure.models import (
     Conversation,
     CounterpartyOnboarding,
     Deal,
+    DealAssignment,
     Message,
     NegotiationSession,
     Organization,
@@ -72,6 +78,7 @@ from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 from syncally.infrastructure.repositories.organizations import (
     SqlAlchemyOrganizationRepository,
 )
+from syncally.operations import correlation_id
 
 router = APIRouter(tags=["organizations"])
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
@@ -107,9 +114,9 @@ def _public_invitation_base_url() -> str:
         if parsed.scheme not in {"http", "https"}:
             raise HTTPException(status_code=503, detail="Configure a local HTTP or HTTPS invitation URL.")
         return value.rstrip("/")
+
     if parsed.scheme != "https":
         raise HTTPException(status_code=503, detail="Configure a public HTTPS invitation URL.")
-
     local_suffixes = (".localhost", ".local", ".internal", ".test", ".invalid", ".example")
     try:
         address = ip_address(normalized_host)
@@ -192,6 +199,9 @@ class CreateOrganizationRequest(BaseModel):
 
 class AddOrganizationMemberRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
+    role_bundles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    deal_ids: list[UUID] = Field(default_factory=list)
 
 
 class OrganizationMemberResponse(BaseModel):
@@ -202,6 +212,10 @@ class OrganizationMemberResponse(BaseModel):
     status: str
     capabilities: list[str] = Field(default_factory=list)
     assigned_capabilities: list[str] = Field(default_factory=list)
+    role_bundles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    deal_ids: list[UUID] = Field(default_factory=list)
+    is_owner: bool = False
     version: int
 
 
@@ -209,12 +223,23 @@ class UpdateMemberPermissionsRequest(BaseModel):
     expected_version: int = Field(ge=1)
     role: str | None = Field(default=None, pattern=r"^(ADMIN|MEMBER)$")
     capabilities: list[str] | None = None
+    role_bundles: list[str] | None = None
+    permissions: list[str] | None = None
+    deal_ids: list[UUID] | None = None
+
+
+class DealAssignmentUpdate(BaseModel):
+    expected_version: int = Field(ge=1)
+    deal_ids: list[UUID] = Field(default_factory=list)
 
 
 class CreateInvitationRequest(BaseModel):
     deal_id: UUID | None = None
     role: str = Field(default="MEMBER", pattern=r"^(ADMIN|MEMBER)$")
-    recipient_email: str = Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    role_bundles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    deal_ids: list[UUID] = Field(default_factory=list)
+    recipient_email: str | None = Field(default=None, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
     @field_validator("recipient_email", mode="before")
     @classmethod
@@ -246,6 +271,7 @@ class CreateCounterpartyInvitationRequest(CreateOrganizationRequest):
 
 
 class InvitationResponse(BaseModel):
+    invitation_id: UUID | None = None
     token: str
     invite_url: str
     organization_id: UUID
@@ -508,9 +534,93 @@ def _active_admin_membership(
     )
     if membership is None:
         raise HTTPException(status_code=404, detail="Organization not found")
-    if membership.role != "ADMIN":
+    if "org.members.manage" not in expand_grants(membership.role_bundles, membership.permissions, owner=membership.is_owner):
         raise HTTPException(status_code=403, detail="Organization admin role required")
     return organization, membership
+
+
+def _validate_member_grants(
+    db: Session,
+    organization: Organization,
+    delegator: OrganizationMember,
+    role_bundles: list[str],
+    permissions: list[str],
+    deal_ids: list[UUID],
+) -> tuple[list[str], list[str], list[UUID]]:
+    try:
+        bundles, custom_permissions = validate_grants(role_bundles, permissions)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    owner = bool(delegator.is_owner)
+    delegated = expand_grants(delegator.role_bundles, delegator.permissions, owner=owner)
+    requested = expand_grants(bundles, custom_permissions)
+    can_delegate_ordinary_bundles = "org.members.manage" in delegated
+    if not owner:
+        if bundles.intersection(OWNER_ONLY_BUNDLES) or requested.intersection(OWNER_ONLY_PERMISSIONS):
+            raise HTTPException(status_code=403, detail="Only the organization owner may grant organization-wide access")
+        if can_delegate_ordinary_bundles:
+            custom_requested = expand_grants((), custom_permissions)
+            if not custom_requested.issubset(delegated):
+                raise HTTPException(status_code=403, detail="You may only grant custom permissions delegated to your account")
+        elif not requested.issubset(delegated):
+            raise HTTPException(status_code=403, detail="You may only grant permissions delegated to your account")
+    unique_deal_ids = list(dict.fromkeys(deal_ids))
+    if unique_deal_ids:
+        if not owner and "deal.assign" not in delegated:
+            raise HTTPException(status_code=403, detail="Deal assignment authority required")
+        if not owner and not can_delegate_ordinary_bundles:
+            delegator_deal_ids = set(db.scalars(select(DealAssignment.deal_id).where(
+                DealAssignment.organization_id == organization.id,
+                DealAssignment.user_id == delegator.user_id,
+                DealAssignment.status == "ACTIVE",
+            )).all())
+            if not set(unique_deal_ids).issubset(delegator_deal_ids):
+                raise HTTPException(status_code=403, detail="You may only delegate deals assigned to your account")
+        deals = db.scalars(
+            select(Deal).where(
+                Deal.id.in_(unique_deal_ids),
+                or_(Deal.buyer_organization_id == organization.id, Deal.seller_organization_id == organization.id),
+            )
+        ).all()
+        if {deal.id for deal in deals} != set(unique_deal_ids):
+            raise HTTPException(status_code=422, detail="Every selected deal must belong to this organization")
+    return sorted(bundles), sorted(custom_permissions), unique_deal_ids
+
+
+def _replace_member_assignments(
+    db: Session, organization_id: UUID, user_id: UUID, deal_ids: list[UUID], actor_id: UUID
+) -> None:
+    existing = db.scalars(select(DealAssignment).where(
+        DealAssignment.organization_id == organization_id,
+        DealAssignment.user_id == user_id,
+        DealAssignment.status == "ACTIVE",
+    ).with_for_update()).all()
+    before = sorted(str(item.deal_id) for item in existing)
+    by_deal = {assignment.deal_id: assignment for assignment in existing}
+    for assignment in existing:
+        assignment.status = "ACTIVE" if assignment.deal_id in deal_ids else "REVOKED"
+    for deal_id in deal_ids:
+        if deal_id not in by_deal:
+            db.add(DealAssignment(organization_id=organization_id, deal_id=deal_id, user_id=user_id, status="ACTIVE"))
+    if before != sorted(str(item) for item in deal_ids):
+        db.add(AuditEvent(
+            id=uuid4(), aggregate_type="organization_member", aggregate_id=user_id,
+            event_type="member.deal_assignments_changed", actor_type="USER", actor_id=str(actor_id),
+            occurred_at=datetime.now(UTC), correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+            payload={"organization_id": str(organization_id), "before": before, "after": sorted(str(item) for item in deal_ids)},
+        ))
+
+
+def _is_org_admin(member: OrganizationMember) -> bool:
+    return "org.members.manage" in expand_grants(member.role_bundles, member.permissions, owner=member.is_owner)
+
+
+def _active_org_admin_count(db: Session, organization_id: UUID) -> int:
+    members = db.scalars(select(OrganizationMember).where(
+        OrganizationMember.organization_id == organization_id,
+        OrganizationMember.status == "ACTIVE",
+    )).all()
+    return sum(1 for member in members if _is_org_admin(member))
 
 
 @org_router.post("", status_code=status.HTTP_201_CREATED)
@@ -551,8 +661,15 @@ def create_organization(
             role="ADMIN",
             status="ACTIVE",
             capabilities=["FINANCE"],
+            role_bundles=[],
+            permissions=[],
+            is_owner=True,
         )
     )
+    db.add(AuditEvent(id=uuid4(), aggregate_type="organization", aggregate_id=organization.id,
+                      event_type="organization.owner_registered", actor_type="USER", actor_id=str(actor.user_id),
+                      occurred_at=datetime.now(UTC), correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+                      payload={"user_id": str(actor.user_id), "source": "authenticated_organization_creation"}))
     db.commit()
     return {
         "id": str(organization.id),
@@ -573,7 +690,7 @@ def list_my_organizations(
 ) -> list[dict[str, Any]]:
     """List active organizations and roles resolved from database membership."""
     rows = db.execute(
-        select(Organization, OrganizationMember.role)
+        select(Organization, OrganizationMember.role, OrganizationMember.is_owner)
         .join(
             OrganizationMember,
             OrganizationMember.organization_id == Organization.id,
@@ -590,12 +707,13 @@ def list_my_organizations(
             "id": str(organization.id),
             "legal_name": organization.legal_name,
             "country_code": organization.country_code,
-            "role": role,
+            "role": "ADMIN" if actor.has_permission(organization.id, "org.members.manage") else "MEMBER",
+            "is_owner": is_owner,
             "capabilities": sorted([
                 c.value for c in actor.capabilities_by_organization.get(organization.id, frozenset())
             ]),
         }
-        for organization, role in rows
+        for organization, _legacy_role, is_owner in rows
     ]
 
 
@@ -937,7 +1055,10 @@ def add_organization_member(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Add an existing active account to an organization as a regular member."""
-    organization, _ = _active_admin_membership(db, organization_id, actor.user_id)
+    organization, delegator = _active_admin_membership(db, organization_id, actor.user_id)
+    role_bundles, permissions, deal_ids = _validate_member_grants(
+        db, organization, delegator, payload.role_bundles, payload.permissions, payload.deal_ids
+    )
     email = payload.email.strip().lower()
     user = db.scalar(
         select(User).where(
@@ -958,18 +1079,19 @@ def add_organization_member(
     )
     if existing_membership is not None:
         if existing_membership.status == "ACTIVE":
-            email_sent, email_error = _send_invitation_email(
-                notifier.send_member_added_notice if notifier else None,
-                user.email,
-                organization.legal_name,
-                f"{public_base_url}/#/deals",
-            )
-            return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role,
-                    "email_sent": email_sent, "email_error": email_error}
+            raise HTTPException(status_code=409, detail="User already has an active membership; edit access instead")
         existing_membership.role = "MEMBER"
         existing_membership.status = "ACTIVE"
         existing_membership.capabilities = []
+        existing_membership.role_bundles = role_bundles
+        existing_membership.permissions = permissions
         existing_membership.version = existing_membership.version + 1
+        _replace_member_assignments(db, organization_id, user.id, deal_ids, actor.user_id)
+        db.add(AuditEvent(id=uuid4(), aggregate_type="organization_member", aggregate_id=existing_membership.id,
+                          event_type="member.access_granted", actor_type="USER", actor_id=str(actor.user_id),
+                          occurred_at=datetime.now(UTC), correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+                          payload={"organization_id": str(organization_id),
+                          "user_id": str(user.id), "role_bundles": role_bundles, "permissions": permissions}))
         db.commit()
         email_sent, email_error = _send_invitation_email(
             notifier.send_member_added_notice if notifier else None,
@@ -977,16 +1099,30 @@ def add_organization_member(
             organization.legal_name,
             f"{public_base_url}/#/deals",
         )
-        return {"user_id": str(user.id), "email": user.email, "role": existing_membership.role,
-                "email_sent": email_sent, "email_error": email_error}
+        return {
+            "user_id": str(user.id),
+            "email": user.email,
+            "role": existing_membership.role,
+            "email_sent": email_sent,
+            "email_error": email_error,
+        }
 
     membership = OrganizationMember(
         organization_id=organization_id,
         user_id=user.id,
         role="MEMBER",
         status="ACTIVE",
+        role_bundles=role_bundles,
+        permissions=permissions,
     )
     db.add(membership)
+    db.flush()
+    _replace_member_assignments(db, organization_id, user.id, deal_ids, actor.user_id)
+    db.add(AuditEvent(id=uuid4(), aggregate_type="organization_member", aggregate_id=membership.id,
+                      event_type="member.access_granted", actor_type="USER", actor_id=str(actor.user_id),
+                      occurred_at=datetime.now(UTC), correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+                      payload={"organization_id": str(organization_id),
+                      "user_id": str(user.id), "role_bundles": role_bundles, "permissions": permissions}))
     try:
         db.commit()
     except IntegrityError as exc:
@@ -1001,8 +1137,13 @@ def add_organization_member(
         organization.legal_name,
         f"{public_base_url}/#/deals",
     )
-    return {"user_id": str(user.id), "email": user.email, "role": membership.role,
-            "email_sent": email_sent, "email_error": email_error}
+    return {
+        "user_id": str(user.id),
+        "email": user.email,
+        "role": membership.role,
+        "email_sent": email_sent,
+        "email_error": email_error,
+    }
 
 
 @org_router.get(
@@ -1015,7 +1156,7 @@ def list_organization_members(
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List active members of an organization with effective capabilities."""
-    if organization_id not in actor.organization_ids:
+    if not actor.has_permission(organization_id, "org.members.manage"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Active organization membership required",
@@ -1041,10 +1182,138 @@ def list_organization_members(
             "status": member.status,
             "capabilities": _compute_effective_capabilities(member.role, member.capabilities),
             "assigned_capabilities": sorted(member.capabilities or []),
+            "role_bundles": list(member.role_bundles or []),
+            "permissions": list(member.permissions or []),
+            "deal_ids": db.scalars(select(DealAssignment.deal_id).where(
+                DealAssignment.organization_id == organization_id,
+                DealAssignment.user_id == member.user_id,
+                DealAssignment.status == "ACTIVE",
+            )).all(),
+            "is_owner": member.is_owner,
             "version": member.version,
         }
         for member, email, display_name in rows
     ]
+
+
+@org_router.get("/{organization_id}/assignable-deals")
+def list_assignable_organization_deals(
+    organization_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    organization = db.scalar(select(Organization).where(Organization.id == organization_id, Organization.status == "ACTIVE"))
+    if organization is None or organization_id not in actor.organization_ids:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if not actor.has_permission(organization_id, "deal.assign"):
+        raise HTTPException(status_code=403, detail="Deal assignment permission required")
+    deals = db.scalars(select(Deal).where(
+        or_(Deal.buyer_organization_id == organization_id, Deal.seller_organization_id == organization_id)
+    ).order_by(Deal.created_at.desc(), Deal.id)).all()
+    return [{"id": str(deal.id), "display_name": deal.display_name or "Untitled deal", "status": deal.status}
+            for deal in deals]
+
+
+@org_router.put("/{organization_id}/members/{user_id}/deal-assignments")
+def update_member_deal_assignments(
+    organization_id: UUID,
+    user_id: UUID,
+    payload: DealAssignmentUpdate,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Let a deal manager assign only deals already delegated to their own account."""
+    organization = db.scalar(select(Organization).where(
+        Organization.id == organization_id,
+        Organization.status == "ACTIVE",
+    ).with_for_update().execution_options(populate_existing=True))
+    if organization is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    manager = db.scalar(select(OrganizationMember).where(
+        OrganizationMember.organization_id == organization_id,
+        OrganizationMember.user_id == actor.user_id,
+        OrganizationMember.status == "ACTIVE",
+    ).with_for_update().execution_options(populate_existing=True))
+    if manager is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    manager_grants = expand_grants(manager.role_bundles, manager.permissions, owner=manager.is_owner)
+    if "deal.assign" not in manager_grants:
+        raise HTTPException(status_code=403, detail="Deal assignment permission required")
+    if user_id == actor.user_id:
+        raise HTTPException(status_code=403, detail="Cannot change your own deal assignments")
+
+    target = db.scalar(select(OrganizationMember).where(
+        OrganizationMember.organization_id == organization_id,
+        OrganizationMember.user_id == user_id,
+        OrganizationMember.status == "ACTIVE",
+    ).with_for_update().execution_options(populate_existing=True))
+    if target is None:
+        raise HTTPException(status_code=404, detail="Member not found in organization")
+    if target.is_owner:
+        raise HTTPException(status_code=409, detail="Owner deal scope cannot be edited")
+    if target.version != payload.expected_version:
+        raise HTTPException(status_code=409, detail="Member permissions conflict; please refresh")
+
+    requested_deal_ids = list(dict.fromkeys(payload.deal_ids))
+    deals = db.scalars(select(Deal).where(
+        Deal.id.in_(requested_deal_ids),
+        or_(Deal.buyer_organization_id == organization_id, Deal.seller_organization_id == organization_id),
+    )).all()
+    if {deal.id for deal in deals} != set(requested_deal_ids):
+        raise HTTPException(status_code=422, detail="Every selected deal must belong to this organization")
+
+    is_admin_delegator = "org.members.manage" in manager_grants
+    current_deal_ids = set(db.scalars(select(DealAssignment.deal_id).where(
+        DealAssignment.organization_id == organization_id,
+        DealAssignment.user_id == user_id,
+        DealAssignment.status == "ACTIVE",
+    )).all())
+    if not manager.is_owner and not is_admin_delegator:
+        own_deal_ids = set(db.scalars(select(DealAssignment.deal_id).where(
+            DealAssignment.organization_id == organization_id,
+            DealAssignment.user_id == actor.user_id,
+            DealAssignment.status == "ACTIVE",
+        )).all())
+        if not set(requested_deal_ids).issubset(own_deal_ids):
+            raise HTTPException(status_code=403, detail="You may only delegate deals assigned to your account")
+        deal_ids = sorted((current_deal_ids - own_deal_ids) | set(requested_deal_ids), key=str)
+    else:
+        deal_ids = requested_deal_ids
+
+    _replace_member_assignments(db, organization_id, user_id, deal_ids, actor.user_id)
+    target.version += 1
+    db.commit()
+    return {"organization_id": str(organization_id), "user_id": str(user_id),
+            "deal_ids": [str(item) for item in deal_ids], "version": target.version}
+
+
+@org_router.post("/{organization_id}/claim-ownership")
+def claim_legacy_organization_ownership(
+    organization_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Recover a legacy ownerless organization only when one admin is unambiguous."""
+    organization, member = _active_admin_membership(db, organization_id, actor.user_id)
+    existing_owner = db.scalar(select(OrganizationMember.id).where(
+        OrganizationMember.organization_id == organization_id,
+        OrganizationMember.status == "ACTIVE",
+        OrganizationMember.is_owner.is_(True),
+    ).limit(1))
+    if existing_owner is not None:
+        raise HTTPException(status_code=409, detail="Organization already has an owner")
+    if _active_org_admin_count(db, organization_id) != 1:
+        raise HTTPException(status_code=409, detail="A system administrator must resolve ownership because multiple admins exist")
+    member.is_owner = True
+    member.role_bundles = []
+    member.permissions = []
+    member.version += 1
+    db.add(AuditEvent(id=uuid4(), aggregate_type="organization", aggregate_id=organization_id,
+                      event_type="organization.owner_recovered", actor_type="USER", actor_id=str(actor.user_id),
+                      occurred_at=datetime.now(UTC), correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+                      payload={"user_id": str(actor.user_id), "method": "sole_admin_claim"}))
+    db.commit()
+    return {"organization_id": str(organization.id), "owner_user_id": str(actor.user_id), "status": "recovered"}
 
 
 @org_router.patch(
@@ -1059,7 +1328,7 @@ def update_member_permissions(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Update an organization member's role and capabilities with optimistic locking."""
-    _active_admin_membership(db, organization_id, actor.user_id)
+    organization, delegator = _active_admin_membership(db, organization_id, actor.user_id)
 
     if user_id == actor.user_id:
         raise HTTPException(
@@ -1083,6 +1352,9 @@ def update_member_permissions(
             detail="Member not found in organization",
         )
 
+    if target.is_owner:
+        raise HTTPException(status_code=409, detail="Transfer ownership before editing this member's access")
+
     user = db.scalar(
         select(User).where(User.id == target.user_id, User.status == "ACTIVE")
     )
@@ -1098,35 +1370,30 @@ def update_member_permissions(
             detail="Member permissions conflict; please refresh",
         )
 
-    if target.role == "ADMIN" and payload.role == "MEMBER":
-        admin_count = db.scalar(
-            select(func.count(OrganizationMember.id))
-            .where(
-                OrganizationMember.organization_id == organization_id,
-                OrganizationMember.role == "ADMIN",
-                OrganizationMember.status == "ACTIVE",
-            )
-        )
-        if (admin_count or 0) <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Cannot demote the last remaining admin of the organization",
-            )
-
-    if payload.capabilities is not None:
-        valid_caps = {c.value for c in OrganizationCapability}
-        cleaned_caps: list[str] = []
-        for cap in payload.capabilities:
-            if cap not in valid_caps:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Invalid capability '{cap}'; valid: {sorted(valid_caps)}",
-                )
-            cleaned_caps.append(cap)
-        target.capabilities = sorted(set(cleaned_caps))
-
-    if payload.role is not None:
-        target.role = payload.role
+    if payload.role is not None or payload.capabilities is not None:
+        raise HTTPException(status_code=422, detail="Use role_bundles and permissions")
+    before_bundles = list(target.role_bundles or [])
+    before_permissions = list(target.permissions or [])
+    before_deal_ids = list(db.scalars(select(DealAssignment.deal_id).where(
+        DealAssignment.organization_id == organization_id,
+        DealAssignment.user_id == user_id,
+        DealAssignment.status == "ACTIVE",
+    )).all())
+    bundles = payload.role_bundles if payload.role_bundles is not None else list(target.role_bundles or [])
+    permissions = payload.permissions if payload.permissions is not None else list(target.permissions or [])
+    deal_ids = payload.deal_ids if payload.deal_ids is not None else list(db.scalars(select(DealAssignment.deal_id).where(
+        DealAssignment.organization_id == organization_id,
+        DealAssignment.user_id == user_id,
+        DealAssignment.status == "ACTIVE",
+    )).all())
+    bundles, permissions, deal_ids = _validate_member_grants(
+        db, organization, delegator, bundles, permissions, deal_ids
+    )
+    if _is_org_admin(target) and "org.members.manage" not in expand_grants(bundles, permissions, owner=target.is_owner) and _active_org_admin_count(db, organization_id) <= 1:
+        raise HTTPException(status_code=409, detail="Cannot remove the last organization administrator")
+    target.role_bundles = bundles
+    target.permissions = permissions
+    _replace_member_assignments(db, organization_id, user_id, deal_ids, actor.user_id)
 
     target.version = target.version + 1
 
@@ -1140,11 +1407,19 @@ def update_member_permissions(
             actor_type="USER",
             actor_id=str(actor.user_id),
             occurred_at=now,
+            correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
             payload={
                 "organization_id": str(organization_id),
                 "target_user_id": str(user_id),
                 "role": target.role,
                 "capabilities": target.capabilities,
+                "role_bundles": bundles,
+                "permissions": permissions,
+                "deal_ids": [str(item) for item in deal_ids],
+                "before": {"role_bundles": before_bundles, "permissions": before_permissions,
+                           "deal_ids": [str(item) for item in before_deal_ids]},
+                "after": {"role_bundles": bundles, "permissions": permissions,
+                          "deal_ids": [str(item) for item in deal_ids]},
                 "version": target.version,
             },
         )
@@ -1159,6 +1434,10 @@ def update_member_permissions(
         "status": target.status,
         "capabilities": _compute_effective_capabilities(target.role, target.capabilities),
         "assigned_capabilities": sorted(target.capabilities or []),
+        "role_bundles": bundles,
+        "permissions": permissions,
+        "deal_ids": deal_ids,
+        "is_owner": target.is_owner,
         "version": target.version,
     }
 
@@ -1198,24 +1477,26 @@ def revoke_organization_member(
             detail="Member not found in organization",
         )
 
-    if target.role == "ADMIN":
-        admin_count = db.scalar(
-            select(func.count(OrganizationMember.id))
-            .where(
-                OrganizationMember.organization_id == organization_id,
-                OrganizationMember.role == "ADMIN",
-                OrganizationMember.status == "ACTIVE",
-            )
-        )
-        if (admin_count or 0) <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Cannot revoke the last remaining admin of the organization",
-            )
+    if target.is_owner:
+        raise HTTPException(status_code=409, detail="Transfer ownership before removing this member")
 
+    if _is_org_admin(target) and _active_org_admin_count(db, organization_id) <= 1:
+        raise HTTPException(status_code=409, detail="Cannot revoke the last organization administrator")
+
+    before_bundles = list(target.role_bundles or [])
+    before_permissions = list(target.permissions or [])
     target.status = "REVOKED"
     target.capabilities = []
+    target.role_bundles = []
+    target.permissions = []
     target.version = target.version + 1
+    assignments = db.scalars(select(DealAssignment).where(
+        DealAssignment.organization_id == organization_id,
+        DealAssignment.user_id == user_id,
+        DealAssignment.status == "ACTIVE",
+    ).with_for_update()).all()
+    for assignment in assignments:
+        assignment.status = "REVOKED"
 
     now = datetime.now(UTC)
     db.add(
@@ -1227,9 +1508,14 @@ def revoke_organization_member(
             actor_type="USER",
             actor_id=str(actor.user_id),
             occurred_at=now,
+            correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
             payload={
                 "organization_id": str(organization_id),
                 "target_user_id": str(user_id),
+                "before": {"role_bundles": before_bundles,
+                           "permissions": before_permissions,
+                           "deal_ids": [str(item.deal_id) for item in assignments]},
+                "after": {"role_bundles": [], "permissions": [], "deal_ids": []},
             },
         )
     )
@@ -1250,7 +1536,7 @@ def get_approval_routing_policy_route(
     Absent (``null``) means the default: existing single-approver bilateral
     approval behavior.
     """
-    if organization_id not in actor.organization_ids:
+    if not actor.has_permission(organization_id, "approval_routing.manage"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Active organization membership required",
@@ -1275,7 +1561,8 @@ def put_approval_routing_policy_route(
     organization with AGREEMENT_APPROVAL capability - routing can only
     sequence existing approval authority, never grant new authority.
     """
-    _active_admin_membership(db, organization_id, actor.user_id)
+    if not actor.has_permission(organization_id, "approval_routing.manage"):
+        raise HTTPException(status_code=403, detail="Approval routing permission required")
 
     domain_policy = DomainApprovalRoutingPolicy(
         organization_id=OrganizationId(organization_id),
@@ -1319,7 +1606,8 @@ def delete_approval_routing_policy_route(
     Reverts the organization to the default: existing single-approver
     bilateral approval behavior.
     """
-    _active_admin_membership(db, organization_id, actor.user_id)
+    if not actor.has_permission(organization_id, "approval_routing.manage"):
+        raise HTTPException(status_code=403, detail="Approval routing permission required")
     repo = SqlAlchemyApprovalRoutingPolicyRepository(db)
     try:
         repo.delete(organization_id, expected_version=expected_version)
@@ -1343,15 +1631,10 @@ def repair_organization_finance_route(
     Preserves the self-modification restriction on general member editing and avoids blanket admin
     grants by only provisioning FINANCE if the organization currently has zero members with FINANCE capability.
     """
-    _active_admin_membership(db, organization_id, actor.user_id)
-    repaired = repair_organization_finance_membership(db, organization_id, actor.user_id)
-    if not repaired:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Organization already has an active finance member or cannot be repaired",
-        )
-    db.commit()
-    return {"status": "repaired", "organization_id": str(organization_id)}
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Finance access must be granted explicitly through member access settings",
+    )
 
 
 def _create_invitation_token(
@@ -1363,6 +1646,9 @@ def _create_invitation_token(
     recipient_email: str | None = None,
     shell_id: UUID | None = None,
     inviter_party: str = "BUYER",
+    role_bundles: list[str] | None = None,
+    permissions: list[str] | None = None,
+    deal_ids: list[UUID] | None = None,
 ) -> tuple[str, datetime, UUID]:
     if not settings.jwt_secret:
         raise HTTPException(
@@ -1379,6 +1665,9 @@ def _create_invitation_token(
         "org_name": organization.legal_name,
         "deal_id": str(deal_id) if deal_id else None,
         "role": role,
+        "role_bundles": list(role_bundles or []),
+        "permissions": list(permissions or []),
+        "granted_deal_ids": [str(item) for item in (deal_ids or [])],
         "inviter_user_id": str(inviter_user_id),
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
@@ -1462,13 +1751,28 @@ def create_organization_invitation(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     """Generate a signed single-use invitation token valid for 7 days."""
-    organization, _ = _active_admin_membership(db, organization_id, actor.user_id)
-    if payload.deal_id is not None:
+    organization, delegator = _active_admin_membership(db, organization_id, actor.user_id)
+    if payload.recipient_email is not None and payload.deal_id is not None:
         raise HTTPException(status_code=422, detail="Use counterparty deal creation for recipient-bound deal invitations")
+    if payload.deal_id is not None:
+        deal = db.scalar(select(Deal).where(Deal.id == payload.deal_id))
+        if deal is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+        if deal.onboarding is not None:
+            raise HTTPException(status_code=409, detail="This deal already has a bound counterparty invitation")
+        if organization_id not in (deal.buyer_organization_id, deal.seller_organization_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Organization is not a participant in this deal",
+            )
+    role_bundles, permissions, deal_ids = _validate_member_grants(
+        db, organization, delegator, payload.role_bundles, payload.permissions, payload.deal_ids
+    )
     notifier, public_base_url, configuration_error = _invitation_delivery()
     token, expires_at, jti = _create_invitation_token(
         organization, actor.user_id, payload.deal_id, payload.role,
         recipient_email=payload.recipient_email,
+        role_bundles=role_bundles, permissions=permissions, deal_ids=deal_ids,
     )
     db.add(
         AuditEvent(
@@ -1483,20 +1787,29 @@ def create_organization_invitation(
                 "organization_id": str(organization_id),
                 "deal_id": str(payload.deal_id) if payload.deal_id else None,
                 "role": "MEMBER" if payload.recipient_email else payload.role,
+                "role_bundles": role_bundles,
+                "permissions": permissions,
+                "deal_ids": [str(item) for item in deal_ids],
                 "expires_at": expires_at.isoformat(),
             },
         )
     )
     db.commit()
     invite_url = _invite_url(public_base_url, token)
-    email_sent, email_error = _send_invitation_email(
-        notifier.send_team_invitation if notifier else None,
-        payload.recipient_email,
-        organization.legal_name,
-        invite_url,
-        expires_at.isoformat(),
-    ) if configuration_error is None else (False, configuration_error)
+    email_sent, email_error = (False, None)
+    if payload.recipient_email is not None:
+        if configuration_error is None:
+            email_sent, email_error = _send_invitation_email(
+                notifier.send_team_invitation if notifier else None,
+                payload.recipient_email,
+                organization.legal_name,
+                invite_url,
+                expires_at.isoformat(),
+            )
+        else:
+            email_error = configuration_error
     return {
+        "invitation_id": jti,
         "token": token,
         "invite_url": invite_url,
         "organization_id": str(organization_id),
@@ -1504,10 +1817,43 @@ def create_organization_invitation(
         "deal_id": str(payload.deal_id) if payload.deal_id else None,
         "role": "MEMBER",
         "expires_at": expires_at.isoformat(),
-        "kind": "TEAM",
+        "kind": "TEAM" if payload.recipient_email else None,
         "email_sent": email_sent,
         "email_error": email_error,
     }
+
+
+@org_router.delete("/{organization_id}/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_organization_invitation(
+    organization_id: UUID,
+    invitation_id: UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> None:
+    """Persist an invitation revocation so its signed token can no longer be accepted."""
+    _active_admin_membership(db, organization_id, actor.user_id)
+    created = db.scalar(select(AuditEvent).where(
+        AuditEvent.aggregate_type == "organization_invitation",
+        AuditEvent.aggregate_id == invitation_id,
+        AuditEvent.event_type == "invitation.created",
+    ).with_for_update().execution_options(populate_existing=True))
+    if created is None or created.payload.get("organization_id") != str(organization_id):
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    completed = db.scalar(select(AuditEvent.id).where(
+        AuditEvent.aggregate_type == "organization_invitation",
+        AuditEvent.aggregate_id == invitation_id,
+        AuditEvent.event_type.in_(("invitation.accepted", "invitation.revoked")),
+    ).limit(1))
+    if completed is not None:
+        raise HTTPException(status_code=409, detail="Invitation has already been accepted or revoked")
+    db.add(AuditEvent(
+        id=uuid4(), aggregate_type="organization_invitation", aggregate_id=invitation_id,
+        event_type="invitation.revoked", actor_type="USER", actor_id=str(actor.user_id),
+        occurred_at=datetime.now(UTC),
+        correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+        payload={"organization_id": str(organization_id), "inviter_user_id": str(actor.user_id)},
+    ))
+    db.commit()
 
 
 @router.post("/deals/counterparty-invitations", status_code=201, response_model=CounterpartyInvitationResponse)
@@ -1551,19 +1897,23 @@ def create_counterparty_invitation(
                                      expires_at=expires_at))
         db.add(AuditEvent(id=uuid4(), aggregate_type="organization_invitation", aggregate_id=jti,
                           event_type="invitation.created", actor_type="USER", actor_id=str(actor.user_id),
-                          occurred_at=now, payload={"kind": "COUNTERPARTY", "deal_id": str(deal.id),
+                          occurred_at=now, correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+                          payload={"kind": "COUNTERPARTY", "deal_id": str(deal.id),
                                                     "organization_id": str(inviter.id), "expires_at": expires_at.isoformat()}))
         db.commit()
         invite_url = _invite_url(public_base_url, token)
-        email_sent, email_error = _send_invitation_email(
-            notifier.send_counterparty_invitation if notifier else None,
-            payload.recipient_email,
-            inviter.legal_name,
-            deal.display_name or "your shared trade deal",
-            invite_url,
-            expires_at.isoformat(),
-        ) if configuration_error is None else (False, configuration_error)
-        return {"token": token, "invite_url": invite_url,
+        if configuration_error is None:
+            email_sent, email_error = _send_invitation_email(
+                notifier.send_counterparty_invitation if notifier else None,
+                payload.recipient_email,
+                inviter.legal_name,
+                deal.display_name or "your shared trade deal",
+                invite_url,
+                expires_at.isoformat(),
+            )
+        else:
+            email_sent, email_error = False, configuration_error
+        return {"token": token, "invite_url": invite_url, "invitation_id": jti,
                 "organization_id": str(inviter.id), "organization_legal_name": inviter.legal_name,
                 "deal_id": str(deal.id), "role": "ADMIN", "kind": "COUNTERPARTY",
                 "expires_at": expires_at.isoformat(), "pending_counterparty": True,
@@ -1654,6 +2004,20 @@ def _accept_invitation(
     role = str(claims.get("role", "MEMBER"))
     deal_id_str = claims.get("deal_id")
     kind = claims.get("kind")
+    created_invite = db.scalar(select(AuditEvent).where(
+        AuditEvent.aggregate_type == "organization_invitation",
+        AuditEvent.aggregate_id == jti,
+        AuditEvent.event_type == "invitation.created",
+    ).with_for_update().execution_options(populate_existing=True))
+    if created_invite is None or created_invite.payload.get("organization_id") != str(org_id):
+        raise HTTPException(status_code=409, detail="Invitation is no longer valid")
+    revoked = db.scalar(select(AuditEvent.id).where(
+        AuditEvent.aggregate_type == "organization_invitation",
+        AuditEvent.aggregate_id == jti,
+        AuditEvent.event_type == "invitation.revoked",
+    ).limit(1))
+    if revoked is not None:
+        raise HTTPException(status_code=409, detail="Invitation was revoked")
     onboarding: CounterpartyOnboarding | None = None
     if kind == "TEAM" and payload.organization_legal_name:
         raise HTTPException(status_code=400, detail="Team invitations do not create a counterparty organization")
@@ -1751,12 +2115,11 @@ def _accept_invitation(
         )
 
     inviter_admin = db.scalar(
-        select(OrganizationMember.id)
+        select(OrganizationMember)
         .join(User, User.id == OrganizationMember.user_id)
         .where(
             OrganizationMember.organization_id == org_id,
             OrganizationMember.user_id == inviter_user_id,
-            OrganizationMember.role == "ADMIN",
             OrganizationMember.status == "ACTIVE",
             User.status == "ACTIVE",
         )
@@ -1767,6 +2130,24 @@ def _accept_invitation(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inviter is no longer an active organization admin",
         )
+    if "org.members.manage" not in expand_grants(inviter_admin.role_bundles, inviter_admin.permissions, owner=inviter_admin.is_owner):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inviter no longer has member administration authority")
+    grant_bundles: list[str] = []
+    grant_permissions: list[str] = []
+    grant_deal_ids: list[UUID] = []
+    if kind == "TEAM":
+        raw_bundles = claims.get("role_bundles", [])
+        raw_permissions = claims.get("permissions", [])
+        raw_deals = claims.get("granted_deal_ids", [])
+        try:
+            grant_bundles, grant_permissions, grant_deal_ids = _validate_member_grants(
+                db, inviting_org, inviter_admin,
+                [str(item) for item in raw_bundles],
+                [str(item) for item in raw_permissions],
+                [UUID(str(item)) for item in raw_deals],
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Invitation grant snapshot is invalid") from exc
 
     # Validate the deal claim before writing any user or organization state, so a stale or
     # invalid invitation cannot leave partial changes behind. A deal invitation onboards a
@@ -1870,8 +2251,15 @@ def _accept_invitation(
                 role="ADMIN",
                 status=membership_status,
                 capabilities=["FINANCE"],
+                role_bundles=[],
+                permissions=[],
+                is_owner=True,
             )
         )
+        db.add(AuditEvent(id=uuid4(), aggregate_type="organization", aggregate_id=recipient_org.id,
+                          event_type="organization.owner_registered", actor_type="USER", actor_id=str(user.id),
+                          occurred_at=datetime.now(UTC), correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
+                          payload={"user_id": str(user.id), "source": "counterparty_onboarding"}))
         effective_org = recipient_org
         effective_role = "ADMIN"
     else:
@@ -1891,16 +2279,22 @@ def _accept_invitation(
             existing.role = role
             existing.status = membership_status
             existing.capabilities = []
+            existing.role_bundles = grant_bundles
+            existing.permissions = grant_permissions
             existing.version = existing.version + 1
+            _replace_member_assignments(db, org_id, user.id, grant_deal_ids, inviter_user_id)
         else:
-            db.add(
-                OrganizationMember(
+            membership = OrganizationMember(
                     organization_id=org_id,
                     user_id=user.id,
                     role=role,
                     status=membership_status,
+                    role_bundles=grant_bundles,
+                    permissions=grant_permissions,
                 )
-            )
+            db.add(membership)
+            db.flush()
+            _replace_member_assignments(db, org_id, user.id, grant_deal_ids, inviter_user_id)
         effective_org = inviting_org
         effective_role = role
 
@@ -1942,6 +2336,7 @@ def _accept_invitation(
             actor_type="USER",
             actor_id=str(user.id),
             occurred_at=now,
+            correlation_id=str(correlation_id.get()) if correlation_id.get() else None,
             payload={
                 "organization_id": str(effective_org.id),
                 "inviting_organization_id": str(org_id),
@@ -1949,6 +2344,9 @@ def _accept_invitation(
                 "user_id": str(user.id),
                 "deal_id": deal_id_str,
                 "role": effective_role,
+                "role_bundles": grant_bundles if kind == "TEAM" else [],
+                "permissions": grant_permissions if kind == "TEAM" else [],
+                "deal_ids": [str(item) for item in grant_deal_ids] if kind == "TEAM" else [],
             },
         )
     )

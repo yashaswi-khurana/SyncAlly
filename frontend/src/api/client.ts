@@ -42,6 +42,9 @@ import type {
   OrganizationMember,
   OrganizationProfile,
   PlatformOrganization,
+  PlatformUser,
+  PlatformOrganizationMember,
+  AssignableDeal,
   PaymentAuthorization,
   PaymentMode,
   PaymentMilestoneSummary,
@@ -262,6 +265,32 @@ export function updatePlatformOrganizationStatus(
   );
 }
 
+export function listPlatformOrganizationMembers(organizationId: string): Promise<PlatformOrganizationMember[]> {
+  return apiRequest<PlatformOrganizationMember[]>(`/platform/organizations/${encodeURIComponent(organizationId)}/members`);
+}
+
+export function setPlatformOrganizationOwner(organizationId: string, userId: string, reason: string): Promise<{ organization_id: string; owner_user_id: string; status: string }> {
+  return apiRequest(`/platform/organizations/${encodeURIComponent(organizationId)}/owner`, {
+    method: "PUT",
+    body: JSON.stringify({ user_id: userId, reason }),
+  });
+}
+
+export function listPlatformUsers(): Promise<PlatformUser[]> {
+  return apiRequest<PlatformUser[]>("/platform/users");
+}
+
+export function updatePlatformUserStatus(
+  userId: string,
+  status: "ACTIVE" | "LOCKED",
+  reason?: string,
+): Promise<PlatformUser> {
+  return apiRequest<PlatformUser>(
+    `/platform/users/${encodeURIComponent(userId)}`,
+    { method: "PATCH", body: JSON.stringify({ status, reason }) },
+  );
+}
+
 export function listOrganizations(): Promise<Organization[]> {
   return apiRequest<Organization[]>("/organizations");
 }
@@ -361,14 +390,19 @@ export function createOrganization(input: CreateOrganizationInput): Promise<Orga
 export function addOrganizationMember(
   organizationId: string,
   email: string,
+  grants: { role_bundles: string[]; permissions: string[]; deal_ids: string[] } = { role_bundles: [], permissions: [], deal_ids: [] },
 ): Promise<OrganizationMember> {
   return apiRequest<OrganizationMember>(
     `/organizations/${encodeURIComponent(organizationId)}/members`,
     {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, ...grants }),
     },
   );
+}
+
+export function listAssignableOrganizationDeals(organizationId: string): Promise<AssignableDeal[]> {
+  return apiRequest<AssignableDeal[]>(`/organizations/${encodeURIComponent(organizationId)}/assignable-deals`);
 }
 
 export function listOrganizationMembers(
@@ -392,6 +426,17 @@ export function updateMemberPermissions(
       method: "PATCH",
       body: JSON.stringify(payload),
     },
+  );
+}
+
+export function updateMemberDealAssignments(
+  organizationId: string,
+  userId: string,
+  payload: { expected_version: number; deal_ids: string[] },
+): Promise<{ organization_id: string; user_id: string; deal_ids: string[]; version: number }> {
+  return apiRequest(
+    `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}/deal-assignments`,
+    { method: "PUT", body: JSON.stringify(payload) },
   );
 }
 
@@ -435,8 +480,9 @@ export function deleteApprovalRoutingPolicy(
   );
 }
 
-export function listDeals(): Promise<DealSummary[]> {
-  return apiRequest<DealSummary[]>("/deals");
+export function listDeals(organizationId?: string): Promise<DealSummary[]> {
+  const party = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+  return apiRequest<DealSummary[]>(`/deals${party}`);
 }
 
 export function createDeal(input: CreateDealInput): Promise<Deal> {
@@ -452,14 +498,22 @@ export function createCounterpartyInvitation(input: CounterpartyInvitationInput)
   });
 }
 
+export function cancelOrganizationInvitation(organizationId: string, invitationId: string): Promise<void> {
+  return apiRequest<void>(
+    `/organizations/${encodeURIComponent(organizationId)}/invitations/${encodeURIComponent(invitationId)}`,
+    { method: "DELETE" },
+  );
+}
+
 export function acceptInvitation(input: InvitationAcceptanceInput): Promise<InvitationAcceptance> {
   return apiRequest<InvitationAcceptance>("/invitations/accept", {
     method: "POST", body: JSON.stringify(input),
   }, "json", false);
 }
 
-export function getDeal(dealId: string): Promise<Deal> {
-  return apiRequest<Deal>(`/deals/${encodeURIComponent(dealId)}`);
+export function getDeal(dealId: string, organizationId?: string): Promise<Deal> {
+  const party = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+  return apiRequest<Deal>(`/deals/${encodeURIComponent(dealId)}${party}`);
 }
 
 export function getCurrentAgreement(dealId: string, options?: { organizationId?: string; signal?: AbortSignal }): Promise<AgreementVersion> {
@@ -484,19 +538,21 @@ export function compareAgreementVersions(dealId: string, before: number, after: 
 
 export function listPaymentStatuses(
   dealId: string,
-  options?: { signal?: AbortSignal },
+  options?: { organizationId?: string; signal?: AbortSignal },
 ): Promise<PaymentStatus[]> {
-  return apiRequest<PaymentStatus[]>(`/deals/${encodeURIComponent(dealId)}/payments`, {
+  const party = options?.organizationId ? `?organization_id=${encodeURIComponent(options.organizationId)}` : "";
+  return apiRequest<PaymentStatus[]>(`/deals/${encodeURIComponent(dealId)}/payments${party}`, {
     signal: options?.signal,
   });
 }
 
 export function listDealPaymentMilestones(
   dealId: string,
-  options?: { signal?: AbortSignal },
+  options?: { organizationId?: string; signal?: AbortSignal },
 ): Promise<PaymentMilestoneSummary[]> {
+  const party = options?.organizationId ? `?organization_id=${encodeURIComponent(options.organizationId)}` : "";
   return apiRequest<PaymentMilestoneSummary[]>(
-    `/deals/${encodeURIComponent(dealId)}/payments/milestones`,
+    `/deals/${encodeURIComponent(dealId)}/payments/milestones${party}`,
     { signal: options?.signal },
   );
 }
@@ -506,6 +562,7 @@ export function authorizeDealPayment(
   idempotencyKey: string,
   expectedMode?: PaymentMode,
   options?: {
+    organizationId?: string;
     paymentMilestoneId?: string;
     milestoneId?: string;
   },
@@ -514,21 +571,24 @@ export function authorizeDealPayment(
     idempotency_key: idempotencyKey,
   };
   if (expectedMode) body.expected_mode = expectedMode;
+  const party = options?.organizationId ? `?organization_id=${encodeURIComponent(options.organizationId)}` : "";
   if (options?.paymentMilestoneId) body.payment_milestone_id = options.paymentMilestoneId;
   if (options?.milestoneId) body.milestone_id = options.milestoneId;
 
-  return apiRequest<PaymentAuthorization>(`/deals/${encodeURIComponent(dealId)}/payments`, {
+  return apiRequest<PaymentAuthorization>(`/deals/${encodeURIComponent(dealId)}/payments${party}`, {
     method: "POST",
     body: JSON.stringify(body),
   });
 }
 
-export function previewDealPayment(dealId: string, signal?: AbortSignal): Promise<PaymentPreview> {
-  return apiRequest<PaymentPreview>(`/deals/${encodeURIComponent(dealId)}/payments/preview`, { signal });
+export function previewDealPayment(dealId: string, organizationId?: string, signal?: AbortSignal): Promise<PaymentPreview> {
+  const party = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+  return apiRequest<PaymentPreview>(`/deals/${encodeURIComponent(dealId)}/payments/preview${party}`, { signal });
 }
 
-export function getDealFulfillment(dealId: string, signal?: AbortSignal): Promise<FulfillmentSnapshot> {
-  return apiRequest<FulfillmentSnapshot>(`/deals/${encodeURIComponent(dealId)}/fulfillment`, { signal });
+export function getDealFulfillment(dealId: string, organizationId: string, signal?: AbortSignal): Promise<FulfillmentSnapshot> {
+  const party = `?organization_id=${encodeURIComponent(organizationId)}`;
+  return apiRequest<FulfillmentSnapshot>(`/deals/${encodeURIComponent(dealId)}/fulfillment${party}`, { signal });
 }
 
 export function recordDealFulfillment(
@@ -542,9 +602,10 @@ export function recordDealFulfillment(
   });
 }
 
-export function getCommercialDocumentDraft(dealId: string): Promise<CommercialDocumentDraft> {
+export function getCommercialDocumentDraft(dealId: string, organizationId?: string): Promise<CommercialDocumentDraft> {
+  const party = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
   return apiRequest<CommercialDocumentDraft>(
-    `/deals/${encodeURIComponent(dealId)}/documents/commercial-draft`,
+    `/deals/${encodeURIComponent(dealId)}/documents/commercial-draft${party}`,
   );
 }
 
@@ -622,11 +683,14 @@ export function proposeAmendment(
 }
 export function getAmendmentImpact(
   dealId: string,
-  options?: { versionNumber?: number; signal?: AbortSignal },
+  options?: { versionNumber?: number; organizationId?: string; signal?: AbortSignal },
 ): Promise<AmendmentImpact> {
-  const query = options?.versionNumber ? `?version_number=${options.versionNumber}` : "";
+  const query = new URLSearchParams();
+  if (options?.versionNumber) query.set("version_number", String(options.versionNumber));
+  if (options?.organizationId) query.set("organization_id", options.organizationId);
+  const suffix = query.size ? `?${query.toString()}` : "";
   return apiRequest<AmendmentImpact>(
-    `/deals/${encodeURIComponent(dealId)}/agreements/amendments/impact${query}`,
+    `/deals/${encodeURIComponent(dealId)}/agreements/amendments/impact${suffix}`,
     { signal: options?.signal },
   );
 }

@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.api.authorization import require_deal_action
 from syncally.application.ai import (
     AIConfigurationError,
     AIProvenance,
@@ -355,6 +356,10 @@ def suggest_facts_route(
     """Run the scoped fake/provider on explicit request and save unreviewed candidates."""
     try:
         context = select_ai_context(actor, deal_id, payload.organization_id, repository)
+        deal = repository.get_deal_for_participant(deal_id, actor.user_id)
+        if deal is None:
+            raise CommunicationNotFound("Deal not found")
+        require_deal_action(actor, deal, context.organization_id, "deal.edit_assigned")
         repository.require_participant_membership(deal_id, context.organization_id, actor.user_id)
         db.rollback()  # Do not hold a database transaction while the provider runs.
         result = extract_facts_from_context(context, provider)
@@ -863,7 +868,7 @@ def update_fact_visibility_route(
 ) -> ConstraintResponse:
     """Update visibility of an extracted fact only for an authorized owner organization member."""
     deal = repository.get_deal_for_participant(deal_id, actor.user_id)
-    if deal is None or deal.id != deal_id or not actor.can_access_deal(deal):
+    if deal is None or deal.id != deal_id or not actor.can_read_deal(deal):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
     row = db.scalar(
@@ -885,6 +890,7 @@ def update_fact_visibility_route(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only an authorized member of the owner organization can modify fact visibility",
         )
+    require_deal_action(actor, deal, row.owner_organization_id, "deal.edit_assigned")
 
     membership_id = db.scalar(
         select(OrganizationMember.id)

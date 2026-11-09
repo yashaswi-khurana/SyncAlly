@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from syncally.application.deals import DealRepository, get_deal
+from syncally.application.deals import DealNotFound, DealRepository, get_deal
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import Agreement, Approval, ApprovalDecision
 from syncally.domain.agreements.obligations import (
@@ -336,7 +336,7 @@ def resolve_party_organization(
         deal.seller_organization_id,
     } & actor.organization_ids
     if not party_organizations:
-        raise AgreementAccessDenied("Actor is not an active member of a deal party")
+        raise DealNotFound("Deal not found")
     if organization_id is None:
         if len(party_organizations) > 1:
             raise AmbiguousAgreementOrganization(
@@ -344,9 +344,9 @@ def resolve_party_organization(
             )
         return next(iter(party_organizations))
     if organization_id not in actor.organization_ids:
-        raise AgreementAccessDenied("Actor cannot act for this organization")
+        raise DealNotFound("Deal not found")
     if organization_id not in party_organizations:
-        raise AgreementAccessDenied("Organization is not a party to this deal")
+        raise DealNotFound("Deal not found")
     return organization_id
 
 

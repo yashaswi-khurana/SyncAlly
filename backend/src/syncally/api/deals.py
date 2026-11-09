@@ -60,6 +60,7 @@ from syncally.domain.shared.errors import InvalidTransition, InvariantViolation
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
+from syncally.infrastructure.models import DealAssignment
 from syncally.infrastructure.repositories import SqlAlchemyDealRepository
 
 router = APIRouter(prefix="/deals", tags=["deals"])
@@ -232,10 +233,14 @@ def _to_case_response(case: DealCase) -> CaseResponse:
     )
 
 
-def _viewer_role(actor: ActorContext, deal: Deal) -> str:
-    """Name the actor's side of a deal they participate in."""
-    is_buyer = deal.buyer_organization_id in actor.organization_ids
-    is_seller = deal.seller_organization_id in actor.organization_ids
+def _viewer_role(actor: ActorContext, deal: Deal, organization_id: UUID | None = None) -> str:
+    """Name only the party scopes for which the actor has deal access."""
+    is_buyer = actor.has_deal_authority(deal, deal.buyer_organization_id, "deal.read_assigned")
+    is_seller = actor.has_deal_authority(deal, deal.seller_organization_id, "deal.read_assigned")
+    if organization_id == deal.buyer_organization_id:
+        return "BUYER"
+    if organization_id == deal.seller_organization_id:
+        return "SELLER"
     if is_buyer and is_seller:
         return "BOTH"
     return "BUYER" if is_buyer else "SELLER"
@@ -264,11 +269,12 @@ def _resolve_deal_party_organization(
         return organization_id
     if len(party_organizations) == 1:
         return next(iter(party_organizations))
-    return deal.buyer_organization_id
+    raise HTTPException(status_code=422, detail="Select the organization you are acting for")
 
 
 @router.get("", response_model=list[DealSummaryResponse])
 def list_deals_route(
+    organization_id: UUID | None = Query(default=None),
     actor: ActorContext = Depends(get_current_actor),
     repository: DealRepository = Depends(get_deal_repository),
 ) -> list[DealSummaryResponse]:
@@ -276,9 +282,9 @@ def list_deals_route(
     return [
         DealSummaryResponse(
             **_to_response(deal).model_dump(),
-            viewer_role=_viewer_role(actor, deal),
+            viewer_role=_viewer_role(actor, deal, organization_id),
         )
-        for deal in list_deals(actor, repository)
+        for deal in list_deals(actor, repository, organization_id)
     ]
 
 
@@ -305,6 +311,9 @@ def create_deal_route(
             ),
             repository,
         )
+        initiating_org = payload.buyer_organization_id if payload.initiator_party == "BUYER" else payload.seller_organization_id
+        db.add(DealAssignment(organization_id=initiating_org, deal_id=deal.id, user_id=actor.user_id, status="ACTIVE"))
+        db.commit()
     except DealAccessDenied as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except DealNotFound as exc:
@@ -353,6 +362,7 @@ def analyze_opening_request_route(
 @router.get("/{deal_id}", response_model=DealResponse)
 def read_deal_route(
     deal_id: UUID,
+    organization_id: UUID | None = Query(default=None),
     actor: ActorContext = Depends(get_current_actor),
     repository: DealRepository = Depends(get_deal_repository),
 ) -> DealResponse:
@@ -361,6 +371,17 @@ def read_deal_route(
         deal = get_deal(actor, deal_id, repository)
     except DealNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if organization_id is not None:
+        acting_org = _resolve_deal_party_organization(actor, deal, organization_id)
+        require_deal_action(actor, deal, acting_org, "deal.read_assigned")
+    else:
+        authorized_parties = {
+            party_id
+            for party_id in (deal.buyer_organization_id, deal.seller_organization_id)
+            if actor.has_deal_authority(deal, party_id, "deal.read_assigned")
+        }
+        if not authorized_parties:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
     return _to_response(deal)
 
 
@@ -377,6 +398,7 @@ def _raise_case_impl(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
     acting_org = _resolve_deal_party_organization(actor, deal, payload.acting_organization_id)
+    require_deal_action(actor, deal, acting_org, "deal.edit_assigned")
 
     try:
         case = raise_deal_case(
@@ -432,6 +454,7 @@ def _list_cases_impl(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
     acting_org = _resolve_deal_party_organization(actor, deal, organization_id)
+    require_deal_action(actor, deal, acting_org, "deal.read_assigned")
 
     try:
         cases = list_deal_cases(
@@ -461,6 +484,7 @@ def _respond_case_impl(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
     acting_org = _resolve_deal_party_organization(actor, deal, payload.acting_organization_id)
+    require_deal_action(actor, deal, acting_org, "deal.edit_assigned")
 
     try:
         case = respond_to_deal_case(
@@ -506,6 +530,7 @@ def _add_evidence_impl(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
     acting_org = _resolve_deal_party_organization(actor, deal, payload.acting_organization_id)
+    require_deal_action(actor, deal, acting_org, "deal.edit_assigned")
 
     try:
         evidence = add_case_evidence(

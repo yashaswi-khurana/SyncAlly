@@ -7,12 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext
+from syncally.domain.organizations.authorization import expand_grants
 from syncally.domain.organizations.organization import (
     OrganizationCapability,
     OrganizationMemberRole,
     resolve_effective_capabilities,
 )
-from syncally.infrastructure.models import Organization, OrganizationMember, User
+from syncally.infrastructure.models import DealAssignment, Organization, OrganizationMember, User
 
 
 def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
@@ -26,6 +27,9 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
             OrganizationMember.organization_id,
             OrganizationMember.role,
             OrganizationMember.capabilities,
+            OrganizationMember.role_bundles,
+            OrganizationMember.permissions,
+            OrganizationMember.is_owner,
         )
         .join(Organization, Organization.id == OrganizationMember.organization_id)
         .where(
@@ -37,8 +41,11 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
 
     roles_by_organization: dict[UUID, OrganizationMemberRole] = {}
     capabilities_by_organization: dict[UUID, frozenset[OrganizationCapability]] = {}
+    permissions_by_organization: dict[UUID, frozenset[str]] = {}
+    all_deal_organization_ids: set[UUID] = set()
+    owned_organization_ids: set[UUID] = set()
 
-    for org_id, role_str, caps_raw in memberships:
+    for org_id, role_str, caps_raw, bundles_raw, permissions_raw, is_owner in memberships:
         try:
             role = OrganizationMemberRole(role_str)
             roles_by_organization[org_id] = role
@@ -48,6 +55,22 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
         capabilities_by_organization[org_id] = resolve_effective_capabilities(
             role_str, caps_raw
         )
+        permissions = expand_grants(bundles_raw, permissions_raw, owner=bool(is_owner))
+        permissions_by_organization[org_id] = permissions
+        if bool(is_owner):
+            owned_organization_ids.add(org_id)
+        if "deal.read_all" in permissions:
+            all_deal_organization_ids.add(org_id)
+
+    active_assignments = db.execute(
+        select(DealAssignment.organization_id, DealAssignment.deal_id)
+        .join(OrganizationMember, (OrganizationMember.organization_id == DealAssignment.organization_id) & (OrganizationMember.user_id == DealAssignment.user_id))
+        .where(
+            DealAssignment.user_id == user_id,
+            DealAssignment.status == "ACTIVE",
+            OrganizationMember.status == "ACTIVE",
+        )
+    ).all()
 
     return ActorContext(
         user_id=user_id,
@@ -55,6 +78,10 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
         system_role=user.system_role,
         roles_by_organization=roles_by_organization,
         capabilities_by_organization=capabilities_by_organization,
+        permissions_by_organization=permissions_by_organization,
+        all_deal_organization_ids=frozenset(all_deal_organization_ids),
+        assigned_deals=frozenset((org_id, deal_id) for org_id, deal_id in active_assignments),
+        owned_organization_ids=frozenset(owned_organization_ids),
     )
 
 
@@ -88,11 +115,25 @@ def verify_member_capability(
             detail="Active organization membership required",
         )
 
-    effective_capabilities = resolve_effective_capabilities(member.role, member.capabilities)
-    if required_capability not in effective_capabilities:
+    permission_by_legacy = {
+        OrganizationCapability.ADMINISTRATION: "org.members.manage",
+        OrganizationCapability.DRAFTING: "deal.edit_assigned",
+        OrganizationCapability.AGREEMENT_APPROVAL: "agreement.approve",
+        OrganizationCapability.FINANCE: "payments.authorize",
+        OrganizationCapability.FULFILLMENT: "fulfillment.record",
+    }
+    permission = permission_by_legacy[required_capability]
+    grants = set(expand_grants(member.role_bundles, member.permissions, owner=member.is_owner))
+    # Compatibility for explicitly persisted old capabilities only. Role names no longer imply grants.
+    for legacy in member.capabilities or []:
+        try:
+            grants.add(permission_by_legacy[OrganizationCapability(legacy)])
+        except (ValueError, KeyError):
+            continue
+    if permission not in grants:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Organization capability '{required_capability.value}' required",
+            detail=f"Organization permission '{permission}' required",
         )
 
     return member

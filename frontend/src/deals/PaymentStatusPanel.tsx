@@ -232,13 +232,13 @@ export default function PaymentStatusPanel({
     const controller = new AbortController();
     const currentGeneration = ++requestGenerationRef.current;
     void Promise.all([
-      listPaymentStatuses(dealId, { signal: controller.signal }),
-      getCurrentAgreement(dealId, { signal: controller.signal }).catch((caught: unknown) => {
+      listPaymentStatuses(dealId, { organizationId: selectedOrganizationId || undefined, signal: controller.signal }),
+      getCurrentAgreement(dealId, { organizationId: selectedOrganizationId || undefined, signal: controller.signal }).catch((caught: unknown) => {
         if (caught instanceof ApiError && caught.status === 404) return null;
         throw caught;
       }),
       listOrganizations(),
-      listDealPaymentMilestones(dealId, { signal: controller.signal }).catch(() => []),
+      listDealPaymentMilestones(dealId, { organizationId: selectedOrganizationId || undefined, signal: controller.signal }).catch(() => []),
     ]).then(
       ([payments, agreement, organizations, milestones]) => {
         if (cancelled || currentGeneration !== requestGenerationRef.current) return;
@@ -286,7 +286,7 @@ export default function PaymentStatusPanel({
       cancelled = true;
       controller.abort();
     };
-  }, [buyerOrganizationId, dealId, reloadCount, reloadToken, sellerOrganizationId]);
+  }, [buyerOrganizationId, dealId, reloadCount, reloadToken, selectedOrganizationId, sellerOrganizationId]);
 
   const hasTransitionalPayment =
     state.status === "ready" &&
@@ -305,8 +305,8 @@ export default function PaymentStatusPanel({
       const pollGeneration = requestGenerationRef.current;
 
       void Promise.all([
-        listPaymentStatuses(dealId, { signal: controller.signal }),
-        listDealPaymentMilestones(dealId, { signal: controller.signal }).catch(() => []),
+        listPaymentStatuses(dealId, { organizationId: selectedOrganizationId || undefined, signal: controller.signal }),
+        listDealPaymentMilestones(dealId, { organizationId: selectedOrganizationId || undefined, signal: controller.signal }).catch(() => []),
       ])
         .then(([payments, milestones]) => {
           if (cancelled || pollGeneration !== requestGenerationRef.current) return;
@@ -331,7 +331,7 @@ export default function PaymentStatusPanel({
       controller.abort();
       window.clearInterval(intervalId);
     };
-  }, [buyerOrganizationId, dealId, hasTransitionalPayment, reloadCount, reloadToken, sellerOrganizationId]);
+  }, [buyerOrganizationId, dealId, hasTransitionalPayment, reloadCount, reloadToken, selectedOrganizationId, sellerOrganizationId]);
 
   const hasRetryingPayment =
     state.status === "ready" &&
@@ -413,7 +413,7 @@ export default function PaymentStatusPanel({
     setAuthorizationError("");
     setConfirmationOpen(true);
     try {
-      const preview = await previewDealPayment(dealId);
+      const preview = await previewDealPayment(dealId, selectedOrganizationId);
       if (generation === requestGenerationRef.current && sequence === previewSequenceRef.current) {
         setPaymentPreview(preview);
       }
@@ -459,12 +459,13 @@ export default function PaymentStatusPanel({
             dealId,
             idempotencyKey.current,
             paymentPreview?.execution_mode,
-            milestoneOptions,
+            { ...milestoneOptions, organizationId: selectedOrganizationId },
           )
         : authorizeDealPayment(
             dealId,
             idempotencyKey.current,
             paymentPreview?.execution_mode,
+            { organizationId: selectedOrganizationId },
           ));
       idempotencyKey.current = null;
       setTargetMilestone(null);

@@ -84,7 +84,7 @@ def create_deal(
     if command.initiator_party not in {"BUYER", "SELLER"}:
         raise DealAccessDenied("Invalid initiating party")
     initiator = command.buyer_organization_id if command.initiator_party == "BUYER" else command.seller_organization_id
-    if initiator not in actor.organization_ids:
+    if initiator not in actor.organization_ids or not actor.has_permission(initiator, "deal.create"):
         raise DealAccessDenied("Actor cannot create a deal for this organization")
     if not _both_organizations_active(repository, command):
         raise DealNotFound("Buyer or seller organization is not available")
@@ -102,14 +102,27 @@ def create_deal(
 def get_deal(actor: ActorContext, deal_id: UUID, repository: DealRepository) -> Deal:
     """Load a deal the actor participates in, hiding missing and forbidden deals alike."""
     deal = repository.get_for_participant(deal_id, actor.user_id)
-    if deal is None or not actor.can_access_deal(deal):
+    if deal is None or not actor.can_read_deal(deal):
         raise DealNotFound("Deal not found")
     return deal
 
 
-def list_deals(actor: ActorContext, repository: DealRepository) -> list[Deal]:
-    """List every deal the actor participates in as buyer or seller."""
-    return repository.list_for_participant(actor.user_id)
+def list_deals(
+    actor: ActorContext,
+    repository: DealRepository,
+    organization_id: UUID | None = None,
+) -> list[Deal]:
+    """List deals visible through one party, or all party scopes when omitted."""
+    deals = repository.list_for_participant(actor.user_id)
+    if organization_id is not None:
+        if organization_id not in actor.organization_ids:
+            return []
+        return [
+            deal for deal in deals
+            if organization_id in {deal.buyer_organization_id, deal.seller_organization_id}
+            and actor.has_deal_authority(deal, organization_id, "deal.read_assigned")
+        ]
+    return [deal for deal in deals if actor.can_read_deal(deal)]
 
 
 def _both_organizations_active(repository: DealRepository, command: CreateDealCommand) -> bool:

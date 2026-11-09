@@ -141,6 +141,8 @@ def record_fulfillment_event(
         raise FulfillmentAccessDenied("Select an active organization membership")
     if command.organization_id not in (deal.buyer_organization_id, deal.seller_organization_id):
         raise FulfillmentAccessDenied("Selected organization is not a party to this deal")
+    if not actor.has_deal_authority(deal, command.organization_id, "fulfillment.record"):
+        raise FulfillmentAccessDenied("Assigned deal and fulfillment permission required")
     if command.stage is FulfillmentStage.SHIPPED:
         allowed_organization = deal.seller_organization_id
     else:

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.api.authorization import require_deal_action
 from syncally.application.agreements import (
     AgreementAccessDenied,
     AmbiguousAgreementOrganization,
@@ -123,6 +124,7 @@ def get_deal_reminders(
     """
     deal = db.get(Deal, deal_id)
     target_org = _resolve_actor_deal_org(deal, actor, organization_id)
+    require_deal_action(actor, deal, target_org, "deal.read_assigned")
 
     try:
         reminders = list_deal_reminders(db, deal_id, viewer_organization_id=target_org)
@@ -144,6 +146,7 @@ def sync_reminders(
     """Sync and schedule reminders for outstanding obligations on the deal."""
     deal = db.get(Deal, deal_id)
     target_org = _resolve_actor_deal_org(deal, actor, organization_id)
+    require_deal_action(actor, deal, target_org, "deal.edit_assigned")
 
     schedule_deal_reminders(db, deal_id)
     db.commit()
@@ -161,6 +164,7 @@ def trigger_dispatch(
     """Dispatch due reminders, strictly verifying truth and resolved/superseded facts."""
     deal = db.get(Deal, deal_id)
     target_org = _resolve_actor_deal_org(deal, actor, organization_id)
+    require_deal_action(actor, deal, target_org, "deal.edit_assigned")
 
     dispatched = dispatch_due_reminders(db, deal_id=deal_id)
     db.commit()
@@ -178,6 +182,7 @@ def suppress_reminder(
     """Allow an authorized recipient to dismiss/suppress a reminder."""
     deal = db.get(Deal, deal_id)
     target_org = _resolve_actor_deal_org(deal, actor, organization_id)
+    require_deal_action(actor, deal, target_org, "deal.edit_assigned")
 
     repo = SqlAlchemyReminderRepository(db)
     reminder = repo.get(reminder_id)

@@ -2,6 +2,7 @@
 
 import asyncio
 import unittest
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -14,9 +15,11 @@ from syncally.api.auth import get_current_actor
 from syncally.api.main import app
 from syncally.application.identity import ActorContext
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.models import (
     Base,
     Deal,
+    DealAssignment,
     Organization,
     OrganizationMember,
     User,
@@ -58,7 +61,13 @@ class DealRouteTests(unittest.TestCase):
 
     def _authenticate(self, actor: ActorContext) -> None:
         app.dependency_overrides[get_db] = lambda: self.session
-        app.dependency_overrides[get_current_actor] = lambda: actor
+        # These route-contract tests exercise deal workflow behavior as an
+        # organization owner; authorization denial cases use actors outside
+        # the deal party or explicit non-owner contexts.
+        owner_actor = actor if (actor.permissions_by_organization or actor.assigned_deals) else replace(
+            actor, owned_organization_ids=actor.organization_ids
+        )
+        app.dependency_overrides[get_current_actor] = lambda: owner_actor
 
     def _request(
         self, method: str, path: str, *, json: dict[str, Any] | None = None
@@ -346,6 +355,42 @@ class DealRouteTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_deal_reads_require_both_party_assignment_and_action_permission(self) -> None:
+        user, buyer, seller = self._seed_participants()
+        member = self.session.query(OrganizationMember).filter_by(
+            user_id=user.id, organization_id=buyer.id
+        ).one()
+        member.role = "MEMBER"
+        member.role_bundles = ["DEAL_MEMBER"]
+        deal = Deal(
+            buyer_organization_id=buyer.id,
+            seller_organization_id=seller.id,
+            status="DRAFT",
+            version=0,
+        )
+        self.session.add(deal)
+        self.session.commit()
+        assignment = DealAssignment(organization_id=buyer.id, deal_id=deal.id, user_id=user.id, status="ACTIVE")
+        self.session.add(assignment)
+        self.session.commit()
+
+        app.dependency_overrides[get_db] = lambda: self.session
+        app.dependency_overrides[get_current_actor] = lambda: resolve_actor(self.session, user.id)
+
+        self.assertEqual(self._request("GET", f"/deals?organization_id={buyer.id}").json()[0]["id"], str(deal.id))
+        self.assertEqual(self._request("GET", f"/deals/{deal.id}?organization_id={buyer.id}").status_code, 200)
+
+        assignment.status = "REVOKED"
+        self.session.commit()
+        self.assertEqual(self._request("GET", "/deals").json(), [])
+        self.assertEqual(self._request("GET", f"/deals/{deal.id}?organization_id={buyer.id}").status_code, 404)
+
+        assignment.status = "ACTIVE"
+        member.role_bundles = []
+        self.session.commit()
+        self.assertEqual(self._request("GET", "/deals").json(), [])
+        self.assertEqual(self._request("GET", f"/deals/{deal.id}?organization_id={buyer.id}").status_code, 404)
 
     def test_list_deals_is_empty_for_a_non_participant(self) -> None:
         _, buyer, seller = self._seed_participants()

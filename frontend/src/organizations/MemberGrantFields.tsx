@@ -50,30 +50,30 @@ export default function MemberGrantFields({
   useEffect(() => onChange({ role_bundles: bundles, permissions, deal_ids: dealIds }), [bundles, permissions, dealIds, onChange]);
 
   return <>
-    <fieldset className="field">
+    <fieldset className="field control-rows">
       <legend>Permission bundles</legend>
       <p className="muted">Select the actions this member needs. Bundles can be combined.</p>
-      {BUNDLES.map((bundle) => <label key={bundle} style={{ display: "block", margin: "6px 0" }}>
+      {BUNDLES.map((bundle) => <label key={bundle}>
         <input type="checkbox" disabled={disabled} checked={bundles.includes(bundle)} onChange={() => toggle(bundles, setBundles, bundle)} /> {bundle.replaceAll("_", " ")}
       </label>)}
-      {isOwner ? <label style={{ display: "block", margin: "6px 0" }}><input type="checkbox" disabled={disabled} checked={bundles.includes("ORG_ADMIN")} onChange={() => {
+      {isOwner ? <label><input type="checkbox" disabled={disabled} checked={bundles.includes("ORG_ADMIN")} onChange={() => {
         if (!bundles.includes("ORG_ADMIN") && !window.confirm("Grant organization administration, including profile and member management?")) return;
         toggle(bundles, setBundles, "ORG_ADMIN");
       }} /> Organization administrator</label> : null}
     </fieldset>
-    <fieldset className="field">
+    <fieldset className="field control-rows">
       <legend>Additional permissions</legend>
-      {isOwner ? <label style={{ display: "block", margin: "6px 0" }}><input type="checkbox" disabled={disabled} checked={permissions.includes("deal.read_all")} onChange={() => {
+      {isOwner ? <label><input type="checkbox" disabled={disabled} checked={permissions.includes("deal.read_all")} onChange={() => {
         if (!permissions.includes("deal.read_all") && !window.confirm("Grant access to every current and future deal in this organization?")) return;
         toggle(permissions, setPermissions, "deal.read_all");
       }} /> Read all organization deals</label> : null}
-      {PERMISSIONS.map((permission) => <label key={permission} style={{ display: "block", margin: "6px 0" }}>
+      {PERMISSIONS.map((permission) => <label key={permission}>
         <input type="checkbox" disabled={disabled || bundledPermissions.has(permission)} checked={permissions.includes(permission) || bundledPermissions.has(permission)} onChange={() => toggle(permissions, setPermissions, permission)} /> {permission}{bundledPermissions.has(permission) ? " (included in selected bundle)" : ""}
       </label>)}
     </fieldset>
-    <fieldset className="field">
+    <fieldset className="field control-rows">
       <legend>Deal access</legend>
-      {deals.length === 0 ? <p className="muted">No deals available to assign.</p> : deals.map((deal) => <label key={deal.id} style={{ display: "block", margin: "6px 0" }}>
+      {deals.length === 0 ? <p className="muted">No deals available to assign.</p> : deals.map((deal) => <label key={deal.id}>
         <input type="checkbox" disabled={disabled} checked={dealIds.includes(deal.id)} onChange={() => toggle(dealIds, setDealIds, deal.id)} /> {deal.display_name} ({deal.status})
       </label>)}
       <p className="muted">No deals are selected by default. Deal access does not grant approval, payment, or editing actions.</p>

@@ -113,11 +113,11 @@ export default function RemindersPanel({
 
   return (
     <section className="panel" aria-labelledby="reminders-panel-title" data-testid="reminders-panel">
-      <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="panel-head panel-head--row">
         <div>
           <span className="eyebrow">Durable Schedules</span>
-          <h3 id="reminders-panel-title" className="display" style={{ fontSize: "1.25rem" }}>
-            Obligation Reminders
+          <h3 id="reminders-panel-title" className="display">
+            Obligation reminders
           </h3>
         </div>
         <div>
@@ -165,19 +165,10 @@ export default function RemindersPanel({
                 <li
                   key={reminder.id}
                   data-testid={`reminder-item-${reminder.id}`}
-                  style={{
-                    border: "1px solid var(--border-color, #e2e8f0)",
-                    borderRadius: "6px",
-                    padding: "0.75rem 1rem",
-                    marginBottom: "0.75rem",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: "1rem",
-                  }}
+                  className="reminders-panel__item"
                 >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+                  <div className="reminders-panel__body">
+                    <div className="reminders-panel__badges">
                       <span className="badge badge--outline" data-testid={`reminder-scope-${reminder.id}`}>
                         {scopeBadgeLabel(reminder.scope)}
                       </span>
@@ -193,18 +184,18 @@ export default function RemindersPanel({
                       <span className="badge badge--ghost">Channel: {reminder.channel}</span>
                     </div>
 
-                    <div style={{ fontSize: "0.875rem", color: "var(--text-muted, #64748b)" }}>
+                    <div className="reminders-panel__meta">
                       <span>Due: {formatUtc(reminder.due_at)}</span>
                       {reminder.delivered_at && (
-                        <span style={{ marginLeft: "1rem" }}>Delivered: {formatUtc(reminder.delivered_at)}</span>
+                        <span>Delivered: {formatUtc(reminder.delivered_at)}</span>
                       )}
                       {reminder.suppression_reason && (
-                        <span style={{ marginLeft: "1rem", color: "var(--warning, #b45309)" }}>
+                        <span className="reminders-panel__meta--warning">
                           Suppressed ({reminder.suppression_reason})
                         </span>
                       )}
                       {(reminder.error_detail || reminder.last_error) && (
-                        <span style={{ marginLeft: "1rem", color: "var(--danger, #dc2626)" }}>
+                        <span className="reminders-panel__meta--danger">
                           Error: {reminder.error_detail || reminder.last_error}
                         </span>
                       )}
@@ -220,7 +211,6 @@ export default function RemindersPanel({
                         disabled={isBusy}
                         aria-busy={isBusy}
                         data-testid={`dismiss-reminder-${reminder.id}`}
-                        style={{ fontSize: "0.8125rem", padding: "0.25rem 0.5rem" }}
                       >
                         {isBusy ? "Dismissing..." : "Dismiss"}
                       </button>

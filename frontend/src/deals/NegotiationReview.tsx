@@ -560,7 +560,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               ) : null}
             </dl>)}
           </div>
-          {view.current_candidate ? <label>
+          {view.current_candidate ? <label className="check-row">
             <input type="checkbox" checked={replacementConfirmed} disabled={pending} onChange={(event) => setReplacementConfirmed(event.target.checked)} />
             Replace agreement version {view.current_candidate.version_number}. Its existing decisions will no longer apply.
           </label> : null}

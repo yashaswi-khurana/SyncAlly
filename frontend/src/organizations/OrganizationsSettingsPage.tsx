@@ -415,7 +415,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
 
                 {intent.recipientEmail ? <p className="muted">Addressed to {intent.recipientEmail}</p> : null}
                 {intent.kind === "INVALID" ? <p role="alert">Invalid invitation token</p> : null}
-                {intent.kind !== "TEAM" ? <div className="field" style={{ marginBottom: 12 }}>
+                {intent.kind !== "TEAM" ? <div className="field">
                   <label htmlFor="accept-org-name">{intent.kind === "COUNTERPARTY" ? "Your Company Legal Name" : "Your Company Legal Name (Optional)"}</label>
                   <input
                     id="accept-org-name"
@@ -427,7 +427,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
                 </div> : null}
 
                 {intent.kind !== "TEAM" && acceptOrgName.trim() ? (
-                  <div className="field" style={{ marginBottom: 12 }}>
+                  <div className="field">
                     <label htmlFor="accept-country-code">Country Code (2 letters)</label>
                     <input
                       id="accept-country-code"

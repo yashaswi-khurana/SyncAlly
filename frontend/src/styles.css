@@ -629,17 +629,18 @@ legend {
   width: 100%;
   min-width: 0;
   min-height: 44px;
-  padding: 11px 13px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   background-color: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 0.92rem;
   line-height: 1.45;
   accent-color: var(--accent);
-  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease),
-    background-color 0.16s var(--ease);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease),
+    background-color 0.18s var(--ease);
 }
 
 :where(textarea) {
@@ -651,6 +652,12 @@ legend {
 :where(input, textarea)::placeholder {
   color: var(--muted);
   opacity: 1;
+}
+
+/* Hover: gently tighten the frame so the control invites interaction. */
+:where(input, textarea, select):where(:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="submit"], [type="button"], [type="reset"], [type="image"], [type="color"])):hover:not(:disabled) {
+  border-color: var(--border-medium);
+  box-shadow: var(--shadow-md);
 }
 
 /* Native selects get one consistent chevron instead of three different ones. */
@@ -685,6 +692,7 @@ legend {
 
 .input--textarea {
   min-height: 84px;
+  padding: 11px 14px;
   line-height: 1.55;
   resize: vertical;
 }
@@ -952,15 +960,16 @@ textarea:not([class]) {
   box-sizing: border-box;
   width: 100%;
   min-height: 84px;
-  padding: 11px 13px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 0.92rem;
   line-height: 1.55;
   resize: vertical;
+  box-shadow: var(--shadow-sm);
 }
 
 /* Checkbox and radio rows: aligned, comfortable targets, accent-tinted. */
@@ -4112,15 +4121,17 @@ body {
   width: 100%;
   min-width: 0;
   min-height: 44px;
-  padding: 11px 13px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 0.92rem;
   line-height: 1.45;
-  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease),
+    background-color 0.18s var(--ease);
 }
 
 .marketplace-page textarea,
@@ -5024,19 +5035,21 @@ body {
   min-width: 0;
   min-height: 116px;
   padding: 12px 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 0.92rem;
   line-height: 1.6;
   resize: vertical;
-  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease),
+    background-color 0.18s var(--ease);
 }
 
 .message-composer textarea:hover:not(:disabled) {
-  border-color: var(--line-strong);
+  border-color: var(--border-medium);
 }
 
 .message-composer textarea:focus-visible {

@@ -32,7 +32,7 @@ export function parseRoute(hash: string): Route {
     return {
       name: "create",
       sellerOrganizationId: params.get("sellerOrganizationId") || params.get("sellerId") || undefined,
-      initiatorParty: initiatorParty === "SELLER" ? "SELLER" : "BUYER",
+      initiatorParty: initiatorParty === "SELLER" ? "SELLER" : initiatorParty === "BUYER" ? "BUYER" : undefined,
       rfqId: params.get("rfqId") || undefined,
       listingId: params.get("listingId") || undefined,
     };

@@ -377,6 +377,11 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
         {header}
         <section className="card" aria-live="polite">
           <p role="status">Loading organizations…</p>
+          <div className="skeleton-stack" aria-hidden="true">
+            <span className="skeleton-bar skeleton-bar--mid" />
+            <span className="skeleton-bar" />
+            <span className="skeleton-bar skeleton-bar--short" />
+          </div>
         </section>
       </div>
     );
@@ -430,7 +435,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
             <p className="counterparty-invitation__summary" role="status">
               {invitation.email_sent
                 ? `Your deal is ready. An invitation email was sent to ${recipientEmail.trim().toLowerCase()}.`
-                : `Your deal is ready, but the invitation email could not be sent to ${recipientEmail.trim().toLowerCase()}. Copy the link and share it securely.`}
+                : `Your deal is ready, but the invitation has not been sent to ${recipientEmail.trim().toLowerCase()}. Copy the link and share it securely.`}
             </p>
             {!invitation.email_sent && invitation.email_error ? <p className="hint" role="alert">{invitation.email_error}</p> : null}
             {invitationOpeningDraft ? <p className="hint">

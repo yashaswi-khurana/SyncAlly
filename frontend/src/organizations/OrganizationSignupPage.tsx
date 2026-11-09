@@ -134,7 +134,7 @@ export default function OrganizationSignupPage({ onSignIn }: {
           {error ? <p className="form-error" role="alert">{error}</p> : null}
           <button type="submit" className="button auth-card__submit" disabled={submitting}>
             <span>{submitting ? "Creating workspace…" : "Create organization"}</span>
-            <span aria-hidden="true">↗</span>
+            <span aria-hidden="true">→</span>
           </button>
         </form>
         <div className="auth-card__fineprint">

@@ -101,6 +101,7 @@ function defaultDraft() {
     payments: [
       { id: "pay-1", amount: "", currency: "", trigger: paymentTiming.trigger, dueCondition: paymentTiming.dueCondition, allocations: [{ obligation_id: "ship-1", amount: "", currency: "" }] },
     ],
+    deliveryLocation: "",
     incoterm: "",
     cancellationTerms: "",
   };
@@ -157,6 +158,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const [items, setItems] = useState<ItemDraft[]>(defaultDraft().items);
   const [shipments, setShipments] = useState<ShipmentDraft[]>(defaultDraft().shipments);
   const [payments, setPayments] = useState<PaymentDraft[]>(defaultDraft().payments);
+  const [deliveryLocation, setDeliveryLocation] = useState("");
   const [incoterm, setIncoterm] = useState("");
   const [cancellationTerms, setCancellationTerms] = useState("");
   const [isDirty, setIsDirty] = useState(false);
@@ -176,6 +178,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     setItems(draft.items);
     setShipments(draft.shipments);
     setPayments(draft.payments);
+    setDeliveryLocation(draft.deliveryLocation);
     setIncoterm(draft.incoterm);
     setCancellationTerms(draft.cancellationTerms);
     setIsDirty(false);
@@ -216,6 +219,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       })));
       setIncoterm(terms.incoterm ?? "");
       setCancellationTerms(terms.cancellation_terms ?? "");
+      setDeliveryLocation(terms.delivery_location ?? "");
     }
   }
 
@@ -227,6 +231,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       setItems(draft.items);
       setShipments(draft.shipments);
       setPayments(draft.payments);
+      setDeliveryLocation(draft.deliveryLocation);
       setIncoterm(draft.incoterm);
       setCancellationTerms(draft.cancellationTerms);
     }
@@ -284,6 +289,8 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       if (!it.currency || it.currency.length !== 3) return `Enter a 3-letter currency code for ${it.description}, such as INR or USD.`;
       currencies.add(it.currency);
     }
+
+    if (!deliveryLocation.trim()) return "Delivery location is required.";
 
     for (let i = 0; i < shipmentDrafts.length; i++) {
       const s = shipmentDrafts[i];
@@ -427,7 +434,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
           amount: { amount: a.amount, currency: a.currency },
         })),
       })),
-      delivery_location: proposalShipments[0]?.destination ?? "",
+      delivery_location: deliveryLocation.trim(),
       incoterm: incoterm ? incoterm : null,
       cancellation_terms: cancellationTerms,
     };
@@ -570,14 +577,14 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
 
         {view.eligible_actions.includes("submit") || view.eligible_actions.includes("counter") ? (
           <details className="collection-authoring" aria-label="Create a trade proposal">
-            <summary><h3>Set the trade terms</h3><span className="badge">Manual proposal</span></summary>
+            <summary><h3>Create a trade proposal</h3><span className="badge">Manual proposal</span></summary>
             <p className="proposal-editor__intro">Review your conversation and any AI suggestions above. Use this proposal to put the agreed product, delivery, and payment terms in one place for both businesses.</p>
             <ol className="proposal-workflow" aria-label="What happens after you send this proposal">
               <li><span>1</span>Partner reviews or counters</li><li><span>2</span>Both sides approve the same agreement</li><li><span>3</span>Agreement is committed, then invoice, payment, and delivery are recorded</li>
             </ol>
             <p className="hint">Sending shares the proposal with your partner. It does not approve or commit the agreement, request payment, or arrange delivery.</p>
             {authorError ? <p role="alert" className="form-error">{authorError}</p> : null}
-            <p className="proposal-editor__draft-note" aria-live="polite">{stale ? "This deal has changed. Reload before sending." : pending ? "Sending your proposal…" : isDirty ? "Unsaved draft changes" : "Draft only · nothing has been sent"}</p>
+            <p className="proposal-editor__draft-note" aria-label="Authoring draft status" aria-live="polite">{stale ? "This deal has changed. Reload the draft before sending." : pending ? "Sending draft…" : isDirty ? "Unsaved draft changes" : "This is a draft · nothing has been sent"}</p>
             <button type="button" className="button secondary proposal-editor__reset" onClick={resetEditor}>Reset draft</button>
 
             <div className="authoring-items" aria-label="Authoring line items">
@@ -591,13 +598,13 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               {items.map((it, idx) => (
                 <div key={idx} className="collection-item-row">
                   <div>
-                    <label>Product or service <input type="text" aria-label={`Product or service ${idx + 1}`} placeholder="e.g. Stainless steel bolts" value={it.description} onChange={(e) => {
+                    <label>Item description <input type="text" aria-label={`Item description ${idx + 1}`} placeholder="e.g. Stainless steel bolts" value={it.description} onChange={(e) => {
                       const updated = [...items];
                       updated[idx].description = e.target.value;
                       setItems(updated);
                       setIsDirty(true);
                     }} /></label>
-                    <label>Quantity <input type="text" inputMode="decimal" aria-label={`Quantity ${idx + 1}`} placeholder="e.g. 120" value={it.quantity} onChange={(e) => {
+                    <label>Item quantity <input type="text" inputMode="decimal" aria-label={`Item quantity ${idx + 1}`} placeholder="e.g. 120" value={it.quantity} onChange={(e) => {
                       const updated = [...items];
                       updated[idx].quantity = e.target.value;
                       setItems(updated);
@@ -644,6 +651,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
 
             <div className="authoring-shipments" aria-label="Authoring shipments">
               <div className="proposal-section__heading"><div><span className="proposal-section__step">02 / DELIVERY</span><h4>Where and when will it arrive?</h4></div><p>Use the destination and requested arrival date both sides can plan around.</p></div>
+              <label>Delivery location<input type="text" aria-label="Delivery location" placeholder="City, port, or region for the overall delivery" value={deliveryLocation} onChange={(e) => { setDeliveryLocation(e.target.value); setIsDirty(true); }} /></label>
               <button type="button" className="button secondary" onClick={() => {
                 const nextNum = shipments.length + 1;
                 setShipments([...shipments, { id: `ship-${nextNum}`, destination: "", targetDate: "", allocations: items.map((item) => ({ line_item_id: item.id, quantity: "", unit: item.unit })) }]);
@@ -653,7 +661,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               {shipments.map((s, idx) => (
                 <div key={idx} className="collection-shipment-row">
                   <div>
-                    <label>{shipments.length > 1 ? `Delivery ${idx + 1} destination` : "Delivery destination"}<input type="text" aria-label={`Delivery destination ${idx + 1}`} placeholder="City, region, country" value={s.destination} onChange={(e) => {
+                    <label>{shipments.length > 1 ? `Shipment destination ${idx + 1}` : "Shipment destination"}<input type="text" aria-label={`Shipment destination ${idx + 1}`} placeholder="City, region, country" value={s.destination} onChange={(e) => {
                       const updated = [...shipments];
                       updated[idx].destination = e.target.value;
                       setShipments(updated);
@@ -727,12 +735,13 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
               {payments.map((p, idx) => (
                 <div key={idx} className="collection-payment-row">
                   <div>
-                    {payments.length === 1 ? <div className="proposal-payment-amount"><span>Payment amount</span><strong>{calculateOrderTotal(items) !== null && items[0]?.currency ? `${calculateOrderTotal(items)} ${items[0].currency.toUpperCase()}` : "Complete the order details first"}</strong><small>Calculated from the products above.</small></div> : <label>Payment amount<input type="text" inputMode="decimal" aria-label={`Payment amount ${idx + 1}`} placeholder="e.g. 1500" value={p.amount} onChange={(e) => {
+                    <label>Payment term amount<input type="text" inputMode="decimal" aria-label={`Payment term amount ${idx + 1}`} placeholder="e.g. 1500" value={p.amount} onChange={(e) => {
                       const updated = [...payments];
                       updated[idx].amount = e.target.value;
                       setPayments(updated);
                       setIsDirty(true);
-                    }} /></label>}
+                    }} /></label>
+                    {payments.length === 1 ? <p className="proposal-editor__auto-note">{calculateOrderTotal(items) !== null && items[0]?.currency ? `A single payment defaults to the full order total of ${calculateOrderTotal(items)} ${items[0].currency.toUpperCase()} when left blank.` : "A single payment defaults to the full order total. Complete the order details first."}</p> : null}
                     {payments.length > 1 ? <label>Currency code<input type="text" aria-label={`Payment currency code ${idx + 1}`} placeholder={items[0]?.currency || "INR"} maxLength={3} value={p.currency} onChange={(e) => {
                       const updated = [...payments];
                       const currency = e.target.value.toUpperCase();
@@ -827,7 +836,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                   disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed)}
                   onClick={() => void submitAuthoring("counter")}
                 >
-                  {pending ? "Sending counterproposal…" : "Send counterproposal"}
+                  {pending ? "Submitting counter-proposal…" : "Submit counter-proposal"}
                 </button>
               ) : view.eligible_actions.includes("submit") ? (
                 <button
@@ -836,7 +845,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                   disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed)}
                   onClick={() => void submitAuthoring("submit")}
                 >
-                  {pending ? "Sending proposal…" : "Send proposal for review"}
+                  {pending ? "Submitting proposal…" : "Submit proposal"}
                 </button>
               ) : null}
             </div>

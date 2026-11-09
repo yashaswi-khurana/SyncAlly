@@ -256,7 +256,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
                             <button
                               type="button"
                               className="button ghost"
-                              style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                              style={{ fontSize: "0.75rem", padding: "2px 6px" }}
                               onClick={() => moveApprover(userId, -1)}
                               disabled={saving || index === 0}
                             >
@@ -265,7 +265,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
                             <button
                               type="button"
                               className="button ghost"
-                              style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                              style={{ fontSize: "0.75rem", padding: "2px 6px" }}
                               onClick={() => moveApprover(userId, 1)}
                               disabled={saving || index === draftOrder.length - 1}
                             >
@@ -276,7 +276,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
                         <button
                           type="button"
                           className="button ghost"
-                          style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                          style={{ fontSize: "0.75rem", padding: "2px 6px" }}
                           onClick={() => toggleApprover(userId)}
                           disabled={saving}
                         >

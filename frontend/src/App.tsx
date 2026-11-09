@@ -22,6 +22,7 @@ import {
   navigateToMarketplace,
   navigateToSourcing,
   navigateToPlatform,
+  parseRoute,
 } from "./router";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
 import type { OpeningMessageDraft, OpeningMessageDraftInput } from "./deals/openingMessageDraft";
@@ -35,6 +36,14 @@ export default function App() {
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [isSystemAdmin, setIsSystemAdmin] = useState<boolean | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [navOpen, setNavOpen] = useState(false);
+  const [navRoute, setNavRoute] = useState(route);
+  if (navRoute !== route) {
+    // close the mobile drawer whenever navigation happens (render-phase
+    // adjustment — no effect needed)
+    setNavRoute(route);
+    setNavOpen(false);
+  }
   const [openingMessageDrafts, setOpeningMessageDrafts] = useState<OpeningMessageDraft[]>([]);
 
   const currentSessionKey = accessToken ? `${accessToken}:${sessionGeneration}` : null;
@@ -148,6 +157,13 @@ export default function App() {
     setOrganizations(null);
     setIsSystemAdmin(null);
     signIn(tokens);
+    // A fresh sign-in must not inherit the previous session's settings route.
+    // Deep links survive: create/deal routes, organization signup, and any
+    // route carrying an invitation token (`/invite?token=…`, `?token=…`).
+    const current = parseRoute(window.location.hash);
+    if (current.name === "organizations" && !current.inviteToken) {
+      navigateToDeals();
+    }
   }
 
   function handleDealCreated(dealId: string, draft?: OpeningMessageDraftInput | { text: string; source: string }) {
@@ -227,7 +243,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="site-nav">
+      <header className={`site-nav${navOpen ? " is-open" : ""}`}>
         <button type="button" className="brand" onClick={navigateToDeals}>
           <span className="brand__mark" aria-hidden="true">
             <svg viewBox="0 0 28 28" focusable="false">
@@ -240,7 +256,7 @@ export default function App() {
             <small>TRADE FOLIO</small>
           </span>
         </button>
-        <nav className="site-nav__links" aria-label="Primary">
+        <nav id="primary-nav" className="site-nav__links" aria-label="Primary" onClick={() => setNavOpen(false)}>
           <button
             type="button"
             className={`nav-link${isWorkspace ? " is-active" : ""}`}
@@ -285,13 +301,25 @@ export default function App() {
               Platform admin
             </button>
           ) : null}
+          <button type="button" className="button ghost nav-signout" onClick={handleSignOut}>
+            Sign out
+          </button>
         </nav>
         <div className="site-nav__meta">
           {import.meta.env.DEV ? <span className="site-nav__environment">LOCAL DEMO</span> : null}
-          <button type="button" className="button ghost" onClick={handleSignOut}>
-            Sign out
-          </button>
         </div>
+        <button
+          type="button"
+          className="site-nav__toggle"
+          aria-expanded={navOpen}
+          aria-controls="primary-nav"
+          aria-label={navOpen ? "Close menu" : "Open menu"}
+          onClick={() => setNavOpen((open) => !open)}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+            {navOpen ? <path d="M4 4 14 14 M14 4 4 14" /> : <path d="M3 5h12 M3 9h12 M3 13h12" />}
+          </svg>
+        </button>
       </header>
 
       <main className="app-main" key={sessionVersion}>
@@ -323,7 +351,18 @@ export default function App() {
         ) : route.name === "organizations" ? (
           <OrganizationsSettingsPage onAccepted={handleInvitationAccepted} />
         ) : route.name === "platform" ? (
-          isSystemAdmin ? <PlatformOrganizationsPage /> : <p role="status">Loading platform access…</p>
+          isSystemAdmin ? (
+            <PlatformOrganizationsPage />
+          ) : (
+            <>
+              <p role="status">Loading platform access…</p>
+              <div className="skeleton-stack" aria-hidden="true">
+                <span className="skeleton-bar skeleton-bar--mid" />
+                <span className="skeleton-bar" />
+                <span className="skeleton-bar skeleton-bar--short" />
+              </div>
+            </>
+          )
         ) : needsOrganizationInvitation ? (
           <section className="card org-access-required" role="status">
             <span className="eyebrow">Organization access</span>
@@ -349,61 +388,42 @@ export default function App() {
       <DevRoleSwitcher onSessionChanged={refreshSessionView} />
 
       {toast && (
-        <aside
-          className="onboarding-toast"
-          role="status"
-          aria-live="polite"
-          style={{
-            position: "fixed",
-            bottom: "24px",
-            right: "24px",
-            zIndex: 1100,
-            maxWidth: "420px",
-            padding: "12px 18px",
-            borderRadius: "8px",
-            background: "var(--surface)",
-            border: "1px solid var(--accent)",
-            color: "var(--ink)",
-            boxShadow: "0 12px 36px rgba(0, 0, 0, 0.25)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "12px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span
+        <aside className="onboarding-toast" role="status" aria-live="polite">
+          <div className="onboarding-toast__message">
+            <svg
+              className="onboarding-toast__icon"
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
               aria-hidden="true"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: "20px",
-                height: "20px",
-                borderRadius: "50%",
-                background: "rgba(56, 211, 159, 0.2)",
-                color: "#38d39f",
-                fontWeight: "bold",
-                fontSize: "12px",
-              }}
             >
-              ✓
-            </span>
+              <path d="M3 8.5 6.5 12 13 4.5" />
+            </svg>
             <span>{toast}</span>
           </div>
           <button
             type="button"
-            className="button ghost"
+            className="button ghost onboarding-toast__dismiss"
             onClick={() => setToast(null)}
             aria-label="Dismiss notification"
-            style={{
-              padding: "4px 8px",
-              fontSize: "12px",
-              border: "none",
-              cursor: "pointer",
-            }}
           >
-            ✕
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <path d="M3 3 9 9 M9 3 3 9" />
+            </svg>
           </button>
         </aside>
       )}

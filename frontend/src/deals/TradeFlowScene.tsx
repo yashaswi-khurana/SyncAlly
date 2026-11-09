@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type * as Three from "three";
+import { sceneState } from "../ui/motion";
 
 export default function TradeFlowScene() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -162,6 +163,10 @@ export default function TradeFlowScene() {
       record.add(seal);
       network.add(record);
 
+      // direction §2: seal settles into gold as consensus rises
+      const sealSettled = new three.Color(0x64876a);
+      const sealGold = new three.Color(0xc28b38);
+
       const pulses = [
         { route: upperRoute, phase: 0, color: buyerColor },
         { route: upperRoute, phase: 0.5, color: paperColor },
@@ -182,6 +187,32 @@ export default function TradeFlowScene() {
       let previousFrame = 0;
       let elapsed = 0;
       const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      const coarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+      const parallaxEnabled = !reducedMotion && !coarsePointer;
+      const parallax = { x: 0, y: 0, targetX: 0, targetY: 0 };
+      let scrollYaw = 0;
+      let scrollYawTarget = 0;
+      const maxTilt = (8 * Math.PI) / 180; // ≤8° pointer parallax (direction §2)
+
+      const handlePointerMove = (event: PointerEvent) => {
+        if (!parallaxEnabled) return;
+        const bounds = host.getBoundingClientRect();
+        if (bounds.width === 0 || bounds.height === 0) return;
+        const nx = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+        const ny = ((event.clientY - bounds.top) / bounds.height) * 2 - 1;
+        parallax.targetX = Math.max(-1, Math.min(1, nx)) * maxTilt;
+        parallax.targetY = Math.max(-1, Math.min(1, ny)) * maxTilt;
+      };
+      const handleScroll = () => {
+        if (reducedMotion) return;
+        scrollYawTarget = Math.max(-0.3, Math.min(0.3, window.scrollY * 0.0004));
+      };
+      if (parallaxEnabled) {
+        host.addEventListener("pointermove", handlePointerMove);
+      }
+      if (!reducedMotion) {
+        window.addEventListener("scroll", handleScroll, { passive: true });
+      }
       for (const { route, phase, pulse } of pulses) {
         pulse.position.copy(route.getPointAt(phase));
       }
@@ -203,34 +234,56 @@ export default function TradeFlowScene() {
         renderer.render(scene, camera);
       };
 
+      let consensusSmoothed = 0;
       const render = (now: number) => {
         if (now - previousFrame < 32) {
           frame = window.requestAnimationFrame(render);
           return;
         }
-        elapsed += Math.min((now - previousFrame) / 1000, 0.05);
+        const delta = Math.min((now - previousFrame) / 1000, 0.05);
         previousFrame = now;
-        network.rotation.y = Math.sin(elapsed * 0.38) * 0.035;
-        network.rotation.x = Math.sin(elapsed * 0.27) * 0.018;
-        buyerNode.position.y = 0.02 + Math.sin(elapsed * 0.8) * 0.045;
-        sellerNode.position.y = 0.02 + Math.sin(elapsed * 0.8 + Math.PI) * 0.045;
-
-        for (const { route, phase, pulse } of pulses) {
-          pulse.position.copy(route.getPointAt((elapsed * 0.12 + phase) % 1));
+        // reduced motion: time stays frozen (static frame) but state still applies
+        if (!reducedMotion) {
+          elapsed += delta;
+          network.rotation.y = Math.sin(elapsed * 0.38) * 0.035;
+          network.rotation.x = Math.sin(elapsed * 0.27) * 0.018;
+          buyerNode.position.y = 0.02 + Math.sin(elapsed * 0.8) * 0.045;
+          sellerNode.position.y = 0.02 + Math.sin(elapsed * 0.8 + Math.PI) * 0.045;
+          for (const { route, phase, pulse } of pulses) {
+            pulse.position.copy(route.getPointAt((elapsed * 0.12 + phase) % 1));
+          }
+          // damped pointer parallax (≤8°) + scroll-linked yaw (direction §2)
+          parallax.x += (parallax.targetX - parallax.x) * 0.07;
+          parallax.y += (parallax.targetY - parallax.y) * 0.07;
+          scrollYaw += (scrollYawTarget - scrollYaw) * 0.05;
+          network.rotation.y += parallax.x + scrollYaw;
+          network.rotation.x += parallax.y;
         }
+
+        // shared sceneState: orbit tightens, seal turns gold, record locks upright
+        const consensusTarget = Math.max(0, Math.min(1, sceneState.consensus));
+        consensusSmoothed += (consensusTarget - consensusSmoothed) * (reducedMotion ? 1 : 0.06);
+        if (consensusSmoothed > 0.001) {
+          const pull = consensusSmoothed * 0.28;
+          buyerNode.position.x = -2.75 + pull;
+          sellerNode.position.x = 2.75 - pull;
+          seal.material.color.copy(sealSettled).lerp(sealGold, consensusSmoothed);
+          record.rotation.y = -0.2 + consensusSmoothed * 0.2;
+        }
+
         renderer.render(scene, camera);
         frame = window.requestAnimationFrame(render);
       };
 
       resize();
-      if (!reducedMotion) {
-        frame = window.requestAnimationFrame(render);
-      }
+      // always run: reduced-motion keeps time frozen (static frame) but must
+      // still reflect sceneState changes such as a commitment landing
+      frame = window.requestAnimationFrame(render);
       const handleVisibilityChange = () => {
         if (document.hidden) {
           window.cancelAnimationFrame(frame);
           frame = 0;
-        } else if (!reducedMotion && frame === 0) {
+        } else if (frame === 0) {
           frame = window.requestAnimationFrame(render);
         }
       };
@@ -244,6 +297,8 @@ export default function TradeFlowScene() {
         resizeObserver?.disconnect();
         window.removeEventListener("resize", resize);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
+        host.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("scroll", handleScroll);
         scene.traverse((object) => {
           if (object instanceof three.Mesh) {
             object.geometry.dispose();

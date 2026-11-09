@@ -247,7 +247,7 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
             setVisibility("SHAREABLE");
             updateOpeningDraft(body, "SHAREABLE", null);
           }} />
-          <span><span aria-hidden="true">{"\u{1F310}"} </span>Shareable <small>Visible to both buyer and seller</small></span>
+          <span>Shareable <small>Visible to both buyer and seller</small></span>
         </label>
         <label><input type="radio" name="message-visibility" value="PRIVATE"
           checked={visibility === "PRIVATE"} onChange={() => {
@@ -255,7 +255,7 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
             setVisibility("PRIVATE");
             updateOpeningDraft(body, "PRIVATE", null);
           }} />
-          <span><span aria-hidden="true">{"\u{1F512}"} </span>Private <small>Visible only to members of your organization</small></span>
+          <span>Private <small>Visible only to members of your organization</small></span>
         </label>
       </fieldset>
       <div className="message-composer__actions">
@@ -1023,7 +1023,7 @@ export default function DealConversationReview({
                             onClick={() => traceSourceMessage(sourceMessage.id)}
                           >
                             Trace to message {String(sourceMessageIndex + 1).padStart(2, "0")}
-                            <span aria-hidden="true"> ↗</span>
+                            <span aria-hidden="true"> →</span>
                           </button>
                         ) : null}
                         <blockquote className="fact-source__quote">“{fact.source_span}”</blockquote>

@@ -5,13 +5,14 @@ import { addOrganizationMember, ApiError, listOrganizations } from "../api/clien
 import type { Organization } from "../api/types";
 import OrganizationMembersSection from "./OrganizationMembersSection";
 import OrganizationProfileSection from "./OrganizationProfileSection";
+import SlackIntegrationSection from "./SlackIntegrationSection";
 
 type OrganizationsState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; organizations: Organization[] };
 
-type OrganizationTab = "overview" | "team";
+type OrganizationTab = "overview" | "team" | "integrations";
 
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
@@ -29,7 +30,11 @@ export default function OrganizationsPanel({
   const [state, setState] = useState<OrganizationsState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
   const [selectedOrgId, setSelectedOrgId] = useState("");
-  const [activeTab, setActiveTab] = useState<OrganizationTab>("overview");
+  const [activeTab, setActiveTab] = useState<OrganizationTab>(() => {
+    const rawPath = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+    const [, query] = rawPath.split("?");
+    return new URLSearchParams(query || "").has("integration") ? "integrations" : "overview";
+  });
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const [inviteEmail, setInviteEmail] = useState("");
@@ -189,6 +194,9 @@ export default function OrganizationsPanel({
                 <button type="button" id="org-team-tab" role="tab" aria-selected={activeTab === "team"} aria-controls="org-team-panel" onClick={() => setActiveTab("team")}>
                   Team &amp; access
                 </button>
+                <button type="button" id="org-integrations-tab" role="tab" aria-selected={activeTab === "integrations"} aria-controls="org-integrations-panel" onClick={() => setActiveTab("integrations")}>
+                  Integrations
+                </button>
               </div>
 
               {activeTab === "overview" ? (
@@ -202,7 +210,7 @@ export default function OrganizationsPanel({
                   </div>
                   <OrganizationProfileSection organization={selectedOrganization} />
                 </section>
-              ) : (
+              ) : activeTab === "team" ? (
                 <section className="org-tab-panel" id="org-team-panel" role="tabpanel" aria-labelledby="org-team-tab">
                   <div className="org-team-actions">
                     <div>
@@ -247,6 +255,8 @@ export default function OrganizationsPanel({
                   ) : null}
                   <OrganizationMembersSection organization={selectedOrganization} />
                 </section>
+              ) : (
+                <SlackIntegrationSection key={`${selectedOrganization.id}:${selectedOrganization.role}`} organization={selectedOrganization} />
               )}
             </div>
           ) : null}

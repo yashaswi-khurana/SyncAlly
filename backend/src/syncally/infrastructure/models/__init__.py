@@ -30,6 +30,7 @@ from syncally.infrastructure.models.identity import (
     RefreshToken,
     User,
 )
+from syncally.infrastructure.models.integrations import SlackInstallation, SlackOAuthState
 from syncally.infrastructure.models.marketplace import MarketplaceListing, MarketplaceRFQ
 from syncally.infrastructure.models.negotiation import (
     NegotiationAction,
@@ -71,6 +72,8 @@ __all__ = [
     "PaymentMilestone",
     "Proposal",
     "RefreshToken",
+    "SlackInstallation",
+    "SlackOAuthState",
     "User",
     "WebhookEvent",
 ]

@@ -4,6 +4,49 @@ Use this guide for the local/demo API, Temporal workflow worker, Temporal outbox
 and PayPal Sandbox payment worker. PostgreSQL is the commercial source of truth.
 A workflow outcome, browser redirect or webhook body does not prove payment.
 
+## Slack connection (OAuth only)
+
+Slice 1 connects one Slack workspace to one SyncAlly organization. It does not
+receive messages or send deal updates yet. In the Slack app configuration, add
+the exact OAuth redirect URL
+`https://<APP_DOMAIN>/integrations/slack/oauth/callback` and request only the
+`app_mentions:read` and `chat:write` bot scopes. Do not configure message-history
+scopes. In this release the `app_mentions:read` scope is recorded for the next
+slice; no Slack event subscriptions are enabled yet.
+
+Set these API environment values from the Slack app's OAuth & Permissions page
+and a deployment secret manager:
+
+```text
+SLACK_CLIENT_ID=<Slack app client ID>
+SLACK_CLIENT_SECRET=<Slack app client secret>
+SLACK_REDIRECT_URI=https://<APP_DOMAIN>/integrations/slack/oauth/callback
+INTEGRATION_TOKEN_ENCRYPTION_KEY=<Fernet key held as a deployment secret>
+```
+
+Generate a dedicated Fernet key once with
+`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`,
+then place it directly in the secret manager. Do not commit it, paste it into
+chat, or reuse the JWT, PayPal, or Slack signing secret. The API encrypts the
+Slack bot token before persisting it. Rotating this encryption key requires
+disconnecting and reconnecting existing Slack installations; do this before
+removing the old key. The API fails closed when Slack credentials or a valid
+encryption key are missing.
+
+After deployment and migration `0033_slack_integrations`, an active organization
+administrator can connect Slack from Settings → Organizations → Integrations.
+The authorization callback is single-use and expires after ten minutes. The
+connection view shows the workspace and granted scopes; it explicitly states
+that messaging is not enabled. Disconnect revokes the Slack token before the
+local credential is cleared. If Slack cannot confirm revocation, the connection
+remains active in SyncAlly and the admin can retry.
+
+The OAuth state table contains only a SHA-256 hash of the short-lived state.
+Audit events contain organization/workspace identifiers and outcome categories,
+never OAuth codes, state values, access tokens, or message content. Keep the
+database and deployment secret store access restricted; ordinary application
+logs do not contain provider credentials.
+
 ## F11a explicit payment modes
 
 Back up the intended database, stop/drain API payment writers and payment workers,

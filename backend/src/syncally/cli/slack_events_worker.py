@@ -10,12 +10,17 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+from fastapi import HTTPException
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from syncally.api.authorization import require_deal_action
 from syncally.application.deals import DealNotFound, get_deal
+from syncally.application.payments import PaymentStatusRecord, list_current_payment_statuses
 from syncally.config import settings
+from syncally.domain.payments.intent import PaymentIntentStatus
+from syncally.domain.shared.money import canonical_decimal
 from syncally.infrastructure.database import SessionLocal
 from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.integrations.slack import SlackIntegrationError, SlackTokenCipher
@@ -27,7 +32,9 @@ from syncally.infrastructure.models import (
     SlackUserLink,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
+from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
+from syncally.infrastructure.repositories.payments import SqlAlchemyPaymentIntentRepository
 from syncally.operations import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -111,6 +118,27 @@ async def _provider_call(method, *args, **kwargs) -> None:
 
 def _cipher() -> SlackTokenCipher:
     return SlackTokenCipher(settings.integration_token_encryption_key.get_secret_value())
+
+
+def _payment_summary_text(payments: list[PaymentStatusRecord]) -> str:
+    if not payments:
+        return "No payment status is available for this deal yet."
+
+    lines = ["Payment status:"]
+    for payment in sorted(
+        payments,
+        key=lambda item: (item.milestone_sequence, str(item.intent_id)),
+    ):
+        try:
+            payment_status = PaymentIntentStatus(payment.status).value
+        except ValueError:
+            payment_status = "UNKNOWN"
+        amount = canonical_decimal(payment.amount.amount)
+        lines.append(
+            f"Milestone {payment.milestone_sequence}: {payment_status} — "
+            f"{payment.amount.currency} {amount}"
+        )
+    return "\n".join(lines)
 
 
 def prune_slack_records(db: Session, now: datetime | None = None) -> tuple[int, int]:
@@ -284,12 +312,50 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             thread_ts=event.thread_ts,
             text=text,
         )
+    elif event.command == "PAYMENTS" and event.deal_id is not None:
+        link = db.scalar(
+            select(SlackUserLink).where(
+                SlackUserLink.installation_id == installation.id,
+                SlackUserLink.slack_user_id == event.slack_user_id,
+                SlackUserLink.organization_id == installation.organization_id,
+                SlackUserLink.workspace_id == installation.workspace_id,
+            )
+        )
+        if link is None:
+            text = "Link your SyncAlly account first: mention `@SyncAlly link` and follow the private instructions."
+        else:
+            actor = resolve_actor(db, link.user_id)
+            if actor is None or installation.organization_id not in actor.organization_ids:
+                text = "I couldn't find authorized payment information for that deal."
+            else:
+                try:
+                    deal_id_value = uuid.UUID(event.deal_id)
+                    deal = get_deal(actor, deal_id_value, SqlAlchemyDealRepository(db))
+                    require_deal_action(actor, deal, installation.organization_id, "payments.read")
+                    payments = list_current_payment_statuses(
+                        actor,
+                        deal_id_value,
+                        SqlAlchemyDealRepository(db),
+                        SqlAlchemyAgreementRepository(db),
+                        SqlAlchemyPaymentIntentRepository(db),
+                    )
+                except (DealNotFound, HTTPException):
+                    text = "I couldn't find authorized payment information for that deal."
+                else:
+                    text = _payment_summary_text(payments)
+        await _provider_call(api.post_ephemeral,
+            token,
+            channel=event.channel_id,
+            user=event.slack_user_id,
+            thread_ts=event.thread_ts,
+            text=text,
+        )
     else:
         await _provider_call(api.post_message,
             token,
             channel=event.channel_id,
             thread_ts=event.thread_ts,
-            text="Use `@SyncAlly link` to connect your account or `@SyncAlly status <deal-id>` to check an exact deal ID.",
+            text="Use `@SyncAlly link` to connect your account, `@SyncAlly status <deal-id>` for deal status, or `@SyncAlly payments <deal-id>` for payment status. Use an exact deal ID.",
         )
     event.status = "DELIVERED"
     event.last_error = None

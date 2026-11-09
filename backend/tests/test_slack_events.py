@@ -9,6 +9,7 @@ import json
 import time
 import unittest
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -25,7 +26,9 @@ from starlette.responses import JSONResponse
 
 from syncally.api import slack_events
 from syncally.application.identity import ActorContext
+from syncally.application.payments import PaymentStatusRecord
 from syncally.domain.deals.deal import DealStatus
+from syncally.domain.shared.money import Money
 from syncally.infrastructure.integrations.slack import SlackTokenCipher
 from syncally.infrastructure.integrations.slack_events import (
     SlackEventVerificationError,
@@ -48,6 +51,22 @@ from syncally.infrastructure.models import (
 
 SIGNING_SECRET = "test-signing-secret"
 FERNET_KEY = Fernet.generate_key().decode("ascii")
+
+
+class SlackEventCommandTests(unittest.TestCase):
+    def test_payment_command_requires_exact_verb_and_deal_id(self) -> None:
+        self.assertEqual(
+            slack_events._event_command("<@BBOT> payments 11111111-1111-1111-1111-111111111111", "BBOT"),
+            ("PAYMENTS", "11111111-1111-1111-1111-111111111111"),
+        )
+        self.assertEqual(
+            slack_events._event_command("<@BBOT> payments 11111111-1111-1111-1111-111111111111 extra", "BBOT"),
+            ("HELP", None),
+        )
+        self.assertEqual(
+            slack_events._event_command("<@BBOT> payment 11111111-1111-1111-1111-111111111111", "BBOT"),
+            ("HELP", None),
+        )
 
 
 def _signed_request(payload: dict[str, object], *, timestamp: int | None = None) -> Request:
@@ -290,6 +309,22 @@ class SlackEventRouteTests(unittest.TestCase):
         self._receive(self._mention_payload(event_id="Ev-message", event_type="message"))
         self.assertEqual(self.db.scalar(select(SlackEvent.event_id)), "Ev-unique")
 
+        payments_payload = self._mention_payload(
+            event_id="Ev-payments",
+            text="<@BBOT> payments 11111111-1111-1111-1111-111111111111",
+        )
+        self._receive(payments_payload)
+        self._receive(payments_payload)
+        payments_event = self.db.scalar(
+            select(SlackEvent).where(SlackEvent.event_id == "Ev-payments")
+        )
+        self.assertIsNotNone(payments_event)
+        assert payments_event is not None
+        self.assertEqual(payments_event.command, "PAYMENTS")
+        self.assertEqual(self.db.scalar(
+            select(SlackEvent.id).where(SlackEvent.event_id == "Ev-payments")
+        ), payments_event.id)
+
     def test_unconfirmed_integrity_failure_is_raised_for_slack_retry(self) -> None:
         error = IntegrityError("insert slack event", {}, RuntimeError("unexpected constraint"))
         with patch.object(self.db, "commit", side_effect=error):
@@ -453,6 +488,185 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(len(denials), 2)
         self.assertEqual(denials[0]["text"], denials[1]["text"])
         self.assertEqual({message["user"] for message in denials}, {"U-no-read", "U-authorized"})
+
+    def _add_payment_lookup(self, deal_id, *, event_id: str, user_id: str = "U-payments", delay: int = 0):
+        now = datetime.now(UTC)
+        self.db.add(Deal(
+            id=deal_id, buyer_organization_id=self.org.id, seller_organization_id=self.other_org.id,
+            display_name="Payment lookup private deal", status=DealStatus.NEGOTIATING.value,
+        ))
+        if self.db.scalar(
+            select(SlackUserLink.id).where(
+                SlackUserLink.installation_id == self.installation.id,
+                SlackUserLink.slack_user_id == user_id,
+            )
+        ) is None:
+            self.db.add(SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id="T-workspace", slack_user_id=user_id, user_id=self.admin.id,
+                created_at=now,
+            ))
+        self.db.add(SlackEvent(
+            id=uuid4(), event_id=event_id, installation_id=self.installation.id,
+            workspace_id="T-workspace", slack_user_id=user_id, channel_id="C-channel",
+            message_ts=f"124.{delay:03d}", thread_ts="124.000", command="PAYMENTS",
+            deal_id=str(deal_id), status="PENDING", attempts=0,
+            available_at=now + timedelta(milliseconds=delay), created_at=now + timedelta(milliseconds=delay),
+        ))
+        self.db.commit()
+
+    def test_payment_lookup_requires_payments_read_and_hides_missing_deal_identically(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id = uuid4()
+        self._add_payment_lookup(deal_id, event_id="Ev-payments-denied", delay=0)
+        self.db.add(SlackEvent(
+            id=uuid4(), event_id="Ev-payments-missing", installation_id=self.installation.id,
+            workspace_id="T-workspace", slack_user_id="U-payments", channel_id="C-channel",
+            message_ts="124.100", thread_ts="124.000", command="PAYMENTS",
+            deal_id=str(uuid4()), status="PENDING", attempts=0,
+            available_at=now + timedelta(seconds=1), created_at=now + timedelta(seconds=1),
+        ))
+        self.db.commit()
+
+        # The user can read the deal through deal.read_all but lacks payments.read.
+        actor_without_payment_permission = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={self.org.id: frozenset({"deal.read_all"})},
+        )
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)), \
+             patch.object(slack_events_worker, "resolve_actor", return_value=actor_without_payment_permission):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=5),
+            )))
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=6),
+            )))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 2)
+        self.assertEqual(
+            {message["text"] for message in api.private_messages},
+            {"I couldn't find authorized payment information for that deal."},
+        )
+        self.assertTrue(all(message["user"] == "U-payments" for message in api.private_messages))
+        self.assertTrue(all(message["thread_ts"] == "124.000" for message in api.private_messages))
+
+    def test_payment_lookup_sends_sorted_minimal_summary_only_to_requester(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id = uuid4()
+        self._add_payment_lookup(deal_id, event_id="Ev-payments-authorized")
+        actor_with_payment_permission = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={
+                self.org.id: frozenset({"deal.read_all", "payments.read"})
+            },
+        )
+        payment_records = [
+            PaymentStatusRecord(
+                intent_id=uuid4(), milestone_sequence=2, amount=Money(Decimal("75.00"), "USD"),
+                status="PAID", reconciled_amount=None, last_checked_at=None, last_reconciled_at=None,
+                invoice_reference="private-provider-invoice-id",
+            ),
+            PaymentStatusRecord(
+                intent_id=uuid4(), milestone_sequence=1, amount=Money(Decimal("25.00"), "EUR"),
+                status="PENDING", reconciled_amount=None, last_checked_at=None, last_reconciled_at=None,
+                invoice_reference="private-provider-invoice-id",
+            ),
+        ]
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)), \
+             patch.object(slack_events_worker, "resolve_actor", return_value=actor_with_payment_permission), \
+             patch.object(slack_events_worker, "list_current_payment_statuses", return_value=payment_records):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=5),
+            )))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 1)
+        reply = api.private_messages[0]
+        self.assertEqual(reply["user"], "U-payments")
+        self.assertEqual(reply["thread_ts"], "124.000")
+        self.assertEqual(
+            reply["text"],
+            "Payment status:\nMilestone 1: PENDING — EUR 25\nMilestone 2: PAID — USD 75",
+        )
+        for secret in (
+            "private-provider-invoice-id", "invoice_url", "recipient_email", "provider",
+            "retry_count", "failure_reason", "Payment lookup private deal",
+        ):
+            self.assertNotIn(secret, reply["text"])
+
+    def test_payment_lookup_without_status_rows_returns_safe_message(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        self._add_payment_lookup(uuid4(), event_id="Ev-payments-no-rows")
+        actor = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={
+                self.org.id: frozenset({"deal.read_all", "payments.read"})
+            },
+        )
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)), \
+             patch.object(slack_events_worker, "resolve_actor", return_value=actor), \
+             patch.object(slack_events_worker, "list_current_payment_statuses", return_value=[]):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=5),
+            )))
+
+        self.assertEqual(len(api.messages), 1)
+        self.assertEqual(api.messages[0]["text"], "No payment status is available for this deal yet.")
+        self.assertEqual(api.messages[0]["user"], "U-payments")
 
     def test_worker_bounds_unexpected_pre_send_failures_without_logging_secrets(self) -> None:
         from syncally.cli import slack_events_worker

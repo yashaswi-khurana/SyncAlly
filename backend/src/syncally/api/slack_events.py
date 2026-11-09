@@ -54,6 +54,15 @@ def _event_command(text: object, bot_user_id: str) -> tuple[str, str | None]:
             return "STATUS", str(uuid.UUID(parts[1]))
         except ValueError:
             pass
+    if (
+        len(parts) == 2
+        and parts[0].casefold() == "payments"
+        and _DEAL_ID.fullmatch(parts[1])
+    ):
+        try:
+            return "PAYMENTS", str(uuid.UUID(parts[1]))
+        except ValueError:
+            pass
     return "HELP", None
 
 

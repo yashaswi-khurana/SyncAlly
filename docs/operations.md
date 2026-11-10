@@ -67,9 +67,14 @@ replayed.
 Members link their own SyncAlly identity by mentioning `@SyncAlly link`, then
 redeeming the short-lived private code in the organization Integrations tab. The
 link establishes identity only. `@SyncAlly status <deal-id>` returns only deal
-status, and `@SyncAlly payments <deal-id>` returns milestone status and amount
-only when current SyncAlly permissions allow it. Missing and unauthorized IDs
-receive the same private response. A linked member can opt in to private
+status, and `@SyncAlly status` resolves status only when exactly one deal is
+followed by that linked user in the same installation, workspace, channel, and
+thread. With no authorized match it privately prompts the user to follow a deal
+or provide an exact ID; with multiple matches it privately requests an exact ID.
+The lookup uses saved follow records and does not read Slack history. Both status
+forms recheck current SyncAlly access. `@SyncAlly payments <deal-id>` returns
+milestone status and amount only when current SyncAlly permissions allow it.
+Missing and unauthorized IDs receive the same private response. A linked member can opt in to private
 agreement-commit, generic agreement-update, proposal-submission, deal-completion,
 verified payment-state-change, generic fulfillment, and content-free new-message notices in the current thread with
 `@SyncAlly follow <deal-id>` and stop them with `@SyncAlly unfollow <deal-id>`.

@@ -45,6 +45,8 @@ def _event_command(text: object, bot_user_id: str) -> tuple[str, str | None]:
     parts = without_mentions.split()
     if len(parts) == 1 and parts[0].casefold() == "link":
         return "LINK", None
+    if len(parts) == 1 and parts[0].casefold() == "status":
+        return "STATUS", None
     if (
         len(parts) == 3
         and parts[0].casefold() == "start"

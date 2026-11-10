@@ -68,6 +68,18 @@ FERNET_KEY = Fernet.generate_key().decode("ascii")
 
 
 class SlackEventCommandTests(unittest.TestCase):
+    def test_status_without_id_is_exact_and_explicit_id_behavior_is_preserved(self) -> None:
+        deal_id = "11111111-1111-1111-1111-111111111111"
+        self.assertEqual(slack_events._event_command("<@BBOT> status", "BBOT"), ("STATUS", None))
+        self.assertEqual(
+            slack_events._event_command(f"<@BBOT> status {deal_id}", "BBOT"),
+            ("STATUS", deal_id),
+        )
+        self.assertEqual(
+            slack_events._event_command(f"status {deal_id} extra", "BBOT"),
+            ("HELP", None),
+        )
+
     def test_start_command_requires_exact_side_and_counterparty_uuid(self) -> None:
         organization_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         self.assertEqual(
@@ -547,6 +559,158 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(len(denials), 2)
         self.assertEqual(denials[0]["text"], denials[1]["text"])
         self.assertEqual({message["user"] for message in denials}, {"U-no-read", "U-authorized"})
+
+    def test_current_status_uses_only_exact_thread_follows_and_rechecks_permissions(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        first_deal_id, second_deal_id = uuid4(), uuid4()
+        self.db.add_all([
+            Deal(
+                id=first_deal_id, buyer_organization_id=self.org.id,
+                seller_organization_id=self.other_org.id, display_name="Secret first title",
+                status=DealStatus.NEGOTIATING.value,
+            ),
+            Deal(
+                id=second_deal_id, buyer_organization_id=self.org.id,
+                seller_organization_id=self.other_org.id, display_name="Secret second title",
+                status=DealStatus.DRAFT.value,
+            ),
+        ])
+        self.db.add_all([
+            SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-status-current",
+                user_id=self.admin.id, created_at=now,
+            ),
+            SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-status-stale",
+                user_id=self.member.id, created_at=now,
+            ),
+        ])
+
+        def subscription(*, deal_id, slack_user_id, user_id, channel_id, thread_ts):
+            return SlackDealSubscription(
+                id=uuid4(), installation_id=self.installation.id,
+                organization_id=self.org.id, workspace_id=self.installation.workspace_id,
+                slack_user_id=slack_user_id, user_id=user_id, deal_id=deal_id,
+                channel_id=channel_id, thread_ts=thread_ts, created_at=now,
+            )
+
+        self.db.add_all([
+            subscription(
+                deal_id=first_deal_id, slack_user_id="U-status-current", user_id=self.admin.id,
+                channel_id="C-channel", thread_ts="T-current",
+            ),
+            # Same user, different thread/channel must not affect current lookup.
+            subscription(
+                deal_id=second_deal_id, slack_user_id="U-status-current", user_id=self.admin.id,
+                channel_id="C-channel", thread_ts="T-other",
+            ),
+            subscription(
+                deal_id=second_deal_id, slack_user_id="U-status-current", user_id=self.admin.id,
+                channel_id="C-other", thread_ts="T-current",
+            ),
+            # A different user's subscription in the same channel/thread is private to them.
+            subscription(
+                deal_id=second_deal_id, slack_user_id="U-another-user", user_id=self.member.id,
+                channel_id="C-channel", thread_ts="T-current",
+            ),
+            # Two exact follows make the thread ambiguous.
+            subscription(
+                deal_id=first_deal_id, slack_user_id="U-status-current", user_id=self.admin.id,
+                channel_id="C-channel", thread_ts="T-multiple",
+            ),
+            subscription(
+                deal_id=second_deal_id, slack_user_id="U-status-current", user_id=self.admin.id,
+                channel_id="C-channel", thread_ts="T-multiple",
+            ),
+        ])
+        member = self.db.scalar(select(OrganizationMember).where(
+            OrganizationMember.user_id == self.member.id,
+            OrganizationMember.organization_id == self.org.id,
+        ))
+        assert member is not None
+        member.permissions = ["deal.read_assigned"]
+        self.db.add(OrganizationMember(
+            organization_id=self.other_org.id, user_id=self.member.id, role="MEMBER",
+            status="ACTIVE", capabilities=[], permissions=["deal.read_assigned"],
+        ))
+        self.db.add(DealAssignment(
+            organization_id=self.org.id, deal_id=first_deal_id,
+            user_id=self.member.id, status="ACTIVE",
+        ))
+        self.db.add(DealAssignment(
+            organization_id=self.other_org.id, deal_id=first_deal_id,
+            user_id=self.member.id, status="ACTIVE",
+        ))
+        self.db.add(subscription(
+            deal_id=first_deal_id, slack_user_id="U-status-stale", user_id=self.member.id,
+            channel_id="C-channel", thread_ts="T-stale",
+        ))
+        self.db.commit()
+        # This grant existed when the subscription was created, then became stale.
+        member.permissions = []
+
+        events = [
+            SlackEvent(
+                id=uuid4(), event_id=f"Ev-status-current-{index}",
+                installation_id=self.installation.id, workspace_id=self.installation.workspace_id,
+                slack_user_id=user_id, channel_id="C-channel", message_ts=f"127.{index:03d}",
+                thread_ts=thread_ts, command="STATUS", deal_id=None, status="PENDING",
+                attempts=0, available_at=now + timedelta(seconds=index),
+            )
+            for index, (user_id, thread_ts) in enumerate((
+                ("U-status-current", "T-current"),
+                ("U-status-current", "T-empty"),
+                ("U-status-current", "T-multiple"),
+                ("U-status-stale", "T-stale"),
+            ))
+        ]
+        self.db.add_all(events)
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        api = FakeAPI()
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            for index in range(len(events)):
+                self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                    factory, api, now=now + timedelta(seconds=index)
+                )))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 4)
+        self.assertEqual(api.private_messages[0]["text"], "Deal status: NEGOTIATING.")
+        self.assertEqual(api.private_messages[0]["user"], "U-status-current")
+        self.assertEqual(api.private_messages[0]["thread_ts"], "T-current")
+        self.assertNotIn("Secret", api.private_messages[0]["text"])
+        self.assertEqual(
+            api.private_messages[1]["text"],
+            "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID.",
+        )
+        self.assertEqual(
+            api.private_messages[2]["text"],
+            "More than one authorized deal is followed in this thread. Provide an exact deal ID.",
+        )
+        self.assertEqual(
+            api.private_messages[3]["text"],
+            "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID.",
+        )
 
     def _add_payment_lookup(self, deal_id, *, event_id: str, user_id: str = "U-payments", delay: int = 0):
         now = datetime.now(UTC)

@@ -1068,7 +1068,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                 token,
                 channel=event.channel_id,
                 thread_ts=event.thread_ts,
-                text="Your Slack account is already linked to SyncAlly. You can ask for `status <deal-id> ` followed by an exact deal ID.",
+                text="Your Slack account is already linked to SyncAlly. Ask `status` for the unique deal followed in this thread, or use `status <deal-id>`.",
             )
         else:
             code = _link_code(event, installation, db)
@@ -1077,7 +1077,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                     token,
                     channel=event.channel_id,
                     thread_ts=event.thread_ts,
-                    text="Your Slack account is linked to SyncAlly. You can ask for `status <deal-id>` followed by an exact deal ID.",
+                    text="Your Slack account is linked to SyncAlly. Ask `status` for the unique deal followed in this thread, or use `status <deal-id>`.",
                 )
                 event.status = "DELIVERED"
                 event.delivered_at = datetime.now(UTC)
@@ -1093,6 +1093,56 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                     "The code is private to you and grants no additional deal permissions."
                 ),
             )
+    elif event.command == "STATUS" and event.deal_id is None:
+        link = db.scalar(
+            select(SlackUserLink).where(
+                SlackUserLink.installation_id == installation.id,
+                SlackUserLink.slack_user_id == event.slack_user_id,
+                SlackUserLink.organization_id == installation.organization_id,
+                SlackUserLink.workspace_id == installation.workspace_id,
+            )
+        )
+        if link is None:
+            text = "Link your SyncAlly account first: mention `@SyncAlly link` and follow the private instructions."
+        else:
+            actor = resolve_actor(db, link.user_id)
+            if actor is None or installation.organization_id not in actor.organization_ids:
+                text = "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID."
+            else:
+                followed_deal_ids = db.scalars(
+                    select(SlackDealSubscription.deal_id)
+                    .where(
+                        SlackDealSubscription.installation_id == installation.id,
+                        SlackDealSubscription.organization_id == installation.organization_id,
+                        SlackDealSubscription.workspace_id == installation.workspace_id,
+                        SlackDealSubscription.slack_user_id == event.slack_user_id,
+                        SlackDealSubscription.user_id == link.user_id,
+                        SlackDealSubscription.channel_id == event.channel_id,
+                        SlackDealSubscription.thread_ts == event.thread_ts,
+                    )
+                    .distinct()
+                ).all()
+                authorized_deals = []
+                for followed_deal_id in followed_deal_ids:
+                    deal = _authorized_subscription_deal(
+                        db, installation, link, str(followed_deal_id)
+                    )
+                    if deal is not None:
+                        authorized_deals.append(deal)
+                if not authorized_deals:
+                    text = "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID."
+                elif len(authorized_deals) > 1:
+                    text = "More than one authorized deal is followed in this thread. Provide an exact deal ID."
+                else:
+                    text = f"Deal status: {authorized_deals[0].status.value}."
+        await _provider_call(
+            api.post_ephemeral,
+            token,
+            channel=event.channel_id,
+            user=event.slack_user_id,
+            thread_ts=event.thread_ts,
+            text=text,
+        )
     elif event.command == "STATUS" and event.deal_id is not None:
         link = db.scalar(
             select(SlackUserLink).where(
@@ -1284,8 +1334,9 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             channel=event.channel_id,
             thread_ts=event.thread_ts,
             text=(
-                "Use `@SyncAlly link` to connect your account, `@SyncAlly status <deal-id>` "
-                "for deal status, `@SyncAlly payments <deal-id>` for payment status, "
+                "Use `@SyncAlly link` to connect your account, `@SyncAlly status` "
+                "for the unique deal you follow in this thread, or `@SyncAlly status <deal-id>` "
+                "for an exact deal, `@SyncAlly payments <deal-id>` for payment status, "
                 "`@SyncAlly start buyer <organization-id>` or `@SyncAlly start seller <organization-id>` "
                 "to create a draft deal without notifying the counterparty, "
                 "or `@SyncAlly follow <deal-id>` to get agreement, proposal, approval, completion, payment, fulfillment, and new-message updates in this thread. "

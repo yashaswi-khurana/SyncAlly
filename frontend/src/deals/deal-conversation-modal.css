@@ -1,0 +1,67 @@
+/* Conversation overview + full transcript modal (DealConversationReview).
+   Kept beside the component so the shared stylesheet stays untouched. */
+
+.conversation-overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.conversation-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 3vw, 32px);
+}
+
+.conversation-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(12, 14, 12, 0.62);
+  backdrop-filter: blur(4px);
+}
+
+.conversation-modal__panel {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 4px;
+  width: min(880px, 100%);
+  max-height: min(86vh, 920px);
+  margin: 0;
+  overflow: hidden;
+}
+
+.conversation-modal__panel .panel-head {
+  margin-bottom: 6px;
+}
+
+.conversation-modal__panel .message-list {
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 12px;
+  margin-bottom: 0;
+}
+
+.conversation-modal__close {
+  flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+  .conversation-modal {
+    padding: 10px;
+  }
+
+  .conversation-modal__panel {
+    max-height: calc(100vh - 20px);
+  }
+}

@@ -44,6 +44,8 @@ from syncally.infrastructure.models import (
     Organization,
     OrganizationMember,
     OutboxEvent,
+    PaymentIntent,
+    PaymentMilestone,
     SlackDealSubscription,
     SlackEvent,
     SlackInstallation,
@@ -651,6 +653,60 @@ class SlackEventRouteTests(unittest.TestCase):
         self.db.commit()
         return source
 
+    def _add_payment_notification(self, *, deal_id, agreement_id, now):
+        milestone_id = uuid4()
+        payment_id = uuid4()
+        self.db.add_all([
+            PaymentMilestone(
+                id=milestone_id,
+                deal_id=deal_id,
+                agreement_version_id=agreement_id,
+                sequence_number=1,
+                payer_organization_id=self.org.id,
+                amount=Decimal("100.00"),
+                currency="USD",
+                trigger_type="MANUAL",
+                due_condition="On completion",
+                status="PENDING",
+            ),
+            PaymentIntent(
+                id=payment_id,
+                deal_id=deal_id,
+                agreement_version_id=agreement_id,
+                payment_milestone_id=milestone_id,
+                seller_organization_id=self.other_org.id,
+                payer_organization_id=self.org.id,
+                authorized_by=self.admin.id,
+                amount=Decimal("100.00"),
+                currency="USD",
+                status="SENT",
+                provider="OFFLINE_DEMO",
+                execution_mode="OFFLINE_DEMO",
+                reconciliation_source="OFFLINE_DEMO",
+                idempotency_key=f"test-{payment_id}",
+            ),
+        ])
+        source = OutboxEvent(
+            id=uuid4(),
+            aggregate_type="deal",
+            aggregate_id=deal_id,
+            event_type="DEAL_NOTIFICATION",
+            payload={
+                "deal_id": str(deal_id),
+                "record_id": str(payment_id),
+                "kind": "PAYMENT_STATE_CHANGED",
+                "amount": "100.00",
+                "invoice_url": "https://private.example/invoice",
+            },
+            status="DELIVERED",
+            retry_count=2,
+            created_at=now,
+            delivered_at=now,
+        )
+        self.db.add(source)
+        self.db.commit()
+        return payment_id, source
+
     def test_follow_command_is_private_audited_and_idempotent_then_unfollow_cancels_delivery(self) -> None:
         from syncally.cli import slack_events_worker
 
@@ -937,6 +993,145 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(delivery.status, "FAILED")
         self.assertEqual(delivery.last_error, "source_mismatch")
         self.assertEqual(api.messages, [])
+
+    def test_payment_notification_fanout_is_idempotent_and_preserves_source_outbox(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, agreement_id, _agreement_event_id, subscription = self._add_follow_setup(now=now)
+        payment_id, source = self._add_payment_notification(
+            deal_id=deal_id, agreement_id=agreement_id, now=now,
+        )
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 2)
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 0)
+        delivery = self.db.scalar(select(SlackNotificationDelivery).where(
+            SlackNotificationDelivery.source_event_id == source.id,
+            SlackNotificationDelivery.subscription_id == subscription.id,
+        ))
+        self.assertIsNotNone(delivery)
+        assert delivery is not None
+        self.assertEqual(delivery.status, "PENDING")
+        self.assertEqual(self.db.get(PaymentIntent, payment_id).deal_id, deal_id)
+        self.db.refresh(source)
+        self.assertEqual(source.status, "DELIVERED")
+        self.assertEqual(source.retry_count, 2)
+
+    def test_payment_notification_is_private_minimal_and_requires_payments_read(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        self.db.get(OutboxEvent, agreement_event_id).event_type = "ALREADY_CONSUMED"
+        payment_id, source = self._add_payment_notification(
+            deal_id=deal_id, agreement_id=agreement_id, now=now,
+        )
+        delivery = SlackNotificationDelivery(
+            id=uuid4(), source_event_id=source.id, subscription_id=subscription.id,
+            status="PENDING", attempts=0, available_at=now,
+        )
+        self.db.add(delivery)
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        actor_with_payment_permission = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={
+                self.org.id: frozenset({"deal.read_all", "payments.read"})
+            },
+        )
+        api = FakeAPI()
+        with (
+            patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)),
+            patch.object(slack_events_worker, "resolve_actor", return_value=actor_with_payment_permission),
+        ):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now)))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 1)
+        message = api.private_messages[0]
+        self.assertEqual(message["user"], subscription.slack_user_id)
+        self.assertEqual(message["channel"], subscription.channel_id)
+        self.assertEqual(message["thread_ts"], subscription.thread_ts)
+        self.assertEqual(
+            message["text"],
+            f"A payment update is available for a deal you follow. Mention @SyncAlly payments {deal_id} "
+            "in this thread to view the current status.",
+        )
+        for private_value in ("100.00", "invoice", "private.example", str(payment_id)):
+            self.assertNotIn(private_value, message["text"])
+        self.db.refresh(source)
+        self.assertEqual(source.status, "DELIVERED")
+
+    def test_payment_notification_without_current_payments_read_is_suppressed(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        self.db.get(OutboxEvent, agreement_event_id).event_type = "ALREADY_CONSUMED"
+        _payment_id, source = self._add_payment_notification(
+            deal_id=deal_id, agreement_id=agreement_id, now=now,
+        )
+        delivery = SlackNotificationDelivery(
+            id=uuid4(), source_event_id=source.id, subscription_id=subscription.id,
+            status="PENDING", attempts=0, available_at=now,
+        )
+        self.db.add(delivery)
+        self.db.commit()
+        actor_without_payment_permission = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={self.org.id: frozenset({"deal.read_all"})},
+        )
+
+        class FakeAPI:
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                raise AssertionError("revoked payment access must suppress the notice")
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        with (
+            patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)),
+            patch.object(slack_events_worker, "resolve_actor", return_value=actor_without_payment_permission),
+        ):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, FakeAPI(), now=now)))
+        self.db.refresh(delivery)
+        self.assertEqual(delivery.status, "FAILED")
+        self.assertEqual(delivery.last_error, "authorization_revoked")
+
+    def test_payment_notification_invalid_record_is_terminal_at_fanout(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, agreement_id, _agreement_event_id, subscription = self._add_follow_setup(now=now)
+        _payment_id, source = self._add_payment_notification(
+            deal_id=deal_id, agreement_id=agreement_id, now=now,
+        )
+        source.payload["record_id"] = str(uuid4())
+        self.db.commit()
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 2)
+        delivery = self.db.scalar(select(SlackNotificationDelivery).where(
+            SlackNotificationDelivery.source_event_id == source.id,
+            SlackNotificationDelivery.subscription_id == subscription.id,
+        ))
+        self.assertIsNotNone(delivery)
+        assert delivery is not None
+        self.assertEqual(delivery.status, "FAILED")
+        self.assertEqual(delivery.last_error, "source_mismatch")
 
     def test_follow_requires_current_deal_read_permission(self) -> None:
         from syncally.cli import slack_events_worker

@@ -69,10 +69,10 @@ link establishes identity only. `@SyncAlly status <deal-id>` returns only deal
 status, and `@SyncAlly payments <deal-id>` returns milestone status and amount
 only when current SyncAlly permissions allow it. Missing and unauthorized IDs
 receive the same private response. A linked member can opt in to private
-agreement-commit and deal-completion notices in the current thread with
+agreement-commit, deal-completion, and verified payment-state-change notices in the current thread with
 `@SyncAlly follow <deal-id>` and stop them with `@SyncAlly unfollow <deal-id>`.
-SyncAlly rechecks deal access before each notice; notices omit deal names, terms,
-and payment details. They are sent only to the subscribing user as ephemeral
+SyncAlly rechecks deal access before each notice and requires current `payments.read`
+for payment-state notices; notices omit deal names, terms, and payment details. They are sent only to the subscribing user as ephemeral
 thread replies and may be missed when Slack cannot display an ephemeral message.
 Deal creation, invoice links, fuzzy lookup, and Slack history are outside this
 release.

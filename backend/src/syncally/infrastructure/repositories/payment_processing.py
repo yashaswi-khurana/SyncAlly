@@ -29,6 +29,7 @@ from syncally.application.payments import (
     OFFLINE_RECONCILIATION_EVENT_TYPE,
     PAYPAL_WEBHOOK_RECONCILIATION_EVENT_TYPE,
 )
+from syncally.application.workflow_notifications import NotificationKind
 from syncally.domain.agreements.agreement import AgreementStatus
 from syncally.domain.agreements.trade_terms import TradeTerms
 from syncally.domain.organizations.organization import OrganizationMemberRole
@@ -65,6 +66,7 @@ from syncally.infrastructure.models import (
     User,
     WebhookEvent,
 )
+from syncally.infrastructure.workflow_notifications import queue_deal_workflow_notification
 from syncally.operations import Operation, log_operation
 
 SessionFactory = Callable[[], Session]
@@ -366,6 +368,13 @@ class SqlAlchemyPaymentProcessingRepository(PaymentProcessingRepository):
                     },
                 )
             )
+            if status_changed or amount_changed:
+                queue_deal_workflow_notification(
+                    db,
+                    deal_id=row.deal_id,
+                    record_id=payment_intent_id,
+                    kind=NotificationKind.PAYMENT_STATE_CHANGED,
+                )
             webhook.processed = True
             outbox.status = "DELIVERED"
             outbox.delivered_at = now

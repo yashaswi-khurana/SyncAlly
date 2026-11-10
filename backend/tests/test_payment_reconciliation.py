@@ -157,6 +157,45 @@ class PaymentReconciliationRepositoryTests(unittest.TestCase):
             self.assertEqual(audit.event_type, "PAYMENT_STATE_RECONCILED")
             self.assertEqual(audit.payload["previous_status"], "SENT")
             self.assertEqual(audit.payload["current_status"], "PAID")
+            notice = db.scalar(select(OutboxEvent).where(
+                OutboxEvent.aggregate_type == "deal",
+                OutboxEvent.aggregate_id == intent.deal_id,
+                OutboxEvent.event_type == "DEAL_NOTIFICATION",
+            ))
+            self.assertIsNotNone(notice)
+            assert notice is not None
+            self.assertEqual(notice.payload, {
+                "deal_id": str(intent.deal_id),
+                "record_id": str(intent.id),
+                "kind": "PAYMENT_STATE_CHANGED",
+            })
+
+    def test_amount_only_reconciliation_delta_queues_payment_notice(self) -> None:
+        intent, outbox, webhook, lease_until = self._seed(
+            status=PaymentIntentStatus.PARTIALLY_PAID,
+            reconciled_amount=Decimal("4.00"),
+        )
+
+        self._record(
+            intent,
+            outbox,
+            webhook,
+            lease_until,
+            VerifiedProviderPaymentStatus.PARTIALLY_PAID,
+            "6.00",
+        )
+
+        with self.session_factory() as db:
+            saved = db.get(PaymentIntent, intent.id)
+            self.assertEqual(saved.status, PaymentIntentStatus.PARTIALLY_PAID.value)
+            self.assertEqual(saved.reconciled_amount, Decimal("6.00"))
+            notices = list(db.scalars(select(OutboxEvent).where(
+                OutboxEvent.aggregate_type == "deal",
+                OutboxEvent.aggregate_id == intent.deal_id,
+                OutboxEvent.event_type == "DEAL_NOTIFICATION",
+            )))
+            self.assertEqual(len(notices), 1)
+            self.assertEqual(notices[0].payload["kind"], "PAYMENT_STATE_CHANGED")
 
     def test_partial_payment_is_saved_as_partial_not_paid(self) -> None:
         intent, outbox, webhook, lease_until = self._seed()
@@ -253,6 +292,10 @@ class PaymentReconciliationRepositoryTests(unittest.TestCase):
             self.assertEqual(db.get(OutboxEvent, outbox.id).status, "DELIVERED")
             audit = db.scalar(select(AuditEvent))
             self.assertEqual(audit.payload["current_status"], "PAID")
+            self.assertEqual(db.scalar(select(OutboxEvent.id).where(
+                OutboxEvent.aggregate_type == "deal",
+                OutboxEvent.event_type == "DEAL_NOTIFICATION",
+            )), None)
 
     def test_conflicting_provider_state_cannot_replace_a_paid_intent(self) -> None:
         intent, outbox, webhook, lease_until = self._seed(
@@ -303,6 +346,10 @@ class PaymentReconciliationRepositoryTests(unittest.TestCase):
             self.assertEqual(audit.event_type, "PAYMENT_RECONCILIATION_NEEDS_ACTION")
             self.assertEqual(audit.payload["error_code"], "PAYPAL_RECONCILIATION_MISMATCH")
             self.assertEqual(audit.payload["payment_status"], PaymentIntentStatus.SENT.value)
+            self.assertEqual(db.scalar(select(OutboxEvent.id).where(
+                OutboxEvent.aggregate_type == "deal",
+                OutboxEvent.event_type == "DEAL_NOTIFICATION",
+            )), None)
 
 
 if __name__ == "__main__":

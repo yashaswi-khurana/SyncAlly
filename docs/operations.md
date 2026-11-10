@@ -54,8 +54,8 @@ Slack may already have accepted the message. A worker crash leaves a leased
 known to be retryable return to `PENDING`. Outbound delivery is best-effort and
 does not guarantee exactly-once replies. Monitor failed rows in `slack_events`
 and `slack_notification_deliveries`.
-The worker polls committed-agreement outbox events and fans them out to explicit
-thread subscriptions through a separate delivery table; it never changes
+The worker polls committed-agreement and deal-completion outbox events and fans
+them out to explicit thread subscriptions through a separate delivery table; it never changes
 Temporal outbox state. Delivery rows are idempotent per source event and
 subscription. Disconnect and unfollow remove pending subscription deliveries.
 The worker deletes expired link challenges and removes terminal (`DELIVERED` or
@@ -69,7 +69,7 @@ link establishes identity only. `@SyncAlly status <deal-id>` returns only deal
 status, and `@SyncAlly payments <deal-id>` returns milestone status and amount
 only when current SyncAlly permissions allow it. Missing and unauthorized IDs
 receive the same private response. A linked member can opt in to private
-agreement-commit notices in the current thread with
+agreement-commit and deal-completion notices in the current thread with
 `@SyncAlly follow <deal-id>` and stop them with `@SyncAlly unfollow <deal-id>`.
 SyncAlly rechecks deal access before each notice; notices omit deal names, terms,
 and payment details. They are sent only to the subscribing user as ephemeral

@@ -218,18 +218,19 @@ def prune_slack_records(db: Session, now: datetime | None = None) -> tuple[int, 
     return expired_challenges, old_terminal_events
 
 
-def _enqueue_agreement_commit_deliveries(db: Session, now: datetime) -> int:
-    """Fan out recent committed agreements without touching Temporal outbox state."""
+def _enqueue_slack_notification_deliveries(db: Session, now: datetime) -> int:
+    """Fan out supported outbox notifications without touching Temporal state."""
     existing = exists(
         select(SlackNotificationDelivery.id).where(
             SlackNotificationDelivery.source_event_id == OutboxEvent.id,
             SlackNotificationDelivery.subscription_id == SlackDealSubscription.id,
         )
     )
-    rows = db.execute(
+    # The existing agreement outbox contract stores DomainAgreement.id (the
+    # deal UUID) in aggregate_id; agreement_version_id lives in the payload.
+    agreement_rows = db.execute(
         select(OutboxEvent.id, SlackDealSubscription.id, OutboxEvent.created_at)
-        .join(AgreementVersion, AgreementVersion.id == OutboxEvent.aggregate_id)
-        .join(SlackDealSubscription, SlackDealSubscription.deal_id == AgreementVersion.deal_id)
+        .join(SlackDealSubscription, SlackDealSubscription.deal_id == OutboxEvent.aggregate_id)
         .where(
             OutboxEvent.aggregate_type == "agreement",
             OutboxEvent.event_type == "AGREEMENT_COMMITTED",
@@ -240,6 +241,24 @@ def _enqueue_agreement_commit_deliveries(db: Session, now: datetime) -> int:
         .order_by(OutboxEvent.created_at, OutboxEvent.id, SlackDealSubscription.id)
         .limit(250)
     ).all()
+    completion_rows = db.execute(
+        select(OutboxEvent.id, SlackDealSubscription.id, OutboxEvent.created_at)
+        .join(SlackDealSubscription, SlackDealSubscription.deal_id == OutboxEvent.aggregate_id)
+        .where(
+            OutboxEvent.aggregate_type == "deal",
+            OutboxEvent.event_type == "DEAL_NOTIFICATION",
+            OutboxEvent.payload["kind"].as_string() == "DEAL_COMPLETED",
+            OutboxEvent.created_at >= now - timedelta(days=_EVENT_RETENTION_DAYS),
+            SlackDealSubscription.created_at < OutboxEvent.created_at,
+            ~existing,
+        )
+        .order_by(OutboxEvent.created_at, OutboxEvent.id, SlackDealSubscription.id)
+        .limit(250)
+    ).all()
+    rows = sorted(
+        [*agreement_rows, *completion_rows],
+        key=lambda row: (row[2], str(row[0]), str(row[1])),
+    )[:250]
     inserted = 0
     for source_event_id, subscription_id, source_created_at in rows:
         try:
@@ -265,7 +284,7 @@ def _enqueue_agreement_commit_deliveries(db: Session, now: datetime) -> int:
 
 
 def _take_notification_delivery(db: Session, now: datetime) -> uuid.UUID | None:
-    _enqueue_agreement_commit_deliveries(db, now)
+    _enqueue_slack_notification_deliveries(db, now)
     db.execute(
         update(SlackNotificationDelivery)
         .where(
@@ -348,13 +367,41 @@ async def _deliver_notification(
         return
     subscription = db.get(SlackDealSubscription, delivery.subscription_id)
     source = db.get(OutboxEvent, delivery.source_event_id)
-    if subscription is None or source is None or source.event_type != "AGREEMENT_COMMITTED":
+    if subscription is None or source is None:
         delivery.status = "FAILED"
         delivery.last_error = "source_or_subscription_missing"
         db.commit()
         return
-    agreement = db.get(AgreementVersion, source.aggregate_id)
-    if agreement is None or agreement.deal_id != subscription.deal_id:
+
+    source_payload = source.payload if isinstance(source.payload, dict) else {}
+    notification_kind: str | None = None
+    if source.aggregate_type == "agreement" and source.event_type == "AGREEMENT_COMMITTED":
+        # Keep the aggregate deal scope and version record independently
+        # checked because this event's aggregate_id is the deal UUID.
+        version_id_value = source_payload.get("agreement_version_id")
+        try:
+            version_id = uuid.UUID(version_id_value) if isinstance(version_id_value, str) else None
+        except ValueError:
+            version_id = None
+        agreement = db.get(AgreementVersion, version_id) if version_id is not None else None
+        if (
+            agreement is not None
+            and source.aggregate_id == subscription.deal_id
+            and agreement.deal_id == subscription.deal_id
+            and source_payload.get("deal_id") == str(subscription.deal_id)
+            and source_payload.get("agreement_version_id") == str(agreement.id)
+        ):
+            notification_kind = "AGREEMENT_COMMITTED"
+    elif (
+        source.aggregate_type == "deal"
+        and source.event_type == "DEAL_NOTIFICATION"
+        and source_payload.get("kind") == "DEAL_COMPLETED"
+        and source.aggregate_id == subscription.deal_id
+        and source_payload.get("deal_id") == str(subscription.deal_id)
+    ):
+        notification_kind = "DEAL_COMPLETED"
+
+    if notification_kind is None:
         delivery.status = "FAILED"
         delivery.last_error = "source_mismatch"
         db.commit()
@@ -409,10 +456,18 @@ async def _deliver_notification(
         user=subscription.slack_user_id,
         thread_ts=subscription.thread_ts,
         text=(
-            "A SyncAlly agreement was committed for a deal you follow. "
-            f"Mention `@SyncAlly status {subscription.deal_id}` or "
-            f"`@SyncAlly payments {subscription.deal_id}` in this thread "
-            "to check its current state."
+            (
+                "A SyncAlly agreement was committed for a deal you follow. "
+                f"Mention `@SyncAlly status {subscription.deal_id}` or "
+                f"`@SyncAlly payments {subscription.deal_id}` in this thread "
+                "to check its current state."
+            )
+            if notification_kind == "AGREEMENT_COMMITTED"
+            else (
+                "A SyncAlly deal you follow has been completed. "
+                f"Mention `@SyncAlly status {subscription.deal_id}` in this thread "
+                "to check its current status."
+            )
         ),
     )
     delivery.status = "DELIVERED"

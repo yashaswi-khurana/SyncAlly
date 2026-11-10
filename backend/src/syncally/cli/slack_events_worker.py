@@ -1172,6 +1172,72 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             thread_ts=event.thread_ts,
             text=text,
         )
+    elif event.command == "PAYMENTS" and event.deal_id is None:
+        link = db.scalar(
+            select(SlackUserLink).where(
+                SlackUserLink.installation_id == installation.id,
+                SlackUserLink.slack_user_id == event.slack_user_id,
+                SlackUserLink.organization_id == installation.organization_id,
+                SlackUserLink.workspace_id == installation.workspace_id,
+            )
+        )
+        if link is None:
+            text = "Link your SyncAlly account first: mention `@SyncAlly link` and follow the private instructions."
+        else:
+            followed_deal_ids = db.scalars(
+                select(SlackDealSubscription.deal_id)
+                .where(
+                    SlackDealSubscription.installation_id == installation.id,
+                    SlackDealSubscription.organization_id == installation.organization_id,
+                    SlackDealSubscription.workspace_id == installation.workspace_id,
+                    SlackDealSubscription.slack_user_id == event.slack_user_id,
+                    SlackDealSubscription.user_id == link.user_id,
+                    SlackDealSubscription.channel_id == event.channel_id,
+                    SlackDealSubscription.thread_ts == event.thread_ts,
+                )
+                .distinct()
+            ).all()
+            authorized_deals = []
+            for followed_deal_id in followed_deal_ids:
+                deal = _authorized_subscription_deal(
+                    db,
+                    installation,
+                    link,
+                    str(followed_deal_id),
+                    permission="payments.read",
+                )
+                if deal is not None:
+                    authorized_deals.append(deal)
+            if not authorized_deals:
+                text = "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID."
+            elif len(authorized_deals) > 1:
+                text = "More than one authorized deal with payment access is followed in this thread. Provide an exact deal ID."
+            else:
+                deal = authorized_deals[0]
+                actor = resolve_actor(db, link.user_id)
+                try:
+                    if actor is None or installation.organization_id not in actor.organization_ids:
+                        raise HTTPException(status_code=403)
+                    require_deal_action(actor, deal, installation.organization_id, "payments.read")
+                    payments = list_current_payment_statuses(
+                        actor,
+                        deal.id,
+                        SqlAlchemyDealRepository(db),
+                        SqlAlchemyAgreementRepository(db),
+                        SqlAlchemyPaymentIntentRepository(db),
+                    )
+                except (DealNotFound, HTTPException):
+                    text = "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID."
+                else:
+                    text = _payment_summary_text(payments)
+        await _provider_call(
+            api.post_ephemeral,
+            token,
+            channel=event.channel_id,
+            user=event.slack_user_id,
+            thread_ts=event.thread_ts,
+            text=text,
+        )
     elif event.command == "PAYMENTS" and event.deal_id is not None:
         link = db.scalar(
             select(SlackUserLink).where(
@@ -1336,7 +1402,8 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             text=(
                 "Use `@SyncAlly link` to connect your account, `@SyncAlly status` "
                 "for the unique deal you follow in this thread, or `@SyncAlly status <deal-id>` "
-                "for an exact deal, `@SyncAlly payments <deal-id>` for payment status, "
+                "for an exact deal, `@SyncAlly payments` for payment status of the unique deal you follow here, "
+                "or `@SyncAlly payments <deal-id>` for an exact deal, "
                 "`@SyncAlly start buyer <organization-id>` or `@SyncAlly start seller <organization-id>` "
                 "to create a draft deal without notifying the counterparty, "
                 "or `@SyncAlly follow <deal-id>` to get agreement, proposal, approval, completion, payment, fulfillment, and new-message updates in this thread. "

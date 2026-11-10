@@ -100,6 +100,10 @@ class SlackEventCommandTests(unittest.TestCase):
 
     def test_payment_command_requires_exact_verb_and_deal_id(self) -> None:
         self.assertEqual(
+            slack_events._event_command("<@BBOT> payments", "BBOT"),
+            ("PAYMENTS", None),
+        )
+        self.assertEqual(
             slack_events._event_command("<@BBOT> payments 11111111-1111-1111-1111-111111111111", "BBOT"),
             ("PAYMENTS", "11111111-1111-1111-1111-111111111111"),
         )
@@ -1901,6 +1905,142 @@ class SlackEventRouteTests(unittest.TestCase):
         )
         self.assertTrue(all(message["user"] == "U-payments" for message in api.private_messages))
         self.assertTrue(all(message["thread_ts"] == "124.000" for message in api.private_messages))
+
+    def test_bare_payments_uses_unique_exact_follow_and_hides_denied_or_ambiguous_deals(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        first_deal_id, second_deal_id = uuid4(), uuid4()
+        self.db.add_all([
+            Deal(
+                id=first_deal_id, buyer_organization_id=self.org.id,
+                seller_organization_id=self.other_org.id, display_name="Private payment deal one",
+                status=DealStatus.NEGOTIATING.value,
+            ),
+            Deal(
+                id=second_deal_id, buyer_organization_id=self.org.id,
+                seller_organization_id=self.other_org.id, display_name="Private payment deal two",
+                status=DealStatus.NEGOTIATING.value,
+            ),
+            SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-payments-current",
+                user_id=self.admin.id, created_at=now,
+            ),
+            SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-payments-revoked",
+                user_id=self.member.id, created_at=now,
+            ),
+        ])
+
+        def add_follow(deal_id, slack_user_id, user_id, channel_id, thread_ts):
+            self.db.add(SlackDealSubscription(
+                id=uuid4(), installation_id=self.installation.id,
+                organization_id=self.org.id, workspace_id=self.installation.workspace_id,
+                slack_user_id=slack_user_id, user_id=user_id, deal_id=deal_id,
+                channel_id=channel_id, thread_ts=thread_ts, created_at=now,
+            ))
+
+        add_follow(first_deal_id, "U-payments-current", self.admin.id, "C-channel", "T-current")
+        add_follow(second_deal_id, "U-payments-current", self.admin.id, "C-channel", "T-other")
+        add_follow(second_deal_id, "U-payments-current", self.admin.id, "C-other", "T-current")
+        add_follow(second_deal_id, "U-other-user", self.member.id, "C-channel", "T-current")
+        add_follow(first_deal_id, "U-payments-current", self.admin.id, "C-channel", "T-multiple")
+        add_follow(second_deal_id, "U-payments-current", self.admin.id, "C-channel", "T-multiple")
+        add_follow(first_deal_id, "U-payments-revoked", self.member.id, "C-channel", "T-revoked")
+        self.db.commit()
+
+        events = [
+            SlackEvent(
+                id=uuid4(), event_id=f"Ev-bare-payments-{index}",
+                installation_id=self.installation.id, workspace_id=self.installation.workspace_id,
+                slack_user_id=user_id, channel_id=channel_id, message_ts=f"128.{index:03d}",
+                thread_ts=thread_ts, command="PAYMENTS", deal_id=None, status="PENDING",
+                attempts=0, available_at=now + timedelta(seconds=index),
+            )
+            for index, (user_id, channel_id, thread_ts) in enumerate((
+                ("U-payments-current", "C-channel", "T-current"),
+                ("U-payments-current", "C-channel", "T-empty"),
+                ("U-payments-current", "C-channel", "T-multiple"),
+                ("U-payments-revoked", "C-channel", "T-revoked"),
+            ))
+        ]
+        self.db.add_all(events)
+        self.db.commit()
+
+        allowed_actor = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={
+                self.org.id: frozenset({"deal.read_all", "payments.read"})
+            },
+        )
+        revoked_actor = ActorContext(
+            user_id=self.member.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={self.org.id: frozenset({"deal.read_all"})},
+        )
+
+        def resolve_test_actor(_db, user_id):
+            return allowed_actor if user_id == self.admin.id else revoked_actor
+
+        payment_record = PaymentStatusRecord(
+            intent_id=uuid4(), milestone_sequence=1,
+            amount=Money(Decimal("25.00"), "USD"), status="PENDING",
+            reconciled_amount=None, last_checked_at=None, last_reconciled_at=None,
+            invoice_reference="secret-invoice-reference",
+        )
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        api = FakeAPI()
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)), \
+             patch.object(slack_events_worker, "resolve_actor", side_effect=resolve_test_actor), \
+             patch.object(slack_events_worker, "list_current_payment_statuses", return_value=[payment_record]) as list_payments:
+            for index in range(len(events)):
+                self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                    factory, api, now=now + timedelta(seconds=index)
+                )))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 4)
+        unique_reply = api.private_messages[0]
+        self.assertEqual(unique_reply["user"], "U-payments-current")
+        self.assertEqual(unique_reply["thread_ts"], "T-current")
+        self.assertEqual(unique_reply["text"], "Payment status:\nMilestone 1: PENDING — USD 25")
+        for secret in (
+            "secret-invoice-reference", "invoice_url", "recipient_email", "provider",
+            str(payment_record.intent_id), "Private payment deal",
+        ):
+            self.assertNotIn(secret, unique_reply["text"])
+        self.assertEqual(
+            api.private_messages[1]["text"],
+            "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID.",
+        )
+        self.assertEqual(
+            api.private_messages[2]["text"],
+            "More than one authorized deal with payment access is followed in this thread. Provide an exact deal ID.",
+        )
+        self.assertEqual(
+            api.private_messages[3]["text"],
+            "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID.",
+        )
+        self.assertEqual(list_payments.call_count, 1)
+        self.assertEqual(list_payments.call_args.args[1], first_deal_id)
 
     def test_payment_lookup_sends_sorted_minimal_summary_only_to_requester(self) -> None:
         from syncally.cli import slack_events_worker

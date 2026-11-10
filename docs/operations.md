@@ -74,6 +74,12 @@ or provide an exact ID; with multiple matches it privately requests an exact ID.
 The lookup uses saved follow records and does not read Slack history. Both status
 forms recheck current SyncAlly access. `@SyncAlly payments <deal-id>` returns
 milestone status and amount only when current SyncAlly permissions allow it.
+`@SyncAlly payments` resolves payments only when exactly one deal in this thread
+is followed by this linked user and the user currently has `payments.read` for
+the installed organization. Zero authorized matches prompt the user to follow a
+deal or provide an exact ID; multiple authorized matches prompt for an exact ID.
+Both payment forms return only milestone status, currency, and amount, with no
+invoice links, provider IDs, or recipient details.
 Missing and unauthorized IDs receive the same private response. A linked member can opt in to private
 agreement-commit, generic agreement-update, proposal-submission, deal-completion,
 verified payment-state-change, generic fulfillment, and content-free new-message notices in the current thread with

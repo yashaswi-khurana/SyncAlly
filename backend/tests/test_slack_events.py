@@ -41,11 +41,13 @@ from syncally.infrastructure.models import (
     AuditEvent,
     Base,
     Deal,
+    NegotiationSession,
     Organization,
     OrganizationMember,
     OutboxEvent,
     PaymentIntent,
     PaymentMilestone,
+    Proposal,
     SlackDealSubscription,
     SlackEvent,
     SlackInstallation,
@@ -708,6 +710,28 @@ class SlackEventRouteTests(unittest.TestCase):
         self.db.commit()
         return payment_id, source
 
+    def _add_proposal(self, *, deal_id, title: str = "private proposal terms"):
+        session_id = uuid4()
+        proposal_id = uuid4()
+        self.db.add(NegotiationSession(
+            id=session_id,
+            deal_id=deal_id,
+            max_rounds=4,
+            round_count=1,
+        ))
+        self.db.add(Proposal(
+            id=proposal_id,
+            deal_id=deal_id,
+            negotiation_session_id=session_id,
+            proposal_number=2,
+            author_organization_id=self.org.id,
+            terms_json={"private_terms": title},
+            terms_hash="c" * 64,
+            status="ACCEPTED_AS_CANDIDATE",
+        ))
+        self.db.flush()
+        return proposal_id
+
     def test_follow_command_is_private_audited_and_idempotent_then_unfollow_cancels_delivery(self) -> None:
         from syncally.cli import slack_events_worker
 
@@ -1008,7 +1032,7 @@ class SlackEventRouteTests(unittest.TestCase):
         )
         unsupported = self._add_deal_notification(
             deal_id=deal_id,
-            kind="PROPOSAL_SUBMITTED",
+            kind="MESSAGE_RECEIVED",
             now=now - timedelta(seconds=5),
             payload_record_id=agreement_id,
         )
@@ -1104,6 +1128,174 @@ class SlackEventRouteTests(unittest.TestCase):
         assert delivery is not None
         self.assertEqual(delivery.status, "FAILED")
         self.assertEqual(delivery.last_error, "source_mismatch")
+
+    def test_proposal_submission_fanout_is_idempotent_and_ignores_other_kinds(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        proposal_id = self._add_proposal(deal_id=deal_id)
+        proposal_source = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="PROPOSAL_SUBMITTED",
+            now=now - timedelta(seconds=10),
+            payload_record_id=proposal_id,
+        )
+        unsupported = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="MESSAGE_RECEIVED",
+            now=now - timedelta(seconds=5),
+        )
+
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 2)
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 0)
+        delivery_sources = set(self.db.scalars(select(SlackNotificationDelivery.source_event_id)))
+        self.assertEqual(delivery_sources, {agreement_event_id, proposal_source.id})
+        self.assertNotIn(unsupported.id, delivery_sources)
+        self.db.refresh(proposal_source)
+        self.db.refresh(unsupported)
+        self.assertEqual(proposal_source.status, "DELIVERED")
+        self.assertEqual(unsupported.status, "DELIVERED")
+        self.assertIsNotNone(self.db.get(SlackDealSubscription, subscription.id))
+
+    def test_proposal_submission_is_private_generic_and_hides_proposal_content(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_commit = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_commit is not None
+        agreement_commit.event_type = "ALREADY_CONSUMED"
+        proposal_id = self._add_proposal(deal_id=deal_id, title="confidential price and rationale")
+        source = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="PROPOSAL_SUBMITTED",
+            now=now - timedelta(seconds=10),
+            payload_record_id=proposal_id,
+        )
+        source.payload.update({
+            "rationale": "confidential negotiation reason",
+            "author_organization_id": str(self.org.id),
+            "proposal_terms": "private commercial values",
+        })
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now)))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 1)
+        reply = api.private_messages[0]
+        self.assertEqual(reply["user"], subscription.slack_user_id)
+        self.assertEqual(reply["channel"], subscription.channel_id)
+        self.assertEqual(reply["thread_ts"], subscription.thread_ts)
+        self.assertEqual(
+            reply["text"],
+            "An agreement proposal was submitted for a deal you follow. Open SyncAlly to review it.",
+        )
+        for private_value in (
+            "confidential price and rationale", "confidential negotiation reason",
+            "private commercial values", str(self.org.id), str(proposal_id),
+            "Sensitive agreement title", "private commercial terms",
+        ):
+            self.assertNotIn(private_value, reply["text"])
+        self.db.refresh(source)
+        self.assertEqual(source.status, "DELIVERED")
+
+    def test_proposal_submission_with_mismatched_proposal_fails_without_posting(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_commit = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_commit is not None
+        agreement_commit.event_type = "ALREADY_CONSUMED"
+        other_deal_id = uuid4()
+        self.db.add(Deal(
+            id=other_deal_id,
+            buyer_organization_id=self.org.id,
+            seller_organization_id=self.other_org.id,
+            display_name="Other deal proposal",
+            status=DealStatus.NEGOTIATING.value,
+        ))
+        self.db.flush()
+        other_proposal_id = self._add_proposal(deal_id=other_deal_id)
+        source = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="PROPOSAL_SUBMITTED",
+            now=now - timedelta(seconds=10),
+            payload_record_id=other_proposal_id,
+        )
+
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 1)
+        delivery = self.db.scalar(select(SlackNotificationDelivery).where(
+            SlackNotificationDelivery.source_event_id == source.id,
+            SlackNotificationDelivery.subscription_id == subscription.id,
+        ))
+        self.assertIsNotNone(delivery)
+        assert delivery is not None
+        self.assertEqual(delivery.status, "FAILED")
+        self.assertEqual(delivery.last_error, "source_mismatch")
+
+    def test_proposal_submission_rechecks_deal_read_access_before_send(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_commit = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_commit is not None
+        agreement_commit.event_type = "ALREADY_CONSUMED"
+        proposal_id = self._add_proposal(deal_id=deal_id)
+        source = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="PROPOSAL_SUBMITTED",
+            now=now - timedelta(seconds=10),
+            payload_record_id=proposal_id,
+        )
+        self.db.add(SlackNotificationDelivery(
+            id=uuid4(), source_event_id=source.id, subscription_id=subscription.id,
+            status="PENDING", attempts=0, available_at=now,
+        ))
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        actor_without_deal_read = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={self.org.id: frozenset()},
+        )
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)), \
+             patch.object(slack_events_worker, "resolve_actor", return_value=actor_without_deal_read):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now)))
+
+        self.assertEqual(api.messages, [])
+        self.db.refresh(source)
+        self.assertEqual(source.status, "DELIVERED")
 
     def test_payment_notification_fanout_is_idempotent_and_preserves_source_outbox(self) -> None:
         from syncally.cli import slack_events_worker

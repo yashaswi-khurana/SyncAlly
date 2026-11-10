@@ -55,7 +55,7 @@ known to be retryable return to `PENDING`. Outbound delivery is best-effort and
 does not guarantee exactly-once replies. Monitor failed rows in `slack_events`
 and `slack_notification_deliveries`.
 The worker polls committed-agreement, agreement-update, proposal-submission,
-deal-completion, payment-state, and fulfillment outbox events and fans them out to explicit
+deal-completion, payment-state, fulfillment, and new-message outbox events and fans them out to explicit
 thread subscriptions through a separate delivery table; it never changes
 Temporal outbox state. Delivery rows are idempotent per source event and
 subscription. Disconnect and unfollow remove pending subscription deliveries.
@@ -71,10 +71,11 @@ status, and `@SyncAlly payments <deal-id>` returns milestone status and amount
 only when current SyncAlly permissions allow it. Missing and unauthorized IDs
 receive the same private response. A linked member can opt in to private
 agreement-commit, generic agreement-update, proposal-submission, deal-completion,
-verified payment-state-change, and generic fulfillment notices in the current thread with
+verified payment-state-change, generic fulfillment, and content-free new-message notices in the current thread with
 `@SyncAlly follow <deal-id>` and stop them with `@SyncAlly unfollow <deal-id>`.
 SyncAlly rechecks deal access before each notice and requires current `payments.read`
-for payment-state notices and `fulfillment.read` for fulfillment notices; notices omit
+for payment-state notices and `fulfillment.read` for fulfillment notices; message notices
+respect visibility and apply only to messages created after following. They omit message bodies,
 deal names, terms, payment details, and shipment details. A completion-triggering
 fulfillment event produces only the deal-completion notice. Notices are sent only to the subscribing user as ephemeral
 thread replies and may be missed when Slack cannot display an ephemeral message.

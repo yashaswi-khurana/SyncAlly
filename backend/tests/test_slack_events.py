@@ -40,8 +40,10 @@ from syncally.infrastructure.models import (
     AgreementVersion,
     AuditEvent,
     Base,
+    Conversation,
     Deal,
     FulfillmentEvent,
+    Message,
     NegotiationSession,
     Obligation,
     Organization,
@@ -658,6 +660,51 @@ class SlackEventRouteTests(unittest.TestCase):
         self.db.commit()
         return source
 
+    def _add_message_notification(
+        self,
+        *,
+        deal_id,
+        visibility: str,
+        conversation_org_id,
+        now: datetime,
+        payload_deal_id=None,
+        payload_record_id=None,
+    ):
+        conversation = self.db.scalar(
+            select(Conversation).where(
+                Conversation.deal_id == deal_id,
+                Conversation.participant_organization_id == conversation_org_id,
+            )
+        )
+        if conversation is None:
+            conversation = Conversation(
+                id=uuid4(),
+                deal_id=deal_id,
+                participant_organization_id=conversation_org_id,
+                created_at=now,
+            )
+            self.db.add(conversation)
+            self.db.flush()
+        message = Message(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            author_user_id=self.admin.id,
+            body="private message body must not reach Slack",
+            visibility=visibility,
+            source_type="USER",
+            created_at=now,
+        )
+        self.db.add(message)
+        self.db.flush()
+        source = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="MESSAGE_RECEIVED",
+            now=now,
+            payload_deal_id=payload_deal_id,
+            payload_record_id=payload_record_id or message.id,
+        )
+        return message, source
+
     def _add_payment_notification(self, *, deal_id, agreement_id, now):
         milestone_id = uuid4()
         payment_id = uuid4()
@@ -951,7 +998,7 @@ class SlackEventRouteTests(unittest.TestCase):
             deal_id=deal_id, kind="DEAL_COMPLETED", now=now - timedelta(seconds=10),
         )
         unsupported = self._add_deal_notification(
-            deal_id=deal_id, kind="MESSAGE_RECEIVED", now=now - timedelta(seconds=5),
+            deal_id=deal_id, kind="UNSUPPORTED_KIND", now=now - timedelta(seconds=5),
         )
 
         self.assertEqual(
@@ -1077,7 +1124,7 @@ class SlackEventRouteTests(unittest.TestCase):
         )
         unsupported = self._add_deal_notification(
             deal_id=deal_id,
-            kind="MESSAGE_RECEIVED",
+            kind="UNSUPPORTED_KIND",
             now=now - timedelta(seconds=5),
             payload_record_id=agreement_id,
         )
@@ -1188,7 +1235,7 @@ class SlackEventRouteTests(unittest.TestCase):
         )
         unsupported = self._add_deal_notification(
             deal_id=deal_id,
-            kind="MESSAGE_RECEIVED",
+            kind="UNSUPPORTED_KIND",
             now=now - timedelta(seconds=5),
         )
 
@@ -1850,7 +1897,7 @@ class SlackEventRouteTests(unittest.TestCase):
             deal_id=deal_id, agreement_id=agreement_id, now=now - timedelta(seconds=10),
         )
         unsupported = self._add_deal_notification(
-            deal_id=deal_id, kind="MESSAGE_RECEIVED", now=now - timedelta(seconds=5),
+            deal_id=deal_id, kind="UNSUPPORTED_KIND", now=now - timedelta(seconds=5),
         )
 
         self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 1)
@@ -2004,6 +2051,193 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(len(api.messages), 1)
         self.assertIn("has been completed", api.messages[0]["text"])
         self.assertNotIn("fulfillment update was recorded", api.messages[0]["text"])
+
+    def test_message_notifications_only_fan_out_when_visible_to_following_party(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_commit = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_commit is not None
+        agreement_commit.event_type = "ALREADY_CONSUMED"
+        self.db.commit()
+        shareable_message, shareable_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="SHAREABLE",
+            conversation_org_id=self.other_org.id,
+            now=now + timedelta(seconds=1),
+        )
+        own_private_message, own_private_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="PRIVATE",
+            conversation_org_id=self.org.id,
+            now=now + timedelta(seconds=2),
+        )
+        hidden_private, hidden_private_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="PRIVATE",
+            conversation_org_id=self.other_org.id,
+            now=now + timedelta(seconds=3),
+        )
+        hidden_internal, hidden_internal_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="INTERNAL",
+            conversation_org_id=self.other_org.id,
+            now=now + timedelta(seconds=4),
+        )
+        outsider_org = Organization(
+            legal_name="Unrelated organization", country_code="GB", status="ACTIVE"
+        )
+        self.db.add(outsider_org)
+        self.db.flush()
+        outsider_message, outsider_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="SHAREABLE",
+            conversation_org_id=outsider_org.id,
+            now=now + timedelta(seconds=5),
+        )
+
+        self.assertEqual(
+            slack_events_worker._enqueue_slack_notification_deliveries(
+                self.db, now + timedelta(seconds=5)
+            ),
+            5,
+        )
+        self.assertEqual(
+            slack_events_worker._enqueue_slack_notification_deliveries(
+                self.db, now + timedelta(seconds=5)
+            ),
+            0,
+        )
+        deliveries = {
+            row.source_event_id: row
+            for row in self.db.scalars(select(SlackNotificationDelivery)).all()
+        }
+        self.assertEqual(deliveries[shareable_source.id].status, "PENDING")
+        self.assertEqual(deliveries[own_private_source.id].status, "PENDING")
+        self.assertEqual(deliveries[hidden_private_source.id].status, "FAILED")
+        self.assertEqual(deliveries[hidden_internal_source.id].status, "FAILED")
+        self.assertEqual(deliveries[outsider_source.id].status, "FAILED")
+        self.assertEqual(
+            {shareable_message.visibility, own_private_message.visibility,
+             hidden_private.visibility, hidden_internal.visibility, outsider_message.visibility},
+            {"SHAREABLE", "PRIVATE", "INTERNAL"},
+        )
+
+        actor = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={
+                self.org.id: frozenset({"deal.read_assigned"})
+            },
+            assigned_deals=frozenset({(self.org.id, deal_id)}),
+        )
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)), \
+             patch.object(slack_events_worker, "resolve_actor", return_value=actor):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=10),
+            )))
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=11),
+            )))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 2)
+        for reply in api.private_messages:
+            self.assertEqual(reply["user"], subscription.slack_user_id)
+            self.assertEqual(reply["channel"], subscription.channel_id)
+            self.assertEqual(reply["thread_ts"], subscription.thread_ts)
+            self.assertEqual(reply["text"], "A new message is available in SyncAlly.")
+            self.assertNotIn("private message body", reply["text"])
+        self.db.refresh(shareable_source)
+        self.db.refresh(own_private_source)
+        self.assertEqual(shareable_source.status, "DELIVERED")
+        self.assertEqual(own_private_source.status, "DELIVERED")
+
+    def test_message_notification_rejects_mismatched_source_and_does_not_backfill_history(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_commit = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_commit is not None
+        agreement_commit.event_type = "ALREADY_CONSUMED"
+        self.db.commit()
+
+        _invalid_message, invalid_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="SHAREABLE",
+            conversation_org_id=self.other_org.id,
+            now=now + timedelta(seconds=1),
+            payload_deal_id=uuid4(),
+        )
+        _historical_message, historical_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="SHAREABLE",
+            conversation_org_id=self.other_org.id,
+            # The fixture creates the subscription two minutes before `now`.
+            now=now - timedelta(minutes=3),
+        )
+        # A delayed outbox row must not make a pre-follow message eligible.
+        historical_source.created_at = now + timedelta(seconds=1)
+        self.db.commit()
+        equal_message, equal_source = self._add_message_notification(
+            deal_id=deal_id,
+            visibility="SHAREABLE",
+            conversation_org_id=self.other_org.id,
+            now=now + timedelta(seconds=2),
+        )
+        equal_message.created_at = subscription.created_at
+        equal_source.created_at = now + timedelta(seconds=3)
+        self.db.commit()
+
+        self.assertEqual(
+            slack_events_worker._enqueue_slack_notification_deliveries(
+                self.db, now + timedelta(seconds=2)
+            ),
+            3,
+        )
+        invalid_delivery = self.db.scalar(
+            select(SlackNotificationDelivery).where(
+                SlackNotificationDelivery.source_event_id == invalid_source.id
+            )
+        )
+        self.assertIsNotNone(invalid_delivery)
+        assert invalid_delivery is not None
+        self.assertEqual(invalid_delivery.status, "FAILED")
+        historical_delivery = self.db.scalar(
+            select(SlackNotificationDelivery).where(
+                SlackNotificationDelivery.source_event_id == historical_source.id
+            )
+        )
+        self.assertIsNotNone(historical_delivery)
+        assert historical_delivery is not None
+        self.assertEqual(historical_delivery.status, "FAILED")
+        equal_delivery = self.db.scalar(
+            select(SlackNotificationDelivery).where(
+                SlackNotificationDelivery.source_event_id == equal_source.id
+            )
+        )
+        self.assertIsNotNone(equal_delivery)
+        assert equal_delivery is not None
+        self.assertEqual(equal_delivery.status, "FAILED")
+        self.assertIsNotNone(self.db.get(SlackDealSubscription, subscription.id))
 
     def test_mismatched_completion_payload_does_not_suppress_fulfillment_notice(self) -> None:
         from syncally.cli import slack_events_worker

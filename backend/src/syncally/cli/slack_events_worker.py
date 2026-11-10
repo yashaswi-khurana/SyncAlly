@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import HTTPException
 from sqlalchemy import delete, exists, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from syncally.api.authorization import require_deal_action
 from syncally.application.deals import DealNotFound, get_deal
@@ -28,6 +28,7 @@ from syncally.infrastructure.integrations.slack_events import SlackWebAPI, Slack
 from syncally.infrastructure.models import (
     AgreementVersion,
     AuditEvent,
+    FulfillmentEvent,
     OutboxEvent,
     PaymentIntent,
     Proposal,
@@ -222,6 +223,21 @@ def prune_slack_records(db: Session, now: datetime | None = None) -> tuple[int, 
     return expired_challenges, old_terminal_events
 
 
+def _has_completion_notice(db: Session, deal_id: uuid.UUID, record_id: uuid.UUID) -> bool:
+    return db.scalar(
+        select(OutboxEvent.id)
+        .where(
+            OutboxEvent.aggregate_type == "deal",
+            OutboxEvent.aggregate_id == deal_id,
+            OutboxEvent.event_type == "DEAL_NOTIFICATION",
+            OutboxEvent.payload["kind"].as_string() == "DEAL_COMPLETED",
+            OutboxEvent.payload["deal_id"].as_string() == str(deal_id),
+            OutboxEvent.payload["record_id"].as_string() == str(record_id),
+        )
+        .limit(1)
+    ) is not None
+
+
 def _enqueue_slack_notification_deliveries(db: Session, now: datetime) -> int:
     """Fan out supported outbox notifications without touching Temporal state."""
     existing = exists(
@@ -301,8 +317,43 @@ def _enqueue_slack_notification_deliveries(db: Session, now: datetime) -> int:
         .order_by(OutboxEvent.created_at, OutboxEvent.id, SlackDealSubscription.id)
         .limit(250)
     ).all()
+    completed_source = aliased(OutboxEvent)
+    completion_for_fulfillment = exists(
+        select(completed_source.id).where(
+            completed_source.aggregate_type == "deal",
+            completed_source.aggregate_id == OutboxEvent.aggregate_id,
+            completed_source.event_type == "DEAL_NOTIFICATION",
+            completed_source.payload["kind"].as_string() == "DEAL_COMPLETED",
+            completed_source.payload["deal_id"].as_string()
+            == OutboxEvent.payload["deal_id"].as_string(),
+            completed_source.payload["record_id"].as_string()
+            == OutboxEvent.payload["record_id"].as_string(),
+        )
+    )
+    fulfillment_rows = db.execute(
+        select(OutboxEvent.id, SlackDealSubscription.id, OutboxEvent.created_at)
+        .join(SlackDealSubscription, SlackDealSubscription.deal_id == OutboxEvent.aggregate_id)
+        .where(
+            OutboxEvent.aggregate_type == "deal",
+            OutboxEvent.event_type == "DEAL_NOTIFICATION",
+            OutboxEvent.payload["kind"].as_string() == "FULFILLMENT_EVENT_RECORDED",
+            OutboxEvent.created_at >= now - timedelta(days=_EVENT_RETENTION_DAYS),
+            SlackDealSubscription.created_at < OutboxEvent.created_at,
+            ~completion_for_fulfillment,
+            ~existing,
+        )
+        .order_by(OutboxEvent.created_at, OutboxEvent.id, SlackDealSubscription.id)
+        .limit(250)
+    ).all()
     rows = sorted(
-        [*agreement_rows, *completion_rows, *payment_rows, *agreement_update_rows, *proposal_rows],
+        [
+            *agreement_rows,
+            *completion_rows,
+            *payment_rows,
+            *agreement_update_rows,
+            *proposal_rows,
+            *fulfillment_rows,
+        ],
         key=lambda row: (row[2], str(row[0]), str(row[1])),
     )[:250]
     inserted = 0
@@ -368,6 +419,32 @@ def _enqueue_slack_notification_deliveries(db: Session, now: datetime) -> int:
                         and source.payload.get("deal_id") == str(subscription.deal_id)
                         and proposal is not None
                         and proposal.deal_id == subscription.deal_id
+                    )
+                elif (
+                    source is not None
+                    and source.aggregate_type == "deal"
+                    and source.event_type == "DEAL_NOTIFICATION"
+                    and isinstance(source.payload, dict)
+                    and source.payload.get("kind") == "FULFILLMENT_EVENT_RECORDED"
+                ):
+                    try:
+                        fulfillment_id = uuid.UUID(source.payload.get("record_id", ""))
+                    except (AttributeError, TypeError, ValueError):
+                        fulfillment_id = None
+                    fulfillment = (
+                        db.get(FulfillmentEvent, fulfillment_id)
+                        if fulfillment_id is not None
+                        else None
+                    )
+                    source_matches = bool(
+                        subscription is not None
+                        and source.aggregate_id == subscription.deal_id
+                        and source.payload.get("deal_id") == str(subscription.deal_id)
+                        and fulfillment is not None
+                        and fulfillment.deal_id == subscription.deal_id
+                        and not _has_completion_notice(
+                            db, subscription.deal_id, fulfillment.id
+                        )
                     )
                 db.add(
                     SlackNotificationDelivery(
@@ -549,6 +626,28 @@ async def _deliver_notification(
         proposal = db.get(Proposal, proposal_id) if proposal_id is not None else None
         if proposal is not None and proposal.deal_id == subscription.deal_id:
             notification_kind = "PROPOSAL_SUBMITTED"
+    elif (
+        source.aggregate_type == "deal"
+        and source.event_type == "DEAL_NOTIFICATION"
+        and source_payload.get("kind") == "FULFILLMENT_EVENT_RECORDED"
+        and source.aggregate_id == subscription.deal_id
+        and source_payload.get("deal_id") == str(subscription.deal_id)
+    ):
+        try:
+            fulfillment_id = uuid.UUID(source_payload.get("record_id", ""))
+        except (TypeError, ValueError):
+            fulfillment_id = None
+        fulfillment = (
+            db.get(FulfillmentEvent, fulfillment_id)
+            if fulfillment_id is not None
+            else None
+        )
+        if (
+            fulfillment is not None
+            and fulfillment.deal_id == subscription.deal_id
+            and not _has_completion_notice(db, subscription.deal_id, fulfillment.id)
+        ):
+            notification_kind = "FULFILLMENT_EVENT_RECORDED"
 
     if notification_kind is None:
         delivery.status = "FAILED"
@@ -585,7 +684,15 @@ async def _deliver_notification(
             installation,
             link,
             str(subscription.deal_id),
-            permission="payments.read" if notification_kind == "PAYMENT_STATE_CHANGED" else "deal.read_assigned",
+            permission=(
+                "payments.read"
+                if notification_kind == "PAYMENT_STATE_CHANGED"
+                else (
+                    "fulfillment.read"
+                    if notification_kind == "FULFILLMENT_EVENT_RECORDED"
+                    else "deal.read_assigned"
+                )
+            ),
         )
         if link is not None
         else None
@@ -633,9 +740,16 @@ async def _deliver_notification(
                         )
                         if notification_kind == "PROPOSAL_SUBMITTED"
                         else (
-                            "A SyncAlly deal you follow has been completed. "
-                            f"Mention `@SyncAlly status {subscription.deal_id}` in this thread "
-                            "to check its current status."
+                            (
+                                "A fulfillment update was recorded for a deal you follow. "
+                                "Open SyncAlly to review fulfillment details."
+                            )
+                            if notification_kind == "FULFILLMENT_EVENT_RECORDED"
+                            else (
+                                "A SyncAlly deal you follow has been completed. "
+                                f"Mention `@SyncAlly status {subscription.deal_id}` in this thread "
+                                "to check its current status."
+                            )
                         )
                     )
                 )
@@ -898,7 +1012,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                     try:
                         db.commit()
                         text = (
-                            "You're following agreement, proposal, approval, completion, and payment updates for this deal in this thread. "
+                            "You're following agreement, proposal, approval, completion, payment, and fulfillment updates for this deal in this thread. "
                             f"Mention `@SyncAlly unfollow {deal.id}` to stop."
                         )
                     except IntegrityError:
@@ -915,12 +1029,12 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                         if subscription is None:
                             raise
                         text = (
-                            "You're already following agreement, proposal, approval, completion, and payment updates for this deal in this thread. "
+                            "You're already following agreement, proposal, approval, completion, payment, and fulfillment updates for this deal in this thread. "
                             f"Mention `@SyncAlly unfollow {deal.id}` to stop."
                         )
                 else:
                     text = (
-                        "You're already following agreement, proposal, approval, completion, and payment updates for this deal in this thread. "
+                        "You're already following agreement, proposal, approval, completion, payment, and fulfillment updates for this deal in this thread. "
                         f"Mention `@SyncAlly unfollow {deal.id}` to stop."
                     )
         else:
@@ -953,7 +1067,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                     now=now,
                 )
                 db.commit()
-                text = "You're no longer following agreement, proposal, approval, completion, and payment updates for this deal in this thread."
+                text = "You're no longer following agreement, proposal, approval, completion, payment, and fulfillment updates for this deal in this thread."
         await _provider_call(
             api.post_ephemeral,
             token,
@@ -970,7 +1084,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             text=(
                 "Use `@SyncAlly link` to connect your account, `@SyncAlly status <deal-id>` "
                 "for deal status, `@SyncAlly payments <deal-id>` for payment status, "
-                "or `@SyncAlly follow <deal-id>` to get agreement, proposal, approval, completion, and payment updates in this thread. "
+                "or `@SyncAlly follow <deal-id>` to get agreement, proposal, approval, completion, payment, and fulfillment updates in this thread. "
                 "Use an exact deal ID."
             ),
         )

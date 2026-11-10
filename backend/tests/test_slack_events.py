@@ -632,7 +632,8 @@ class SlackEventRouteTests(unittest.TestCase):
         return event
 
     def _add_deal_notification(
-        self, *, deal_id, kind: str, now: datetime, payload_deal_id=None
+        self, *, deal_id, kind: str, now: datetime, payload_deal_id=None,
+        payload_record_id=None,
     ) -> OutboxEvent:
         source = OutboxEvent(
             id=uuid4(),
@@ -641,7 +642,7 @@ class SlackEventRouteTests(unittest.TestCase):
             event_type="DEAL_NOTIFICATION",
             payload={
                 "deal_id": str(payload_deal_id or deal_id),
-                "record_id": str(deal_id),
+                "record_id": str(payload_record_id or deal_id),
                 "kind": kind,
                 "terms": "must not reach Slack",
             },
@@ -993,6 +994,116 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(delivery.status, "FAILED")
         self.assertEqual(delivery.last_error, "source_mismatch")
         self.assertEqual(api.messages, [])
+
+    def test_agreement_update_fanout_is_idempotent_and_ignores_other_kinds(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_update = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="AGREEMENT_APPROVAL_RECORDED",
+            now=now - timedelta(seconds=10),
+            payload_record_id=agreement_id,
+        )
+        unsupported = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="PROPOSAL_SUBMITTED",
+            now=now - timedelta(seconds=5),
+            payload_record_id=agreement_id,
+        )
+
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 2)
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 0)
+        delivery_sources = set(self.db.scalars(select(SlackNotificationDelivery.source_event_id)))
+        self.assertEqual(delivery_sources, {agreement_event_id, agreement_update.id})
+        self.assertNotIn(unsupported.id, delivery_sources)
+        self.db.refresh(agreement_update)
+        self.db.refresh(unsupported)
+        self.assertEqual(agreement_update.status, "DELIVERED")
+        self.assertEqual(unsupported.status, "DELIVERED")
+        self.assertIsNotNone(self.db.get(SlackDealSubscription, subscription.id))
+
+    def test_agreement_update_is_private_generic_and_hides_decision_details(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_commit = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_commit is not None
+        agreement_commit.event_type = "ALREADY_CONSUMED"
+        source = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="AGREEMENT_APPROVAL_RECORDED",
+            now=now - timedelta(seconds=10),
+            payload_record_id=agreement_id,
+        )
+        source.payload.update({
+            "decision": "REJECT",
+            "actor_id": str(self.other.id),
+            "terms": "secret withdrawal rationale",
+        })
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now)))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 1)
+        message = api.private_messages[0]
+        self.assertEqual(message["user"], subscription.slack_user_id)
+        self.assertEqual(message["channel"], subscription.channel_id)
+        self.assertEqual(message["thread_ts"], subscription.thread_ts)
+        self.assertEqual(
+            message["text"],
+            f"An agreement update was recorded for a deal you follow. Mention `@SyncAlly status {deal_id}` "
+            "in this thread to check its current status.",
+        )
+        for private_value in ("REJECT", str(self.other.id), "secret withdrawal rationale", str(agreement_id)):
+            self.assertNotIn(private_value, message["text"])
+        self.db.refresh(source)
+        self.assertEqual(source.status, "DELIVERED")
+
+    def test_agreement_update_with_mismatched_version_fails_without_posting(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, subscription = self._add_follow_setup(now=now)
+        agreement_commit = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_commit is not None
+        agreement_commit.event_type = "ALREADY_CONSUMED"
+        source = self._add_deal_notification(
+            deal_id=deal_id,
+            kind="AGREEMENT_APPROVAL_RECORDED",
+            now=now - timedelta(seconds=10),
+            payload_record_id=uuid4(),
+        )
+
+        self.assertEqual(slack_events_worker._enqueue_slack_notification_deliveries(self.db, now), 1)
+
+        delivery = self.db.scalar(select(SlackNotificationDelivery).where(
+            SlackNotificationDelivery.source_event_id == source.id,
+            SlackNotificationDelivery.subscription_id == subscription.id,
+        ))
+        self.assertIsNotNone(delivery)
+        assert delivery is not None
+        self.assertEqual(delivery.status, "FAILED")
+        self.assertEqual(delivery.last_error, "source_mismatch")
 
     def test_payment_notification_fanout_is_idempotent_and_preserves_source_outbox(self) -> None:
         from syncally.cli import slack_events_worker

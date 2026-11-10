@@ -16,12 +16,19 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 
 from syncally.api.authorization import require_deal_action
-from syncally.application.deals import DealNotFound, get_deal
+from syncally.application.deals import (
+    CreateDealCommand,
+    DealAccessDenied,
+    DealNotFound,
+    create_deal,
+    get_deal,
+)
 from syncally.application.payments import PaymentStatusRecord, list_current_payment_statuses
 from syncally.config import settings
 from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.domain.shared.money import canonical_decimal
 from syncally.infrastructure.database import SessionLocal
+from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
 from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.integrations.slack import SlackIntegrationError, SlackTokenCipher
 from syncally.infrastructure.integrations.slack_events import SlackWebAPI, SlackWebAPIError
@@ -30,6 +37,7 @@ from syncally.infrastructure.models import (
     AuditEvent,
     Conversation,
     Deal,
+    DealAssignment,
     FulfillmentEvent,
     Message,
     OutboxEvent,
@@ -130,6 +138,21 @@ async def _provider_call(method, *args, **kwargs) -> None:
 
 def _cipher() -> SlackTokenCipher:
     return SlackTokenCipher(settings.integration_token_encryption_key.get_secret_value())
+
+
+class _StagedDealRepository:
+    """Use the deal policy while leaving the surrounding transaction in charge."""
+
+    def __init__(self, db: Session) -> None:
+        self._db = db
+        self._repository = SqlAlchemyDealRepository(db)
+
+    def active_organization_exists(self, organization_id: uuid.UUID) -> bool:
+        return self._repository.active_organization_exists(organization_id)
+
+    def add(self, deal):
+        self._repository.stage(deal)
+        return deal
 
 
 def _payment_summary_text(payments: list[PaymentStatusRecord]) -> str:
@@ -943,7 +966,97 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
         return
     token = _cipher().decrypt(installation.encrypted_bot_token)
 
-    if event.command == "LINK":
+    if event.command == "CREATED" and event.deal_id is not None:
+        link = db.scalar(
+            select(SlackUserLink).where(
+                SlackUserLink.installation_id == installation.id,
+                SlackUserLink.slack_user_id == event.slack_user_id,
+                SlackUserLink.organization_id == installation.organization_id,
+                SlackUserLink.workspace_id == installation.workspace_id,
+            )
+        )
+        linked_actor = resolve_actor(db, link.user_id) if link is not None else None
+        created_by_linked_user = (
+            linked_actor is not None
+            and installation.organization_id in linked_actor.organization_ids
+            and db.scalar(
+            select(DealAssignment.id).where(
+                DealAssignment.deal_id == uuid.UUID(event.deal_id),
+                DealAssignment.organization_id == installation.organization_id,
+                DealAssignment.user_id == linked_actor.user_id,
+                DealAssignment.status == "ACTIVE",
+            )
+            ) is not None
+        )
+        await _provider_call(
+            api.post_ephemeral,
+            token,
+            channel=event.channel_id,
+            user=event.slack_user_id,
+            thread_ts=event.thread_ts,
+            text=(
+                f"Draft deal created: `{event.deal_id}` (status: DRAFT)."
+                if created_by_linked_user
+                else "I couldn't confirm that draft. Link your SyncAlly account and try again."
+            ),
+        )
+    elif event.command in {"START_BUYER", "START_SELLER"} and event.deal_id is not None:
+        link = db.scalar(
+            select(SlackUserLink).where(
+                SlackUserLink.installation_id == installation.id,
+                SlackUserLink.slack_user_id == event.slack_user_id,
+                SlackUserLink.organization_id == installation.organization_id,
+                SlackUserLink.workspace_id == installation.workspace_id,
+            )
+        )
+        if link is None:
+            text = "Link your SyncAlly account first: mention `@SyncAlly link` and follow the private instructions."
+        else:
+            actor = resolve_actor(db, link.user_id)
+            try:
+                counterparty_id = uuid.UUID(event.deal_id)
+                if event.command == "START_BUYER":
+                    buyer_id, seller_id, initiating_party = installation.organization_id, counterparty_id, "BUYER"
+                else:
+                    buyer_id, seller_id, initiating_party = counterparty_id, installation.organization_id, "SELLER"
+                if (
+                    actor is None
+                    or installation.organization_id not in actor.organization_ids
+                    or counterparty_id == installation.organization_id
+                ):
+                    raise DealNotFound("Organization is not available")
+                lock_demo_deal_creation(db, buyer_id, seller_id)
+                deal = create_deal(
+                    actor,
+                    CreateDealCommand(
+                        buyer_organization_id=buyer_id,
+                        seller_organization_id=seller_id,
+                        initiator_party=initiating_party,
+                    ),
+                    _StagedDealRepository(db),
+                )
+                db.add(DealAssignment(
+                    organization_id=installation.organization_id,
+                    deal_id=deal.id,
+                    user_id=actor.user_id,
+                    status="ACTIVE",
+                ))
+                event.command = "CREATED"
+                event.deal_id = str(deal.id)
+                db.commit()
+                text = f"Draft deal created: `{deal.id}` (status: DRAFT)."
+            except (DealAccessDenied, DealNotFound, ValueError):
+                db.rollback()
+                text = "I couldn't create that draft deal. Check your organization access and the counterparty organization ID."
+        await _provider_call(
+            api.post_ephemeral,
+            token,
+            channel=event.channel_id,
+            user=event.slack_user_id,
+            thread_ts=event.thread_ts,
+            text=text,
+        )
+    elif event.command == "LINK":
         existing = db.scalar(
             select(SlackUserLink).where(
                 SlackUserLink.installation_id == installation.id,
@@ -1173,6 +1286,8 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             text=(
                 "Use `@SyncAlly link` to connect your account, `@SyncAlly status <deal-id>` "
                 "for deal status, `@SyncAlly payments <deal-id>` for payment status, "
+                "`@SyncAlly start buyer <organization-id>` or `@SyncAlly start seller <organization-id>` "
+                "to create a draft deal without notifying the counterparty, "
                 "or `@SyncAlly follow <deal-id>` to get agreement, proposal, approval, completion, payment, fulfillment, and new-message updates in this thread. "
                 "Use an exact deal ID."
             ),

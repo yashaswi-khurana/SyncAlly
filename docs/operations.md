@@ -79,8 +79,12 @@ respect visibility and apply only to messages created after following. They omit
 deal names, terms, payment details, and shipment details. A completion-triggering
 fulfillment event produces only the deal-completion notice. Notices are sent only to the subscribing user as ephemeral
 thread replies and may be missed when Slack cannot display an ephemeral message.
-Deal creation, invoice links, fuzzy lookup, and Slack history are outside this
-release.
+An authorized member with `deal.create` can create a draft with
+`@SyncAlly start buyer <counterparty-organization-id>` or
+`@SyncAlly start seller <counterparty-organization-id>`. The installation's
+organization is the initiating party. This command creates only a DRAFT and
+does not invite or notify the counterparty. Invoice links, fuzzy lookup, and
+Slack history are outside this release.
 
 The authorization callback is single-use and expires after ten minutes. The
 connection view shows the workspace and granted scopes. Disconnect revokes the

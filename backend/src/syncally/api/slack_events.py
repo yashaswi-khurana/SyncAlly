@@ -46,6 +46,16 @@ def _event_command(text: object, bot_user_id: str) -> tuple[str, str | None]:
     if len(parts) == 1 and parts[0].casefold() == "link":
         return "LINK", None
     if (
+        len(parts) == 3
+        and parts[0].casefold() == "start"
+        and parts[1].casefold() in {"buyer", "seller"}
+        and _DEAL_ID.fullmatch(parts[2])
+    ):
+        try:
+            return f"START_{parts[1].upper()}", str(uuid.UUID(parts[2]))
+        except ValueError:
+            pass
+    if (
         len(parts) == 2
         and parts[0].casefold() in {"follow", "unfollow"}
         and _DEAL_ID.fullmatch(parts[1])

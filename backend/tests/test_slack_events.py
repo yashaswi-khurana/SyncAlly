@@ -11,7 +11,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from cryptography.fernet import Fernet
@@ -41,7 +41,9 @@ from syncally.infrastructure.models import (
     AuditEvent,
     Base,
     Conversation,
+    CounterpartyOnboarding,
     Deal,
+    DealAssignment,
     FulfillmentEvent,
     Message,
     NegotiationSession,
@@ -66,6 +68,24 @@ FERNET_KEY = Fernet.generate_key().decode("ascii")
 
 
 class SlackEventCommandTests(unittest.TestCase):
+    def test_start_command_requires_exact_side_and_counterparty_uuid(self) -> None:
+        organization_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        self.assertEqual(
+            slack_events._event_command(f"<@BBOT> start buyer {organization_id}", "BBOT"),
+            ("START_BUYER", organization_id),
+        )
+        self.assertEqual(
+            slack_events._event_command(f"<@BBOT> start SELLER {organization_id.upper()}", "BBOT"),
+            ("START_SELLER", organization_id),
+        )
+        for text in (
+            f"start buyer {organization_id} extra",
+            f"start customer {organization_id}",
+            "start buyer not-an-organization-id",
+            f"start buyer {organization_id[:-1]}",
+        ):
+            self.assertEqual(slack_events._event_command(text, "BBOT"), ("HELP", None))
+
     def test_payment_command_requires_exact_verb_and_deal_id(self) -> None:
         self.assertEqual(
             slack_events._event_command("<@BBOT> payments 11111111-1111-1111-1111-111111111111", "BBOT"),
@@ -348,6 +368,21 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(self.db.scalar(
             select(SlackEvent.id).where(SlackEvent.event_id == "Ev-payments")
         ), payments_event.id)
+
+    def test_start_event_intake_normalizes_counterparty_and_deduplicates_provider_event(self) -> None:
+        payload = self._mention_payload(
+            event_id="Ev-start-intake",
+            text=f"<@BBOT> start seller {str(self.other_org.id).upper()}",
+        )
+        self.assertEqual(self._receive(payload), {"ok": True})
+        self.assertEqual(self._receive(payload), {"ok": True})
+        events = self.db.scalars(
+            select(SlackEvent).where(SlackEvent.event_id == "Ev-start-intake")
+        ).all()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].command, "START_SELLER")
+        self.assertEqual(events[0].deal_id, str(self.other_org.id))
+        self.assertFalse(hasattr(events[0], "message_text"))
 
     def test_unconfirmed_integrity_failure_is_raised_for_slack_retry(self) -> None:
         error = IntegrityError("insert slack event", {}, RuntimeError("unexpected constraint"))
@@ -2348,6 +2383,224 @@ class SlackEventRouteTests(unittest.TestCase):
                     SlackNotificationDelivery.id == preserved.id
                 )
             ))
+
+    def test_start_creates_private_draft_once_and_rate_limit_retries_confirmation(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        event = SlackEvent(
+            id=uuid4(), event_id="Ev-start-draft", installation_id=self.installation.id,
+            workspace_id="T-workspace", slack_user_id="U-start", channel_id="C-channel",
+            message_ts="123.700", thread_ts="123.000", command="START_BUYER",
+            deal_id=str(self.other_org.id), status="PENDING", attempts=0, available_at=now,
+        )
+        self.db.add(SlackUserLink(
+            id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+            workspace_id="T-workspace", slack_user_id="U-start", user_id=self.admin.id,
+            created_at=now,
+        ))
+        self.db.add(event)
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+                self.calls = 0
+
+            async def post_message(self, token: str, **kwargs: str) -> None:
+                raise AssertionError("draft acknowledgments must be private")
+
+            async def post_ephemeral(self, token: str, **kwargs: str) -> None:
+                self.calls += 1
+                if self.calls == 1:
+                    raise SlackWebAPIError("ratelimited", retry_after=1)
+                self.messages.append(kwargs)
+
+        api = FakeAPI()
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now)))
+            stored = self.db.get(SlackEvent, event.id)
+            assert stored is not None
+            self.db.refresh(stored)
+            self.assertEqual(stored.command, "CREATED")
+            created_id = stored.deal_id
+            self.assertNotEqual(created_id, str(self.other_org.id))
+            created = self.db.get(Deal, UUID(created_id))
+            self.assertIsNotNone(created)
+            assert created is not None
+            self.assertEqual(created.status, DealStatus.DRAFT.value)
+            assignment = self.db.scalar(select(DealAssignment).where(DealAssignment.deal_id == created.id))
+            self.assertIsNotNone(assignment)
+            self.assertEqual(assignment.organization_id, self.org.id)
+            self.assertEqual(assignment.user_id, self.admin.id)
+
+            retry_at = now + timedelta(seconds=3)
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=retry_at)))
+
+            seller_event = SlackEvent(
+                id=uuid4(), event_id="Ev-start-seller", installation_id=self.installation.id,
+                workspace_id="T-workspace", slack_user_id="U-start", channel_id="C-channel",
+                message_ts="123.701", thread_ts="123.000", command="START_SELLER",
+                deal_id=str(self.other_org.id), status="PENDING", attempts=0,
+                available_at=now + timedelta(seconds=4),
+            )
+            with factory() as db:
+                db.add(seller_event)
+                db.commit()
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=4)
+            )))
+
+        self.assertEqual(api.calls, 3)
+        self.assertEqual(len(api.messages), 2)
+        self.assertEqual(api.messages[0]["user"], "U-start")
+        self.assertEqual(api.messages[0]["thread_ts"], "123.000")
+        self.assertEqual(api.messages[0]["text"], f"Draft deal created: `{created_id}` (status: DRAFT).")
+        deals = self.db.scalars(select(Deal)).all()
+        self.assertEqual(len(deals), 2)
+        buyer_deal = next(deal for deal in deals if deal.id == UUID(created_id))
+        self.assertEqual(buyer_deal.buyer_organization_id, self.org.id)
+        self.assertEqual(buyer_deal.seller_organization_id, self.other_org.id)
+        seller_deal = next(deal for deal in deals if deal.id != UUID(created_id))
+        self.assertEqual(seller_deal.buyer_organization_id, self.other_org.id)
+        self.assertEqual(seller_deal.seller_organization_id, self.org.id)
+        self.assertEqual(seller_deal.status, DealStatus.DRAFT.value)
+        self.assertIsNone(self.db.scalar(
+            select(CounterpartyOnboarding).where(CounterpartyOnboarding.deal_id.in_([deal.id for deal in deals]))
+        ))
+        outbox = self.db.scalar(select(OutboxEvent).where(OutboxEvent.aggregate_id == buyer_deal.id))
+        self.assertIsNotNone(outbox)
+        self.assertEqual(outbox.event_type, "DEAL_NOTIFICATION")
+        self.assertEqual(outbox.payload["kind"], "DEAL_CREATED")
+
+    def test_start_denies_missing_create_permission_wrong_tenant_and_same_organization_privately(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        inactive_org = Organization(legal_name="Inactive", country_code="GB", status="INACTIVE")
+        inactive_counterparty_actor = User(
+            email="inactive-counterparty-admin@example.com",
+            display_name="Inactive Counterparty Admin",
+            status="ACTIVE",
+        )
+        self.db.add(inactive_org)
+        self.db.add(inactive_counterparty_actor)
+        self.db.flush()
+        self.db.add(OrganizationMember(
+            organization_id=self.org.id, user_id=inactive_counterparty_actor.id,
+            role="ADMIN", status="ACTIVE", capabilities=[], permissions=["deal.create"],
+        ))
+        self.db.flush()
+        cases = (
+            ("U-no-create", self.member, self.other_org.id),
+            ("U-wrong-tenant", self.other, self.other_org.id),
+            ("U-same-org", self.admin, self.org.id),
+            ("U-inactive-counterparty", inactive_counterparty_actor, inactive_org.id),
+        )
+        events: list[SlackEvent] = []
+        for index, (slack_user_id, user, counterparty_id) in enumerate(cases):
+            self.db.add(SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id,
+                organization_id=self.org.id, workspace_id="T-workspace",
+                slack_user_id=slack_user_id, user_id=user.id, created_at=now,
+            ))
+            events.append(SlackEvent(
+                id=uuid4(), event_id=f"Ev-start-denied-{index}",
+                installation_id=self.installation.id, workspace_id="T-workspace",
+                slack_user_id=slack_user_id, channel_id="C-channel",
+                message_ts=f"123.8{index}", thread_ts="123.000",
+                command="START_BUYER", deal_id=str(counterparty_id),
+                status="PENDING", attempts=0,
+                available_at=now + timedelta(seconds=index),
+            ))
+        self.db.add_all(events)
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+
+            async def post_message(self, token: str, **kwargs: str) -> None:
+                raise AssertionError("authorization errors must be private")
+
+            async def post_ephemeral(self, token: str, **kwargs: str) -> None:
+                self.messages.append(kwargs)
+
+        api = FakeAPI()
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            for index in range(len(events)):
+                self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                    factory, api, now=now + timedelta(seconds=index)
+                )))
+
+        self.assertEqual(self.db.scalar(select(Deal.id)), None)
+        self.assertEqual(len(api.messages), len(cases))
+        self.assertEqual(
+            {message["text"] for message in api.messages},
+            {"I couldn't create that draft deal. Check your organization access and the counterparty organization ID."},
+        )
+        self.assertEqual({message["user"] for message in api.messages}, {case[0] for case in cases})
+
+    def test_created_retry_does_not_disclose_draft_after_slack_link_changes(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal = Deal(
+            buyer_organization_id=self.org.id,
+            seller_organization_id=self.other_org.id,
+            created_at=now,
+            status=DealStatus.DRAFT.value,
+        )
+        self.db.add(deal)
+        self.db.flush()
+        self.db.add(DealAssignment(
+            organization_id=self.org.id,
+            deal_id=deal.id,
+            user_id=self.admin.id,
+            status="ACTIVE",
+        ))
+        self.db.add(SlackUserLink(
+            id=uuid4(), installation_id=self.installation.id,
+            organization_id=self.org.id, workspace_id="T-workspace",
+            slack_user_id="U-relinked", user_id=self.member.id, created_at=now,
+        ))
+        event = SlackEvent(
+            id=uuid4(), event_id="Ev-created-relinked", installation_id=self.installation.id,
+            workspace_id="T-workspace", slack_user_id="U-relinked", channel_id="C-channel",
+            message_ts="124.700", thread_ts="124.000", command="CREATED",
+            deal_id=str(deal.id), status="PENDING", attempts=0, available_at=now,
+        )
+        self.db.add(event)
+        self.db.commit()
+
+        class FakeAPI:
+            messages: list[dict[str, str]] = []
+
+            async def post_message(self, token: str, **kwargs: str) -> None:
+                raise AssertionError("draft acknowledgments must be private")
+
+            async def post_ephemeral(self, token: str, **kwargs: str) -> None:
+                self.messages.append(kwargs)
+
+        api = FakeAPI()
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now)))
+
+        self.assertEqual(len(api.messages), 1)
+        self.assertNotIn(str(deal.id), api.messages[0]["text"])
+        self.assertIn("couldn't confirm", api.messages[0]["text"])
 
 
 if __name__ == "__main__":

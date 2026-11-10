@@ -31,9 +31,11 @@ from syncally.infrastructure.models.identity import (
     User,
 )
 from syncally.infrastructure.models.integrations import (
+    SlackDealSubscription,
     SlackEvent,
     SlackInstallation,
     SlackLinkChallenge,
+    SlackNotificationDelivery,
     SlackOAuthState,
     SlackUserLink,
 )
@@ -79,8 +81,10 @@ __all__ = [
     "Proposal",
     "RefreshToken",
     "SlackInstallation",
+    "SlackDealSubscription",
     "SlackEvent",
     "SlackLinkChallenge",
+    "SlackNotificationDelivery",
     "SlackOAuthState",
     "SlackUserLink",
     "User",

@@ -15,8 +15,8 @@ bot event, and set the Events API request URL to
 scopes. Mentions are delivered only in conversations where the bot is a member;
 DMs and message history are not supported. The bot's private link-code response
 uses Slack ephemeral delivery, which requires the user to be in that channel and
-may not appear in Slack. If no private response appears, repeat `@SyncAlly link`
-or repeat the exact `@SyncAlly status <deal-id>` request.
+may not appear in Slack. If no private response appears, repeat `@SyncAlly link`,
+`@SyncAlly status <deal-id>`, or another exact request.
 
 Set these API environment values from the Slack app's OAuth & Permissions page
 and a deployment secret manager:
@@ -39,8 +39,8 @@ removing the old key. Keep the signing secret separate from the OAuth client
 secret and Fernet key. The API fails closed when Slack credentials or a valid
 encryption key are missing.
 
-After deployment and migrations `0033_slack_integrations` and
-`0034_slack_events_and_links`, an active organization administrator can connect
+After deployment and migrations `0033_slack_integrations`,
+`0034_slack_events_and_links`, and `0035_slack_deal_subscriptions`, an active organization administrator can connect
 Slack from Settings -> Organizations -> Integrations. Start the dedicated
 `python -m syncally.cli.slack_events_worker` process (Compose service
 `slack-events-worker`) to deliver queued replies. Slack event requests are signed,
@@ -52,19 +52,30 @@ Slack may already have accepted the message. A worker crash leaves a leased
 `PROCESSING` event; after its lease expires it becomes `FAILED` with
 `delivery_uncertain` and is not automatically replayed. Only failures explicitly
 known to be retryable return to `PENDING`. Outbound delivery is best-effort and
-does not guarantee exactly-once replies. Monitor failed rows in `slack_events`.
+does not guarantee exactly-once replies. Monitor failed rows in `slack_events`
+and `slack_notification_deliveries`.
+The worker polls committed-agreement outbox events and fans them out to explicit
+thread subscriptions through a separate delivery table; it never changes
+Temporal outbox state. Delivery rows are idempotent per source event and
+subscription. Disconnect and unfollow remove pending subscription deliveries.
 The worker deletes expired link challenges and removes terminal (`DELIVERED` or
-`FAILED`) event rows 30 days after receipt. It preserves `PENDING` and
+`FAILED`) event and notification-delivery rows after 30 days. It preserves `PENDING` and
 `PROCESSING` work; expired processing leases are marked uncertain and are not
 replayed.
 
 Members link their own SyncAlly identity by mentioning `@SyncAlly link`, then
 redeeming the short-lived private code in the organization Integrations tab. The
-link establishes identity only. Each `@SyncAlly status <deal-id>` request resolves
-the active SyncAlly actor again and returns only deal status when existing deal
-permissions allow it. Missing and unauthorized deal IDs receive the same reply.
-Invoice/payment data, deal creation, fuzzy lookup and Slack history are outside
-this release.
+link establishes identity only. `@SyncAlly status <deal-id>` returns only deal
+status, and `@SyncAlly payments <deal-id>` returns milestone status and amount
+only when current SyncAlly permissions allow it. Missing and unauthorized IDs
+receive the same private response. A linked member can opt in to private
+agreement-commit notices in the current thread with
+`@SyncAlly follow <deal-id>` and stop them with `@SyncAlly unfollow <deal-id>`.
+SyncAlly rechecks deal access before each notice; notices omit deal names, terms,
+and payment details. They are sent only to the subscribing user as ephemeral
+thread replies and may be missed when Slack cannot display an ephemeral message.
+Deal creation, invoice links, fuzzy lookup, and Slack history are outside this
+release.
 
 The authorization callback is single-use and expires after ten minutes. The
 connection view shows the workspace and granted scopes. Disconnect revokes the

@@ -168,3 +168,69 @@ class SlackLinkChallenge(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class SlackDealSubscription(Base):
+    """Private Slack thread subscription to one SyncAlly deal's updates."""
+
+    __tablename__ = "slack_deal_subscriptions"
+    __table_args__ = (
+        UniqueConstraint(
+            "installation_id", "user_id", "deal_id", "channel_id", "thread_ts",
+            name="uq_slack_deal_subscription_thread",
+        ),
+        Index("ix_slack_deal_subscriptions_deal", "deal_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("slack_installations.id", ondelete="CASCADE"), nullable=False
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    slack_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    deal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("deals.id", ondelete="CASCADE"), nullable=False
+    )
+    channel_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    thread_ts: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SlackNotificationDelivery(Base):
+    """Durable per-subscription delivery for one SyncAlly outbox event."""
+
+    __tablename__ = "slack_notification_deliveries"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING', 'PROCESSING', 'DELIVERED', 'FAILED')",
+            name="ck_slack_notification_delivery_status",
+        ),
+        UniqueConstraint(
+            "source_event_id", "subscription_id",
+            name="uq_slack_notification_source_subscription",
+        ),
+        Index("ix_slack_notification_deliveries_pending", "status", "available_at"),
+        Index("ix_slack_notification_deliveries_retention", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)
+    source_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("outbox_events.id", ondelete="CASCADE"), nullable=False
+    )
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE, ForeignKey("slack_deal_subscriptions.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -15,7 +15,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
-from sqlalchemy import Column, MetaData, Table, create_engine, inspect, select
+from sqlalchemy import Column, DateTime, MetaData, String, Table, create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -34,8 +34,10 @@ from syncally.infrastructure.models import (
     Base,
     Organization,
     OrganizationMember,
+    SlackDealSubscription,
     SlackInstallation,
     SlackLinkChallenge,
+    SlackNotificationDelivery,
     SlackOAuthState,
     SlackUserLink,
     User,
@@ -318,7 +320,17 @@ class SlackIntegrationTests(unittest.TestCase):
             encrypted_code=SlackTokenCipher(FERNET_KEY).encrypt("pending-code"),
             expires_at=now + timedelta(minutes=5), attempts=0,
         )
-        self.db.add_all([link, challenge])
+        subscription = SlackDealSubscription(
+            id=uuid4(), installation_id=installation.id, organization_id=self.org.id,
+            workspace_id=installation.workspace_id, slack_user_id="U-person",
+            user_id=self.user.id, deal_id=uuid4(), channel_id="C-channel",
+            thread_ts="125.000", created_at=now,
+        )
+        delivery = SlackNotificationDelivery(
+            id=uuid4(), source_event_id=uuid4(), subscription_id=subscription.id,
+            status="PENDING", attempts=0, available_at=now,
+        )
+        self.db.add_all([link, challenge, subscription, delivery])
         self.db.commit()
 
         self.fake_oauth.revoke_error = SlackIntegrationError("provider details")
@@ -326,11 +338,15 @@ class SlackIntegrationTests(unittest.TestCase):
             asyncio.run(integrations.disconnect_slack(self.org.id, self.admin, self.db))
         self.assertIsNotNone(self.db.get(SlackUserLink, link.id))
         self.assertIsNotNone(self.db.get(SlackLinkChallenge, challenge.id))
+        self.assertIsNotNone(self.db.get(SlackDealSubscription, subscription.id))
+        self.assertIsNotNone(self.db.get(SlackNotificationDelivery, delivery.id))
 
         self.fake_oauth.revoke_error = None
         asyncio.run(integrations.disconnect_slack(self.org.id, self.admin, self.db))
         self.assertIsNone(self.db.get(SlackUserLink, link.id))
         self.assertIsNone(self.db.get(SlackLinkChallenge, challenge.id))
+        self.assertIsNone(self.db.get(SlackDealSubscription, subscription.id))
+        self.assertIsNone(self.db.get(SlackNotificationDelivery, delivery.id))
 
     def test_schema_rejects_invalid_lifecycle_and_duplicate_active_mappings(self) -> None:
         self._installation(self.org.id)
@@ -400,12 +416,20 @@ class SlackIntegrationTests(unittest.TestCase):
         metadata = MetaData()
         Table("organizations", metadata, Column("id", UUID_TYPE, primary_key=True))
         Table("users", metadata, Column("id", UUID_TYPE, primary_key=True))
+        Table("deals", metadata, Column("id", UUID_TYPE, primary_key=True))
+        Table(
+            "outbox_events", metadata,
+            Column("id", UUID_TYPE, primary_key=True),
+            Column("event_type", String(128), nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+        )
         metadata.create_all(engine)
         versions = Path(__file__).parents[1] / "alembic" / "versions"
         migration_0033 = runpy.run_path(str(versions / "0033_slack_integrations.py"))
         migration_0034 = runpy.run_path(str(versions / "0034_slack_events_and_links.py"))
+        migration_0035 = runpy.run_path(str(versions / "0035_slack_deal_subscriptions.py"))
 
-        for migration in (migration_0033, migration_0034):
+        for migration in (migration_0033, migration_0034, migration_0035):
             with engine.begin() as connection:
                 context = MigrationContext.configure(connection)
                 with Operations.context(context):
@@ -413,7 +437,10 @@ class SlackIntegrationTests(unittest.TestCase):
 
         inspector = inspect(engine)
         tables = set(inspector.get_table_names())
-        self.assertTrue({"slack_events", "slack_user_links", "slack_link_challenges"}.issubset(tables))
+        self.assertTrue({
+            "slack_events", "slack_user_links", "slack_link_challenges",
+            "slack_deal_subscriptions", "slack_notification_deliveries",
+        }.issubset(tables))
         self.assertEqual(
             {index["name"] for index in inspector.get_indexes("slack_events")},
             {"ix_slack_events_pending", "ix_slack_events_retention"},
@@ -444,16 +471,38 @@ class SlackIntegrationTests(unittest.TestCase):
             if column["name"] == "encrypted_code"
         )
         self.assertTrue(encrypted_code_column["nullable"])
+        self.assertEqual(
+            {constraint["name"] for constraint in inspector.get_unique_constraints("slack_deal_subscriptions")},
+            {"uq_slack_deal_subscription_thread"},
+        )
+        self.assertEqual(
+            {constraint["name"] for constraint in inspector.get_unique_constraints("slack_notification_deliveries")},
+            {"uq_slack_notification_source_subscription"},
+        )
+        self.assertEqual(
+            {index["name"] for index in inspector.get_indexes("slack_notification_deliveries")},
+            {"ix_slack_notification_deliveries_pending", "ix_slack_notification_deliveries_retention"},
+        )
+        self.assertEqual(
+            {constraint["name"] for constraint in inspector.get_check_constraints("slack_notification_deliveries")},
+            {"ck_slack_notification_delivery_status"},
+        )
         for table in ("slack_events", "slack_user_links", "slack_link_challenges"):
+            self.assertTrue(inspector.get_foreign_keys(table), table)
+        for table in ("slack_deal_subscriptions", "slack_notification_deliveries"):
             self.assertTrue(inspector.get_foreign_keys(table), table)
 
         with engine.begin() as connection:
             context = MigrationContext.configure(connection)
             with Operations.context(context):
+                migration_0035["downgrade"]()
                 migration_0034["downgrade"]()
         tables_after = set(inspect(engine).get_table_names())
         self.assertTrue({"slack_installations", "slack_oauth_states"}.issubset(tables_after))
-        self.assertFalse({"slack_events", "slack_user_links", "slack_link_challenges"} & tables_after)
+        self.assertFalse({
+            "slack_events", "slack_user_links", "slack_link_challenges",
+            "slack_deal_subscriptions", "slack_notification_deliveries",
+        } & tables_after)
         engine.dispose()
 
     def test_token_cipher_does_not_expose_plaintext_and_rejects_wrong_key(self) -> None:

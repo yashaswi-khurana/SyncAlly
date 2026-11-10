@@ -11,8 +11,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import delete, exists, select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from syncally.api.authorization import require_deal_action
@@ -26,9 +26,14 @@ from syncally.infrastructure.identity import resolve_actor
 from syncally.infrastructure.integrations.slack import SlackIntegrationError, SlackTokenCipher
 from syncally.infrastructure.integrations.slack_events import SlackWebAPI, SlackWebAPIError
 from syncally.infrastructure.models import (
+    AgreementVersion,
+    AuditEvent,
+    OutboxEvent,
+    SlackDealSubscription,
     SlackEvent,
     SlackInstallation,
     SlackLinkChallenge,
+    SlackNotificationDelivery,
     SlackUserLink,
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
@@ -41,6 +46,7 @@ logger = logging.getLogger(__name__)
 _MAX_ATTEMPTS = 8
 _LEASE_SECONDS = 60
 _EVENT_RETENTION_DAYS = 30
+_PRIVATE_DEAL_DENIAL = "I couldn't find an authorized deal to follow."
 _SAFE_PROVIDER_FAILURES = frozenset(
     {
         "ratelimited",
@@ -141,6 +147,55 @@ def _payment_summary_text(payments: list[PaymentStatusRecord]) -> str:
     return "\n".join(lines)
 
 
+def _authorized_subscription_deal(
+    db: Session,
+    installation: SlackInstallation,
+    link: SlackUserLink,
+    deal_id: str,
+):
+    """Reload the actor and enforce current assigned deal-read access."""
+    actor = resolve_actor(db, link.user_id)
+    if actor is None or installation.organization_id not in actor.organization_ids:
+        return None
+    try:
+        deal_uuid = uuid.UUID(deal_id)
+        deal = get_deal(actor, deal_uuid, SqlAlchemyDealRepository(db))
+        require_deal_action(actor, deal, installation.organization_id, "deal.read_assigned")
+    except (DealNotFound, ValueError, HTTPException):
+        return None
+    return deal
+
+
+def _audit_subscription_change(
+    db: Session,
+    *,
+    subscription_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    installation: SlackInstallation,
+    user_id: uuid.UUID,
+    event_type: str,
+    now: datetime,
+) -> None:
+    db.add(
+        AuditEvent(
+            id=uuid.uuid4(),
+            aggregate_type="slack_deal_subscription",
+            aggregate_id=subscription_id,
+            event_type=event_type,
+            actor_type="USER",
+            actor_id=str(user_id),
+            occurred_at=now,
+            payload={
+                "provider": "SLACK",
+                "organization_id": str(installation.organization_id),
+                "workspace_id": installation.workspace_id,
+                "deal_id": str(deal_id),
+                "outcome": event_type.rsplit(".", 1)[-1].upper(),
+            },
+        )
+    )
+
+
 def prune_slack_records(db: Session, now: datetime | None = None) -> tuple[int, int]:
     """Delete expired pairing codes and terminal event metadata past retention."""
     current_time = now or datetime.now(UTC)
@@ -153,8 +208,220 @@ def prune_slack_records(db: Session, now: datetime | None = None) -> tuple[int, 
             SlackEvent.created_at < current_time - timedelta(days=_EVENT_RETENTION_DAYS),
         )
     ).rowcount or 0
+    db.execute(
+        delete(SlackNotificationDelivery).where(
+            SlackNotificationDelivery.status.in_(("DELIVERED", "FAILED")),
+            SlackNotificationDelivery.created_at < current_time - timedelta(days=_EVENT_RETENTION_DAYS),
+        )
+    )
     db.commit()
     return expired_challenges, old_terminal_events
+
+
+def _enqueue_agreement_commit_deliveries(db: Session, now: datetime) -> int:
+    """Fan out recent committed agreements without touching Temporal outbox state."""
+    existing = exists(
+        select(SlackNotificationDelivery.id).where(
+            SlackNotificationDelivery.source_event_id == OutboxEvent.id,
+            SlackNotificationDelivery.subscription_id == SlackDealSubscription.id,
+        )
+    )
+    rows = db.execute(
+        select(OutboxEvent.id, SlackDealSubscription.id, OutboxEvent.created_at)
+        .join(AgreementVersion, AgreementVersion.id == OutboxEvent.aggregate_id)
+        .join(SlackDealSubscription, SlackDealSubscription.deal_id == AgreementVersion.deal_id)
+        .where(
+            OutboxEvent.aggregate_type == "agreement",
+            OutboxEvent.event_type == "AGREEMENT_COMMITTED",
+            OutboxEvent.created_at >= now - timedelta(days=_EVENT_RETENTION_DAYS),
+            SlackDealSubscription.created_at < OutboxEvent.created_at,
+            ~existing,
+        )
+        .order_by(OutboxEvent.created_at, OutboxEvent.id, SlackDealSubscription.id)
+        .limit(250)
+    ).all()
+    inserted = 0
+    for source_event_id, subscription_id, source_created_at in rows:
+        try:
+            with db.begin_nested():
+                db.add(
+                    SlackNotificationDelivery(
+                        id=uuid.uuid4(),
+                        source_event_id=source_event_id,
+                        subscription_id=subscription_id,
+                        status="PENDING",
+                        attempts=0,
+                        available_at=as_utc(source_created_at),
+                    )
+                )
+                db.flush()
+            inserted += 1
+        except IntegrityError:
+            # Another worker may have fanned out this exact source/subscriber
+            # pair while this process was selecting it.
+            continue
+    db.commit()
+    return inserted
+
+
+def _take_notification_delivery(db: Session, now: datetime) -> uuid.UUID | None:
+    _enqueue_agreement_commit_deliveries(db, now)
+    db.execute(
+        update(SlackNotificationDelivery)
+        .where(
+            SlackNotificationDelivery.status == "PROCESSING",
+            SlackNotificationDelivery.available_at <= now,
+        )
+        .values(status="FAILED", last_error="delivery_uncertain")
+    )
+    db.execute(
+        update(SlackNotificationDelivery)
+        .where(
+            SlackNotificationDelivery.available_at <= now,
+            SlackNotificationDelivery.status == "PENDING",
+            SlackNotificationDelivery.attempts >= _MAX_ATTEMPTS,
+        )
+        .values(status="FAILED", last_error="attempts_exhausted")
+    )
+    db.commit()
+    delivery = db.scalar(
+        select(SlackNotificationDelivery)
+        .where(
+            SlackNotificationDelivery.available_at <= now,
+            SlackNotificationDelivery.status == "PENDING",
+            SlackNotificationDelivery.attempts < _MAX_ATTEMPTS,
+        )
+        .order_by(SlackNotificationDelivery.available_at, SlackNotificationDelivery.created_at)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    if delivery is None:
+        return None
+    delivery.status = "PROCESSING"
+    delivery.attempts += 1
+    delivery.available_at = now + timedelta(seconds=_LEASE_SECONDS)
+    db.commit()
+    return delivery.id
+
+
+def _record_notification_failure(
+    session_factory: Callable[[], Session],
+    delivery_id: uuid.UUID,
+    *,
+    failure_kind: str,
+    retry_after: float | None = None,
+    uncertain: bool = False,
+    terminal: bool = False,
+) -> None:
+    db = session_factory()
+    try:
+        delivery = db.get(SlackNotificationDelivery, delivery_id)
+        if delivery is None:
+            return
+        delivery.last_error = failure_kind
+        if uncertain or terminal or delivery.attempts >= _MAX_ATTEMPTS:
+            delivery.status = "FAILED"
+        else:
+            delivery.status = "PENDING"
+            delivery.available_at = datetime.now(UTC) + timedelta(
+                seconds=retry_after or min(2 ** delivery.attempts, 300)
+            )
+        db.commit()
+        logger.warning(
+            "Slack notification delivery failure recorded",
+            extra={"failure_kind": failure_kind, "retryable": delivery.status == "PENDING"},
+        )
+    except Exception:
+        db.rollback()
+        logger.error("Could not persist Slack notification delivery failure state")
+    finally:
+        db.close()
+
+
+async def _deliver_notification(
+    db: Session,
+    delivery_id: uuid.UUID,
+    api: SlackWebAPI,
+) -> None:
+    delivery = db.get(SlackNotificationDelivery, delivery_id)
+    if delivery is None:
+        return
+    subscription = db.get(SlackDealSubscription, delivery.subscription_id)
+    source = db.get(OutboxEvent, delivery.source_event_id)
+    if subscription is None or source is None or source.event_type != "AGREEMENT_COMMITTED":
+        delivery.status = "FAILED"
+        delivery.last_error = "source_or_subscription_missing"
+        db.commit()
+        return
+    agreement = db.get(AgreementVersion, source.aggregate_id)
+    if agreement is None or agreement.deal_id != subscription.deal_id:
+        delivery.status = "FAILED"
+        delivery.last_error = "source_mismatch"
+        db.commit()
+        return
+
+    installation = db.scalar(
+        select(SlackInstallation).where(
+            SlackInstallation.id == subscription.installation_id,
+            SlackInstallation.organization_id == subscription.organization_id,
+            SlackInstallation.workspace_id == subscription.workspace_id,
+            SlackInstallation.status == "CONNECTED",
+        )
+    )
+    if installation is None or not installation.encrypted_bot_token:
+        delivery.status = "FAILED"
+        delivery.last_error = "installation_inactive"
+        db.commit()
+        return
+
+    link = db.scalar(
+        select(SlackUserLink).where(
+            SlackUserLink.installation_id == subscription.installation_id,
+            SlackUserLink.organization_id == subscription.organization_id,
+            SlackUserLink.workspace_id == subscription.workspace_id,
+            SlackUserLink.slack_user_id == subscription.slack_user_id,
+            SlackUserLink.user_id == subscription.user_id,
+        )
+    )
+    deal = (
+        _authorized_subscription_deal(
+            db,
+            installation,
+            link,
+            str(subscription.deal_id),
+        )
+        if link is not None
+        else None
+    )
+    if deal is None:
+        # Revoked membership, deal access, or identity mapping suppresses a
+        # queued update instead of revealing whether the deal changed.
+        delivery.status = "FAILED"
+        delivery.last_error = "authorization_revoked"
+        db.commit()
+        return
+
+    token = _cipher().decrypt(installation.encrypted_bot_token)
+    await _provider_call(
+        api.post_ephemeral,
+        token,
+        channel=subscription.channel_id,
+        user=subscription.slack_user_id,
+        thread_ts=subscription.thread_ts,
+        text=(
+            "A SyncAlly agreement was committed for a deal you follow. "
+            f"Mention `@SyncAlly status {subscription.deal_id}` or "
+            f"`@SyncAlly payments {subscription.deal_id}` in this thread "
+            "to check its current state."
+        ),
+    )
+    delivery.status = "DELIVERED"
+    delivery.last_error = None
+    delivery.delivered_at = datetime.now(UTC)
+    try:
+        db.commit()
+    except Exception as error:
+        raise SlackWebAPIError("delivery_uncertain", uncertain=True) from error
 
 
 def _take_event(db: Session, now: datetime) -> uuid.UUID | None:
@@ -350,12 +617,135 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             thread_ts=event.thread_ts,
             text=text,
         )
+    elif event.command in {"FOLLOW", "UNFOLLOW"} and event.deal_id is not None:
+        link = db.scalar(
+            select(SlackUserLink).where(
+                SlackUserLink.installation_id == installation.id,
+                SlackUserLink.slack_user_id == event.slack_user_id,
+                SlackUserLink.organization_id == installation.organization_id,
+                SlackUserLink.workspace_id == installation.workspace_id,
+            )
+        )
+        if link is None:
+            text = "Link your SyncAlly account first: mention `@SyncAlly link` and follow the private instructions."
+        elif event.command == "FOLLOW":
+            deal = _authorized_subscription_deal(
+                db, installation, link, event.deal_id
+            )
+            if deal is None:
+                text = _PRIVATE_DEAL_DENIAL
+            else:
+                subscription = db.scalar(
+                    select(SlackDealSubscription).where(
+                        SlackDealSubscription.installation_id == installation.id,
+                        SlackDealSubscription.user_id == link.user_id,
+                        SlackDealSubscription.deal_id == deal.id,
+                        SlackDealSubscription.channel_id == event.channel_id,
+                        SlackDealSubscription.thread_ts == event.thread_ts,
+                    )
+                )
+                if subscription is None:
+                    now = datetime.now(UTC)
+                    subscription = SlackDealSubscription(
+                        id=uuid.uuid4(),
+                        installation_id=installation.id,
+                        organization_id=installation.organization_id,
+                        workspace_id=installation.workspace_id,
+                        slack_user_id=event.slack_user_id,
+                        user_id=link.user_id,
+                        deal_id=deal.id,
+                        channel_id=event.channel_id,
+                        thread_ts=event.thread_ts,
+                        created_at=now,
+                    )
+                    db.add(subscription)
+                    _audit_subscription_change(
+                        db,
+                        subscription_id=subscription.id,
+                        deal_id=deal.id,
+                        installation=installation,
+                        user_id=link.user_id,
+                        event_type="integration.deal_followed",
+                        now=now,
+                    )
+                    try:
+                        db.commit()
+                        text = (
+                            "You're following agreement updates for this deal in this thread. "
+                            f"Mention `@SyncAlly unfollow {deal.id}` to stop."
+                        )
+                    except IntegrityError:
+                        db.rollback()
+                        subscription = db.scalar(
+                            select(SlackDealSubscription).where(
+                                SlackDealSubscription.installation_id == installation.id,
+                                SlackDealSubscription.user_id == link.user_id,
+                                SlackDealSubscription.deal_id == deal.id,
+                                SlackDealSubscription.channel_id == event.channel_id,
+                                SlackDealSubscription.thread_ts == event.thread_ts,
+                            )
+                        )
+                        if subscription is None:
+                            raise
+                        text = (
+                            "You're already following agreement updates for this deal in this thread. "
+                            f"Mention `@SyncAlly unfollow {deal.id}` to stop."
+                        )
+                else:
+                    text = (
+                        "You're already following agreement updates for this deal in this thread. "
+                        f"Mention `@SyncAlly unfollow {deal.id}` to stop."
+                    )
+        else:
+            subscription = db.scalar(
+                select(SlackDealSubscription).where(
+                    SlackDealSubscription.installation_id == installation.id,
+                    SlackDealSubscription.user_id == link.user_id,
+                    SlackDealSubscription.deal_id == uuid.UUID(event.deal_id),
+                    SlackDealSubscription.channel_id == event.channel_id,
+                    SlackDealSubscription.thread_ts == event.thread_ts,
+                )
+            )
+            if subscription is None:
+                text = "You're not following this deal in this thread."
+            else:
+                now = datetime.now(UTC)
+                db.execute(
+                    delete(SlackNotificationDelivery).where(
+                        SlackNotificationDelivery.subscription_id == subscription.id
+                    )
+                )
+                db.delete(subscription)
+                _audit_subscription_change(
+                    db,
+                    subscription_id=subscription.id,
+                    deal_id=subscription.deal_id,
+                    installation=installation,
+                    user_id=link.user_id,
+                    event_type="integration.deal_unfollowed",
+                    now=now,
+                )
+                db.commit()
+                text = "You're no longer following agreement updates for this deal in this thread."
+        await _provider_call(
+            api.post_ephemeral,
+            token,
+            channel=event.channel_id,
+            user=event.slack_user_id,
+            thread_ts=event.thread_ts,
+            text=text,
+        )
     else:
         await _provider_call(api.post_message,
             token,
             channel=event.channel_id,
             thread_ts=event.thread_ts,
-            text="Use `@SyncAlly link` to connect your account, `@SyncAlly status <deal-id>` for deal status, or `@SyncAlly payments <deal-id>` for payment status. Use an exact deal ID.",
+            text=(
+                "Use `@SyncAlly link` to connect your account, `@SyncAlly status <deal-id>` "
+                "for deal status, `@SyncAlly payments <deal-id>` for payment status, "
+                "or `@SyncAlly follow <deal-id>` to get agreement updates in this thread. "
+                "Use an exact deal ID."
+            ),
         )
     event.status = "DELIVERED"
     event.last_error = None
@@ -371,16 +761,51 @@ async def process_one(
     api: SlackWebAPI | None = None,
     now: datetime | None = None,
 ) -> bool:
+    current_time = now or datetime.now(UTC)
     session = session_factory()
     try:
-        event_id = _take_event(session, now or datetime.now(UTC))
-        if event_id is None:
+        # Handle user controls such as UNFOLLOW before attempting any queued
+        # notification, so an opt-out can suppress pending deliveries.
+        event_id = _take_event(session, current_time)
+        delivery_id = (
+            None if event_id is not None else _take_notification_delivery(session, current_time)
+        )
+        if delivery_id is None and event_id is None:
             return False
     finally:
         session.close()
 
     db = session_factory()
     try:
+        if delivery_id is not None:
+            try:
+                await _deliver_notification(db, delivery_id, api or SlackWebAPI())
+            except SlackWebAPIError as error:
+                db.rollback()
+                db.close()
+                failure_kind = _safe_failure_kind(error)
+                _record_notification_failure(
+                    session_factory,
+                    delivery_id,
+                    failure_kind="delivery_uncertain" if error.uncertain else failure_kind,
+                    retry_after=error.retry_after,
+                    uncertain=error.uncertain,
+                    terminal=failure_kind in {
+                        "thread_not_supported", "thread_not_found", "message_not_found"
+                    },
+                )
+            except Exception as error:
+                db.rollback()
+                db.close()
+                _record_notification_failure(
+                    session_factory,
+                    delivery_id,
+                    failure_kind=_safe_failure_kind(error),
+                    uncertain=isinstance(error, SQLAlchemyError),
+                )
+            return True
+
+        assert event_id is not None
         event = db.get(SlackEvent, event_id)
         if event is None:
             return True

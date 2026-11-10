@@ -30,8 +30,10 @@ from syncally.infrastructure.integrations.slack import (
 )
 from syncally.infrastructure.models import (
     AuditEvent,
+    SlackDealSubscription,
     SlackInstallation,
     SlackLinkChallenge,
+    SlackNotificationDelivery,
     SlackOAuthState,
     SlackUserLink,
 )
@@ -390,6 +392,15 @@ async def disconnect_slack(
     # confirmed installation. Reconnection must establish new user links.
     db.execute(delete(SlackUserLink).where(SlackUserLink.installation_id == installation.id))
     db.execute(delete(SlackLinkChallenge).where(SlackLinkChallenge.installation_id == installation.id))
+    subscription_ids = select(SlackDealSubscription.id).where(
+        SlackDealSubscription.installation_id == installation.id
+    )
+    db.execute(
+        delete(SlackNotificationDelivery).where(
+            SlackNotificationDelivery.subscription_id.in_(subscription_ids)
+        )
+    )
+    db.execute(delete(SlackDealSubscription).where(SlackDealSubscription.installation_id == installation.id))
     installation.status = "DISCONNECTED"
     installation.encrypted_bot_token = None
     installation.disconnected_at = datetime.now(UTC)

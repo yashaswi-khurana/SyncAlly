@@ -203,6 +203,90 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("previous extraction failed validation", calls[1]["contents"][0]["parts"][0]["text"])
 
+    def test_gemini_repairs_a_rejected_proposal_once_with_grounded_citations(self) -> None:
+        context = self._demo_context(
+            "Item: Widget, 12 boxes at USD 2.50 each; deliver to Toronto by 2026-12-01."
+        )
+        message = replace(context.messages[0], visibility=Visibility.SHAREABLE)
+        context = replace(context, messages=(message,))
+        facts = DemoAISuggestionProvider().extract_facts(
+            FactExtractionRequest(context), timeout_seconds=1
+        )
+        citations = [{
+            "schema_version": 1,
+            "field": fact.field.value,
+            "value": fact.value,
+            "currency_or_unit": fact.currency_or_unit,
+            "source": {
+                "schema_version": 1,
+                "message_id": str(fact.source.message_id),
+                "quote": fact.source.quote,
+                "unknown_reason": None,
+            },
+        } for fact in facts]
+        valid = {
+            "schema_version": 1,
+            "insufficient_context": False,
+            "proposal": _proposal_payload(),
+            "citations": citations,
+        }
+        invalid = {**valid, "citations": citations[:-1]}
+        calls = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            calls.append(json.loads(request.content))
+            payload = invalid if len(calls) == 1 else valid
+            return httpx.Response(200, json={
+                "modelVersion": "gemini-test", "candidates": [{
+                    "index": 0, "finishReason": "STOP", "content": {
+                        "role": "model", "parts": [{"text": json.dumps(payload)}],
+                    },
+                }],
+            })
+
+        provider = ConfiguredAIProvider(self._remote_config(
+            ai_provider="gemini", gemini_model="gemini-3.5-flash", google_api_key="test-key",
+        ), transport=httpx.MockTransport(respond))
+        result = draft_proposal_from_context(context, provider)
+
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(result.proposal, self.proposal)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("previous proposal failed validation", calls[1]["contents"][0]["parts"][0]["text"])
+
+    def test_gemini_does_not_retry_an_explicit_insufficient_context_result(self) -> None:
+        context = self._demo_context(
+            "Item: Widget, 12 boxes at USD 2.50 each; deliver to Toronto by 2026-12-01."
+        )
+        message = replace(context.messages[0], visibility=Visibility.SHAREABLE)
+        context = replace(context, messages=(message,))
+        calls = []
+        response = {
+            "schema_version": 1,
+            "insufficient_context": True,
+            "proposal": None,
+            "citations": [],
+        }
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, json={
+                "modelVersion": "gemini-test", "candidates": [{
+                    "index": 0, "finishReason": "STOP", "content": {
+                        "role": "model", "parts": [{"text": json.dumps(response)}],
+                    },
+                }],
+            })
+
+        provider = ConfiguredAIProvider(self._remote_config(
+            ai_provider="gemini", gemini_model="gemini-3.5-flash", google_api_key="test-key",
+        ), transport=httpx.MockTransport(respond))
+        result = draft_proposal_from_context(context, provider)
+
+        self.assertIs(result.result.status, ValidationStatus.INVALID)
+        self.assertIn("does not have enough grounded context", result.result.issues[0].message)
+        self.assertEqual(len(calls), 1)
+
     def _remote_config(self, **updates: object) -> Settings:
         values = dict(
             app_env="test", ai_provider="openai", ai_remote_egress_enabled=True,
@@ -678,7 +762,11 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.repository.memberships.add((self.buyer_id, self.user_id))
         self.repository.conversation_owner[self.buyer_conversation_id] = self.buyer_id
         self.repository.conversation_owner[self.seller_conversation_id] = self.seller_id
-        self.actor = ActorContext(self.user_id, frozenset({self.buyer_id}))
+        self.actor = ActorContext(
+            self.user_id,
+            frozenset({self.buyer_id}),
+            owned_organization_ids=frozenset({self.buyer_id}),
+        )
 
         self.proposal = ProposedTerms.from_mapping(_proposal_payload())
 

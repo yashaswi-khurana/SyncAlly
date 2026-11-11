@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     ai_provider: Literal[
         "offline", "openai", "openai_with_offline_fallback",
         "gemini", "gemini_with_offline_fallback",
+        "nvidia", "nvidia_with_offline_fallback",
     ] = "offline"
     payment_mode: Literal["PAYPAL_SANDBOX", "OFFLINE_DEMO"] = "PAYPAL_SANDBOX"
     ai_remote_egress_enabled: bool = False
@@ -116,6 +117,8 @@ class Settings(BaseSettings):
     openai_model: str = ""
     google_api_key: SecretStr = SecretStr("")
     gemini_model: str = ""
+    nvidia_api_key: SecretStr = SecretStr("")
+    nvidia_model: str = ""
     slack_client_id: str = ""
     slack_client_secret: SecretStr = SecretStr("")
     slack_redirect_uri: str = ""

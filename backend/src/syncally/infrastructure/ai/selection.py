@@ -24,6 +24,7 @@ from syncally.domain.ai.contracts import (
 from syncally.domain.conversations import Message, MessageSourceType, Visibility
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
+from syncally.infrastructure.ai.nvidia import NvidiaChatCompletions
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions, transmitted_context
 from syncally.infrastructure.ai.sourcing import interpret_sourcing_requirements
 
@@ -34,14 +35,29 @@ class ConfiguredAIProvider:
         self._config = config
         mode = config.ai_provider
         self.provenance = AIProvenance(provider="offline", mode=mode, context_scope="authorized")
-        self._remote: OpenAIChatCompletions | GeminiGenerateContent | None = None
+        self._remote: OpenAIChatCompletions | GeminiGenerateContent | NvidiaChatCompletions | None = None
         if mode == "offline":
             if config.app_env.lower() not in {"development", "test"}:
                 raise AIConfigurationError("AI suggestions are not configured")
             return
         is_gemini = mode.startswith("gemini")
-        model = config.gemini_model if is_gemini else config.openai_model
-        api_key = config.google_api_key if is_gemini else config.openai_api_key
+        is_nvidia = mode.startswith("nvidia")
+        if is_gemini:
+            model = config.gemini_model
+            api_key = config.google_api_key
+            provider_name = "gemini"
+            adapter = GeminiGenerateContent
+        elif is_nvidia:
+            model = config.nvidia_model
+            api_key = config.nvidia_api_key
+            provider_name = "nvidia"
+            adapter = NvidiaChatCompletions
+        else:
+            model = config.openai_model
+            api_key = config.openai_api_key
+            provider_name = "openai"
+            adapter = OpenAIChatCompletions
+
         if not config.ai_remote_egress_enabled or not model.strip():
             raise AIConfigurationError("AI suggestions are not configured")
         if not api_key.get_secret_value().strip():
@@ -49,11 +65,10 @@ class ConfiguredAIProvider:
                 raise AIConfigurationError("AI suggestions are not configured")
             self.provenance = replace(self.provenance, fallback_reason="missing_credentials")
             return
-        adapter = GeminiGenerateContent if is_gemini else OpenAIChatCompletions
         self._remote = adapter(api_key=api_key, model=model.strip(), transport=transport)
         self.provenance = replace(
             self.provenance,
-            provider="gemini" if is_gemini else "openai",
+            provider=provider_name,
             model=self._remote.model,
         )
 

@@ -117,10 +117,10 @@ class AIConfigurationError(AIProviderError):
 
 @dataclass(frozen=True, slots=True)
 class AIProvenance:
-    provider: Literal["offline", "openai", "gemini", "unknown"] = "unknown"
+    provider: Literal["offline", "openai", "gemini", "nvidia", "unknown"] = "unknown"
     mode: Literal[
         "offline", "openai", "openai_with_offline_fallback", "gemini",
-        "gemini_with_offline_fallback", "unknown",
+        "gemini_with_offline_fallback", "nvidia", "nvidia_with_offline_fallback", "unknown",
     ] = "unknown"
     model: str | None = None
     context_scope: Literal["authorized", "shareable_only", "authorized_private", "unknown"] = "unknown"

@@ -34,6 +34,7 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
   const [state, setState] = useState<DealsState>({ status: "loading" });
   const [reloadCount, setReloadCount] = useState(0);
   const [organizationNames, setOrganizationNames] = useState<Record<string, string>>({});
+  const [failedOrganizationIds, setFailedOrganizationIds] = useState<Record<string, true>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +75,7 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
           if (!cancelled) setOrganizationNames((names) => ({ ...names, [id]: organization.legal_name }));
         } catch {
           // A missing or inaccessible party name does not prevent opening the deal.
+          if (!cancelled) setFailedOrganizationIds((failed) => ({ ...failed, [id]: true }));
         }
       }
     };
@@ -91,6 +93,11 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
       return (
         <section className="card" aria-live="polite">
           <p role="status">Loading deals…</p>
+          <div className="skeleton-stack" aria-hidden="true">
+            <span className="skeleton-bar skeleton-bar--mid" />
+            <span className="skeleton-bar" />
+            <span className="skeleton-bar skeleton-bar--short" />
+          </div>
         </section>
       );
     }
@@ -118,7 +125,7 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
             <span className="eyebrow">Workspace</span>
             <h2 id="deals-heading">Deals shared with you</h2>
           </div>
-          <button type="button" className="button" onClick={onCreateDeal}>
+          <button type="button" className="button secondary" onClick={onCreateDeal}>
             New deal
           </button>
         </div>
@@ -150,7 +157,9 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
                       ? <span>{organizationNames[deal.buyer_organization_id] ?? "Buyer"} ↔ {organizationNames[deal.seller_organization_id] ?? "Seller"}</span>
                       : organizationNames[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id]
                         ? <span>Trading partner: {organizationNames[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id]}</span>
-                        : null
+                        : failedOrganizationIds[deal.viewer_role === "BUYER" ? deal.seller_organization_id : deal.buyer_organization_id]
+                          ? <span>Trading partner: Name unavailable</span>
+                          : null
                   )}
                   <span className="mono">Reference: {deal.id}</span>
                 </div>

@@ -13,7 +13,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
-    server: { proxy },
+    server: {
+      host: "0.0.0.0",
+      allowedHosts: [".e2b.app", "localhost", "127.0.0.1"],
+      proxy,
+    },
     test: {
       environment: "happy-dom",
       setupFiles: ["./src/test-setup.ts"],

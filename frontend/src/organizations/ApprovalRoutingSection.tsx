@@ -145,15 +145,11 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
   }
 
   return (
-    <div
-      className="approval-routing-section"
-      data-testid="approval-routing-section"
-      style={{ marginTop: 24, borderTop: "1px solid var(--border)", paddingTop: 16 }}
-    >
-      <div className="panel-head" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="approval-routing-section" data-testid="approval-routing-section">
+      <div className="panel-head approval-routing-section__head">
         <div>
           <span className="eyebrow">Organization Access</span>
-          <h4 style={{ margin: "4px 0" }}>Approval Routing</h4>
+          <h4>Approval routing</h4>
           <p className="muted" style={{ fontSize: "0.85rem", margin: 0 }}>
             Optional: require specific members to approve, in sequence or in parallel, before this
             organization&apos;s approval is recorded. Leaving this unset keeps the default: any one
@@ -162,8 +158,8 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
         </div>
       </div>
 
-      {actionError && <p className="form-error" role="alert" style={{ marginBottom: 12 }}>{actionError}</p>}
-      {actionNotice && <p className="success" role="status" style={{ marginBottom: 12 }}>{actionNotice}</p>}
+      {actionError && <p className="form-error" role="alert">{actionError}</p>}
+      {actionNotice && <p className="success" role="status">{actionNotice}</p>}
 
       {!editing ? (
         <div>
@@ -196,8 +192,8 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
           )}
         </div>
       ) : (
-        <form onSubmit={handleSave} noValidate>
-          <div className="field" style={{ marginBottom: 12 }}>
+        <form className="form" onSubmit={handleSave} noValidate>
+          <div className="field">
             <label htmlFor="routing-mode">Mode</label>
             <select
               id="routing-mode"
@@ -210,7 +206,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
             </select>
           </div>
 
-          <div className="field" style={{ marginBottom: 12 }}>
+          <div className="field">
             <label>Eligible approvers</label>
             {eligibleApprovers.length === 0 ? (
               <p className="hint">
@@ -218,9 +214,9 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
                 Members &amp; Permissions first.
               </p>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+              <div className="control-rows">
                 {eligibleApprovers.map((member) => (
-                  <label key={member.user_id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.85rem" }}>
+                  <label key={member.user_id}>
                     <input
                       type="checkbox"
                       checked={draftOrder.includes(member.user_id)}
@@ -235,7 +231,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
           </div>
 
           {draftOrder.length > 0 && (
-            <div className="field" style={{ marginBottom: 12 }}>
+            <div className="field">
               <label>Order{draftMode === "SEQUENTIAL" ? " (turn order)" : ""}</label>
               <ol style={{ margin: 0, paddingLeft: 20 }}>
                 {draftOrder.map((userId, index) => {
@@ -256,7 +252,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
                             <button
                               type="button"
                               className="button ghost"
-                              style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                              style={{ fontSize: "0.75rem", padding: "2px 6px" }}
                               onClick={() => moveApprover(userId, -1)}
                               disabled={saving || index === 0}
                             >
@@ -265,7 +261,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
                             <button
                               type="button"
                               className="button ghost"
-                              style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                              style={{ fontSize: "0.75rem", padding: "2px 6px" }}
                               onClick={() => moveApprover(userId, 1)}
                               disabled={saving || index === draftOrder.length - 1}
                             >
@@ -276,7 +272,7 @@ export default function ApprovalRoutingSection({ organization, members }: Props)
                         <button
                           type="button"
                           className="button ghost"
-                          style={{ fontSize: "0.7rem", padding: "2px 6px" }}
+                          style={{ fontSize: "0.75rem", padding: "2px 6px" }}
                           onClick={() => toggleApprover(userId)}
                           disabled={saving}
                         >

@@ -1,4 +1,6 @@
+import { useEffect, useRef } from "react";
 import type { AgreementVersion, Deal } from "../api/types";
+import { initMotion } from "../ui/motion";
 
 export type OverviewSnapshot = {
   dealId: string;
@@ -14,6 +16,24 @@ interface Props {
   organizationId: string;
   reloadToken: number;
   snapshot: OverviewSnapshot | null;
+  partyNames?: { buyer?: string; seller?: string };
+  onRevealPanel?: (panel: "obligations" | "invoices") => void;
+}
+
+const PIPELINE_STAGES = [
+  "Negotiation",
+  "Term Verification",
+  "Bilateral Approval",
+  "Committed Trade",
+  "Settlement",
+] as const;
+
+function stageIndex(status: string): number {
+  if (["DRAFT", "NEGOTIATING"].includes(status)) return 0;
+  if (status === "PENDING_APPROVALS") return 2;
+  if (status === "AGREED") return 3;
+  if (["EXECUTING", "COMPLETED"].includes(status)) return 4;
+  return -1;
 }
 
 const DEAL_STAGE_LABELS: Record<string, string> = {
@@ -80,7 +100,12 @@ function nextRequiredAction(deal: Deal, organizationId: string): string {
   return "Refresh the deal to check its current stage and available actions.";
 }
 
-export default function DealOverview({ deal, organizationId, reloadToken, snapshot }: Props) {
+export default function DealOverview({ deal, organizationId, reloadToken, snapshot, partyNames, onRevealPanel }: Props) {
+  const rootRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const handle = initMotion(rootRef.current);
+    return () => handle.destroy();
+  }, []);
   const current = snapshot?.dealId === deal.id && snapshot.organizationId === organizationId &&
     snapshot.reloadToken === reloadToken ? snapshot : null;
   let message = "Checking agreement status…";
@@ -133,19 +158,79 @@ export default function DealOverview({ deal, organizationId, reloadToken, snapsh
   }
 
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-  return <section className="card" aria-labelledby="deal-overview-heading">
+  const revealAndScroll = (panel: "obligations" | "invoices", id: string) => {
+    onRevealPanel?.(panel);
+    window.requestAnimationFrame(() => scrollTo(id));
+  };
+
+  let waiting: { text: string; side: "buyer" | "seller" | "neutral" } | null = null;
+  if (
+    current?.agreement && current.agreement.status === "PENDING_APPROVAL" &&
+    deal.status === "PENDING_APPROVALS" && organizationId && current.partyVerified &&
+    hasVerifiedCurrentAgreement(current.agreement, deal)
+  ) {
+    const approvals = current.agreement.approvals;
+    const mine = approvals.find((approval) => approval.organization_id === organizationId);
+    const otherId = organizationId === deal.buyer_organization_id ? deal.seller_organization_id : deal.buyer_organization_id;
+    const other = approvals.find((approval) => approval.organization_id === otherId);
+    const otherSide = otherId === deal.buyer_organization_id ? "buyer" : "seller";
+    const otherLabel = otherSide === "buyer"
+      ? partyNames?.buyer || "Buyer"
+      : partyNames?.seller || "Seller";
+    if (approvals.some((approval) => approval.decision === "REJECT")) {
+      waiting = null;
+    } else if (mine?.decision !== "APPROVE") {
+      waiting = {
+        text: "your approval",
+        side: organizationId === deal.buyer_organization_id ? "buyer" : "seller",
+      };
+    } else if (other?.decision !== "APPROVE") {
+      waiting = { text: `${otherLabel} approval`, side: otherSide };
+    } else {
+      waiting = { text: "commitment by either authorized member", side: "neutral" };
+    }
+  }
+
+  const activeStage = stageIndex(deal.status);
+  return <section ref={rootRef} className="card" aria-labelledby="deal-overview-heading">
     <h2 id="deal-overview-heading">Deal overview</h2>
+    <ol className="stage-stepper" aria-label="Trade pipeline stages">
+      {PIPELINE_STAGES.map((stage, index) => {
+        const state = activeStage < 0 ? "halted" : index < activeStage ? "done" : index === activeStage ? "active" : "todo";
+        return (
+          <li
+            key={stage}
+            className={`stage-stepper__item stage-stepper__item--${state}`}
+            aria-current={state === "active" ? "step" : undefined}
+          >
+            <span className="stage-stepper__marker" aria-hidden="true" />
+            <span className="stage-stepper__label">{stage}</span>
+          </li>
+        );
+      })}
+    </ol>
     <p>Current stage: {DEAL_STAGE_LABELS[deal.status] ?? "Stage unavailable"}</p>
+    {waiting ? (
+      <p className={`stage-waiting stage-waiting--${waiting.side}`}>
+        <strong>Waiting on:</strong> {waiting.text}
+      </p>
+    ) : null}
     <p><strong>Next action:</strong> {nextRequiredAction(deal, organizationId)}</p>
     {organizationId && current?.partyVerified ? <p>Viewing as {organizationId === deal.buyer_organization_id ? "buyer" : "seller"}.</p> : null}
     {agreementLink && current?.agreement && Array.isArray(current.agreement.terms?.line_items)
       ? <ul aria-label="Items in current agreement">{current.agreement.terms.line_items.map((item, index) =>
         <li key={index}>{item.description}: {item.quantity} {item.unit}</li>)}</ul> : null}
     <p>{message}</p>
+    {message === "Checking agreement status…" ? (
+      <div className="skeleton-stack" aria-hidden="true">
+        <span className="skeleton-bar skeleton-bar--mid" />
+        <span className="skeleton-bar skeleton-bar--short" />
+      </div>
+    ) : null}
     {agreementLink ? <button type="button" className="button secondary" onClick={() => scrollTo("agreement-review-heading")}>Review agreement</button> : null}
     {executionLinks ? <div className="actions">
-      <button type="button" className="button secondary" onClick={() => scrollTo("payment-status-heading")}>View payment</button>
-      <button type="button" className="button secondary" onClick={() => scrollTo("fulfillment-heading")}>View delivery</button>
+      <button type="button" className="button secondary" onClick={() => revealAndScroll("invoices", "payment-status-heading")}>View payment</button>
+      <button type="button" className="button secondary" onClick={() => revealAndScroll("obligations", "fulfillment-heading")}>View delivery</button>
     </div> : null}
   </section>;
 }

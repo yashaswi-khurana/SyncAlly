@@ -22,6 +22,7 @@ import type {
   Visibility,
 } from "../api/types";
 import AISuggestionReview from "./AISuggestionReview";
+import "./deal-conversation-modal.css";
 import type { OpeningMessageDraft } from "./openingMessageDraft";
 
 type OrganizationState =
@@ -61,6 +62,10 @@ const REVIEWABLE_STATUSES = new Set<DealFact["status"]>([
   "EXTRACTED",
   "NEEDS_CLARIFICATION",
 ]);
+
+// The transcript card shows only the most recent messages; the full thread
+// opens in the large closable conversation modal.
+const OVERVIEW_MESSAGE_COUNT = 3;
 
 function areFactsEqual(a: DealFact[], b: DealFact[]): boolean {
   if (a.length !== b.length) {
@@ -247,7 +252,7 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
             setVisibility("SHAREABLE");
             updateOpeningDraft(body, "SHAREABLE", null);
           }} />
-          <span><span aria-hidden="true">{"\u{1F310}"} </span>Shareable <small>Visible to both buyer and seller</small></span>
+          <span>Shareable <small>Visible to both buyer and seller</small></span>
         </label>
         <label><input type="radio" name="message-visibility" value="PRIVATE"
           checked={visibility === "PRIVATE"} onChange={() => {
@@ -255,7 +260,7 @@ function MessageComposer({ deal, organization, onSent, composerId, buttonLabel, 
             setVisibility("PRIVATE");
             updateOpeningDraft(body, "PRIVATE", null);
           }} />
-          <span><span aria-hidden="true">{"\u{1F512}"} </span>Private <small>Visible only to members of your organization</small></span>
+          <span>Private <small>Visible only to members of your organization</small></span>
         </label>
       </fieldset>
       <div className="message-composer__actions">
@@ -395,10 +400,10 @@ function ThreadImporter({ deal, organization, onImported }: {
             <label><input type="radio" name={`import-visibility-${deal.id}`} checked={visibility === "SHAREABLE"}
               onChange={() => { setVisibility("SHAREABLE"); setSharingConfirmed(false); }} />Shareable</label>
           </fieldset>
-          <label><input type="checkbox" checked={confirmed} disabled={pending}
+          <label className="check-row"><input type="checkbox" checked={confirmed} disabled={pending}
             onChange={(event) => setConfirmed(event.target.checked)} />I confirm importing this exact text as {organization.legal_name}</label>
           {visibility === "SHAREABLE" ? (
-            <label><input type="checkbox" checked={sharingConfirmed} disabled={pending}
+            <label className="check-row"><input type="checkbox" checked={sharingConfirmed} disabled={pending}
               onChange={(event) => setSharingConfirmed(event.target.checked)} />I confirm sharing this thread with the counterparty</label>
           ) : null}
         </>
@@ -443,6 +448,8 @@ export default function DealConversationReview({
   const [actionError, setActionError] = useState<{ factId: string; message: string } | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
+  const [fullConversationOpen, setFullConversationOpen] = useState(false);
+  const fullConversationCloseRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -484,6 +491,7 @@ export default function DealConversationReview({
     contextGenerationRef.current += 1;
     const removedFactIds = removedFactIdsRef.current;
     removedFactIds.clear();
+    setFullConversationOpen(false);
     return () => {
       contextGenerationRef.current += 1;
       removedFactIds.clear();
@@ -506,6 +514,8 @@ export default function DealConversationReview({
         )
       : [];
   const visibleMessages = currentConversation?.messages ?? [];
+  const overviewMessages = visibleMessages.slice(-OVERVIEW_MESSAGE_COUNT);
+  const hiddenMessageCount = visibleMessages.length - overviewMessages.length;
   const factsAwaitingReview = visibleFacts.filter((fact) => REVIEWABLE_STATUSES.has(fact.status)).length;
   const confirmedFacts = visibleFacts.filter((fact) => fact.status === "CONFIRMED").length;
   const privateFacts = visibleFacts.filter((fact) => fact.visibility === "PRIVATE").length;
@@ -522,12 +532,72 @@ export default function DealConversationReview({
     return true;
   });
 
+  // Focus the close button when the full transcript modal opens so keyboard
+  // users land inside the dialog, and unlock scrolling when it closes.
+  useEffect(() => {
+    if (!fullConversationOpen) return;
+    fullConversationCloseRef.current?.focus();
+    if (typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [fullConversationOpen]);
+
   function traceSourceMessage(messageId: string) {
     setHighlightedMessageId(messageId);
-    document.getElementById(`deal-message-${messageId}`)?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-    });
+    const overviewElement = document.getElementById(`deal-message-${messageId}`);
+    if (overviewElement) {
+      overviewElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      return;
+    }
+    // The source message is older than the overview window: reveal the full
+    // transcript modal and scroll to the traced message there.
+    setFullConversationOpen(true);
+    window.setTimeout(() => {
+      document.getElementById(`deal-message-modal-${messageId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 60);
+  }
+
+  function renderMessageList(messages: DealMessage[], options: { idPrefix: string; label: string }) {
+    return (
+      <ol className="message-list" aria-label={options.label} tabIndex={0}>
+        {messages.length === 0 ? (
+          <li className="empty-state">No messages yet.</li>
+        ) : (
+          messages.map((message) => (
+            <li
+              key={message.id}
+              id={`${options.idPrefix}${message.id}`}
+              className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
+            >
+              <div className="communication-meta">
+                <span>
+                  {message.source_type === "AGENT"
+                    ? "SyncAlly assistant"
+                    : "Deal participant"}
+                </span>
+                <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
+              </div>
+              <p className="message-body">{message.body}</p>
+              <div className="communication-badges">
+                <span className={`badge badge--${message.visibility.toLowerCase()}`}>
+                  <span aria-hidden="true">{message.visibility === "PRIVATE" ? "\u{1F512}" : "\u{1F310}"} </span>
+                  {message.visibility === "PRIVATE" ? "Private" : "Shareable"}
+                </span>
+              </div>
+            </li>
+          ))
+        )}
+      </ol>
+    );
   }
 
   useEffect(() => {
@@ -819,6 +889,7 @@ export default function DealConversationReview({
                     setActionError(null);
                     setHighlightedMessageId(null);
                     setFactFilter("all");
+                    setFullConversationOpen(false);
                     setInternalSelectedOrgId(nextOrgId);
                     onOrganizationChange?.(nextOrgId);
                   }}
@@ -849,35 +920,29 @@ export default function DealConversationReview({
                 </button>
               </div>
             ) : (
-              <ol className="message-list" aria-label="Conversation messages" tabIndex={0}>
-                {visibleMessages.length === 0 ? (
-                  <li className="empty-state">No messages yet.</li>
-                ) : (
-                  visibleMessages.map((message) => (
-                    <li
-                      key={message.id}
-                      id={`deal-message-${message.id}`}
-                      className={`message-entry message-entry--${message.source_type.toLowerCase()}${highlightedMessageId === message.id ? " message-entry--source-linked" : ""}`}
-                    >
-                      <div className="communication-meta">
-                        <span>
-                          {message.source_type === "AGENT"
-                            ? "SyncAlly assistant"
-                            : "Deal participant"}
-                        </span>
-                        <time dateTime={message.created_at}>{formatTimestamp(message.created_at)}</time>
-                      </div>
-                      <p className="message-body">{message.body}</p>
-                      <div className="communication-badges">
-                        <span className={`badge badge--${message.visibility.toLowerCase()}`}>
-                          <span aria-hidden="true">{message.visibility === "PRIVATE" ? "\u{1F512}" : "\u{1F310}"} </span>
-                          {message.visibility === "PRIVATE" ? "Private" : "Shareable"}
-                        </span>
-                      </div>
-                    </li>
-                  ))
-                )}
-              </ol>
+              <>
+                {renderMessageList(overviewMessages, {
+                  idPrefix: "deal-message-",
+                  label: "Conversation messages",
+                })}
+                {visibleMessages.length > 0 ? (
+                  <div className="conversation-overview-actions">
+                    {hiddenMessageCount > 0 ? (
+                      <p className="hint">Showing the latest {overviewMessages.length} of {visibleMessages.length} messages.</p>
+                    ) : null}
+                    {hiddenMessageCount > 0 ? (
+                      <button
+                        type="button"
+                        className="button secondary"
+                        aria-expanded={fullConversationOpen}
+                        onClick={() => setFullConversationOpen(true)}
+                      >
+                        View all {visibleMessages.length} messages
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </>
             )}
             {currentConversation && selectedOrganization ? (
               <>
@@ -1023,7 +1088,7 @@ export default function DealConversationReview({
                             onClick={() => traceSourceMessage(sourceMessage.id)}
                           >
                             Trace to message {String(sourceMessageIndex + 1).padStart(2, "0")}
-                            <span aria-hidden="true"> ↗</span>
+                            <span aria-hidden="true"> →</span>
                           </button>
                         ) : null}
                         <blockquote className="fact-source__quote">“{fact.source_span}”</blockquote>
@@ -1089,6 +1154,49 @@ export default function DealConversationReview({
             onAgreementCreated={onAgreementCreated}
           />
         </>
+      ) : null}
+      {fullConversationOpen && currentConversation ? (
+        <div
+          className="conversation-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="full-conversation-heading"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              setFullConversationOpen(false);
+            }
+          }}
+        >
+          <div
+            className="conversation-modal__backdrop"
+            aria-hidden="true"
+            onClick={() => setFullConversationOpen(false)}
+          />
+          <div className="card communication-card conversation-modal__panel">
+            <div className="panel-head">
+              <div>
+                <span className="eyebrow">Deal messages</span>
+                <h2 id="full-conversation-heading">Full conversation</h2>
+              </div>
+              <button
+                type="button"
+                className="button secondary conversation-modal__close"
+                ref={fullConversationCloseRef}
+                onClick={() => setFullConversationOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <p className="muted">
+              All {visibleMessages.length} messages your organization is allowed to read.
+            </p>
+            {renderMessageList(visibleMessages, {
+              idPrefix: "deal-message-modal-",
+              label: "Full conversation messages",
+            })}
+          </div>
+        </div>
       ) : null}
     </section>
   );

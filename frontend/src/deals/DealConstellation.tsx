@@ -3,11 +3,15 @@ import TradeFlowScene from "./TradeFlowScene";
 interface DealConstellationProps {
   buyerOrganizationId: string;
   sellerOrganizationId: string;
+  buyerName?: string;
+  sellerName?: string;
 }
 
 export default function DealConstellation({
   buyerOrganizationId,
   sellerOrganizationId,
+  buyerName,
+  sellerName,
 }: DealConstellationProps) {
   return (
     <div className="deal-constellation" aria-hidden="true">
@@ -19,11 +23,11 @@ export default function DealConstellation({
         <span>Shared record</span>
         <span>Seller</span>
       </div>
-      <span className="deal-constellation__id deal-constellation__id--buyer">
-        {buyerOrganizationId.slice(0, 8)}
+      <span className="deal-constellation__id deal-constellation__id--buyer" title={buyerOrganizationId}>
+        {buyerName || buyerOrganizationId.slice(0, 8)}
       </span>
-      <span className="deal-constellation__id deal-constellation__id--seller">
-        {sellerOrganizationId.slice(0, 8)}
+      <span className="deal-constellation__id deal-constellation__id--seller" title={sellerOrganizationId}>
+        {sellerName || sellerOrganizationId.slice(0, 8)}
       </span>
     </div>
   );

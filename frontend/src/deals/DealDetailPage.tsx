@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import type { Deal, NegotiationView, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
+import { setSceneConsensus } from "../ui/motion";
 import DealConstellation from "./DealConstellation";
 import DealConversationReview from "./DealConversationReview";
 import AgreementReview from "./AgreementReview";
@@ -78,6 +79,7 @@ export default function DealDetailPage({
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(openingMessageDraft?.organizationId ?? "");
   const [counterpartyName, setCounterpartyName] = useState("Counterparty");
   const [partyNames, setPartyNames] = useState<{ buyer: string; seller: string }>({ buyer: "", seller: "" });
+  const [deskTab, setDeskTab] = useState<"trade" | "obligations" | "invoices" | "audit">("trade");
   const [negotiation, setNegotiation] = useState<NegotiationView | null>(null);
   const [overview, setOverview] = useState<OverviewSnapshot | null>(null);
   function commercialChanged() {
@@ -436,6 +438,18 @@ export default function DealDetailPage({
     setFreshnessError(null);
   }, []);
 
+  // direction §2: approval progress in the DOM tweens the shared scene state
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    const status = state.deal.status;
+    const target = ["AGREED", "EXECUTING", "COMPLETED"].includes(status)
+      ? 1
+      : status === "PENDING_APPROVALS"
+        ? 0.5
+        : 0;
+    setSceneConsensus(target);
+  }, [state]);
+
   function handleStartConversation() {
     const composer = document.querySelector<HTMLTextAreaElement>("#deal-message-input");
     if (composer) {
@@ -507,7 +521,9 @@ export default function DealDetailPage({
         method: "POST",
         body: JSON.stringify({
           recipient_email: teamRecipientEmail.trim().toLowerCase(),
-          ...inviteGrants,
+          ...(inviteGrants.role_bundles.length > 0 ? { role_bundles: inviteGrants.role_bundles } : {}),
+          ...(inviteGrants.permissions.length > 0 ? { permissions: inviteGrants.permissions } : {}),
+          ...(inviteGrants.deal_ids.length > 0 ? { deal_ids: inviteGrants.deal_ids } : {}),
         }),
       });
       setGeneratedInvite(res);
@@ -551,6 +567,11 @@ export default function DealDetailPage({
     return (
       <section className="card" aria-live="polite">
         <p role="status">Loading deal…</p>
+        <div className="skeleton-stack" aria-hidden="true">
+          <span className="skeleton-bar skeleton-bar--mid" />
+          <span className="skeleton-bar" />
+          <span className="skeleton-bar skeleton-bar--short" />
+        </div>
       </section>
     );
   }
@@ -788,7 +809,7 @@ export default function DealDetailPage({
                   Invite team member
                 </button> : null}
                 <button type="button" className="button deal-room__refresh" onClick={retryDeal}>
-                  Refresh room <span aria-hidden="true">↗</span>
+                  Refresh room <span aria-hidden="true">↻</span>
                 </button>
               </div>
             </div>
@@ -796,21 +817,29 @@ export default function DealDetailPage({
             <DealConstellation
               buyerOrganizationId={deal.buyer_organization_id}
               sellerOrganizationId={deal.seller_organization_id}
+              buyerName={partyNames.buyer || undefined}
+              sellerName={partyNames.seller || undefined}
             />
           </div>
 
           <dl className="deal-room__ledger">
             <div className="deal-room__ledger-item">
               <dt>Deal reference</dt>
-              <dd className="mono">{deal.id}</dd>
+              <dd className="mono" title={deal.id}>{deal.id}</dd>
             </div>
             <div className="deal-room__ledger-item">
               <dt>Buyer organization</dt>
-              <dd className="mono" title={partyNames.buyer || undefined}>{deal.buyer_organization_id}</dd>
+              <dd className="mono" title={deal.buyer_organization_id}>
+                {partyNames.buyer || deal.buyer_organization_id.slice(0, 8)}
+                <span className="visually-hidden">{deal.buyer_organization_id}</span>
+              </dd>
             </div>
             <div className="deal-room__ledger-item">
               <dt>Seller organization</dt>
-              <dd className="mono" title={partyNames.seller || undefined}>{deal.seller_organization_id}</dd>
+              <dd className="mono" title={deal.seller_organization_id}>
+                {partyNames.seller || deal.seller_organization_id.slice(0, 8)}
+                <span className="visually-hidden">{deal.seller_organization_id}</span>
+              </dd>
             </div>
             <div className="deal-room__ledger-item deal-room__ledger-item--version">
               <dt>Deal version</dt>
@@ -819,7 +848,63 @@ export default function DealDetailPage({
           </dl>
         </section>
 
-        <DealOverview deal={deal} organizationId={selectedOrganizationId} reloadToken={agreementReloadToken} snapshot={overview} />
+        <DealOverview
+          deal={deal}
+          organizationId={selectedOrganizationId}
+          reloadToken={agreementReloadToken}
+          snapshot={overview}
+          partyNames={partyNames}
+          onRevealPanel={setDeskTab}
+        />
+        <div className="deal-desk" data-active-tab={deskTab}>
+          <div className="deal-desk__tabs" role="tablist" aria-label="Deal workspace views">
+            <button
+              type="button"
+              role="tab"
+              id="deal-desk-tab-trade"
+              aria-selected={deskTab === "trade"}
+              aria-controls="deal-desk-panel-trade"
+              className={deskTab === "trade" ? "deal-desk__tab deal-desk__tab--active" : "deal-desk__tab"}
+              onClick={() => setDeskTab("trade")}
+            >
+              Trade Desk
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="deal-desk-tab-obligations"
+              aria-selected={deskTab === "obligations"}
+              aria-controls="deal-desk-panel-obligations"
+              className={deskTab === "obligations" ? "deal-desk__tab deal-desk__tab--active" : "deal-desk__tab"}
+              onClick={() => setDeskTab("obligations")}
+            >
+              Obligations &amp; Delivery
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="deal-desk-tab-invoices"
+              aria-selected={deskTab === "invoices"}
+              aria-controls="deal-desk-panel-invoices"
+              className={deskTab === "invoices" ? "deal-desk__tab deal-desk__tab--active" : "deal-desk__tab"}
+              onClick={() => setDeskTab("invoices")}
+            >
+              Invoices &amp; Payments
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="deal-desk-tab-audit"
+              aria-selected={deskTab === "audit"}
+              aria-controls="deal-desk-panel-audit"
+              className={deskTab === "audit" ? "deal-desk__tab deal-desk__tab--active" : "deal-desk__tab"}
+              onClick={() => setDeskTab("audit")}
+            >
+              Audit &amp; Legal
+            </button>
+          </div>
+          <div className="deal-desk__panel deal-desk__panel--trade" role="tabpanel" id="deal-desk-panel-trade" aria-labelledby="deal-desk-tab-trade">
+            <div className="deal-desk__stream">
         <DealConversationReview
           negotiation={negotiation?.organization_id === selectedOrganizationId && negotiation.deal_id === deal.id ? negotiation : null}
           deal={deal}
@@ -840,6 +925,8 @@ export default function DealDetailPage({
           deal={deal} organizationId={selectedOrganizationId} reloadToken={agreementReloadToken}
           onLoaded={setNegotiation} onChanged={commercialChanged}
         /> : null}
+            </div>
+            <div className="deal-desk__ledger">
         {!deal.pending_counterparty ? <AgreementReview
           key={`agreement:${deal.id}:${selectedOrganizationId}`}
           dealId={deal.id}
@@ -853,6 +940,9 @@ export default function DealDetailPage({
           onCommitted={commercialChanged}
           onOverviewChange={setOverview}
         /> : null}
+            </div>
+          </div>
+          <div className="deal-desk__panel deal-desk__panel--obligations" role="tabpanel" id="deal-desk-panel-obligations" aria-labelledby="deal-desk-tab-obligations">
         <FulfillmentPanel
           dealId={deal.id}
           buyerOrganizationId={deal.buyer_organization_id}
@@ -861,6 +951,14 @@ export default function DealDetailPage({
           reloadToken={agreementReloadToken}
           onChanged={commercialChanged}
         />
+        <RemindersPanel
+          key={`reminders:${deal.id}:${selectedOrganizationId}`}
+          deal={deal}
+          selectedOrganizationId={selectedOrganizationId}
+          reloadToken={agreementReloadToken}
+        />
+          </div>
+          <div className="deal-desk__panel deal-desk__panel--invoices" role="tabpanel" id="deal-desk-panel-invoices" aria-labelledby="deal-desk-tab-invoices">
         <PaymentStatusPanel
           key={`payment:${deal.id}:${selectedOrganizationId}`}
           dealId={deal.id}
@@ -869,6 +967,8 @@ export default function DealDetailPage({
           selectedOrganizationId={selectedOrganizationId}
           reloadToken={agreementReloadToken}
         />
+          </div>
+          <div className="deal-desk__panel deal-desk__panel--audit" role="tabpanel" id="deal-desk-panel-audit" aria-labelledby="deal-desk-tab-audit">
         <DealCasesPanel
           key={`cases:${deal.id}`}
           deal={deal}
@@ -876,12 +976,8 @@ export default function DealDetailPage({
           reloadToken={agreementReloadToken}
           onCaseChanged={commercialChanged}
         />
-        <RemindersPanel
-          key={`reminders:${deal.id}:${selectedOrganizationId}`}
-          deal={deal}
-          selectedOrganizationId={selectedOrganizationId}
-          reloadToken={agreementReloadToken}
-        />
+          </div>
+        </div>
 
         {showInviteModal ? (
           <div
@@ -904,16 +1000,29 @@ export default function DealDetailPage({
                   onClick={() => setShowInviteModal(false)}
                   aria-label="Close"
                 >
-                  ✕
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                    <path d="M3 3 9 9 M9 3 3 9" />
+                  </svg>
                 </button>
               </div>
 
-              <p className="muted" style={{ marginBottom: 16 }}>
+              <p className="muted invite-modal__intro">
                 Team membership invitation
               </p>
 
-              <form onSubmit={handleGenerateInvite} className="form" style={{ gap: 14 }}>
-                <div className="field"><label htmlFor="deal-team-email">Team member email</label><input id="deal-team-email" type="email" maxLength={320} value={teamRecipientEmail} disabled={generatingInvite} onChange={(event) => setTeamRecipientEmail(event.target.value)} /></div>
+              <form onSubmit={handleGenerateInvite} className="form invite-modal__form">
+                <div className="field">
+                  <label htmlFor="deal-team-email">Team member email</label>
+                  <input
+                    id="deal-team-email"
+                    type="email"
+                    maxLength={320}
+                    placeholder="colleague@company.com"
+                    value={teamRecipientEmail}
+                    disabled={generatingInvite}
+                    onChange={(event) => setTeamRecipientEmail(event.target.value)}
+                  />
+                </div>
                 <div className="field">
                   <label htmlFor="deal-invite-org-select">Inviting Organization</label>
                   <select
@@ -939,7 +1048,6 @@ export default function DealDetailPage({
                   organizationId={selectedInviteOrgId}
                   isOwner={Boolean(adminOrganizations.find((org) => org.id === selectedInviteOrgId)?.is_owner)}
                   disabled={generatingInvite}
-                  initialDealId={state.deal.id}
                   onChange={updateInviteGrants}
                 /> : null}
 
@@ -949,7 +1057,7 @@ export default function DealDetailPage({
                   </p>
                 ) : null}
 
-                <div style={{ marginTop: 8 }}>
+                <div className="invite-modal__actions">
                   <button
                     type="submit"
                     className="button"
@@ -961,15 +1069,15 @@ export default function DealDetailPage({
               </form>
 
               {generatedInvite ? (
-                <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--line)" }}>
-                  <span className="eyebrow">Shareable Invitation Link</span>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <div className="invite-modal__link">
+                  <span className="eyebrow">Shareable invitation link</span>
+                  <div className="invite-modal__link-row">
                     <input
                       type="text"
                       readOnly
+                      aria-label="Shareable invitation link"
                       value={generatedInvite.invite_url}
                       className="mono"
-                      style={{ flex: 1, fontSize: "0.85rem" }}
                     />
                     <button
                       type="button"
@@ -982,21 +1090,7 @@ export default function DealDetailPage({
                       {cancelingInvite ? "Revoking…" : "Revoke invitation"}
                     </button>
                   </div>
-                  <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        padding: "2px 8px",
-                        borderRadius: "4px",
-                        background: "rgba(56, 211, 159, 0.15)",
-                        color: "#38d39f",
-                        fontSize: "0.75rem",
-                        fontWeight: 600,
-                      }}
-                    >
-                      Expires in 7 days · Single use
-                    </span>
-                  </div>
+                  <span className="badge badge--status-confirmed">Expires in 7 days · Single use</span>
                 </div>
               ) : null}
             </div>

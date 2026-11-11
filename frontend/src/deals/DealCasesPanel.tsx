@@ -225,11 +225,11 @@ export default function DealCasesPanel({
 
   return (
     <section className="card deal-cases-panel" aria-labelledby="deal-cases-heading">
-      <div className="panel-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="panel-head panel-head--row">
         <div>
           <span className="eyebrow">Disputes & Cancellations</span>
-          <h2 id="deal-cases-heading" className="display" style={{ margin: 0, fontSize: "1.25rem" }}>
-            Deal Cases ({cases.length})
+          <h2 id="deal-cases-heading" className="display">
+            Deal cases ({cases.length})
           </h2>
         </div>
         {deal.status !== "CANCELLED" && deal.status !== "COMPLETED" ? (
@@ -244,13 +244,13 @@ export default function DealCasesPanel({
       </div>
 
       {loading ? (
-        <p className="muted" style={{ padding: "1rem" }}>Loading cases...</p>
+        <p className="muted">Loading cases...</p>
       ) : error ? (
-        <div className="banner banner--error" role="alert" style={{ margin: "1rem 0" }}>
+        <div className="banner banner--error" role="alert">
           {error}
         </div>
       ) : cases.length === 0 ? (
-        <p className="muted" style={{ padding: "1rem 0" }}>
+        <p className="muted">
           No cancellation or dispute cases recorded for this deal.
         </p>
       ) : (
@@ -263,7 +263,6 @@ export default function DealCasesPanel({
               <div
                 key={c.id}
                 className="deal-case-item card"
-                style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", padding: "1rem" }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
                   <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
@@ -271,89 +270,71 @@ export default function DealCasesPanel({
                     <span className={statusBadgeClass(c.status)}>{c.status}</span>
                     <span className="badge badge--neutral">{c.evidence_visibility}</span>
                   </div>
-                  <span className="muted mono" style={{ fontSize: "0.8rem" }}>
+                  <span className="mono muted deal-case-item__timestamp">
                     {new Date(c.created_at).toLocaleString()}
                   </span>
                 </div>
 
-                <p style={{ margin: "0.5rem 0", fontWeight: 500 }}>{c.reason}</p>
+                <p className="deal-case-item__reason">{c.reason}</p>
 
                 {/* Blocker alert banner */}
                 {c.operational_impact_blockers && c.operational_impact_blockers.length > 0 ? (
-                  <div
-                    className="deal-cases-blocker-banner banner banner--warning"
-                    role="alert"
-                    style={{ margin: "0.75rem 0", padding: "0.75rem", background: "rgba(255,170,0,0.1)", border: "1px solid #fa0" }}
-                  >
+                  <div className="deal-cases-blocker-banner banner banner--warning" role="alert">
                     <strong>Operational Impact Blockers:</strong>
-                    <ul style={{ margin: "0.25rem 0 0 1.25rem", padding: 0 }}>
+                    <ul>
                       {c.operational_impact_blockers.map((blocker, idx) => (
                         <li key={idx}>{blocker}</li>
                       ))}
                     </ul>
-                    <small className="muted" style={{ display: "block", marginTop: "0.25rem" }}>
+                    <small className="muted">
                       Automated closure is blocked until financial and delivery obligations are settled.
                     </small>
                   </div>
                 ) : null}
 
                 {c.resolution ? (
-                  <div style={{ margin: "0.5rem 0", padding: "0.5rem", background: "rgba(255,255,255,0.02)", borderRadius: "4px" }}>
+                  <p className="deal-case-item__resolution">
                     <strong>Resolution:</strong> {c.resolution}
-                  </div>
+                  </p>
                 ) : null}
 
                 {/* Evidence items */}
-                <div style={{ marginTop: "0.75rem" }}>
-                  <h4 style={{ margin: "0.25rem 0", fontSize: "0.9rem" }}>
-                    Evidence Items ({c.evidence_items.length})
-                  </h4>
+                <div className="deal-case-item__evidence">
+                  <h4>Evidence items ({c.evidence_items.length})</h4>
                   {c.evidence_items.length === 0 ? (
                     <span className="muted" style={{ fontSize: "0.85rem" }}>No evidence submitted.</span>
                   ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.25rem" }}>
+                    <ul className="deal-case-evidence">
                       {c.evidence_items.map((e) => (
-                        <div
-                          key={e.evidence_id}
-                          style={{
-                            padding: "0.5rem",
-                            background: "rgba(0,0,0,0.2)",
-                            borderRadius: "4px",
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                          }}
-                        >
-                          <div>
-                            <p style={{ margin: 0, fontSize: "0.9rem" }}>{e.notes}</p>
-                            <span className="muted mono" style={{ fontSize: "0.75rem" }}>
-                              {new Date(e.submitted_at).toLocaleString()}
-                            </span>
-                          </div>
-                          <span className="badge badge--neutral" style={{ fontSize: "0.75rem" }}>
-                            {e.visibility}
-                          </span>
-                        </div>
+                        <li key={e.evidence_id} className="deal-case-evidence__item">
+                          <p>{e.notes}</p>
+                          <span className="mono">{new Date(e.submitted_at).toLocaleString()}</span>
+                          <span className="badge badge--neutral">{e.visibility}</span>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   )}
 
                   {canRespond ? (
                     <div style={{ marginTop: "0.5rem" }}>
                       {activeEvidenceCaseId === c.id ? (
-                        <form onSubmit={(e) => handleAddEvidenceSubmit(c.id, e)} style={{ marginTop: "0.5rem" }}>
-                          <textarea
-                            className="input"
-                            placeholder="Add evidence notes..."
-                            value={newEvidenceNotes}
-                            onChange={(e) => setNewEvidenceNotes(e.target.value)}
-                            rows={2}
-                            style={{ width: "100%", marginBottom: "0.5rem" }}
-                            required
-                          />
-                          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                        <form onSubmit={(e) => handleAddEvidenceSubmit(c.id, e)} className="deal-case-form">
+                          <div className="field">
+                            <label htmlFor={`case-evidence-notes-${c.id}`}>Evidence notes</label>
+                            <textarea
+                              className="input input--textarea"
+                              id={`case-evidence-notes-${c.id}`}
+                              placeholder="Add evidence notes..."
+                              value={newEvidenceNotes}
+                              onChange={(e) => setNewEvidenceNotes(e.target.value)}
+                              rows={2}
+                              required
+                            />
+                          </div>
+                          <div className="deal-case-form__row">
                             <select
                               className="input"
+                              aria-label="Evidence visibility"
                               value={newEvidenceVisibility}
                               onChange={(e) => setNewEvidenceVisibility(e.target.value as EvidenceVisibility)}
                             >
@@ -397,7 +378,7 @@ export default function DealCasesPanel({
 
                 {/* Bilateral decision controls */}
                 {canRespond ? (
-                  <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                  <div className="deal-case-item__actions">
                     <div style={{ display: "flex", gap: "0.5rem" }}>
                       {isInitiator ? (
                         <button
@@ -440,18 +421,18 @@ export default function DealCasesPanel({
                     </div>
 
                     {activeRespondCase && activeRespondCase.caseId === c.id ? (
-                      <form onSubmit={handleRespondSubmit} style={{ marginTop: "0.75rem" }}>
-                        <div style={{ marginBottom: "0.5rem" }}>
-                          <label style={{ display: "block", fontSize: "0.85rem", marginBottom: "0.25rem" }}>
-                            Rationale for {activeRespondCase.decision}:
+                      <form onSubmit={handleRespondSubmit} className="deal-case-form">
+                        <div className="field">
+                          <label htmlFor={`case-rationale-${c.id}`}>
+                            Rationale for {activeRespondCase.decision}
                           </label>
                           <textarea
-                            className="input"
+                            className="input input--textarea"
+                            id={`case-rationale-${c.id}`}
                             value={respondRationale}
                             onChange={(e) => setRespondRationale(e.target.value)}
                             placeholder="State rationale for your decision..."
                             rows={2}
-                            style={{ width: "100%" }}
                             required
                           />
                         </div>
@@ -508,91 +489,83 @@ export default function DealCasesPanel({
                 onClick={() => setShowRaiseModal(false)}
                 aria-label="Close modal"
               >
-                ✕
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                  <path d="M3 3 9 9 M9 3 3 9" />
+                </svg>
               </button>
             </div>
 
-            <form onSubmit={handleRaiseCaseSubmit} style={{ marginTop: "1rem" }}>
-              <div style={{ marginBottom: "1rem" }}>
-                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 500 }}>
-                  Case Type
+            <form onSubmit={handleRaiseCaseSubmit} className="form deal-case-form">
+              <fieldset>
+                <legend>Case type</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="caseType"
+                    value="DISPUTE"
+                    checked={caseType === "DISPUTE"}
+                    onChange={() => setCaseType("DISPUTE")}
+                  />
+                  Dispute
                 </label>
-                <div style={{ display: "flex", gap: "1rem" }}>
-                  <label>
-                    <input
-                      type="radio"
-                      name="caseType"
-                      value="DISPUTE"
-                      checked={caseType === "DISPUTE"}
-                      onChange={() => setCaseType("DISPUTE")}
-                    />{" "}
-                    Dispute
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="caseType"
-                      value="CANCELLATION"
-                      checked={caseType === "CANCELLATION"}
-                      onChange={() => setCaseType("CANCELLATION")}
-                    />{" "}
-                    Mutual Cancellation
-                  </label>
-                </div>
-              </div>
+                <label>
+                  <input
+                    type="radio"
+                    name="caseType"
+                    value="CANCELLATION"
+                    checked={caseType === "CANCELLATION"}
+                    onChange={() => setCaseType("CANCELLATION")}
+                  />
+                  Mutual cancellation
+                </label>
+              </fieldset>
 
-              <div style={{ marginBottom: "1rem" }}>
-                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 500 }}>
-                  Reason
-                </label>
+              <div className="field">
+                <label htmlFor="case-reason">Reason</label>
                 <textarea
-                  className="input"
+                  className="input input--textarea"
+                  id="case-reason"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="Explain why this case is being raised..."
                   rows={3}
-                  style={{ width: "100%" }}
                   required
                 />
               </div>
 
-              <div style={{ marginBottom: "1rem" }}>
-                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 500 }}>
-                  Evidence Visibility
-                </label>
+              <div className="field">
+                <label htmlFor="case-evidence-visibility">Evidence visibility</label>
                 <select
                   className="input"
+                  id="case-evidence-visibility"
                   value={evidenceVisibility}
                   onChange={(e) => setEvidenceVisibility(e.target.value as EvidenceVisibility)}
-                  style={{ width: "100%" }}
                 >
-                  <option value="MUTUAL_VISIBLE">Mutual Visible (Both parties)</option>
-                  <option value="COUNTERPARTY_RESTRICTED">Counterparty Restricted (Submitting org only)</option>
-                  <option value="PRIVATE_OPERATOR">Private Operator (Internal only)</option>
+                  <option value="MUTUAL_VISIBLE">Mutual visible (both parties)</option>
+                  <option value="COUNTERPARTY_RESTRICTED">Counterparty restricted (submitting organization only)</option>
+                  <option value="PRIVATE_OPERATOR">Private operator (internal only)</option>
                 </select>
               </div>
 
-              <div style={{ marginBottom: "1rem" }}>
-                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 500 }}>
-                  Initial Evidence Notes (Optional)
-                </label>
+              <div className="field">
+                <label htmlFor="case-evidence-notes">Initial evidence notes (optional)</label>
                 <textarea
-                  className="input"
+                  className="input input--textarea"
+                  id="case-evidence-notes"
                   value={evidenceNotes}
                   onChange={(e) => setEvidenceNotes(e.target.value)}
-                  placeholder="Add initial evidence, document references, or notes..."
+                  placeholder="Add initial evidence, document references, or notes…"
                   rows={2}
-                  style={{ width: "100%" }}
                 />
               </div>
 
               {formError ? (
-                <div className="banner banner--error" role="alert" style={{ marginBottom: "1rem" }}>
+                <div className="banner banner--error" role="alert">
                   {formError}
                 </div>
               ) : null}
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+              <div className="deal-case-form__actions">
                 <button
                   type="button"
                   className="button button--secondary"

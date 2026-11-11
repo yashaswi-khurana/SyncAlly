@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { initMotion } from "../ui/motion";
 import type { FormEvent } from "react";
 
 import { ApiError, apiRequest, login } from "../api/client";
@@ -62,7 +63,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
   const [mode, setMode] = useState<"signin" | "invite">(() =>
     getInviteTokenFromHash() ? "invite" : "signin",
   );
-  const [inviteEmail, setInviteEmail] = useState(() => invitationPresentation(getInviteTokenFromHash()).recipientEmail ?? "");
+  const [inviteEmail, setInviteEmail] = useState("");
   const [invitePassword, setInvitePassword] = useState("");
   const [pendingSetup, setPendingSetup] = useState(() => readPendingPasswordSetup(getInviteTokenFromHash()));
   const inviteSetupToken = pendingSetup?.setupToken ?? null;
@@ -70,6 +71,11 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
   const [inviteOrgName, setInviteOrgName] = useState("");
   const [inviteCountryCode, setInviteCountryCode] = useState("US");
   const currentInviteRef = useRef(inviteToken);
+  const authRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const handle = initMotion(authRef.current);
+    return () => handle.destroy();
+  }, []);
   const intent = invitationPresentation(inviteToken);
 
   useEffect(() => {
@@ -84,7 +90,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       }
       setInviteToken(token);
       setMode(token ? "invite" : "signin");
-      setInviteEmail(invitationPresentation(token).recipientEmail ?? "");
+      setInviteEmail("");
       setInvitePassword("");
       setPendingSetup(null);
       setInviteDisplayName("");
@@ -140,6 +146,14 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
     }
   }
 
+  function validateInvitePassword(): string | null {
+    const passwordLength = Array.from(invitePassword).length;
+    if (passwordLength === 0) return "Password is required.";
+    if (passwordLength < 12) return "Password must be at least 12 characters.";
+    if (passwordLength > 128) return "Password must be at most 128 characters.";
+    return null;
+  }
+
   async function handleInviteSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!inviteToken || submitting || intent.kind === "INVALID") return;
@@ -147,12 +161,10 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
 
     const nextErrors: FieldErrors = {};
     if (inviteSetupToken) {
-      const passwordLength = Array.from(invitePassword).length;
-      if (passwordLength < 12) nextErrors.password = "Password must be at least 12 characters.";
-      else if (passwordLength > 128) nextErrors.password = "Password must be at most 128 characters.";
+      nextErrors.password = validateInvitePassword() ?? undefined;
       setFieldErrors(nextErrors);
       setFormError(null);
-      if (Object.keys(nextErrors).length > 0) return;
+      if (nextErrors.password) return;
 
       setSubmitting(true);
       try {
@@ -182,14 +194,16 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
     if (inviteEmail.trim() === "") {
       nextErrors.email = "Email is required.";
     }
+    const passwordError = validateInvitePassword();
+    if (passwordError) nextErrors.password = passwordError;
 
     setFieldErrors(nextErrors);
     setFormError(null);
-    if (intent.kind === "COUNTERPARTY" && !inviteOrgName.trim()) {
-      setFormError("Your company legal name is required.");
+    if (Object.keys(nextErrors).length > 0) {
       return;
     }
-    if (Object.keys(nextErrors).length > 0) {
+    if (intent.kind === "COUNTERPARTY" && !inviteOrgName.trim()) {
+      setFormError("Your company legal name is required.");
       return;
     }
 
@@ -198,6 +212,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
       const payload: InvitationAcceptanceInput = {
         token: inviteToken,
         email: inviteEmail.trim(),
+        password: invitePassword,
         display_name: inviteDisplayName.trim() || undefined,
       };
       // A legal name creates a counterparty organization; team invitees join
@@ -254,7 +269,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
   }
 
   return (
-    <main className="auth-layout">
+    <main className="auth-layout" ref={authRef}>
       <header className="auth-masthead">
         <a className="auth-wordmark" href="#/deals" aria-label="SyncAlly home">
           <span className="auth-wordmark__mark" aria-hidden="true">
@@ -284,7 +299,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           <span className="eyebrow">A clearer way to manage trade</span>
           <span className="auth-hero__edition">BUYER ↔ SELLER</span>
         </div>
-        <h1 id="auth-title">
+        <h1 id="auth-title" data-motion-title>
           Bring your trade<br />
           <span>agreements together.</span>
         </h1>
@@ -343,8 +358,8 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
             {inviteSetupToken
               ? "Your invitation is accepted. Create a password to finish setting up your account before entering your workspace."
               : intent.kind === "TEAM"
-                ? "Accept the invitation first. Then create a password before entering your organization."
-                : "Accept the invitation and add your company details. You’ll create a password before entering the deal."}
+                ? "Enter your email and a password to accept the invitation and join your organization."
+                : "Accept the invitation and add your company details, then choose a password to enter the deal."}
           </p>
           <form className="form" onSubmit={handleInviteSubmit} noValidate>
             {intent.recipientEmail ? <p>Invitation for {intent.recipientEmail}</p> : null}
@@ -359,7 +374,6 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                   autoComplete="email"
                   maxLength={320}
                   value={inviteEmail}
-                  readOnly={Boolean(intent.recipientEmail)}
                   aria-invalid={fieldErrors.email ? true : undefined}
                   onChange={(e) => setInviteEmail(e.target.value)}
                 />
@@ -403,7 +417,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                 />
               </div> : null}
             </> : null}
-            {inviteSetupToken ? <div className="field">
+            <div className="field">
               <label htmlFor="invite-password">Password (12–128 characters)</label>
               <input
                 id="invite-password"
@@ -419,15 +433,15 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
                   {fieldErrors.password}
                 </p>
               ) : null}
-            </div> : null}
+            </div>
             {formError ? (
               <p className="form-error" role="alert">
                 {formError}
               </p>
             ) : null}
             <button type="submit" className="button auth-card__submit" disabled={submitting || intent.kind === "INVALID"}>
-              <span>{submitting ? (inviteSetupToken ? "Saving password…" : "Accepting invitation…") : inviteSetupToken ? "Set password and continue" : "Accept invitation"}</span>
-              <span aria-hidden="true">↗</span>
+              <span>{submitting ? (inviteSetupToken ? "Saving password…" : "Accepting invitation…") : inviteSetupToken ? "Set password and continue" : intent.kind === "TEAM" ? "Accept team invitation" : "Create Account & Join Deal"}</span>
+              <span aria-hidden="true">→</span>
             </button>
             <div style={{ marginTop: 12, textAlign: "center" }}>
               <button
@@ -507,7 +521,7 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
             ) : null}
             <button type="submit" className="button auth-card__submit" disabled={submitting}>
               <span>{submitting ? "Signing in…" : "Enter workspace"}</span>
-              <span aria-hidden="true">↗</span>
+              <span aria-hidden="true">→</span>
             </button>
             {inviteToken ? (
               <div style={{ marginTop: 12, textAlign: "center" }}>

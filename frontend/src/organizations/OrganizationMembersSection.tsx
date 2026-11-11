@@ -229,13 +229,13 @@ export default function OrganizationMembersSection({ organization }: Props) {
       </div>
 
       {actionError && (
-        <p className="form-error" role="alert" style={{ marginBottom: 12 }}>
+        <p className="form-error" role="alert">
           {actionError}
         </p>
       )}
 
       {actionNotice && (
-        <p className="success" role="status" style={{ marginBottom: 12 }}>
+        <p className="success" role="status">
           {actionNotice}
         </p>
       )}
@@ -258,7 +258,7 @@ export default function OrganizationMembersSection({ organization }: Props) {
                   borderRadius: 6,
                   border: "1px solid var(--line)",
                   marginBottom: 8,
-                  background: isEditing ? "var(--bg-card-hover, rgba(255,255,255,0.03))" : "transparent",
+                  background: isEditing ? "var(--surface-2)" : "transparent",
                 }}
               >
                 {!isEditing ? (
@@ -369,33 +369,33 @@ export default function OrganizationMembersSection({ organization }: Props) {
                       </div>
                     </div>
 
-                    <fieldset className="field" style={{ marginBottom: 12 }}>
+                    <fieldset className="field control-rows">
                       <legend>Access bundles</legend>
                       <p className="muted">Bundles can be combined. Each bundle grants the actions listed in its description.</p>
-                      {BUNDLES.map((bundle) => <label key={bundle} style={{ display: "block", margin: "6px 0" }}>
+                      {BUNDLES.map((bundle) => <label key={bundle}>
                         <input type="checkbox" checked={draftBundles.has(bundle)} disabled={saving}
                           onChange={() => handleToggle(setDraftBundles, bundle)} /> {bundle.replaceAll("_", " ")}
                       </label>)}
-                      {organization.is_owner ? <label style={{ display: "block", margin: "6px 0" }}>
+                      {organization.is_owner ? <label>
                         <input type="checkbox" checked={draftBundles.has("ORG_ADMIN")} disabled={saving}
                           onChange={() => handleToggle(setDraftBundles, "ORG_ADMIN")} /> Organization administrator
                       </label> : null}
                     </fieldset>
 
-                    <fieldset className="field" style={{ marginBottom: 12 }}>
+                    <fieldset className="field control-rows">
                       <legend>Additional permissions</legend>
                       {["deal.create", "deal.read_all", "deal.edit_assigned", "agreement.approve", "payments.read", "payments.authorize", "fulfillment.read", "fulfillment.record", "marketplace.manage", "approval_routing.manage"].map((permission) => {
                         const ownerOnly = permission === "deal.read_all";
-                        return <label key={permission} style={{ display: "block", margin: "6px 0" }}>
+                        return <label key={permission}>
                           <input type="checkbox" checked={draftPermissions.has(permission)} disabled={saving || (ownerOnly && !organization.is_owner)}
                             onChange={() => handleToggle(setDraftPermissions, permission)} /> {permission}{ownerOnly ? " (owner delegated)" : ""}
                         </label>;
                       })}
                     </fieldset>
 
-                    <fieldset className="field">
+                    <fieldset className="field control-rows">
                       <legend>Deal access</legend>
-                      {availableDeals.length === 0 ? <p className="muted">No assignable deals are available.</p> : availableDeals.map((deal) => <label key={deal.id} style={{ display: "block", margin: "6px 0" }}>
+                      {availableDeals.length === 0 ? <p className="muted">No assignable deals are available.</p> : availableDeals.map((deal) => <label key={deal.id}>
                         <input type="checkbox" checked={draftDealIds.has(deal.id)} disabled={saving}
                           onChange={() => handleToggle(setDraftDealIds, deal.id)} /> {deal.display_name} ({deal.status})
                       </label>)}

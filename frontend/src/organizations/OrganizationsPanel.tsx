@@ -108,7 +108,16 @@ export default function OrganizationsPanel({
   }
 
   if (state.status === "loading") {
-    return <section className="card"><p role="status">Loading your organizations…</p></section>;
+    return (
+      <section className="card">
+        <p role="status">Loading your organizations…</p>
+        <div className="skeleton-stack" aria-hidden="true">
+          <span className="skeleton-bar skeleton-bar--mid" />
+          <span className="skeleton-bar" />
+          <span className="skeleton-bar skeleton-bar--short" />
+        </div>
+      </section>
+    );
   }
 
   if (state.status === "error") {
@@ -137,7 +146,7 @@ export default function OrganizationsPanel({
       {organizations.length === 0 ? (
         <div className="org-empty-state">
           <span className="eyebrow">Organization access</span>
-          <h3>No organization is connected to this account</h3>
+          <h3>You are not an active member of any organization</h3>
           <p className="muted">Ask an organization administrator for an invitation. New organizations are set up during owner account onboarding.</p>
         </div>
       ) : (

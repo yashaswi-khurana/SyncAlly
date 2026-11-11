@@ -38,6 +38,10 @@ const PROPOSAL_FIELDS: Array<[keyof ProposalSuggestionDraft, string]> = [
   ["deliveryDate", "Delivery date"],
 ];
 
+function quantityUnitMatchesExplicitUnit(quantityUnit: string, explicitUnit: string): boolean {
+  return quantityUnit === explicitUnit || quantityUnit.endsWith(` ${explicitUnit}`);
+}
+
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
     return caught.status === 401 ? "Your session has expired. Sign in again." : caught.message;
@@ -224,14 +228,6 @@ export default function AISuggestionReview({
       }
     }
   }
-  const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
-  const quantityUnits = new Set(
-    quantities.map((fact) => fact.currency_or_unit?.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
-  );
-  if (quantityUnits.size > 1) {
-    conflictingFields.add("quantity");
-    conflictingFields.add("unit");
-  }
   const explicitUnits = confirmed.filter((fact) => requiredTradeField(fact.field) === "unit");
   const explicitUnitValues = new Set(
     explicitUnits.map((fact) => fact.typed_value.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
@@ -239,13 +235,23 @@ export default function AISuggestionReview({
   if (explicitUnitValues.size > 1) {
     conflictingFields.add("unit");
   }
-  if (explicitUnitValues.size === 1 && quantityUnits.size === 1) {
-    const [expUnit] = explicitUnitValues;
-    const [qtyUnit] = quantityUnits;
-    if (expUnit !== qtyUnit) {
-      conflictingFields.add("unit");
-      conflictingFields.add("quantity");
-    }
+  const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
+  const quantityUnits = new Set(
+    quantities.map((fact) => fact.currency_or_unit?.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
+  );
+  const explicitUnit = explicitUnitValues.size === 1 ? [...explicitUnitValues][0] : null;
+  const quantityUnitsConflict = quantityUnits.size > 1
+    && (!explicitUnit
+      || [...quantityUnits].some((unit) => !quantityUnitMatchesExplicitUnit(unit, explicitUnit)));
+  if (quantityUnitsConflict) {
+    conflictingFields.add("quantity");
+    conflictingFields.add("unit");
+  }
+  if (explicitUnit && [...quantityUnits].some(
+    (unit) => !quantityUnitMatchesExplicitUnit(unit, explicitUnit),
+  )) {
+    conflictingFields.add("unit");
+    conflictingFields.add("quantity");
   }
   if (!confirmedSignatures.unit && confirmedSignatures.quantity) {
     if (quantityUnits.size === 1) {
@@ -534,7 +540,15 @@ export default function AISuggestionReview({
             const missing = missingFields.includes(key);
             return (
               <li className={missing ? "terms-readiness__item terms-readiness__item--missing" : "terms-readiness__item terms-readiness__item--ready"} key={key}>
-                <span className="terms-readiness__icon" aria-hidden="true">{missing ? "●" : "✓"}</span>
+                <span className="terms-readiness__icon" aria-hidden="true">
+                  {missing ? (
+                    "●"
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 8.5 6.5 12 13 4.5" />
+                    </svg>
+                  )}
+                </span>
                 <span>{label}</span>
                 <span className="visually-hidden">{missing ? "Missing" : "Detected"}</span>
               </li>
@@ -602,7 +616,7 @@ export default function AISuggestionReview({
               ))}
             </ul>
           ) : (
-            <p className="ai-change-radar__clear" role="status">
+            <p className="ai-change-radar__clear">
               No differences surfaced among extracted shared values. This does not check every message or establish agreement.
             </p>
           )}
@@ -769,7 +783,7 @@ export default function AISuggestionReview({
             <input id={`proposal-expiry-${dealId}`} type="datetime-local" value={expiresAt} disabled={pendingAction !== null}
               onChange={(event) => { proposalEditRevisionRef.current += 1; setExpiresAt(event.target.value); }} />
           </div>
-          {negotiation?.current_candidate ? <label>
+          {negotiation?.current_candidate ? <label className="check-row">
             <input type="checkbox" checked={replacementConfirmed} disabled={pendingAction !== null}
               onChange={(event) => setReplacementAcknowledgement(event.target.checked ? candidateSignature : "")} />
             Replace candidate version {negotiation.current_candidate.version_number} and invalidate its approvals

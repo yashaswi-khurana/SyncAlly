@@ -116,6 +116,11 @@ vi.mock("./ui/DevRoleSwitcher", () => ({
   },
 }));
 
+function signOutFromBanner(banner: HTMLElement) {
+  fireEvent.click(within(banner).getByRole("button", { name: "Account menu" }));
+  fireEvent.click(within(banner).getByRole("button", { name: "Sign out" }));
+}
+
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -182,7 +187,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Download trade pack" }));
     const signal = vi.mocked(getTradePack).mock.calls[0][4]!;
-    fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
+    signOutFromBanner(screen.getByRole("banner"));
     expect(signal.aborted).toBe(true);
     await act(async () => { resolve(new Blob(["late document"])); });
     expect(screen.queryByRole("button", { name: "Download trade pack" })).not.toBeInTheDocument();
@@ -414,7 +419,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create deal" }));
     await waitFor(() => expect(mockedCreateDeal).toHaveBeenCalledOnce());
 
-    fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "Sign out" }));
+    signOutFromBanner(screen.getByRole("banner"));
     expect(await screen.findByRole("heading", { name: "Open your trade desk." })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: "buyer@example.com" } });
@@ -530,7 +535,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
     await act(async () => {});
-    fireEvent.click(within(screen.getAllByRole("banner")[0]).getByRole("button", { name: "Sign out" }));
+    signOutFromBanner(screen.getAllByRole("banner")[0]);
     await act(async () => resolveRefresh([]));
     expect(screen.getByRole("heading", { name: "Join via counterparty invite." })).toBeInTheDocument();
     expect(mockedGetDeal).not.toHaveBeenCalledWith("stale-deal");
@@ -595,7 +600,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Accept & Join" }));
     if (change === "sign out") {
-      fireEvent.click(within(screen.getAllByRole("banner")[0]).getByRole("button", { name: "Sign out" }));
+      signOutFromBanner(screen.getAllByRole("banner")[0]);
     } else {
       mockedApiRequest.mockResolvedValueOnce({ message: "Reset" });
       fireEvent.click(screen.getByRole("button", { name: "Reset Demo Data" }));
@@ -727,10 +732,7 @@ describe("App", () => {
       await screen.findByRole("heading", { name: "Deals shared with you" }),
     ).toBeInTheDocument();
 
-    const globalSignOut = within(screen.getAllByRole("banner")[0]).getByRole("button", {
-      name: "Sign out",
-    });
-    fireEvent.click(globalSignOut);
+    signOutFromBanner(screen.getAllByRole("banner")[0]);
 
     expect(
       await screen.findByRole("heading", { name: "Open your trade desk." }),

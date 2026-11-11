@@ -5,7 +5,7 @@ import { useSession } from "./auth/useSession";
 import { useHashRoute } from "./app/useHashRoute";
 import { getCurrentUser, listOrganizations } from "./api/client";
 import { getAccessToken } from "./api/tokenStore";
-import type { InvitationAcceptance, Organization, TokenResponse } from "./api/types";
+import type { CurrentUser, InvitationAcceptance, Organization, TokenResponse } from "./api/types";
 import CreateDealPage from "./deals/CreateDealPage";
 import DealDetailPage from "./deals/DealDetailPage";
 import DealsPage from "./deals/DealsPage";
@@ -33,6 +33,12 @@ import ScrollProgress from "./ui/ScrollProgress";
 import SplitText from "./ui/SplitText";
 import type { OpeningMessageDraft, OpeningMessageDraftInput } from "./deals/openingMessageDraft";
 
+function initialsFor(user: CurrentUser | null): string {
+  const source = user?.display_name?.trim() || user?.email || "";
+  const letters = source.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]);
+  return (letters.join("") || "?").toUpperCase();
+}
+
 export default function App() {
   const { accessToken, signIn, signOut } = useSession();
   const route = useHashRoute();
@@ -41,6 +47,9 @@ export default function App() {
   const sessionGenerationRef = useRef(0);
   const [organizations, setOrganizations] = useState<Organization[] | null>(null);
   const [isSystemAdmin, setIsSystemAdmin] = useState<boolean | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [navRoute, setNavRoute] = useState(route);
@@ -112,6 +121,7 @@ export default function App() {
         if (!cancelled) {
           setOrganizations(orgResult.status === "fulfilled" ? orgResult.value : null);
           setIsSystemAdmin(userResult.status === "fulfilled" && userResult.value.system_role === "SYSTEM_ADMIN");
+          setCurrentUser(userResult.status === "fulfilled" ? userResult.value : null);
         }
       } catch {
         if (!cancelled) setOrganizations(null);
@@ -121,6 +131,17 @@ export default function App() {
       cancelled = true;
     };
   }, [accessToken, sessionVersion]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    function handleOutsideClick(event: MouseEvent) {
+      if (!profileMenuRef.current?.contains(event.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    }
+    window.addEventListener("mousedown", handleOutsideClick);
+    return () => window.removeEventListener("mousedown", handleOutsideClick);
+  }, [profileMenuOpen]);
 
   useEffect(() => {
     if (!toast) return;
@@ -152,6 +173,8 @@ export default function App() {
     setOpeningMessageDrafts([]);
     setOrganizations(null);
     setIsSystemAdmin(null);
+    setCurrentUser(null);
+    setProfileMenuOpen(false);
     setToast(null);
     signOut();
   }
@@ -323,9 +346,29 @@ export default function App() {
               Platform admin
             </button>
           ) : null}
-          <button type="button" className="button secondary nav-signout" onClick={handleSignOut}>
-            Sign out
-          </button>
+          <div className="nav-profile" ref={profileMenuRef} onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="nav-profile__avatar"
+              aria-haspopup="true"
+              aria-expanded={profileMenuOpen}
+              aria-label="Account menu"
+              onClick={() => setProfileMenuOpen((open) => !open)}
+            >
+              {initialsFor(currentUser)}
+            </button>
+            {profileMenuOpen ? (
+              <div className="nav-profile__menu" role="menu">
+                <div className="nav-profile__identity">
+                  <strong>{currentUser?.display_name ?? "Account"}</strong>
+                  <span>{currentUser?.email ?? ""}</span>
+                </div>
+                <button type="button" className="nav-profile__signout" onClick={handleSignOut}>
+                  Sign out
+                </button>
+              </div>
+            ) : null}
+          </div>
         </nav>
         <button
           type="button"

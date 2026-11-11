@@ -4,9 +4,9 @@
 
 Reuse the existing Render static site and `syncally-db` PostgreSQL instance. Deploy
 one Hostless App from this repository using the root `hostless.yaml`; it runs the
-API, Temporal CLI development server, workflow worker, outbox worker, and payment
-worker together. Do not create another database, worker, or persistent volume for
-this layout. `hostless.yaml` caps the app at 0.5 vCPU and 1 GiB RAM, matching the
+API, Temporal CLI development server, workflow worker, outbox worker, payment
+worker, and Slack Events worker together. Do not create another database, worker,
+or persistent volume for this layout. `hostless.yaml` caps the app at 0.5 vCPU and 1 GiB RAM, matching the
 published shared free pool; check the account's own billing page before creating
 the resource and stop if the UI says it needs a paid plan or billing method.
 

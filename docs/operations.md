@@ -40,10 +40,12 @@ secret and Fernet key. The API fails closed when Slack credentials or a valid
 encryption key are missing.
 
 After deployment and migrations `0033_slack_integrations`,
-`0034_slack_events_and_links`, and `0035_slack_deal_subscriptions`, an active organization administrator can connect
-Slack from Settings -> Organizations -> Integrations. Start the dedicated
-`python -m syncally.cli.slack_events_worker` process (Compose service
-`slack-events-worker`) to deliver queued replies. Slack event requests are signed,
+`0034_slack_events_and_links`, `0035_slack_deal_subscriptions`, and
+`0036_slack_deal_name_references`, an active organization administrator can connect
+Slack from Settings -> Organizations -> Integrations. The Render/Hostless startup
+script runs `python -m syncally.cli.slack_events_worker` alongside the API and
+other workers; Docker Compose uses the separate `slack-events-worker` service.
+Slack event requests are signed,
 freshness-checked and acknowledged after a durable event insert; `event_id`
 deduplicates intake only. The worker retries known transient failures with bounded
 attempts and honors Slack's `Retry-After` rate limit. Ambiguous outbound timeouts

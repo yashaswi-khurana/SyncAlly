@@ -559,6 +559,9 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                   </button>
                 ) : null}
               </div>
+              {initiatorParty === "BUYER" && !marketplaceContext ? (
+                <p className="hint">Analysis may send your opening request to the configured AI provider. Review the extracted details and seller matches.</p>
+              ) : null}
             </div>
 
             {analysisError ? (
@@ -573,8 +576,8 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
                   <h3 style={{ margin: 0, fontSize: "1rem" }}>Structured Requirements</h3>
                   {analysisResult.provenance ? (
                     <span className="badge" style={{ fontSize: "0.75rem" }}>
-                      {analysisResult.provenance.provider === "openai" ? "AI Extracted (OpenAI)"
-                        : analysisResult.provenance.provider === "gemini" ? "AI Extracted (Google Gemini)"
+                      {analysisResult.provenance.provider === "openai" ? "AI-assisted + rules (OpenAI)"
+                        : analysisResult.provenance.provider === "gemini" ? "AI-assisted + rules (Google Gemini)"
                           : "Offline Normalization"}
                     </span>
                   ) : null}

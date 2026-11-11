@@ -1,6 +1,8 @@
 """Explicit per-invocation egress and fallback policy behind the existing port."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import httpx
 
@@ -13,8 +15,8 @@ from syncally.application.ai import (
 )
 from syncally.application.conversations import AiContext
 from syncally.config import Settings
-from syncally.domain.ai.contracts import ExtractedFact, NormalizedRequirement, ProposedTerms
-from syncally.domain.conversations import Visibility
+from syncally.domain.ai.contracts import ExtractedFact, FactField, NormalizedRequirement, ProposedTerms
+from syncally.domain.conversations import Message, MessageSourceType, Visibility
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions, transmitted_context
@@ -97,14 +99,45 @@ class ConfiguredAIProvider:
         return self._offline.draft_proposal(request, timeout_seconds=timeout_seconds)
 
     def normalize_opening_request(
-        self, text: str, *, timeout_seconds: float = 10.0
+        self, text: str, *, timeout_seconds: float = 25.0
     ) -> NormalizedRequirement:
         try:
-            if self._remote is not None and hasattr(self._remote, "normalize_opening_request"):
-                return self._remote.normalize_opening_request(text, timeout_seconds=timeout_seconds)  # type: ignore[no-any-return]
-            if self._remote is not None:
-                self.provenance = replace(self.provenance, provider="offline", model=None)
-            return self._offline.normalize_opening_request(text)
+            baseline = self._offline.normalize_opening_request(text)
+            if self._remote is None:
+                return baseline
+
+            # This ephemeral context contains only the text the user chose to analyze.
+            message = Message(
+                id=uuid4(), conversation_id=uuid4(), author_user_id=uuid4(),
+                author_agent_id=None, body=text, visibility=Visibility.SHAREABLE,
+                source_type=MessageSourceType.USER, created_at=datetime.now(UTC),
+            )
+            context = AiContext(deal_id=uuid4(), organization_id=uuid4(), messages=(message,), constraints=())
+            facts = self._remote.extract_facts(FactExtractionRequest(context=context), timeout_seconds=timeout_seconds)
+            # The adapter verifies the exact source quote and value. Only fill gaps;
+            # ambiguous model suggestions must not select a seller on their own.
+            fields = {
+                FactField.ITEM_DESCRIPTION: "item_description",
+                FactField.QUANTITY: "quantity",
+                FactField.UNIT: "unit",
+                FactField.UNIT_PRICE: "target_unit_price",
+                FactField.DELIVERY_DESTINATION: "destination_name",
+                FactField.DELIVERY_DATE: "target_delivery_date",
+            }
+            values = baseline.model_dump()
+            for field, name in fields.items():
+                candidates = {(fact.value, fact.currency_or_unit) for fact in facts if fact.field == field}
+                if values[name] is not None or len(candidates) != 1:
+                    continue
+                value, currency = candidates.pop()
+                if field is FactField.UNIT_PRICE:
+                    # Never combine an AI price with a different offline currency.
+                    if values["currency"] is not None and values["currency"] != currency:
+                        continue
+                    values["currency"] = currency
+                values[name] = value
+            self.provenance = replace(self.provenance, context_scope="shareable_only")
+            return NormalizedRequirement.model_validate(values)
         finally:
             self._record_model()
 

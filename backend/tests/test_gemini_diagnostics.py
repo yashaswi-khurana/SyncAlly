@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch

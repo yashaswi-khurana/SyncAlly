@@ -93,7 +93,7 @@ describe("OrganizationsPanel", () => {
     render(<OrganizationsPanel />);
 
     expect(await screen.findByRole("heading", { name: "Integrations" })).toBeInTheDocument();
-    expect(await screen.findByText(/slack workspace connected\. members can link accounts and ask for deal status/i)).toBeInTheDocument();
+    expect(await screen.findByText(/slack is connected\. members can now link their accounts and use the commands below/i)).toBeInTheDocument();
     expect(mockedGetSlackConnection).toHaveBeenCalledWith(ORG_ID);
   });
 

@@ -5488,6 +5488,86 @@ body {
   padding-top: 22px;
 }
 
+.slack-integration-card {
+  display: grid;
+  gap: 12px;
+}
+
+.slack-integration-card > h4 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.slack-integration-card .org-team-actions {
+  margin-bottom: 0;
+}
+
+.slack-integration-card__connected {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-seller) 28%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent-seller) 5%, var(--surface));
+}
+
+.slack-integration-card__connected-label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 0;
+}
+
+.slack-integration-card__alert {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.slack-integration-card__alert p {
+  margin: 0;
+}
+
+.slack-command-list,
+.slack-link-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.slack-command-list li {
+  padding-left: 2px;
+}
+
+.slack-command-list li > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.slack-command-list code,
+.slack-link-steps code {
+  overflow-wrap: anywhere;
+}
+
+.slack-link-form {
+  margin-bottom: 0;
+}
+
+.slack-link-form .org-add-member__controls {
+  align-items: flex-end;
+}
+
 .org-section-heading,
 .org-team-actions {
   margin-bottom: 18px;

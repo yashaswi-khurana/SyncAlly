@@ -41,6 +41,7 @@ import type {
   CreateMarketplaceRFQInput,
   OrganizationMember,
   OrganizationProfile,
+  SlackAccountLinkStatus,
   SlackConnection,
   PlatformOrganization,
   PlatformUser,
@@ -298,6 +299,12 @@ export function listOrganizations(): Promise<Organization[]> {
 
 export function getSlackConnection(organizationId: string): Promise<SlackConnection> {
   return apiRequest<SlackConnection>(`/organizations/${encodeURIComponent(organizationId)}/integrations/slack`);
+}
+
+export function getSlackAccountLinkStatus(organizationId: string): Promise<SlackAccountLinkStatus> {
+  return apiRequest<SlackAccountLinkStatus>(
+    `/organizations/${encodeURIComponent(organizationId)}/integrations/slack/link-status`,
+  );
 }
 
 export function startSlackConnection(organizationId: string): Promise<{ authorization_url: string }> {

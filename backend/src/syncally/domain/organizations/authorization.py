@@ -82,6 +82,34 @@ def expand_grants(bundles: Iterable[str] | None, permissions: Iterable[str] | No
     return frozenset(effective)
 
 
+LEGACY_CAPABILITY_PERMISSIONS: dict[str, str] = {
+    "ADMINISTRATION": Permission.ORG_MEMBERS_MANAGE.value,
+    "DRAFTING": Permission.DEAL_EDIT_ASSIGNED.value,
+    "AGREEMENT_APPROVAL": Permission.AGREEMENT_APPROVE.value,
+    "FINANCE": Permission.PAYMENTS_AUTHORIZE.value,
+    "FULFILLMENT": Permission.FULFILLMENT_RECORD.value,
+}
+
+
+def expand_member_grants(
+    bundles: Iterable[str] | None,
+    permissions: Iterable[str] | None,
+    capabilities: Iterable[str] | None = None,
+    *,
+    owner: bool = False,
+) -> frozenset[str]:
+    """Expand current grants and explicitly stored legacy capabilities together."""
+    grants = set(expand_grants(bundles, permissions, owner=owner))
+    if owner:
+        return frozenset(grants)
+    grants.update(
+        permission
+        for capability in capabilities or ()
+        if (permission := LEGACY_CAPABILITY_PERMISSIONS.get(capability)) is not None
+    )
+    return frozenset(grants)
+
+
 def validate_grants(bundles: Iterable[str], permissions: Iterable[str]) -> tuple[set[str], set[str]]:
     """Normalize a requested grant set, rejecting unknown or protected entries."""
     normalized_bundles = set(bundles)

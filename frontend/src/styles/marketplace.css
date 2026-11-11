@@ -135,10 +135,20 @@
 /* ---------- search ---------- */
 
 .marketplace-page__filters {
+  position: sticky;
+  top: calc(var(--nav-h) + 16px);
+  z-index: 2;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(120px, 190px) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(90px, 120px) minmax(90px, 120px) minmax(90px, 120px) auto;
   gap: 14px;
   align-items: end;
+}
+
+@media (max-width: 900px) {
+  .marketplace-page__filters {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .marketplace-page__filters > *,
@@ -216,6 +226,10 @@
 .marketplace-page__listings > .section-heading h2 {
   font-size: var(--text-2xl);
   letter-spacing: -0.04em;
+}
+
+.marketplace-page__listings > .button.ghost {
+  justify-self: center;
 }
 
 .marketplace-page__listing {

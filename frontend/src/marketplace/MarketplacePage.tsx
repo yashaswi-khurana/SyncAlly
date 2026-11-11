@@ -11,6 +11,8 @@ interface MarketplacePageProps {
   organizations: Organization[];
 }
 
+const LISTING_PAGE_SIZE = 10;
+
 function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "The marketplace is unavailable right now.";
 }
@@ -18,8 +20,13 @@ function errorMessage(error: unknown): string {
 export default function MarketplacePage({ organizations }: MarketplacePageProps) {
   const [product, setProduct] = useState("");
   const [country, setCountry] = useState("");
-  const [filters, setFilters] = useState<{ product?: string; country_code?: string }>({});
+  const [type, setType] = useState("");
+  const [dealer, setDealer] = useState("");
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [filters, setFilters] = useState<{ product?: string; country_code?: string; category?: string; dealer?: string; min_price?: string; max_price?: string }>({});
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
+  const [visibleListingCount, setVisibleListingCount] = useState(LISTING_PAGE_SIZE);
   const [rfqs, setRfqs] = useState<MarketplaceRFQ[]>([]);
   const [loadingListings, setLoadingListings] = useState(true);
   const [loadingRfqs, setLoadingRfqs] = useState(true);
@@ -60,9 +67,14 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
     void searchMarketplaceListings({
       q: filters.product,
       country_code: filters.country_code,
+      category: filters.category,
+      dealer: filters.dealer,
+      min_price: filters.min_price,
+      max_price: filters.max_price,
     }, { signal: controller.signal }).then(
       (result) => {
         setListings(result);
+        setVisibleListingCount(LISTING_PAGE_SIZE);
         setListingError("");
       },
       (caught: unknown) => {
@@ -102,6 +114,10 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
     setFilters({
       product: product.trim() || undefined,
       country_code: country.trim().toUpperCase() || undefined,
+      category: type.trim() || undefined,
+      dealer: dealer.trim() || undefined,
+      min_price: minPrice || undefined,
+      max_price: maxPrice || undefined,
     });
   }
 
@@ -231,8 +247,24 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           <input value={product} onChange={(event) => setProduct(event.target.value)} maxLength={100} placeholder="Grain, textiles, machinery…" />
         </label>
         <label>
+          Type / category
+          <input value={type} onChange={(event) => setType(event.target.value)} maxLength={100} placeholder="Fasteners, grain…" />
+        </label>
+        <label>
+          Dealer
+          <input value={dealer} onChange={(event) => setDealer(event.target.value)} maxLength={200} placeholder="Seller name" />
+        </label>
+        <label>
           Country code
           <input value={country} onChange={(event) => setCountry(event.target.value.toUpperCase())} maxLength={2} placeholder="IN" />
+        </label>
+        <label>
+          Min price
+          <input type="number" min="0" step="any" value={minPrice} onChange={(event) => setMinPrice(event.target.value)} placeholder="0" />
+        </label>
+        <label>
+          Max price
+          <input type="number" min="0" step="any" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="1000" />
         </label>
         <button className="button" type="submit" disabled={loadingListings || loadingRfqs}>Search marketplace</button>
       </form>
@@ -330,7 +362,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
         <div className="section-heading"><div><span className="eyebrow">Available now</span><h2>Product listings</h2></div></div>
         {loadingListings ? <p role="status">Loading product listings…</p> : null}
         {!loadingListings && listings.length === 0 && !listingError ? <p className="muted">No matching product listings yet.</p> : null}
-        {listings.map((listing) => (
+        {listings.slice(0, visibleListingCount).map((listing) => (
           <article className="card marketplace-page__listing" key={listing.id}>
             <div className="marketplace-page__item-heading">
               <div><span className="eyebrow">{listing.category} · {listing.country_code}</span><h3>{listing.title}</h3></div>
@@ -347,6 +379,11 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
             ) : null}
           </article>
         ))}
+        {listings.length > visibleListingCount ? (
+          <button className="button ghost" type="button" onClick={() => setVisibleListingCount((count) => count + LISTING_PAGE_SIZE)}>
+            Load more listings
+          </button>
+        ) : null}
         {listingError ? <p role="alert">{listingError}</p> : null}
       </section>
 

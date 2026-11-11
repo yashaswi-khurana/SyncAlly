@@ -76,6 +76,9 @@ def search_marketplace_listings(
     q: str | None = Query(default=None, max_length=100),
     country_code: str | None = Query(default=None, min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$"),
     category: str | None = Query(default=None, max_length=100),
+    dealer: str | None = Query(default=None, max_length=200),
+    min_price: Decimal | None = Query(default=None, ge=0),
+    max_price: Decimal | None = Query(default=None, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=10000),
     _actor: ActorContext = Depends(get_current_actor),
@@ -96,6 +99,13 @@ def search_marketplace_listings(
         statement = statement.where(Organization.country_code == country_code.upper())
     if category and category.strip():
         statement = statement.where(MarketplaceListing.category.ilike(f"%{category.strip()}%"))
+    if dealer and dealer.strip():
+        term = dealer.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        statement = statement.where(Organization.legal_name.ilike(f"%{term}%", escape="\\"))
+    if min_price is not None:
+        statement = statement.where(MarketplaceListing.unit_price >= min_price)
+    if max_price is not None:
+        statement = statement.where(MarketplaceListing.unit_price <= max_price)
     if q and q.strip():
         term = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{term}%"

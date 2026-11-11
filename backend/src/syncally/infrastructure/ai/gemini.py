@@ -29,37 +29,7 @@ from syncally.operations import Operation, log_operation
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/"
 logger = logging.getLogger(__name__)
 _UNKNOWN_FIELD = re.compile(r"""Unknown name\s+["'](?P<field>[A-Za-z][A-Za-z0-9_]*)["']""")
-_GEMINI_ERROR_STATUSES = frozenset(
-    {
-        "INVALID_ARGUMENT",
-        "FAILED_PRECONDITION",
-        "NOT_FOUND",
-        "PERMISSION_DENIED",
-        "RESOURCE_EXHAUSTED",
-        "UNAUTHENTICATED",
-        "UNAVAILABLE",
-        "UNKNOWN",
-    }
-)
-_GEMINI_ERROR_FIELDS = frozenset(
-    {
-        "additionalProperties",
-        "anyOf",
-        "contents",
-        "generationConfig",
-        "items",
-        "maxItems",
-        "maxOutputTokens",
-        "properties",
-        "required",
-        "responseJsonSchema",
-        "responseMimeType",
-        "systemInstruction",
-        "thinkingConfig",
-        "thinkingLevel",
-        "type",
-    }
-)
+_INVALID_VALUE = re.compile(r"""Invalid value at ['"](?P<path>[A-Za-z0-9_.\[\]]+)['"]""")
 
 
 def _safe_error_diagnostics(body: bytearray) -> tuple[str | None, str | None]:
@@ -72,14 +42,16 @@ def _safe_error_diagnostics(body: bytearray) -> tuple[str | None, str | None]:
         return None, None
 
     status = error.get("status")
-    if not isinstance(status, str) or status not in _GEMINI_ERROR_STATUSES:
+    if not isinstance(status, str):
         status = None
 
     message = error.get("message")
-    match = _UNKNOWN_FIELD.search(message) if isinstance(message, str) else None
-    field = match.group("field") if match else None
-    if field not in _GEMINI_ERROR_FIELDS:
-        field = None
+    unknown_field = _UNKNOWN_FIELD.search(message) if isinstance(message, str) else None
+    invalid_value = _INVALID_VALUE.search(message) if isinstance(message, str) else None
+    field = unknown_field.group("field") if unknown_field else None
+    if field is None and invalid_value:
+        path_fields = re.findall(r"[A-Za-z][A-Za-z0-9_]*", invalid_value.group("path"))
+        field = path_fields[-1] if path_fields else None
     return status, field
 
 

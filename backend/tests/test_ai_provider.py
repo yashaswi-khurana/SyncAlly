@@ -255,6 +255,69 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("previous proposal failed validation", calls[1]["contents"][0]["parts"][0]["text"])
 
+    def test_gemini_proposal_separates_item_words_from_count_unit(self) -> None:
+        context = self._demo_context(
+            "TEST ONLY: Please deliver 120 table tennis balls at USD 12 per ball "
+            "to Toronto by 2026-12-15."
+        )
+        message = replace(context.messages[0], visibility=Visibility.SHAREABLE)
+        context = replace(context, messages=(message,))
+        message_id = str(message.id)
+
+        def citation(field: str, value: str, quote: str, currency_or_unit: str | None = None):
+            return {
+                "schema_version": 1,
+                "field": field,
+                "value": value,
+                "currency_or_unit": currency_or_unit,
+                "source": {
+                    "schema_version": 1,
+                    "message_id": message_id,
+                    "quote": quote,
+                    "unknown_reason": None,
+                },
+            }
+
+        payload = {
+            "schema_version": 1,
+            "insufficient_context": False,
+            "proposal": _proposal_payload(
+                description="table tennis balls", quantity="120", unit="balls",
+                unit_price="12", delivery_date="2026-12-15",
+            ),
+            "citations": [
+                citation("item_description", "table tennis balls", "120 table tennis balls"),
+                citation("quantity", "120", "120 table tennis balls"),
+                citation("unit", "balls", "120 table tennis balls"),
+                citation("unit_price", "12", "USD 12 per ball", "USD"),
+                citation("delivery_destination", "Toronto", "Toronto"),
+                citation("delivery_date", "2026-12-15", "2026-12-15"),
+            ],
+        }
+        calls = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            calls.append(json.loads(request.content))
+            return httpx.Response(200, json={
+                "modelVersion": "gemini-test", "candidates": [{
+                    "index": 0, "finishReason": "STOP", "content": {
+                        "role": "model", "parts": [{"text": json.dumps(payload)}],
+                    },
+                }],
+            })
+
+        provider = ConfiguredAIProvider(self._remote_config(
+            ai_provider="gemini", gemini_model="gemini-3.8-flash", google_api_key="test-key",
+        ), transport=httpx.MockTransport(respond))
+        result = draft_proposal_from_context(context, provider)
+
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(result.proposal.unit, "balls")
+        self.assertEqual(len(calls), 1)
+        prompt = calls[0]["contents"][0]["parts"][0]["text"]
+        self.assertIn("For quantity citations", prompt)
+        self.assertIn("120 table tennis balls", prompt)
+
     def test_gemini_does_not_retry_an_explicit_insufficient_context_result(self) -> None:
         context = self._demo_context(
             "Item: Widget, 12 boxes at USD 2.50 each; deliver to Toronto by 2026-12-01."

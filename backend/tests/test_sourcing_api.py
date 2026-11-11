@@ -13,18 +13,29 @@ Tests all endpoints via httpx.AsyncClient with in-memory SQLite and mock actor d
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import httpx
-from sqlalchemy import create_engine
+from pydantic import SecretStr
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from syncally.api.auth import get_current_actor
 from syncally.api.main import app
+from syncally.api.sourcing import SourcingService
+from syncally.application.ai import AIConfigurationError, AIPermanentError
 from syncally.application.identity import ActorContext
+from syncally.config import Settings
+from syncally.infrastructure.ai.gemini import GeminiGenerateContent
+from syncally.infrastructure.ai.openai import OpenAIChatCompletions
+from syncally.infrastructure.ai.selection import ConfiguredAIProvider
+from syncally.infrastructure.ai.sourcing import _grounded, interpret_sourcing_requirements
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     Base,
@@ -52,12 +63,45 @@ class SourcingApiIntegrationTests(unittest.TestCase):
             organization_ids=frozenset({self.buyer_org.id}),
         )
         self._authenticate(self.actor)
+        self._ai_interpreter_patch = patch(
+            "syncally.api.sourcing._interpret_natural",
+            side_effect=self._interpret_with_test_provider,
+        )
+        self._ai_interpreter_patch.start()
 
     def tearDown(self) -> None:
+        self._ai_interpreter_patch.stop()
         app.dependency_overrides.clear()
         self.session.close()
         Base.metadata.drop_all(self.engine)
         self.engine.dispose()
+
+    @staticmethod
+    def _interpret_with_test_provider(prompt, structured_overrides):
+        requirements, fields = SourcingService.interpret_requirements(prompt, structured_overrides)
+        provider = SimpleNamespace(provenance=SimpleNamespace(
+            provider="openai",
+            model="test-only-model",
+            fallback_reason=None,
+        ))
+        return requirements, fields, provider
+
+    def test_interpret_reports_missing_remote_ai_configuration(self) -> None:
+        self._ai_interpreter_patch.stop()
+        try:
+            with patch(
+                "syncally.api.sourcing.ConfiguredAIProvider",
+                side_effect=AIConfigurationError("not configured"),
+            ):
+                response = self._request(
+                    "POST",
+                    "/sourcing/interpret",
+                    json={"prompt": "1000 boxes of fasteners"},
+                )
+        finally:
+            self._ai_interpreter_patch.start()
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Sourcing AI is not configured", response.json()["detail"])
 
     def _seed_buyer(self) -> tuple[User, Organization]:
         user = User(
@@ -112,6 +156,52 @@ class SourcingApiIntegrationTests(unittest.TestCase):
 
         return asyncio.run(send())
 
+    def _request_with_remote_ai(
+        self,
+        provider_name: str,
+        prompt: str,
+        respond,
+        overrides: dict[str, Any] | None = None,
+        path: str = "/sourcing/interpret",
+    ) -> httpx.Response:
+        settings_values: dict[str, Any] = {
+            "app_env": "test",
+            "ai_provider": provider_name,
+            "ai_remote_egress_enabled": True,
+        }
+        if provider_name.startswith("gemini"):
+            settings_values.update(
+                gemini_model="gemini-configured-model",
+                google_api_key="test-gemini-key",
+            )
+        else:
+            settings_values.update(
+                openai_model="openai-configured-model",
+                openai_api_key="test-openai-key",
+            )
+        provider_settings = Settings(_env_file=None, **settings_values)
+        transport = httpx.MockTransport(respond)
+
+        self._ai_interpreter_patch.stop()
+        try:
+            with (
+                patch("syncally.api.sourcing.settings", provider_settings),
+                patch(
+                    "syncally.api.sourcing.ConfiguredAIProvider",
+                    side_effect=lambda _: ConfiguredAIProvider(
+                        provider_settings,
+                        transport=transport,
+                    ),
+                ),
+            ):
+                return self._request(
+                    "POST",
+                    path,
+                    json={"prompt": prompt, "structured_overrides": overrides},
+                )
+        finally:
+            self._ai_interpreter_patch.start()
+
     def _sample_requirements(
         self,
         category: str = "Industrial Fasteners",
@@ -158,6 +248,265 @@ class SourcingApiIntegrationTests(unittest.TestCase):
     # 1. POST /sourcing/interpret
     # =========================================================================
 
+    @staticmethod
+    def _remote_sourcing_extraction() -> dict[str, Any]:
+        return {
+            "extractions": [
+                {"field": "title", "value": "M8 fasteners", "quote": "M8 fasteners"},
+                {"field": "category", "value": "Industrial Fasteners", "quote": "M8 fasteners"},
+                {"field": "pricing.currency", "value": "USD", "quote": "USD currency"},
+                {"field": "quantity.target_quantity", "value": "1000", "quote": "1000 boxes"},
+                {"field": "quantity.unit", "value": "boxes", "quote": "1000 boxes"},
+                {"field": "delivery.destination_country_code", "value": "DE", "quote": "Germany"},
+                {
+                    "field": "commercial_terms.min_warranty_months",
+                    "value": "12",
+                    "quote": "12 month warranty",
+                },
+                {
+                    "field": "commercial_terms.inspection_requirement",
+                    "value": "FACTORY_MILL_CERTIFICATE",
+                    "quote": "factory mill certificate",
+                },
+            ],
+            "unknown_fields": [],
+        }
+
+    def test_interpret_uses_configured_openai_and_gemini_http_transports(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, in USD currency, "
+            "with a 12 month warranty and factory mill certificate."
+        )
+        for provider_name in ("openai", "gemini"):
+            with self.subTest(provider=provider_name):
+                requests: list[httpx.Request] = []
+
+                def respond(request: httpx.Request) -> httpx.Response:
+                    requests.append(request)
+                    if provider_name == "openai":
+                        return httpx.Response(200, json={
+                            "object": "chat.completion",
+                            "model": "openai-response-model",
+                            "choices": [{
+                                "index": 0,
+                                "finish_reason": "stop",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": json.dumps(self._remote_sourcing_extraction()),
+                                    "refusal": None,
+                                },
+                            }],
+                        })
+                    return httpx.Response(200, json={
+                        "modelVersion": "gemini-response-model",
+                        "candidates": [{
+                            "index": 0,
+                            "finishReason": "STOP",
+                            "content": {
+                                "role": "model",
+                                "parts": [{
+                                    "text": json.dumps(self._remote_sourcing_extraction()),
+                                }],
+                            },
+                        }],
+                    })
+
+                response = self._request_with_remote_ai(provider_name, prompt, respond)
+
+                self.assertEqual(response.status_code, 200, response.text)
+                result = response.json()
+                self.assertEqual(result["ai_provider"], provider_name)
+                self.assertEqual(
+                    result["ai_model"],
+                    f"{provider_name}-response-model",
+                )
+                self.assertIsNone(result["fallback_reason"])
+                self.assertEqual(result["requirements"]["quantity"]["target_quantity"], "1000")
+                self.assertEqual(result["requirements"]["delivery"]["destination_country_code"], "DE")
+                self.assertEqual(len(requests), 1)
+                self.assertIn(prompt.encode(), requests[0].content)
+                self.assertNotIn(b"test-openai-key", requests[0].content)
+                self.assertNotIn(b"test-gemini-key", requests[0].content)
+                self.assertEqual(
+                    requests[0].url.host,
+                    "generativelanguage.googleapis.com"
+                    if provider_name == "gemini"
+                    else "api.openai.com",
+                )
+
+    def test_remote_sourcing_releases_read_transaction_before_provider_call(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        for path in ("/sourcing/interpret", "/sourcing/evaluate"):
+            with self.subTest(path=path):
+                self.session.execute(select(User.id)).first()
+                self.assertTrue(self.session.in_transaction())
+                transaction_states: list[bool] = []
+
+                def respond(request: httpx.Request) -> httpx.Response:
+                    transaction_states.append(self.session.in_transaction())
+                    self.assertFalse(self.session.in_transaction())
+                    return httpx.Response(200, json={
+                        "object": "chat.completion",
+                        "model": "openai-response-model",
+                        "choices": [{
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(self._remote_sourcing_extraction()),
+                                "refusal": None,
+                            },
+                        }],
+                    })
+
+                response = self._request_with_remote_ai("openai", prompt, respond, path=path)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(transaction_states, [False])
+
+    def test_interpret_remote_provider_failures_are_explicit_without_fallback(self) -> None:
+        prompt = "Need 1000 boxes of M8 fasteners."
+        for provider_name in ("openai", "gemini"):
+            with self.subTest(provider=provider_name):
+                requests: list[httpx.Request] = []
+
+                def respond(request: httpx.Request) -> httpx.Response:
+                    requests.append(request)
+                    return httpx.Response(503, text="private provider diagnostics")
+
+                response = self._request_with_remote_ai(
+                    f"{provider_name}_with_offline_fallback",
+                    prompt,
+                    respond,
+                )
+
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("temporarily unavailable", response.json()["detail"])
+                self.assertNotIn("private provider diagnostics", response.text)
+                self.assertEqual(len(requests), 1)
+
+    def test_interpret_rejects_unsupported_remote_commercial_value(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany, in USD currency, "
+            "with a 12 month warranty, factory mill certificate, and EXE delivery terms."
+        )
+        extraction = self._remote_sourcing_extraction()
+        extraction["extractions"].append({
+            "field": "commercial_terms.preferred_incoterm",
+            "value": "EXE",
+            "quote": "EXE",
+        })
+        requests: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={
+                "object": "chat.completion",
+                "model": "openai-response-model",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(extraction),
+                        "refusal": None,
+                    },
+                }],
+            })
+
+        response = self._request_with_remote_ai("openai", prompt, respond)
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("invalid output", response.json()["detail"])
+        self.assertEqual(len(requests), 1)
+
+    def test_interpret_reports_ungrounded_model_output_as_bad_gateway(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "12 month warranty, factory mill certificate, and maximum unit price 24 USD."
+        )
+        extraction = self._remote_sourcing_extraction()
+        extraction["extractions"].append({
+            "field": "pricing.target_unit_price",
+            "value": "24",
+            "quote": "maximum unit price 24 USD",
+        })
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "object": "chat.completion",
+                "model": "openai-response-model",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(extraction),
+                        "refusal": None,
+                    },
+                }],
+            })
+
+        response = self._request_with_remote_ai("openai", prompt, respond)
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("invalid output", response.json()["detail"])
+
+    def test_interpret_missing_required_field_must_be_declared_unknown(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        field = "commercial_terms.min_warranty_months"
+        for declared in (False, True):
+            with self.subTest(declared=declared):
+                extraction = self._remote_sourcing_extraction()
+                extraction["extractions"] = [
+                    item for item in extraction["extractions"] if item["field"] != field
+                ]
+                extraction["unknown_fields"] = [field] if declared else []
+
+                def respond(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(200, json={
+                        "object": "chat.completion",
+                        "model": "openai-response-model",
+                        "choices": [{
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(extraction),
+                                "refusal": None,
+                            },
+                        }],
+                    })
+
+                response = self._request_with_remote_ai("openai", prompt, respond)
+                self.assertEqual(response.status_code, 422 if declared else 502)
+                self.assertIn(
+                    "minimum warranty" if declared else "invalid output",
+                    response.json()["detail"],
+                )
+
+    def test_interpret_invalid_explicit_controls_remain_unprocessable(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(500)
+
+        response = self._request_with_remote_ai(
+            "openai",
+            "Need 1000 boxes of fasteners.",
+            respond,
+            {"commercial_terms": {"inspection_requirement": "INVALID"}},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("supported value", response.json()["detail"])
+        self.assertEqual(requests, [])
+
     def test_interpret_nlp_prompt_extracts_fasteners_specification(self) -> None:
         prompt = (
             "Procurement requirement: We need 1,000 boxes of M8x30 DIN 933 Grade 316 stainless steel "
@@ -202,14 +551,10 @@ class SourcingApiIntegrationTests(unittest.TestCase):
         self.assertEqual(req["delivery"]["destination_country_code"], "FR")
         self.assertEqual(req["delivery"]["max_lead_time_days"], 15)
 
-    def test_interpret_empty_payload_returns_defaults(self) -> None:
+    def test_interpret_empty_payload_rejects_missing_controls(self) -> None:
         res = self._request("POST", "/sourcing/interpret", json={})
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIn("requirements", data)
-        req = data["requirements"]
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("1000"))
-        self.assertEqual(req["pricing"]["currency"], "USD")
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("target quantity", res.json()["detail"])
 
     def test_interpret_long_prompt_within_limits(self) -> None:
         prompt = "Need 500 boxes of M8 bolts. " + ("Additional technical specifications and standard notes. " * 80)
@@ -312,6 +657,18 @@ class SourcingApiIntegrationTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         results = res.json()["results"]
         self.assertTrue(len(results) > 0)
+
+    def test_compare_rejects_implicit_commercial_defaults(self) -> None:
+        req = self._sample_requirements()
+        req["pricing"].pop("currency")
+        req["commercial_terms"].pop("min_warranty_months")
+        req["commercial_terms"].pop("inspection_requirement")
+
+        response = self._request("POST", "/sourcing/compare", json={"requirements": req})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("price currency", response.json()["detail"])
+        self.assertIn("inspection requirement", response.json()["detail"])
 
     # =========================================================================
     # 4. POST /sourcing/gap-analysis
@@ -501,3 +858,313 @@ class SourcingApiIntegrationTests(unittest.TestCase):
         res = self._request("POST", "/sourcing/interpret", json={"prompt": huge_prompt})
         self.assertEqual(res.status_code, 413)
         self.assertIn("too large", res.json()["detail"].lower())
+
+
+class SourcingAIInterpretationTests(unittest.TestCase):
+    class Adapter:
+        def __init__(self, response: dict[str, Any]) -> None:
+            self.response = response
+            self.request: dict[str, Any] | None = None
+
+        def _call(
+            self,
+            context: Any,
+            operation: str,
+            schema: dict[str, Any],
+            timeout: float,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.request = {
+                "context": context,
+                "operation": operation,
+                "schema": schema,
+                "timeout": timeout,
+                **kwargs,
+            }
+            return self.response
+
+    def _extraction(self) -> dict[str, Any]:
+        return {
+            "extractions": [
+                {"field": "title", "value": "M8 fasteners", "quote": "M8 fasteners"},
+                {"field": "category", "value": "Industrial Fasteners", "quote": "M8 fasteners"},
+                {"field": "pricing.currency", "value": "USD", "quote": "USD currency"},
+                {"field": "quantity.target_quantity", "value": "1000", "quote": "1000 boxes"},
+                {"field": "quantity.unit", "value": "boxes", "quote": "1000 boxes"},
+                {"field": "delivery.destination_country_code", "value": "DE", "quote": "Germany"},
+                {"field": "commercial_terms.min_warranty_months", "value": "12", "quote": "12 month warranty"},
+                {
+                    "field": "commercial_terms.inspection_requirement",
+                    "value": "FACTORY_MILL_CERTIFICATE",
+                    "quote": "factory mill certificate",
+                },
+            ],
+            "unknown_fields": [],
+        }
+
+    def test_structured_ai_fields_require_exact_grounded_evidence(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        requests: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={
+                "object": "chat.completion",
+                "model": "sourcing-test-model",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(self._extraction()),
+                        "refusal": None,
+                    },
+                }],
+            })
+
+        adapter = OpenAIChatCompletions(
+            api_key=SecretStr("test-only-key"),
+            model="sourcing-test-model",
+            transport=httpx.MockTransport(respond),
+        )
+
+        requirements, parsed_fields = interpret_sourcing_requirements(adapter, prompt)
+
+        request_payload = json.loads(requests[0].content)
+        self.assertEqual(
+            request_payload["response_format"]["json_schema"]["name"],
+            "sourcing_requirements",
+        )
+        self.assertTrue(request_payload["response_format"]["json_schema"]["strict"])
+        self.assertIn(prompt, requests[0].content.decode())
+        self.assertNotIn("test-only-key", requests[0].content.decode())
+        self.assertEqual(requirements.quantity.target_quantity, Decimal("1000"))
+        self.assertEqual(requirements.delivery.destination_country_code, "DE")
+        self.assertEqual(requirements.commercial_terms.min_warranty_months, 12)
+        self.assertIn("commercial_terms.inspection_requirement", parsed_fields)
+
+        fabricated = self._extraction()
+        fabricated["extractions"].append({
+            "field": "pricing.max_unit_price",
+            "value": "99.00",
+            "quote": "USD currency",
+        })
+        with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
+            interpret_sourcing_requirements(self.Adapter(fabricated), prompt)
+
+    def test_unknown_required_commercial_fields_are_not_defaulted(self) -> None:
+        prompt = "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency."
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            item for item in extraction["extractions"]
+            if item["field"] not in {
+                "commercial_terms.min_warranty_months",
+                "commercial_terms.inspection_requirement",
+            }
+        ]
+        extraction["unknown_fields"] = [
+            "commercial_terms.min_warranty_months",
+            "commercial_terms.inspection_requirement",
+        ]
+
+        with self.assertRaisesRegex(ValueError, "minimum warranty.*inspection requirement"):
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+    def test_ungrounded_price_quantity_currency_and_destination_are_rejected(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        invented_values = (
+            ("pricing.max_unit_price", "99.00", "USD currency"),
+            ("quantity.target_quantity", "900", "1000 boxes"),
+            ("pricing.currency", "EUR", "USD currency"),
+            ("delivery.destination_country_code", "FR", "Germany"),
+        )
+        for field, value, quote in invented_values:
+            with self.subTest(field=field):
+                extraction = self._extraction()
+                extraction["extractions"].append({
+                    "field": field,
+                    "value": value,
+                    "quote": quote,
+                })
+                with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
+                    interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+    def test_numeric_and_inspection_values_cannot_borrow_wrong_claim_roles(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "12 month warranty, factory mill certificate, total budget 12000 USD, "
+            "and payment code NONE."
+        )
+        wrong_role_values = (
+            ("pricing.target_unit_price", "12000", "total budget 12000 USD"),
+            ("quantity.target_quantity", "12", "12 month warranty"),
+            ("commercial_terms.min_warranty_months", "1000", "1000 boxes"),
+            ("commercial_terms.inspection_requirement", "NONE", "NONE"),
+        )
+        for field, value, quote in wrong_role_values:
+            with self.subTest(field=field):
+                extraction = self._extraction()
+                extraction["extractions"].append({
+                    "field": "pricing.max_total_budget",
+                    "value": "12000",
+                    "quote": "total budget 12000 USD",
+                })
+                extraction["extractions"].append({
+                    "field": field,
+                    "value": value,
+                    "quote": quote,
+                })
+                with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
+                    interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+    def test_role_units_inspection_and_category_grounding(self) -> None:
+        cases = (
+            ("pricing.target_unit_price", "24", "maximum unit price 24 USD", False),
+            ("pricing.max_unit_price", "24", "target unit price 24 USD", False),
+            ("pricing.max_unit_price", "24", "maximum unit price 24 USD", True),
+            ("pricing.target_unit_price", "24", "target unit price 24 USD", True),
+            ("quantity.target_quantity", "24", "minimum warranty is 24 months", False),
+            ("quantity.target_quantity", "24", "minimum 24 boxes", False),
+            ("quantity.min_acceptable_quantity", "24", "minimum 24 boxes", True),
+            ("quantity.min_acceptable_quantity", "24", "need 24 boxes", False),
+            ("commercial_terms.min_warranty_months", "2", "2 years warranty", False),
+            ("commercial_terms.min_warranty_months", "24", "minimum warranty is 24 months", True),
+            (
+                "commercial_terms.inspection_requirement", "PRE_SHIPMENT_THIRD_PARTY",
+                "third-party pre-shipment freight booking is available", False,
+            ),
+            (
+                "commercial_terms.inspection_requirement", "PRE_SHIPMENT_THIRD_PARTY",
+                "third-party pre-shipment inspection", True,
+            ),
+            ("category", "Industrial Fasteners", "coffee", False),
+            ("category", "Industrial Fasteners", "bolts", True),
+            ("category", "Agricultural Commodities", "coffee", True),
+        )
+        for field, value, quote, expected in cases:
+            with self.subTest(field=field, quote=quote):
+                self.assertEqual(_grounded(field, value, quote), expected)
+
+        extraction = self._extraction()
+        quantity = next(item for item in extraction["extractions"] if item["field"] == "quantity.target_quantity")
+        quantity["value"] = "24"
+        quantity["quote"] = "24 boxes"
+        prompt = (
+            "Need a minimum 24 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+    def test_original_clause_rejects_wrong_role_and_negated_claims(self) -> None:
+        base = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        cases = (
+            (
+                base.replace("1000 boxes", "minimum order quantity is 24 boxes"),
+                "quantity.target_quantity", "24", "minimum order quantity is 24 boxes",
+            ),
+            (
+                base.replace("1000 boxes", "minimum order quantity is 24 boxes"),
+                "quantity.target_quantity", "24", "24 boxes",
+            ),
+            (
+                base.replace("factory mill certificate", "Do not require a third-party pre-shipment inspection"),
+                "commercial_terms.inspection_requirement", "PRE_SHIPMENT_THIRD_PARTY",
+                "Do not require a third-party pre-shipment inspection",
+            ),
+            (
+                base.replace("M8 fasteners", "I don't want bolts; I need coffee"),
+                "category", "Industrial Fasteners", "I don't want bolts",
+            ),
+            (
+                base.replace("M8 fasteners", "I don't want bolts; I need coffee"),
+                "category", "Industrial Fasteners", "bolts",
+            ),
+            (
+                base.replace("factory mill certificate", "Do not require a third-party pre-shipment inspection"),
+                "commercial_terms.inspection_requirement", "PRE_SHIPMENT_THIRD_PARTY",
+                "third-party pre-shipment inspection",
+            ),
+        )
+        for prompt, field, value, quote in cases:
+            with self.subTest(field=field, quote=quote):
+                extraction = self._extraction()
+                if field == "category":
+                    title = next(item for item in extraction["extractions"] if item["field"] == "title")
+                    title.update(value="coffee", quote="coffee")
+                if field == "quantity.target_quantity":
+                    unit = next(item for item in extraction["extractions"] if item["field"] == "quantity.unit")
+                    unit["quote"] = "24 boxes"
+                item = next(item for item in extraction["extractions"] if item["field"] == field)
+                item.update(value=value, quote=quote)
+                with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
+                    interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+    def test_explicit_unit_price_and_total_budget_roles_are_accepted(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "target price USD 12 per box, total budget 12000 USD, 12 month warranty, "
+            "and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].extend([
+            {
+                "field": "pricing.target_unit_price",
+                "value": "12",
+                "quote": "target price USD 12 per box",
+            },
+            {
+                "field": "pricing.max_total_budget",
+                "value": "12000",
+                "quote": "total budget 12000 USD",
+            },
+        ])
+
+        requirements, _ = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.pricing.target_unit_price, Decimal("12"))
+        self.assertEqual(requirements.pricing.max_total_budget, Decimal("12000"))
+
+    def test_gemini_uses_the_same_grounded_structured_sourcing_contract(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        requests: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={
+                "modelVersion": "gemini-test-model",
+                "candidates": [{
+                    "index": 0,
+                    "finishReason": "STOP",
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": json.dumps(self._extraction())}],
+                    },
+                }],
+            })
+
+        adapter = GeminiGenerateContent(
+            api_key=SecretStr("test-only-key"),
+            model="gemini-test-model",
+            transport=httpx.MockTransport(respond),
+        )
+
+        requirements, _ = interpret_sourcing_requirements(adapter, prompt)
+
+        request_payload = json.loads(requests[0].content)
+        self.assertIn("responseJsonSchema", request_payload["generationConfig"])
+        self.assertEqual(request_payload["generationConfig"]["responseMimeType"], "application/json")
+        self.assertEqual(requirements.delivery.destination_country_code, "DE")
+        self.assertNotIn("test-only-key", requests[0].content.decode())

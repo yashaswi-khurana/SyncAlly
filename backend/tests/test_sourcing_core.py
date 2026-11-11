@@ -550,8 +550,24 @@ class TestInquiryDrafter:
         draft = InquiryDrafter.draft_inquiry(requirements=buyer_req, listing=listing)
 
         assert "volume" in draft.body.lower()
-        assert "$24.00" in draft.body
-        assert "$12.00" in draft.body or "$14.00" in draft.body
+        assert "24.00 USD" in draft.body
+        assert "12.00 USD" in draft.body or "14.00 USD" in draft.body
+
+    def test_inquiry_price_gap_uses_explicit_non_usd_currency(self, buyer_req: BuyerRequirements) -> None:
+        listing = get_bundled_listing_by_id("00000000-0000-4000-8000-000000000105")
+        assert listing is not None
+        listing = listing.model_copy(update={"currency": "EUR"})
+        req = buyer_req.model_copy(update={
+            "pricing": PricingConstraint(
+                target_unit_price=Decimal("12.00"), max_unit_price=Decimal("14.00"), currency="EUR"
+            ),
+        })
+
+        draft = InquiryDrafter.draft_inquiry(requirements=req, listing=listing)
+
+        assert "listed unit price is 24.00 EUR" in draft.body
+        assert "budget target for this line item is 12.00 EUR" in draft.body
+        assert "$" not in draft.body
 
     def test_inquiry_targeting_missing_lead_time_requests_confirmation(self, buyer_req: BuyerRequirements) -> None:
         listing = get_bundled_listing_by_id("00000000-0000-4000-8000-000000000102")
@@ -559,7 +575,7 @@ class TestInquiryDrafter:
 
         draft = InquiryDrafter.draft_inquiry(requirements=buyer_req, listing=listing)
 
-        assert "calendar days" in draft.body.lower()
+        assert "within 30 days" in draft.body.lower()
         assert any("lead_time_days" in g for g in draft.gaps_addressed)
 
     def test_inquiry_zero_gaps_generates_order_confirmation_rfq(self) -> None:
@@ -582,9 +598,30 @@ class TestInquiryDrafter:
 
         draft = InquiryDrafter.draft_inquiry(requirements=req, listing=listing, gaps=[])
 
-        assert "fully align" in draft.body.lower()
-        assert "immediate purchase order" in draft.body.lower()
+        assert "appear to align" in draft.body.lower()
+        assert "before we make any purchase commitment" in draft.body.lower()
+        assert "immediate purchase order" not in draft.body.lower()
         assert len(draft.gaps_addressed) == 0
+
+    def test_inquiry_does_not_fill_unspecified_price_or_trade_terms(self) -> None:
+        listing = get_bundled_listing_by_id("00000000-0000-4000-8000-000000000101")
+        assert listing is not None
+        req = BuyerRequirements(
+            title=listing.title,
+            category=listing.category,
+            quantity=QuantityRequirement(target_quantity=Decimal("1000"), unit="boxes"),
+            delivery=DeliveryConstraint(destination_country_code="DE"),
+        )
+
+        draft = InquiryDrafter.draft_inquiry(requirements=req, listing=listing, gaps=[])
+
+        assert draft.proposed_terms["target_unit_price"] is None
+        assert draft.proposed_terms["preferred_incoterm"] is None
+        assert draft.proposed_terms["preferred_payment_term"] is None
+        assert "no maximum lead time specified" in draft.body.lower()
+        assert "no preferred incoterm specified" in draft.body.lower()
+        assert "no preferred payment term specified" in draft.body.lower()
+        assert "prepared to commit to an immediate purchase order" not in draft.body.lower()
 
 
 # =============================================================================

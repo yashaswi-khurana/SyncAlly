@@ -446,7 +446,7 @@ class TestGapReflectionInInquiryLetters:
 
 
 class TestZeroGapPurchaseCommitmentRFQs:
-    """Verifies zero-gap listings generate valid purchase commitment RFQs."""
+    """Verifies zero-gap inquiries request confirmation before commercial commitment."""
 
     @pytest.mark.parametrize(
         "listing_id",
@@ -459,7 +459,7 @@ class TestZeroGapPurchaseCommitmentRFQs:
         ],
     )
     def test_zero_gap_inquiry_body_structure(self, listing_id: str) -> None:
-        """Zero-gap inquiry contains purchase commitment language and omits clarification caveats."""
+        """Zero-gap inquiry summarizes alignment without claiming a purchase commitment."""
         listing = get_bundled_listing_by_id(listing_id)
         assert listing is not None
         req = build_compliant_requirements_for_listing(listing)
@@ -477,12 +477,9 @@ class TestZeroGapPurchaseCommitmentRFQs:
         # Must NOT contain clarification warning
         assert "clarification and mutual alignment" not in inquiry.body
 
-        # MUST contain unambiguous purchase commitment statement
-        commitment_text = (
-            "We are pleased to inform you that your published commercial terms and technical specifications "
-            "fully align with our procurement parameters. We are prepared to commit to an immediate purchase order."
-        )
-        assert commitment_text in inquiry.body
+        assert "appear to align with our stated procurement parameters" in inquiry.body
+        assert "before we make any purchase commitment" in inquiry.body
+        assert "immediate purchase order" not in inquiry.body
 
         # Must declare the formal proposed commercial framework
         assert "Proposed Commercial Framework:" in inquiry.body
@@ -548,10 +545,10 @@ class TestCompromiseProposalsLogic:
 
         assert "unit_price: NON_COMPLIANT" in inquiry.gaps_addressed
         assert "Unit Price & Volume Discount:" in inquiry.body
-        assert "listed unit price is $24.00 USD" in inquiry.body
-        assert "budget target for this line item is $16.00 USD" in inquiry.body
+        assert "listed unit price is 24.00 USD" in inquiry.body
+        assert "budget target for this line item is 16.00 USD" in inquiry.body
         assert "recurring quarterly purchase orders" in inquiry.body
-        assert "volume concession to bring the unit price closer to $16.00 USD" in inquiry.body
+        assert "volume concession to bring the unit price closer to 16.00 USD" in inquiry.body
 
     def test_expedited_shipping_proposal_under_stress(self) -> None:
         """When lead time exceeds buyer window, inquiry proposes expedited shifts / air freight."""
@@ -572,7 +569,7 @@ class TestCompromiseProposalsLogic:
         assert "expedited production shifts, priority scheduling, or expedited air/express freight" in inquiry.body
 
     def test_escrow_payment_proposal_under_stress(self) -> None:
-        """When seller demands advance deposit, inquiry proposes 30/70 split or SyncAlly Escrow."""
+        """When seller requires an advance deposit, inquiry asks for alternative terms without inventing escrow."""
         listing = get_bundled_listing_by_id("00000000-0000-4000-8000-000000000102")
         assert listing is not None
         req = BuyerRequirements(
@@ -589,9 +586,9 @@ class TestCompromiseProposalsLogic:
 
         assert "payment_terms: NON_COMPLIANT" in inquiry.gaps_addressed
         assert "Payment Terms Compromise:" in inquiry.body
-        assert "30% advance deposit" in inquiry.body
-        assert "70% balance payable against the original Bill of Lading" in inquiry.body
-        assert "full escrow deposit released upon destination inspection" in inquiry.body
+        assert "Could you share alternative payment terms for our review?" in inquiry.body
+        assert "30% advance deposit" not in inquiry.body
+        assert "full escrow deposit released upon destination inspection" not in inquiry.body
 
 
 # =============================================================================

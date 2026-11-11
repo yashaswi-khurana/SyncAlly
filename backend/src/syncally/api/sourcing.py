@@ -1,12 +1,12 @@
 """FastAPI router for Buyer Sourcing Agent endpoints.
 
 Exposes REST APIs for:
-- POST /sourcing/interpret: NLP & structured requirements extraction
-- GET /sourcing/listings: Bundled marketplace candidate listings retrieval
-- POST /sourcing/compare: 5-dimension multi-candidate ranking and matrix evaluation
+- POST /sourcing/interpret: configured-provider NLP or explicit structured-control validation
+- GET /sourcing/listings: bundled demo catalogue retrieval
+- POST /sourcing/compare: deterministic multi-candidate ranking and matrix evaluation
 - POST /sourcing/gap-analysis: Deep discrepancy taxonomy and commercial delta detection
 - POST /sourcing/draft-inquiry: Targeted seller inquiry letter generation
-- POST /sourcing/evaluate: End-to-end evaluation pipeline with deal room handoff support
+- POST /sourcing/evaluate: deterministic evaluation; prompt-only requests first require configured AI interpretation
 """
 
 from __future__ import annotations
@@ -21,14 +21,25 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from syncally.api.auth import get_current_actor
+from syncally.application.ai import (
+    AIConfigurationError,
+    AIPermanentError,
+    AITransientError,
+)
 from syncally.application.identity import ActorContext
 from syncally.application.sourcing.service import SourcingService
+from syncally.config import settings
 from syncally.domain.sourcing.contracts import (
     BuyerRequirements,
     CommercialGap,
     ComparisonResult,
     InquiryDraft,
     MarketplaceListingDetail,
+)
+from syncally.infrastructure.ai.selection import ConfiguredAIProvider
+from syncally.infrastructure.ai.sourcing import (
+    missing_required_fields,
+    validate_structured_overrides,
 )
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import Organization, User
@@ -51,6 +62,9 @@ class InterpretRequest(BaseModel):
 class InterpretResponse(BaseModel):
     requirements: BuyerRequirements
     parsed_fields: list[str]
+    ai_provider: str
+    ai_model: str | None = None
+    fallback_reason: str | None = None
 
 
 class ListingsResponse(BaseModel):
@@ -104,11 +118,88 @@ class EvaluateResponse(BaseModel):
     comparisons: list[dict[str, Any]]
     inquiries: dict[str, InquiryDraft]
     total_listings_evaluated: int
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    fallback_reason: str | None = None
 
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
+
+def _interpret_structured(
+    overrides: dict[str, Any] | None,
+) -> tuple[BuyerRequirements, list[str]]:
+    data = overrides or {}
+    validate_structured_overrides(data)
+    missing = missing_required_fields(data)
+    if missing:
+        raise ValueError("Please enter or confirm: " + ", ".join(missing) + ".")
+    try:
+        requirements = BuyerRequirements.model_validate(data)
+    except ValidationError as err:
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+            for item in err.errors()
+        )
+        raise ValueError(f"Please correct the sourcing requirements: {details}") from err
+    return requirements, list(data.keys())
+
+
+def _require_explicit_commercial_controls(requirements: BuyerRequirements) -> None:
+    missing: list[str] = []
+    if "currency" not in requirements.pricing.model_fields_set:
+        missing.append("price currency")
+    for field, label in (
+        ("min_warranty_months", "minimum warranty in months"),
+        ("inspection_requirement", "inspection requirement"),
+    ):
+        if field not in requirements.commercial_terms.model_fields_set:
+            missing.append(label)
+    if missing:
+        raise ValueError(
+            "Please explicitly specify or confirm: " + ", ".join(missing) + "."
+        )
+
+
+def _interpret_natural(
+    prompt: str,
+    structured_overrides: dict[str, Any] | None,
+) -> tuple[BuyerRequirements, list[str], ConfiguredAIProvider]:
+    try:
+        provider = ConfiguredAIProvider(settings)
+    except AIConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sourcing AI is not configured. Configure an enabled OpenAI or Gemini provider.",
+        ) from exc
+    try:
+        requirements, parsed_fields = provider.interpret_sourcing_requirements(
+            prompt,
+            structured_overrides,
+        )
+        return requirements, parsed_fields, provider
+    except AIConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sourcing AI is not configured. Configure an enabled OpenAI or Gemini provider.",
+        ) from exc
+    except AITransientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The configured sourcing AI is temporarily unavailable. Please retry.",
+        ) from exc
+    except AIPermanentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The configured sourcing AI returned invalid output. Please retry or use structured controls.",
+        ) from exc
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 def _serialize_comparison_result(result: ComparisonResult) -> dict[str, Any]:
@@ -170,26 +261,30 @@ def _resolve_buyer_names(
 def interpret_requirements(
     payload: InterpretRequest,
     _actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Parse natural language sourcing prompt and merge with structured overrides."""
-    try:
-        requirements, parsed_fields = SourcingService.interpret_requirements(
-            prompt=payload.prompt,
-            structured_overrides=payload.structured_overrides,
+    """Interpret natural language with the configured provider or validate explicit controls."""
+    provider: ConfiguredAIProvider | None = None
+    if payload.prompt and payload.prompt.strip():
+        db.rollback()
+        requirements, parsed_fields, provider = _interpret_natural(
+            payload.prompt,
+            payload.structured_overrides,
         )
-    except ValidationError as err:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=jsonable_encoder(err.errors()),
-        ) from err
-    except (ValueError, TypeError, InvalidOperation) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
+    else:
+        try:
+            requirements, parsed_fields = _interpret_structured(payload.structured_overrides)
+        except (ValueError, TypeError, InvalidOperation) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
     return {
         "requirements": requirements,
         "parsed_fields": parsed_fields,
+        "ai_provider": provider.provenance.provider if provider else "structured",
+        "ai_model": provider.provenance.model if provider else None,
+        "fallback_reason": provider.provenance.fallback_reason if provider else None,
     }
 
 
@@ -220,6 +315,7 @@ def compare_listings(
 ) -> dict[str, Any]:
     """Evaluate candidate listings against buyer requirements across 5 weighted dimensions."""
     try:
+        _require_explicit_commercial_controls(payload.requirements)
         results = SourcingService.compare_listings(
             requirements=payload.requirements,
             listing_ids=payload.listing_ids,
@@ -230,6 +326,11 @@ def compare_listings(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=jsonable_encoder(err.errors()),
         ) from err
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     return {"results": [_serialize_comparison_result(r) for r in results]}
 
 
@@ -240,6 +341,13 @@ def gap_analysis(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Perform detailed gap detection between buyer requirements and a specific listing."""
+    try:
+        _require_explicit_commercial_controls(payload.requirements)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     try:
         listing, gaps, overall_severity = SourcingService.analyze_gaps(
             requirements=payload.requirements,
@@ -271,6 +379,13 @@ def draft_inquiry(
     db: Session = Depends(get_db),
 ) -> InquiryDraft:
     """Generate professional B2B inquiry letter proposing targeted compromises for all detected gaps."""
+    try:
+        _require_explicit_commercial_controls(payload.requirements)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     buyer_org_id = payload.buyer_organization_id or (
         str(next(iter(actor.organization_ids))) if actor.organization_ids else None
     )
@@ -303,16 +418,34 @@ def evaluate_sourcing(
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Execute complete end-to-end buyer sourcing pipeline: parse, compare, analyze gaps, and draft inquiries."""
+    """Rank the catalogue with explicit requirements, interpreting a prompt through configured AI."""
     buyer_org_id = payload.buyer_organization_id or (
         str(next(iter(actor.organization_ids))) if actor.organization_ids else None
     )
     buyer_org_name, buyer_contact_name = _resolve_buyer_names(actor, db, buyer_org_id)
 
+    requirements = payload.requirements
+    provider: ConfiguredAIProvider | None = None
+    if requirements is None:
+        if not payload.prompt or not payload.prompt.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Provide buyer requirements or a sourcing prompt.",
+            )
+        db.rollback()
+        requirements, _, provider = _interpret_natural(payload.prompt, None)
+
+    try:
+        _require_explicit_commercial_controls(requirements)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
     try:
         report = SourcingService.evaluate(
-            prompt=payload.prompt,
-            requirements=payload.requirements,
+            requirements=requirements,
             listing_ids=payload.listing_ids,
             buyer_organization_id=buyer_org_id,
             buyer_org_name=buyer_org_name,
@@ -335,4 +468,7 @@ def evaluate_sourcing(
         "comparisons": [_serialize_comparison_result(c) for c in report.comparisons],
         "inquiries": report.inquiries,
         "total_listings_evaluated": report.total_listings_evaluated,
+        "ai_provider": provider.provenance.provider if provider else None,
+        "ai_model": provider.provenance.model if provider else None,
+        "fallback_reason": provider.provenance.fallback_reason if provider else None,
     }

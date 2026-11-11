@@ -303,6 +303,19 @@ def get_payment_status_repository(db: Session = Depends(get_db)) -> PaymentStatu
     return SqlAlchemyPaymentIntentRepository(db)
 
 
+def _paypal_currency_ineligibility_reason(currency: str) -> str | None:
+    if (
+        settings.payment_mode == PaymentExecutionMode.PAYPAL_SANDBOX.value
+        and currency not in PAYPAL_INVOICE_SUPPORTED_CURRENCIES
+    ):
+        return (
+            f"PayPal Invoicing does not support {currency}. "
+            "The agreed trade currency remains unchanged; both parties must "
+            "approve a PayPal-supported currency before requesting an invoice."
+        )
+    return None
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=AuthorizePaymentResponse)
 def authorize_payment_route(
     deal_id: UUID,
@@ -509,17 +522,11 @@ def authorize_payment_route(
                 detail=f"Payment milestone {milestone.sequence_number} is not eligible: {reason}",
             )
 
-        if (
-            settings.payment_mode == PaymentExecutionMode.PAYPAL_SANDBOX.value
-            and milestone.currency not in PAYPAL_INVOICE_SUPPORTED_CURRENCIES
-        ):
+        currency_error = _paypal_currency_ineligibility_reason(milestone.currency)
+        if currency_error:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"PayPal Invoicing does not support {milestone.currency}. "
-                    "The agreed trade currency remains unchanged; both parties must "
-                    "approve a PayPal-supported currency before requesting an invoice."
-                ),
+                detail=currency_error,
             )
 
         outcome = authorize_payment_intent_in_transaction(
@@ -727,6 +734,10 @@ def list_payment_milestones_route(
         if milestone.status == "PAID" or (intent is not None and intent.status == "PAID"):
             is_eligible = False
             ineligibility_reason = "Payment already reconciled"
+        elif is_eligible:
+            ineligibility_reason = _paypal_currency_ineligibility_reason(milestone.currency)
+            if ineligibility_reason:
+                is_eligible = False
 
         lifecycle_state = (
             _derive_lifecycle_state(intent.status)

@@ -41,6 +41,14 @@ describe("NegotiationReview", () => {
     expect(screen.getByLabelText("Delivery location")).toHaveValue("");
     expect(screen.getByLabelText("Authoring draft status")).toHaveTextContent("draft");
 
+    const itemCurrency = await screen.findByLabelText("Currency code 1");
+    expect(within(itemCurrency).getByRole("option", { name: "USD" })).toBeInTheDocument();
+    expect(within(itemCurrency).queryByRole("option", { name: "INR" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add payment stage" }));
+    const paymentCurrency = await screen.findByLabelText("Payment currency code 1");
+    expect(within(paymentCurrency).queryByRole("option", { name: "INR" })).not.toBeInTheDocument();
+
     fireEvent.change(description, { target: { value: "Copper cable" } });
     fireEvent.click(screen.getByRole("button", { name: "Reset draft" }));
     expect(description).toHaveValue("");

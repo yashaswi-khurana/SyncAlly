@@ -52,6 +52,7 @@ class NvidiaProviderTests(unittest.TestCase):
         async def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.url, "https://integrate.api.nvidia.com/v1/chat/completions")
             self.assertEqual(request.headers["authorization"], "Bearer test-nvidia-key")
+            self.assertFalse(json.loads(request.content)["stream"])
             response_body = {
                 "id": "chatcmpl-123",
                 "object": "chat.completion",

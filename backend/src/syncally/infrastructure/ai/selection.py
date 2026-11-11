@@ -25,6 +25,7 @@ from syncally.domain.conversations import Message, MessageSourceType, Visibility
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.groq import GroqChatCompletions
+from syncally.infrastructure.ai.nvidia import NvidiaChatCompletions
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions, transmitted_context
 from syncally.infrastructure.ai.sourcing import interpret_sourcing_requirements
 

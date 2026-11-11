@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     google_api_key: SecretStr = SecretStr("")
     gemini_model: str = ""
     nvidia_api_key: SecretStr = SecretStr("")
+    nvidia_model: str = ""
     groq_api_key: SecretStr = SecretStr("")
     groq_model: str = ""
     slack_client_id: str = ""

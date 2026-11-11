@@ -580,3 +580,44 @@
     border-left: 0;
   }
 }
+
+.sourcing-demo-notice {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0.875rem 1rem;
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.sourcing-confirmation-fields {
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.sourcing-confirmation-fields legend {
+  padding: 0 0.5rem;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.sourcing-confirmation-fields p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+
+.sourcing-confirmation-summary {
+  display: grid;
+  gap: 0.375rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+  background: var(--surface);
+  color: var(--ink-soft);
+}

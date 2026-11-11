@@ -18,9 +18,11 @@ output quality, and provider retention configuration must be verified by operato
   are disabled.
 - Business and domain code never import a provider SDK. Adapters translate
   provider output into the versioned S4-01 contracts.
-- A small LangGraph proposal flow checks required trade fields before routing
-  to the existing bounded provider call. Incomplete context returns deterministic
-  clarification guidance without egress. The graph has no checkpointer: each
+- A small LangGraph proposal flow checks required trade fields when no source
+  messages are available. Partial saved facts must not block a draft grounded in
+  messages; the provider and local validators own that decision. Missing facts
+  without messages return deterministic clarification guidance without egress.
+  The graph has no checkpointer: each
   request reloads authorized context from PostgreSQL, which remains the source
   of truth.
 
@@ -60,19 +62,22 @@ candidates; it is never auto-confirmed.
 
 | Limit | Default | Meaning |
 | --- | --- | --- |
-| `max_attempts` | 2 | Maximum HTTP calls for one request; one per attempt |
-| `timeout_seconds` | 10 | Elapsed deadline cancels transport and response streaming |
+| `max_attempts` | 2 (OpenAI), 1 (Gemini) | Transient retry attempts |
+| `timeout_seconds` | 25 seconds (OpenAI), 90 seconds (Gemini) | Elapsed deadline cancels transport and response streaming |
 | `backoff_seconds` | 0.5 | Delay between retry attempts |
-| Remote budget | 20.5 seconds | Outer elapsed retry budget; below frontend's 30 seconds |
+| Remote budget | 50.5 seconds (OpenAI), 90 seconds (Gemini) | Below the fact/proposal frontend's 180-second deadline |
 | Request/response | 128 KiB each | Whole UTF-8 request; streamed response checked before buffering |
-| Output tokens | 4096 | No truncation accepted; finish reason must be `stop` |
+| Output tokens | 4096 (OpenAI), 8192 (Gemini) | No truncation accepted; completion must finish normally |
 | Fact/citation count | 100 | Strict bounded wrapper |
 
 Network timeouts/errors, 429, and 5xx are transient except `insufficient_quota`,
 which is permanent. Authentication/authorization, refusal, unsupported response,
 malformed/duplicate-key/nonfinite JSON, invalid schema/version/domain contract,
-oversize output, bad citations, and insufficient proposal context never retry or
-fall back. Clients/responses close on success, failure, and elapsed cancellation.
+oversize output, bad citations, and insufficient proposal context do not trigger
+transient retries or offline fallback. Gemini may repair a parsed but invalid
+fact/proposal response once within the original elapsed deadline, applying the
+same validators again. Explicit insufficient context never triggers repair.
+Clients/responses close on success, failure, and elapsed cancellation.
 No request, response, prompt, credential, or transport exception text is logged.
 
 Strict JSON schemas require every key, including nullable optional values, with
@@ -101,8 +106,9 @@ names, or symbols anywhere in the cited source message conservatively invalidate
 that monetary evidence, even when the quote omits the contradictory qualifier.
 No currency conversion is allowed. An exact authorized transmitted price term
 with the same explicit currency code remains valid evidence for a proposal.
-Invalid currency evidence is permanent: one HTTP
-attempt, no offline fallback, no candidates or draft, and no database writes.
+Invalid currency evidence produces no candidates or draft and no database writes;
+it cannot trigger offline fallback. Gemini's bounded repair must provide new,
+valid evidence before any result is accepted.
 This stricter remote policy does not change the permissive offline demo helpers.
 
 ## Credentials
@@ -148,6 +154,12 @@ confirms a fact, approves terms, commits an agreement, or starts a payment.
 HTTP runs after rollback, without a database transaction. The selected organization's
 database membership is rechecked before HTTP and afterward before candidate
 persistence or returning draft terms. Invalid output is never persisted.
+Candidate deduplication includes currency/unit as well as owner, message, field,
+and value: equal numeric values in different currencies or count units must not
+collapse into one fact. Explicit code-plus-symbol prices such as `CAD $12 each`
+pass both the remote validator and the shared candidate binding contract.
+Gemini thought parts are excluded from answer JSON; they are never facts or
+logged reasoning.
 
 ## Provenance and evaluation
 
@@ -163,7 +175,89 @@ The LangGraph graph only controls readiness and routing; grounding, retries,
 provider selection, and validation remain in the existing application/provider
 boundary. It cannot confirm facts, approve terms, or create agreements.
 
-The existing `httpx.MockTransport` coverage exercises the OpenAI boundary and
-common privacy, grounding, parsing, size-limit, retry and provenance behavior.
-It does not exercise the new Gemini HTTP adapter. Gemini compiles but still needs
-transport-level contract coverage and a live request using a paid Google AI project.
+The existing `httpx.MockTransport` coverage exercises both adapters, including
+Gemini structured requests, bounded repair, token-limit rejection, and thought
+separation, plus common privacy, grounding, parsing, size-limit, retry and
+provenance behavior. These are mocked contract checks, not production certification.
+
+## Production rollout decisions
+
+Keep the modular monolith and current provider port. Deterministic validation,
+ranking, authorization, money calculations, and commercial state transitions
+must stay ordinary code, not model decisions. A general autonomous agent, vector
+database, prompt framework, or another orchestration service is not required for
+these bounded use cases.
+
+Release in independently reviewable slices:
+
+1. **Boundary correctness:** preserve typed provider output, exact citations,
+   private egress policy, currency/unit identity, bounded calls, and explicit
+   rejection. Exercise malformed output, outage, and duplicate extraction as
+   well as the happy path.
+2. **Genuine sourcing:** route the UI through server-owned interpretation and
+   evaluation. Label actual provider execution separately from deterministic
+   ranking and bundled catalogue data. Never promote missing requirements to
+   inferred quantity, price, currency, destination, or payment commitments.
+3. **Measured production gate:** evaluate the configured model against reviewed,
+   consented examples before rollout. Require zero unauthorized-data disclosures
+   and zero accepted unsupported commercial values in the release fixture set.
+   Track extraction acceptance, empty/clarification outcomes, correction rate,
+   p50/p95 latency, timeout/429 rates, and cost per successful reviewed result.
+   Set product SLOs and spend limits from this baseline, not model advertising.
+4. **Operational scale:** load-test API worker occupancy during provider outages;
+   add bounded per-organization admission and explicit overload responses before
+   broad rollout. Move calls to durable background jobs only if measured latency
+   requires resumable progress. Keep manual fact entry available during outages.
+
+Do not log raw prompts, responses, quotes, credentials, or chain-of-thought.
+Use existing correlation IDs and allowlisted failure stages for diagnostics.
+Persist durable per-result model/prompt-version provenance only with a defined
+retention and privacy policy; current invocation provenance is not an audit trail.
+Pin and evaluate a model change before promoting it. Roll back through operator
+provider configuration; never silently replace remote AI with a demo result.
+Database-backed supplier catalogue ownership and supplier verification remain
+separate release requirements: an AI-generated ranking cannot certify a supplier.
+
+### Sourcing implementation boundary
+
+The sourcing page now uses the backend `/sourcing` endpoints rather than local
+browser evaluation. Natural-language interpretation calls the configured
+OpenAI/Gemini transport; strict field contracts and quoted source evidence are
+validated locally. Unknown required fields cause clarification, not speculative
+commercial defaults. Structured user input is explicitly labeled separately.
+Provider failures are surfaced without offline substitution for sourcing.
+
+Ranking, commercial gap arithmetic, and inquiry templates remain deterministic
+application services over bundled demo catalogue data. The catalogue disclosure
+is a product boundary, not a supplier-verification claim. Users review interpreted
+requirements before ranking; inquiries remain drafts asking suppliers to confirm
+terms, not purchase orders or payment commitments.
+
+Sourcing transmits the prompt and controls the user submits for this purpose; it
+does not retrieve organization-private deal data. Operator remote-egress and
+provider-retention approval remain required. Deal-context private allowlisting
+does not authorize or prohibit text explicitly submitted in this separate flow.
+The `/deals` opening-request analyzer remains a distinct consumer of the provider
+port and now reuses grounded remote fact extraction from main.
+
+## Verification receipt
+
+- Focused backend checks: **136 passed**, including **103 subtests** covering
+  scoped evidence, both mocked provider transports, commercial claim roles,
+  negation/cropped quotes, missing fields, failures, and inquiry authority.
+- Frontend checks: **135 passed** in the combined sourcing/deal-AI/client run;
+  the remaining inquiry case passed separately after correcting unsupported
+  test matchers. Its single-case rerun deselected the other 22 cases in that
+  file. This is cumulative focused coverage, not a fresh full-suite pass.
+- Changed-file Ruff and ESLint checks, TypeScript checking, the production Vite
+  build, and whitespace validation passed for the checked snapshot. Backend
+  checks retain four framework deprecation warnings; the build retains a
+  large-chunk warning.
+- A final sourcing lifecycle fix releases the authentication read transaction
+  before provider HTTP, following the existing deal-AI route pattern. Its
+  isolated SQLite/MockTransport regression was added after those checks but
+  was not executed because additional validation was declined. The results
+  above do not certify this final patch.
+- No live provider calls, production deployment, private-data egress, migrations,
+  or payment execution were used for verification. Model quality, account
+  retention, operational load, and supplier verification remain release gates.

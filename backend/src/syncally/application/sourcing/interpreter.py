@@ -1,8 +1,7 @@
-"""Local requirement interpreter for buyer sourcing prompts and structured criteria.
+"""Deterministic legacy parser for internal compatibility and offline tests.
 
-Operates 100% locally with zero external network or LLM dependencies.
-Extracts structured parameters from natural language prompts using regex and heuristics,
-and composes with structured field overrides.
+The public natural-language sourcing API uses the configured remote AI provider;
+this helper is not used as a fallback for provider errors.
 """
 
 from __future__ import annotations

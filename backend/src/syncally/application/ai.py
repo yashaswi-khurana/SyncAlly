@@ -173,7 +173,7 @@ def _retry_policy_for_provider(
     if policy is not None:
         return policy
     if provider_provenance(provider).provider == "gemini":
-        # Leave 30s within the frontend's 120s deadline for cold start and response handling.
+        # Keep one shared deadline for the initial call and any validation repair.
         return AIRetryPolicy(max_attempts=1, timeout_seconds=90.0, backoff_seconds=0.0)
     return AIRetryPolicy()
 
@@ -439,7 +439,10 @@ def persist_fact_candidates(
         for fact in _list_all_constraints_for_owner(repository, deal_id, owner_id)
     ]
     existing_by_signature = {
-        (fact.owner_organization_id, fact.source_message_id, fact.field, fact.typed_value): fact
+        (
+            fact.owner_organization_id, fact.source_message_id, fact.field,
+            fact.typed_value, fact.currency_or_unit,
+        ): fact
         for fact in existing
     }
     created_at = now or datetime.now(UTC)
@@ -454,6 +457,7 @@ def persist_fact_candidates(
             candidate.source_message_id,
             candidate.fact.field.value,
             candidate.fact.value,
+            candidate.fact.currency_or_unit,
         )
         existing_fact = existing_by_signature.get(signature)
         if existing_fact is not None:

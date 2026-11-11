@@ -64,10 +64,22 @@ class InquiryDrafter:
         proposed_terms: dict[str, Any] = {
             "target_quantity": str(requirements.quantity.target_quantity),
             "unit": requirements.quantity.unit,
-            "target_unit_price": str(requirements.pricing.target_unit_price or listing.unit_price),
+            "target_unit_price": (
+                str(requirements.pricing.target_unit_price)
+                if requirements.pricing.target_unit_price is not None
+                else None
+            ),
             "currency": requirements.pricing.currency,
-            "preferred_incoterm": str(requirements.commercial_terms.preferred_incoterm or "DDP"),
-            "preferred_payment_term": str(requirements.commercial_terms.preferred_payment_term or "Net 30"),
+            "preferred_incoterm": (
+                str(requirements.commercial_terms.preferred_incoterm)
+                if requirements.commercial_terms.preferred_incoterm is not None
+                else None
+            ),
+            "preferred_payment_term": (
+                str(requirements.commercial_terms.preferred_payment_term)
+                if requirements.commercial_terms.preferred_payment_term is not None
+                else None
+            ),
             "destination_country_code": requirements.delivery.destination_country_code,
             "destination_port_or_city": requirements.delivery.destination_port_or_city,
         }
@@ -104,10 +116,10 @@ class InquiryDrafter:
             elif cat == GapCategory.NON_COMPLIANT:
                 target_p = req.pricing.target_unit_price or req.pricing.max_unit_price
                 return (
-                    f"• Unit Price & Volume Discount: Your listed unit price is ${listing.unit_price:.2f} {listing.currency}, "
-                    f"whereas our procurement budget target for this line item is ${target_p:.2f} {req.pricing.currency}. "
+                    f"• Unit Price & Volume Discount: Your listed unit price is {listing.unit_price:.2f} {listing.currency}, "
+                    f"whereas our procurement budget target for this line item is {target_p:.2f} {req.pricing.currency}. "
                     f"In consideration of our volume and potential for recurring quarterly purchase orders, would your team "
-                    f"be open to offering a volume concession to bring the unit price closer to ${target_p:.2f} {req.pricing.currency}?"
+                    f"be open to offering a volume concession to bring the unit price closer to {target_p:.2f} {req.pricing.currency}?"
                 )
 
         if fn == "currency":
@@ -146,14 +158,20 @@ class InquiryDrafter:
         if fn == "lead_time_days":
             if cat in (GapCategory.MISSING, GapCategory.AMBIGUOUS):
                 dest_str = req.delivery.destination_port_or_city or req.delivery.destination_country_code
+                lead_time = req.delivery.max_lead_time_days
+                schedule = f" within {lead_time} days" if lead_time is not None else ""
                 return (
-                    f"• Delivery Schedule: Our manufacturing assembly schedule requires confirmed delivery within "
-                    f"{req.delivery.max_lead_time_days or 30} days. Could you confirm your guaranteed manufacturing "
-                    f"and dispatch lead time in calendar days for an order of {req.quantity.target_quantity} {req.quantity.unit} "
+                    f"• Delivery Schedule: Could you confirm your guaranteed manufacturing and dispatch lead time "
+                    f"{schedule} for an order of {req.quantity.target_quantity} {req.quantity.unit} "
                     f"shipped to {dest_str}?"
                 )
             elif cat == GapCategory.NON_COMPLIANT:
-                max_days = req.delivery.max_lead_time_days or 30
+                max_days = req.delivery.max_lead_time_days
+                if max_days is None:
+                    return (
+                        f"• Delivery Schedule: Your listing states {listing.lead_time_days} days. "
+                        "Could you confirm the schedule available for this order?"
+                    )
                 return (
                     f"• Expedited Lead Time: Your quoted lead time of {listing.lead_time_days} days exceeds our maximum "
                     f"procurement window of {max_days} days. Are expedited production shifts, priority scheduling, or "
@@ -162,34 +180,54 @@ class InquiryDrafter:
 
         # 4. Incoterms Gaps
         if fn == "incoterms":
-            pref = str(req.commercial_terms.preferred_incoterm or "DDP")
+            pref = (
+                str(req.commercial_terms.preferred_incoterm)
+                if req.commercial_terms.preferred_incoterm is not None
+                else None
+            )
             dest_str = req.delivery.destination_port_or_city or req.delivery.destination_country_code
             if cat == GapCategory.MISSING:
+                preferred_terms = (
+                    f"under {pref} terms to our receiving facility in {dest_str}"
+                    if pref
+                    else "under the Incoterms available for our receiving facility in "
+                    f"{dest_str}"
+                )
                 return (
                     f"• Freight & Incoterms: As Incoterms are omitted from your listing, please confirm whether your team "
-                    f"can quote under {pref} terms to our receiving facility in {dest_str}."
+                    f"can quote {preferred_terms}."
                 )
             elif cat == GapCategory.NON_COMPLIANT:
+                preferred_terms = (
+                    f"our preferred {pref} terms to {dest_str}"
+                    if pref
+                    else f"delivery terms to {dest_str}"
+                )
                 return (
                     f"• Incoterm Quotation: Your listing quotes under {', '.join(str(i) for i in listing.incoterms)} terms. "
-                    f"Due to our logistics protocols, we require quotation under {pref} terms to {dest_str}. Could you provide "
-                    f"an updated quotation including comprehensive door-to-door freight, customs clearance, and insurance?"
+                    f"Could you provide a quotation under {preferred_terms}, including applicable freight, customs, and insurance? "
                 )
 
         # 5. Payment Terms Gaps
         if fn == "payment_terms":
-            pref_pt = str(req.commercial_terms.preferred_payment_term or "Net 30")
+            pref_pt = (
+                str(req.commercial_terms.preferred_payment_term)
+                if req.commercial_terms.preferred_payment_term is not None
+                else None
+            )
             if cat in (GapCategory.MISSING, GapCategory.AMBIGUOUS):
+                payment_request = (
+                    f"Could you confirm if you can support {pref_pt}?"
+                    if pref_pt
+                    else "Could you share the payment terms available for this order?"
+                )
                 return (
-                    f"• Commercial Payment Terms: To establish standard billing, we propose settlement under {pref_pt} "
-                    f"or through SyncAlly Milestone Escrow to ensure mutual commercial security."
+                    f"• Commercial Payment Terms: {payment_request}"
                 )
             elif cat == GapCategory.NON_COMPLIANT:
                 return (
                     f"• Payment Terms Compromise: Your listing specifies upfront deposit terms ('{listing.payment_terms}'). "
-                    f"Under our corporate treasury guidelines, we propose a balanced compromise: 30% advance deposit upon "
-                    f"order confirmation, with the remaining 70% balance payable against the original Bill of Lading, "
-                    f"or full escrow deposit released upon destination inspection."
+                    "Could you share alternative payment terms for our review?"
                 )
 
         # 6. Warranty Gaps
@@ -242,6 +280,34 @@ class InquiryDrafter:
     ) -> str:
         """Compose the complete B2B inquiry letter text."""
         dest_loc = requirements.delivery.destination_port_or_city or requirements.delivery.destination_country_code
+        lead_time = requirements.delivery.max_lead_time_days
+        target_price = requirements.pricing.target_unit_price
+        max_price = requirements.pricing.max_unit_price
+        price_label = "Target Unit Price"
+        price = target_price
+        if price is None and max_price is not None:
+            price_label = "Maximum Unit Price"
+            price = max_price
+        price_text = (
+            f"{price_label}: {price:.2f} {requirements.pricing.currency}"
+            if price is not None
+            else "Target Unit Price: Not specified"
+        )
+        delivery_text = (
+            f"Within {lead_time} days"
+            if lead_time is not None
+            else "No maximum lead time specified"
+        )
+        incoterm_text = (
+            f"{requirements.commercial_terms.preferred_incoterm} {dest_loc}"
+            if requirements.commercial_terms.preferred_incoterm is not None
+            else f"No preferred Incoterm specified ({dest_loc})"
+        )
+        payment_text = (
+            str(requirements.commercial_terms.preferred_payment_term)
+            if requirements.commercial_terms.preferred_payment_term is not None
+            else "No preferred payment term specified"
+        )
         lines: list[str] = [
             f"Dear Commercial & Sales Team at {listing.organization_name},",
             "",
@@ -253,8 +319,8 @@ class InquiryDrafter:
             f"- Requested Item: {requirements.title} ({requirements.category})",
             f"- Order Volume: {requirements.quantity.target_quantity} {requirements.quantity.unit}",
             f"- Destination Facility: {dest_loc}, {requirements.delivery.destination_country_code}",
-            f"- Target Delivery Window: Within {requirements.delivery.max_lead_time_days or 30} days",
-            f"- Target Unit Price: ${requirements.pricing.target_unit_price or listing.unit_price:.2f} {requirements.pricing.currency}",
+            f"- Target Delivery Window: {delivery_text}",
+            f"- {price_text}",
             "",
         ]
 
@@ -269,14 +335,15 @@ class InquiryDrafter:
         else:
             lines.extend([
                 "We are pleased to inform you that your published commercial terms and technical specifications "
-                "fully align with our procurement parameters. We are prepared to commit to an immediate purchase order.",
+                "appear to align with our stated procurement parameters. Please confirm current availability and terms "
+                "before we make any purchase commitment.",
                 "",
             ])
 
         lines.extend([
             "Proposed Commercial Framework:",
-            f"- Freight Terms: {requirements.commercial_terms.preferred_incoterm or 'DDP'} {dest_loc}",
-            f"- Payment Terms: {requirements.commercial_terms.preferred_payment_term or 'Net 30'} or SyncAlly Escrow",
+            f"- Freight Terms: {incoterm_text}",
+            f"- Payment Terms: {payment_text}",
             f"- Quality Inspection: {requirements.commercial_terms.inspection_requirement}",
             f"- Warranty Coverage: Minimum {requirements.commercial_terms.min_warranty_months} months defect guarantee",
             "",

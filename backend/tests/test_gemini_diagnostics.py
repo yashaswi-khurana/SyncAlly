@@ -13,6 +13,27 @@ from syncally.operations import SafeOperationalFormatter
 
 
 class GeminiDiagnosticsTests(unittest.TestCase):
+    def test_thinking_parts_are_not_parsed_as_answer_json(self):
+        payload = {"schema_version": 1, "facts": []}
+        response = {
+            "modelVersion": "model",
+            "candidates": [{
+                "index": 0, "finishReason": "STOP",
+                "content": {"role": "model", "parts": [
+                    {"text": "Private reasoning is not JSON", "thought": True},
+                    {"text": json.dumps(payload)},
+                ]},
+            }],
+        }
+        provider = GeminiGenerateContent(
+            api_key=SecretStr("key"), model="gemini-test",
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)),
+        )
+        self.assertEqual(asyncio.run(provider._http(b"{}", 1)), payload)
+        response["candidates"][0]["index"] = False
+        with self.assertRaises(ValueError):
+            asyncio.run(provider._http(b"{}", 1))
+
     def test_invalid_fact_shape_logs_only_validation_stage(self):
         provider = GeminiGenerateContent(api_key=SecretStr("private-key"), model="gemini-3.5-flash")
         context = SimpleNamespace()
@@ -47,8 +68,8 @@ class GeminiDiagnosticsTests(unittest.TestCase):
         self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
         self.assertEqual(body["generationConfig"]["thinkingConfig"], {"thinkingLevel": "low"})
         self.assertEqual(body["generationConfig"]["maxOutputTokens"], 8192)
-        self.assertNotIn("responseJsonSchema", body["generationConfig"])
-        self.assertIn(json.dumps(schema), body["contents"][0]["parts"][0]["text"])
+        self.assertEqual(body["generationConfig"]["responseJsonSchema"], schema)
+        self.assertIn("untrusted data", body["systemInstruction"]["parts"][0]["text"])
 
     def test_rate_limit_logs_only_safe_status(self):
         provider = GeminiGenerateContent(

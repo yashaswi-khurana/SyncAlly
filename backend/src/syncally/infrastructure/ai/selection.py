@@ -15,11 +15,17 @@ from syncally.application.ai import (
 )
 from syncally.application.conversations import AiContext
 from syncally.config import Settings
-from syncally.domain.ai.contracts import ExtractedFact, FactField, NormalizedRequirement, ProposedTerms
+from syncally.domain.ai.contracts import (
+    ExtractedFact,
+    FactField,
+    NormalizedRequirement,
+    ProposedTerms,
+)
 from syncally.domain.conversations import Message, MessageSourceType, Visibility
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions, transmitted_context
+from syncally.infrastructure.ai.sourcing import interpret_sourcing_requirements
 
 
 class ConfiguredAIProvider:
@@ -138,6 +144,25 @@ class ConfiguredAIProvider:
                 values[name] = value
             self.provenance = replace(self.provenance, context_scope="shareable_only")
             return NormalizedRequirement.model_validate(values)
+        finally:
+            self._record_model()
+
+    def interpret_sourcing_requirements(
+        self,
+        prompt: str,
+        structured_overrides: dict | None = None,
+        *,
+        timeout_seconds: float = 20.0,
+    ):
+        if self._remote is None:
+            raise AIConfigurationError("A remote AI provider is required for sourcing interpretation")
+        try:
+            return interpret_sourcing_requirements(
+                self._remote,
+                prompt,
+                structured_overrides,
+                timeout_seconds=timeout_seconds,
+            )
         finally:
             self._record_model()
 

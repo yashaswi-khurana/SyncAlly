@@ -1,19 +1,21 @@
-import React, { useState } from "react";
-import {
-  BUNDLED_MARKETPLACE_LISTING_DETAILS,
-  MOCK_BUNDLED_LISTINGS,
-} from "./bundledListings";
+import React, { useEffect, useRef, useState } from "react";
+import { MOCK_BUNDLED_LISTINGS } from "./bundledListings";
 import { BuyerRequirementForm } from "./BuyerRequirementForm";
 import { GapAnalysisInspector } from "./GapAnalysisInspector";
 import { ListingComparisonView } from "./ListingComparisonView";
 import { SellerInquiryModal } from "./SellerInquiryModal";
 import {
-  draftSellerInquiry,
-  evaluateCandidateListing,
-  interpretPrompt,
-} from "./sourcingEngine";
+  draftSourcingInquiry,
+  evaluateSourcing,
+  interpretSourcingRequirements,
+} from "../api/client";
 import type {
-  BuyerRequirements,
+  BuyerRequirements as ApiBuyerRequirements,
+  ComparisonResult,
+  InterpretSourcingResponse,
+  InterpretSourcingRequest,
+} from "../api/types";
+import type {
   CandidateComparisonResult,
   CommercialGap,
   SourcingHubProps,
@@ -28,12 +30,16 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
 }) => {
   const [prompt, setPrompt] = useState("");
   const [inputMode, setInputMode] = useState<"natural" | "structured">("natural");
-  const [title, setTitle] = useState("M8x30 Grade 316 Stainless Steel Hex Cap Bolts");
-  const [category, setCategory] = useState("Industrial Fasteners");
-  const [targetQuantity, setTargetQuantity] = useState("1000");
-  const [unit, setUnit] = useState("boxes");
-  const [targetPrice, setTargetPrice] = useState("12.00");
-  const [maxPrice, setMaxPrice] = useState("14.00");
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("");
+  const [targetQuantity, setTargetQuantity] = useState("");
+  const [unit, setUnit] = useState("");
+  const [targetPrice, setTargetPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [destinationCountryCode, setDestinationCountryCode] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [minWarrantyMonths, setMinWarrantyMonths] = useState("");
+  const [inspectionRequirement, setInspectionRequirement] = useState("");
   const [selectedSector, setSelectedSector] = useState("All");
 
   const [activeCandidates, setActiveCandidates] = useState<CandidateComparisonResult[]>(initialListings);
@@ -50,85 +56,261 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
   const [inquiryBody, setInquiryBody] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [copiedNotification, setCopiedNotification] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [currentRequirements, setCurrentRequirements] = useState<ApiBuyerRequirements | null>(null);
+  const [interpretationSource, setInterpretationSource] = useState<string | null>(null);
+  const [pendingRequirements, setPendingRequirements] = useState<ApiBuyerRequirements | null>(null);
+  const [pendingSignature, setPendingSignature] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const requirementsGeneration = useRef(0);
+  const evaluationGeneration = useRef(0);
+  const selectionGeneration = useRef(0);
+  const inquiryGeneration = useRef(0);
 
-  const handleEvaluate = () => {
-    let requirements: BuyerRequirements;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requirementsGeneration.current += 1;
+      evaluationGeneration.current += 1;
+      selectionGeneration.current += 1;
+      inquiryGeneration.current += 1;
+    };
+  }, []);
 
-    if (inputMode === "natural") {
-      if (!prompt.trim()) {
-        setValidationError("Please enter sourcing requirements");
-        return;
-      }
-      setValidationError(null);
-      requirements = interpretPrompt(prompt);
-      if (requirements.quantity.target_quantity) {
-        setTargetQuantity(requirements.quantity.target_quantity);
-      }
-      if (requirements.quantity.unit) {
-        setUnit(requirements.quantity.unit);
-      }
-    } else {
-      if (
-        !title.trim() ||
-        !targetQuantity.trim() ||
-        parseFloat(targetQuantity) <= 0 ||
-        isNaN(parseFloat(targetQuantity))
-      ) {
-        setValidationError("Please enter requirement title and positive quantity");
-        return;
-      }
-      setValidationError(null);
-      const parsedTargetPrice = targetPrice.trim() ? targetPrice.trim() : null;
-      const parsedMaxPrice = maxPrice.trim() ? maxPrice.trim() : null;
+  const invalidateRequirements = () => {
+    requirementsGeneration.current += 1;
+    evaluationGeneration.current += 1;
+    inquiryGeneration.current += 1;
+    setIsEvaluating(false);
+    setCurrentRequirements(null);
+    setPendingRequirements(null);
+    setPendingSignature(null);
+    setInterpretationSource(null);
+    setValidationError(null);
+    setIsInquiryModalOpen(false);
+  };
 
-      requirements = {
+  const updateRequirement = <T,>(
+    setter: React.Dispatch<React.SetStateAction<T>>,
+    value: React.SetStateAction<T>,
+  ) => {
+    invalidateRequirements();
+    setter(value);
+  };
+
+  const createOverrides = () => {
+    if (inputMode === "structured") {
+      if (!title.trim() || !category.trim() || !targetQuantity.trim() || !unit.trim()) {
+        throw new Error("Enter an item title, category, positive quantity, and unit.");
+      }
+      if (!destinationCountryCode.trim() || !currency.trim() || !minWarrantyMonths.trim() || !inspectionRequirement) {
+        throw new Error("Confirm the delivery country, currency, warranty, and inspection requirement.");
+      }
+      const quantity = Number(targetQuantity);
+      const warranty = Number(minWarrantyMonths);
+      if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isInteger(warranty) || warranty < 0) {
+        throw new Error("Enter a positive quantity and a non-negative whole-number warranty in months.");
+      }
+      return {
         title: title.trim(),
-        category: category.trim() || "Industrial Fasteners",
+        category: category.trim(),
         description: title.trim(),
-        technical_specs: {
-          materials: [],
-          certifications: [],
-          standards: [],
-        },
+        technical_specs: { materials: [], certifications: [], standards: [] },
         pricing: {
-          target_unit_price: parsedTargetPrice,
-          max_unit_price: parsedMaxPrice,
-          currency: "USD",
+          target_unit_price: targetPrice.trim() || null,
+          max_unit_price: maxPrice.trim() || null,
+          currency: currency.trim().toUpperCase(),
         },
-        quantity: {
-          target_quantity: targetQuantity.trim(),
-          unit: unit.trim() || "units",
-        },
-        delivery: {
-          destination_country_code: "DE",
-          max_lead_time_days: 30,
-        },
+        quantity: { target_quantity: targetQuantity.trim(), unit: unit.trim() },
+        delivery: { destination_country_code: destinationCountryCode.trim().toUpperCase() },
         commercial_terms: {
-          preferred_incoterm: "DDP",
-          acceptable_incoterms: ["DDP", "CIF", "FOB"],
-          min_warranty_months: 12,
-          inspection_requirement: "FACTORY_MILL_CERTIFICATE",
+          acceptable_incoterms: [],
+          min_warranty_months: warranty,
+          inspection_requirement: inspectionRequirement,
         },
         raw_prompt: null,
       };
     }
 
-    const evaluated = BUNDLED_MARKETPLACE_LISTING_DETAILS.map((listing) =>
-      evaluateCandidateListing(listing, requirements)
-    );
-
-    evaluated.sort((a, b) => b.composite_score - a.composite_score);
-
-    setActiveCandidates(evaluated);
-    setSelectedCandidate(evaluated[0] || null);
+    const overrides: Record<string, unknown> = {};
+    if (targetQuantity.trim() || unit.trim()) {
+      overrides.quantity = {
+        ...(targetQuantity.trim() ? { target_quantity: targetQuantity.trim() } : {}),
+        ...(unit.trim() ? { unit: unit.trim() } : {}),
+      };
+    }
+    if (targetPrice.trim() || maxPrice.trim() || currency.trim()) {
+      overrides.pricing = {
+        ...(targetPrice.trim() ? { target_unit_price: targetPrice.trim() } : {}),
+        ...(maxPrice.trim() ? { max_unit_price: maxPrice.trim() } : {}),
+        ...(currency.trim() ? { currency: currency.trim().toUpperCase() } : {}),
+      };
+    }
+    if (destinationCountryCode.trim()) {
+      overrides.delivery = { destination_country_code: destinationCountryCode.trim().toUpperCase() };
+    }
+    if (minWarrantyMonths.trim() || inspectionRequirement) {
+      overrides.commercial_terms = {
+        ...(minWarrantyMonths.trim() ? { min_warranty_months: Number(minWarrantyMonths) } : {}),
+        ...(inspectionRequirement ? { inspection_requirement: inspectionRequirement } : {}),
+      };
+    }
+    return overrides;
   };
 
-  const handleOpenInquiry = (candidate: CandidateComparisonResult) => {
+  const mapComparison = (result: ComparisonResult): CandidateComparisonResult => {
+    const catalogueListing = initialListings.find((item) => item.listing_id === result.listing_id);
+    return {
+      listing_id: result.listing_id,
+      seller_organization_id: result.seller_organization_id,
+      organization_id: result.seller_organization_id,
+      seller_organization_name: result.seller_organization_name,
+      country_code: result.country_code,
+      listing_title: result.listing_title,
+      category: result.category || catalogueListing?.category || "Catalogue demo",
+      unit_price: result.unit_price,
+      currency: result.currency,
+      available_quantity: result.available_quantity,
+      moq: result.moq ?? "Not specified",
+      lead_time_days: result.lead_time_days,
+      match_tier:
+        result.match_tier ||
+        (result.tier.replace("Tier ", "") as CandidateComparisonResult["match_tier"]),
+      composite_score: result.composite_score,
+      completeness_tier:
+        result.completeness_tier || catalogueListing?.completeness_tier || "UNKNOWN",
+      attribute_matrix: (result.attribute_matrix || result.attribute_comparisons || []).map((row) => {
+        const detailed = "display_name" in row;
+        return {
+          attribute: row.attribute || (detailed ? row.display_name : "Requirement"),
+          buyer_requirement: row.buyer_requirement || (detailed ? row.buyer_value : ""),
+          candidate_value: row.candidate_value || (detailed ? row.seller_value : "") || "Not specified",
+          variance: row.variance,
+          status: row.status === "ACCEPTABLE_VARIANCE" ? "ACCEPTABLE" : row.status,
+        };
+      }),
+      gaps: result.gaps || result.detected_gaps || [],
+    };
+  };
+
+  const handleSelectCandidate = (candidate: CandidateComparisonResult) => {
+    evaluationGeneration.current += 1;
+    selectionGeneration.current += 1;
+    inquiryGeneration.current += 1;
+    setIsEvaluating(false);
+    setIsInquiryModalOpen(false);
     setSelectedCandidate(candidate);
-    const draft = draftSellerInquiry(candidate, targetQuantity, unit);
-    setInquirySubject(draft.subject);
-    setInquiryBody(draft.body);
-    setIsInquiryModalOpen(true);
+  };
+
+  const handleEvaluate = async () => {
+    if (isEvaluating) return;
+    const requestId = ++evaluationGeneration.current;
+    const requirementsId = requirementsGeneration.current;
+    const selectionId = selectionGeneration.current;
+    const isCurrent = () =>
+      mounted.current &&
+      evaluationGeneration.current === requestId &&
+      requirementsGeneration.current === requirementsId &&
+      selectionGeneration.current === selectionId;
+    setValidationError(null);
+    setIsEvaluating(true);
+    try {
+      const overrides = createOverrides();
+      if (inputMode === "natural" && !prompt.trim()) {
+        throw new Error("Please enter sourcing requirements.");
+      }
+      const signature = `${inputMode}|${prompt.trim()}|${JSON.stringify(overrides)}`;
+      const mustConfirm = inputMode === "natural" &&
+        (!pendingRequirements || pendingSignature !== signature);
+      if (mustConfirm) {
+        setPendingRequirements(null);
+        setPendingSignature(null);
+      }
+      const interpretation = mustConfirm || inputMode === "structured"
+        ? await interpretSourcingRequirements({
+            ...(inputMode === "natural" ? { prompt: prompt.trim() } : {}),
+            structured_overrides: overrides,
+          } as InterpretSourcingRequest) as InterpretSourcingResponse & {
+            ai_provider?: string;
+            ai_model?: string | null;
+            fallback_reason?: string | null;
+          }
+        : { requirements: pendingRequirements as ApiBuyerRequirements };
+      if (!isCurrent()) return;
+      if (mustConfirm) {
+        const aiStatus = interpretation as InterpretSourcingResponse & {
+          ai_provider?: string;
+          ai_model?: string | null;
+          fallback_reason?: string | null;
+        };
+        setPendingRequirements(interpretation.requirements);
+        setPendingSignature(signature);
+        setInterpretationSource(
+          `AI interpreted by ${aiStatus.ai_provider || "configured provider"}${aiStatus.ai_model ? ` · ${aiStatus.ai_model}` : ""}${aiStatus.fallback_reason ? ` · fallback: ${aiStatus.fallback_reason}` : ""}`,
+        );
+        return;
+      }
+      const report = await evaluateSourcing({ requirements: interpretation.requirements });
+      if (!isCurrent()) return;
+      const candidates = report.comparisons.map(mapComparison);
+      selectionGeneration.current += 1;
+      inquiryGeneration.current += 1;
+      setCurrentRequirements(interpretation.requirements);
+      if (inputMode === "structured") setInterpretationSource("Structured user controls");
+      setPendingRequirements(null);
+      setPendingSignature(null);
+      setActiveCandidates(candidates);
+      setSelectedCandidate(candidates[0] || null);
+    } catch (error) {
+      if (isCurrent()) {
+        setValidationError(error instanceof Error ? error.message : "Sourcing evaluation failed. Please retry.");
+      }
+    } finally {
+      if (mounted.current && evaluationGeneration.current === requestId) {
+        setIsEvaluating(false);
+      }
+    }
+  };
+
+  const handleOpenInquiry = async (candidate: CandidateComparisonResult) => {
+    if (!currentRequirements) {
+      setValidationError("Interpret and evaluate requirements before drafting an inquiry.");
+      return;
+    }
+    evaluationGeneration.current += 1;
+    selectionGeneration.current += 1;
+    const selectedId = selectionGeneration.current;
+    const requirementsId = requirementsGeneration.current;
+    const requestId = ++inquiryGeneration.current;
+    setIsEvaluating(false);
+    setSelectedCandidate(candidate);
+    setValidationError(null);
+    setIsInquiryModalOpen(false);
+    try {
+      const draft = await draftSourcingInquiry({
+        requirements: currentRequirements,
+        listing_id: candidate.listing_id,
+      });
+      if (
+        !mounted.current ||
+        inquiryGeneration.current !== requestId ||
+        requirementsGeneration.current !== requirementsId ||
+        selectionGeneration.current !== selectedId
+      ) return;
+      setInquirySubject(draft.subject);
+      setInquiryBody(draft.body);
+      setIsInquiryModalOpen(true);
+    } catch (error) {
+      if (
+        mounted.current &&
+        inquiryGeneration.current === requestId &&
+        requirementsGeneration.current === requirementsId &&
+        selectionGeneration.current === selectedId
+      ) {
+        setValidationError(error instanceof Error ? error.message : "Could not draft the seller inquiry.");
+      }
+    }
   };
 
   const handleCopyToClipboard = () => {
@@ -143,7 +325,8 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
       selectedCandidate.seller_organization_id ||
       selectedCandidate.organization_id ||
       "";
-    const dealUrl = `#/deals/new?listingId=${selectedCandidate.listing_id}&sellerId=${sellerOrgId}&sellerOrganizationId=${sellerOrgId}&initiatorParty=BUYER&quantity=${targetQuantity}&unitPrice=${selectedCandidate.unit_price}`;
+    const dealQuantity = currentRequirements?.quantity.target_quantity ?? targetQuantity;
+    const dealUrl = `#/deals/new?listingId=${selectedCandidate.listing_id}&sellerId=${sellerOrgId}&sellerOrganizationId=${sellerOrgId}&initiatorParty=BUYER&quantity=${dealQuantity}&unitPrice=${selectedCandidate.unit_price}`;
     window.location.hash = dealUrl;
     if (onDealInitiated) onDealInitiated(dealUrl);
     setIsInquiryModalOpen(false);
@@ -155,39 +338,71 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
         <nav aria-label="Breadcrumb" className="breadcrumbs">
           <span>Marketplace</span> &gt; <span>Sourcing Hub</span>
         </nav>
-        <h1><SplitText text="Production Buyer Sourcing Agent" /></h1>
+        <h1><SplitText text="Buyer Sourcing Agent" /></h1>
         <p className="subtitle">
-          Interpret buyer requirements, evaluate realistic marketplace listings, detect commercial gaps, and draft targeted seller inquiries.
+          AI interprets buyer requirements; deterministic backend scoring and inquiry templates use a bundled demo catalogue.
         </p>
       </header>
+
+      <div role="note" className="sourcing-demo-notice">
+        <strong>Demo catalogue:</strong> bundled sample suppliers and listing data are not verified marketplace offers.
+        Candidate ranking and gap arithmetic are deterministic, not AI-generated.
+        {interpretationSource && <span> Requirement source: {interpretationSource}.</span>}
+      </div>
 
       {/* Dual-Mode Buyer Requirement Input Form */}
       <BuyerRequirementForm
         inputMode={inputMode}
-        setInputMode={setInputMode}
+        setInputMode={(value) => updateRequirement(setInputMode, value)}
         prompt={prompt}
-        setPrompt={setPrompt}
+        setPrompt={(value) => updateRequirement(setPrompt, value)}
         title={title}
-        setTitle={setTitle}
+        setTitle={(value) => updateRequirement(setTitle, value)}
         category={category}
-        setCategory={setCategory}
+        setCategory={(value) => updateRequirement(setCategory, value)}
         targetQuantity={targetQuantity}
-        setTargetQuantity={setTargetQuantity}
+        setTargetQuantity={(value) => updateRequirement(setTargetQuantity, value)}
         unit={unit}
-        setUnit={setUnit}
+        setUnit={(value) => updateRequirement(setUnit, value)}
         targetPrice={targetPrice}
-        setTargetPrice={setTargetPrice}
+        setTargetPrice={(value) => updateRequirement(setTargetPrice, value)}
         maxPrice={maxPrice}
-        setMaxPrice={setMaxPrice}
+        setMaxPrice={(value) => updateRequirement(setMaxPrice, value)}
+        destinationCountryCode={destinationCountryCode}
+        setDestinationCountryCode={(value) => updateRequirement(setDestinationCountryCode, value)}
+        currency={currency}
+        setCurrency={(value) => updateRequirement(setCurrency, value)}
+        minWarrantyMonths={minWarrantyMonths}
+        setMinWarrantyMonths={(value) => updateRequirement(setMinWarrantyMonths, value)}
+        inspectionRequirement={inspectionRequirement}
+        setInspectionRequirement={(value) => updateRequirement(setInspectionRequirement, value)}
         validationError={validationError}
         onEvaluate={handleEvaluate}
+        isEvaluating={isEvaluating}
+        confirmationPending={Boolean(pendingRequirements && inputMode === "natural")}
       />
+
+      {pendingRequirements && inputMode === "natural" && (
+        <div className="sourcing-confirmation-summary" role="status">
+          <strong>Review the interpreted requirements before ranking:</strong>
+          <span>{pendingRequirements.title} · {pendingRequirements.category}</span>
+          <span>
+            {pendingRequirements.quantity.target_quantity} {pendingRequirements.quantity.unit} to{" "}
+            {pendingRequirements.delivery.destination_country_code}
+          </span>
+          <span>
+            Currency: {pendingRequirements.pricing.currency}; warranty:{" "}
+            {pendingRequirements.commercial_terms.min_warranty_months} months; inspection:{" "}
+            {pendingRequirements.commercial_terms.inspection_requirement}
+          </span>
+        </div>
+      )}
 
       {/* Side-by-Side Candidate Listings and Detailed Comparison View */}
       <ListingComparisonView
         candidates={activeCandidates}
         selectedCandidate={selectedCandidate}
-        onSelectCandidate={setSelectedCandidate}
+        onSelectCandidate={handleSelectCandidate}
         onOpenInquiry={handleOpenInquiry}
         selectedSector={selectedSector}
         onSectorChange={setSelectedSector}

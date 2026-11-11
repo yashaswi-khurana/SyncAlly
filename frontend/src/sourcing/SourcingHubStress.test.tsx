@@ -13,14 +13,24 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, within, act } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ReferenceSourcingHub } from "./SourcingHubPage";
+import { interpretSourcingRequirements } from "../api/client";
+import { evaluateNaturalRequirements, installSourcingMocks, openServerInquiry } from "./sourcingTestFixtures";
+
+vi.mock("../api/client", () => ({
+  draftSourcingInquiry: vi.fn(),
+  evaluateSourcing: vi.fn(),
+  interpretSourcingRequirements: vi.fn(),
+}));
 
 describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m3_1)", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    vi.resetAllMocks();
+    installSourcingMocks();
     window.location.hash = "";
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -72,7 +82,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       fireEvent.click(structuredBtn);
       const titleInput = screen.getByLabelText(/item title/i);
       const qtyInput = screen.getByLabelText(/target quantity/i);
-      const budgetInput = screen.getByLabelText(/max budget/i);
+      const budgetInput = screen.getByLabelText(/maximum unit price/i);
 
       fireEvent.change(titleInput, { target: { value: "Custom Titanium Fastener Grade 5" } });
       fireEvent.change(qtyInput, { target: { value: "45000" } });
@@ -87,7 +97,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       // Assert structured values are intact
       expect((screen.getByLabelText(/item title/i) as HTMLInputElement).value).toBe("Custom Titanium Fastener Grade 5");
       expect((screen.getByLabelText(/target quantity/i) as HTMLInputElement).value).toBe("45000");
-      expect((screen.getByLabelText(/max budget/i) as HTMLInputElement).value).toBe("85.50");
+      expect((screen.getByLabelText(/maximum unit price/i) as HTMLInputElement).value).toBe("85.50");
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
   });
@@ -96,7 +106,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
   // 2. EXTREME INPUT LENGTHS & FUZZING
   // ============================================================================
   describe("2. Extreme Input Lengths & Adversarial Payloads", () => {
-    it("handles 100,000-character natural language prompt without crashing or freeze", () => {
+    it("handles 100,000-character natural language prompt without crashing or freeze", async () => {
       render(<ReferenceSourcingHub />);
 
       const massivePrompt = "Need high precision aerospace bolts. " + "A".repeat(100_000);
@@ -106,15 +116,16 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect((textarea as HTMLTextAreaElement).value.length).toBe(100_037);
 
       // Trigger evaluation
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
-      fireEvent.click(evalButton);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /interpret requirements/i }));
+      });
 
       // Verify page is still functional and zero console errors
       expect(screen.getByText(/candidate listings/i)).toBeInTheDocument();
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
-    it("handles Unicode, CJK, Arabic RTL, Emojis, and HTML/XSS injection safely", () => {
+    it("handles Unicode, CJK, Arabic RTL, Emojis, and HTML/XSS injection safely", async () => {
       render(<ReferenceSourcingHub />);
 
       const hostileInput = `<script>alert("XSS")</script> <b>Bold</b> 🔩🚀 🔥 
@@ -126,8 +137,9 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       const textarea = screen.getByLabelText(/procurement requirement/i);
       fireEvent.change(textarea, { target: { value: hostileInput } });
 
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
-      fireEvent.click(evalButton);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /interpret requirements/i }));
+      });
 
       // No raw script execution or React DOM corruption
       expect(document.querySelector("script[src*='alert']")).toBeNull();
@@ -135,15 +147,22 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
-    it("handles extreme numerical boundaries in structured inputs (negative, zero, 1e20, NaN)", () => {
+    it("handles extreme numerical boundaries in structured inputs (negative, zero, 1e20, NaN)", async () => {
       render(<ReferenceSourcingHub />);
 
       const structuredBtn = screen.getByRole("button", { name: /structured field controls/i });
       fireEvent.click(structuredBtn);
 
       const qtyInput = screen.getByLabelText(/target quantity/i);
-      const targetPriceInput = screen.getByLabelText(/target price/i);
-      const maxPriceInput = screen.getByLabelText(/max budget/i);
+      const targetPriceInput = screen.getByLabelText(/target unit price/i);
+      const maxPriceInput = screen.getByLabelText(/maximum unit price/i);
+      fireEvent.change(screen.getByLabelText(/item title/i), { target: { value: "Fasteners" } });
+      fireEvent.change(screen.getByLabelText(/^category$/i), { target: { value: "Industrial Fasteners" } });
+      fireEvent.change(screen.getByLabelText(/^unit$/i), { target: { value: "boxes" } });
+      fireEvent.change(screen.getByLabelText(/delivery country code/i), { target: { value: "DE" } });
+      fireEvent.change(screen.getByLabelText(/sourcing currency/i), { target: { value: "USD" } });
+      fireEvent.change(screen.getByLabelText(/minimum warranty/i), { target: { value: "12" } });
+      fireEvent.change(screen.getByLabelText(/inspection requirement/i), { target: { value: "NONE" } });
 
       // Test negative and extreme values
       fireEvent.change(qtyInput, { target: { value: "-999999999999999" } });
@@ -155,10 +174,14 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
 
       // Assert no crash
       expect(screen.getByText(/candidate listings/i)).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent(/positive quantity/i);
 
       // Test non-numeric garbage
+      fireEvent.change(qtyInput, { target: { value: "1000" } });
       fireEvent.change(maxPriceInput, { target: { value: "NaN_INFINITE_OVERFLOW" } });
-      fireEvent.click(evalButton);
+      vi.mocked(interpretSourcingRequirements).mockRejectedValueOnce(new Error("Invalid maximum unit price"));
+      await act(async () => { fireEvent.click(evalButton); });
+      expect(screen.getByRole("alert")).toHaveTextContent(/invalid maximum unit price/i);
       expect(screen.getByText(/candidate listings/i)).toBeInTheDocument();
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
@@ -174,7 +197,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       const textarea = screen.getByLabelText(/procurement requirement/i);
       fireEvent.change(textarea, { target: { value: "" } });
 
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
+      const evalButton = screen.getByRole("button", { name: /interpret requirements/i });
       fireEvent.click(evalButton);
 
       const alert = screen.getByRole("alert");
@@ -188,7 +211,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       const textarea = screen.getByLabelText(/procurement requirement/i);
       fireEvent.change(textarea, { target: { value: "   \n\t  \r\n   " } });
 
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
+      const evalButton = screen.getByRole("button", { name: /interpret requirements/i });
       fireEvent.click(evalButton);
 
       const alert = screen.getByRole("alert");
@@ -196,20 +219,20 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect(alert).toHaveTextContent(/please enter sourcing requirements/i);
     });
 
-    it("clears validation error alert immediately when valid input is submitted", () => {
+    it("clears validation error alert immediately when valid input is submitted", async () => {
       render(<ReferenceSourcingHub />);
 
       const textarea = screen.getByLabelText(/procurement requirement/i);
       fireEvent.change(textarea, { target: { value: "" } });
 
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
-      fireEvent.click(evalButton);
+      const evalButton = screen.getByRole("button", { name: /interpret requirements/i });
+      await act(async () => { fireEvent.click(evalButton); });
 
       expect(screen.getByRole("alert")).toBeInTheDocument();
 
       // Enter valid input and resubmit
       fireEvent.change(textarea, { target: { value: "1000 units M8 bolts" } });
-      fireEvent.click(evalButton);
+      await act(async () => { fireEvent.click(evalButton); });
 
       expect(screen.queryByRole("alert")).toBeNull();
       expect(consoleErrorSpy).not.toHaveBeenCalled();
@@ -220,7 +243,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
   // 4. COPY-TO-CLIPBOARD TOAST TIMEOUTS
   // ============================================================================
   describe("4. Copy-to-Clipboard Toast Timeouts & Concurrent Triggers", () => {
-    it("shows toast notification on copy and automatically hides it after exactly 2000ms", () => {
+    it("shows toast notification on copy and automatically hides it after exactly 2000ms", async () => {
       const writeTextMock = vi.fn().mockResolvedValue(undefined);
       Object.defineProperty(navigator, "clipboard", {
         value: { writeText: writeTextMock },
@@ -230,9 +253,8 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
 
       render(<ReferenceSourcingHub />);
 
-      // Open inquiry modal for first candidate
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       expect(screen.getByTestId("inquiry-modal")).toBeInTheDocument();
 
@@ -258,7 +280,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect(screen.queryByRole("status")).toBeNull();
     });
 
-    it("handles rapid consecutive copy clicks without unhandled exceptions", () => {
+    it("handles rapid consecutive copy clicks without unhandled exceptions", async () => {
       const writeTextMock = vi.fn().mockResolvedValue(undefined);
       Object.defineProperty(navigator, "clipboard", {
         value: { writeText: writeTextMock },
@@ -268,8 +290,8 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
 
       render(<ReferenceSourcingHub />);
 
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       const copyBtn = screen.getByRole("button", { name: /copy to clipboard/i });
 
@@ -290,7 +312,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
-    it("survives modal close while copy timeout is still pending without throwing", () => {
+    it("survives modal close while copy timeout is still pending without throwing", async () => {
       const writeTextMock = vi.fn().mockResolvedValue(undefined);
       Object.defineProperty(navigator, "clipboard", {
         value: { writeText: writeTextMock },
@@ -300,8 +322,8 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
 
       render(<ReferenceSourcingHub />);
 
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       const copyBtn = screen.getByRole("button", { name: /copy to clipboard/i });
       fireEvent.click(copyBtn);
@@ -328,11 +350,11 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
   // 5. MODAL CLOSE & ESCAPE BEHAVIOR
   // ============================================================================
   describe("5. Modal Close / Dismissal & Escape Key Behavior", () => {
-    it("closes modal via '✕' (deal-modal-close) button", () => {
+    it("closes modal via '✕' (deal-modal-close) button", async () => {
       render(<ReferenceSourcingHub />);
 
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       expect(screen.getByTestId("inquiry-modal")).toBeInTheDocument();
 
@@ -343,11 +365,11 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect(screen.queryByTestId("inquiry-modal")).toBeNull();
     });
 
-    it("closes modal via footer 'Close' button", () => {
+    it("closes modal via footer 'Close' button", async () => {
       render(<ReferenceSourcingHub />);
 
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       expect(screen.getByTestId("inquiry-modal")).toBeInTheDocument();
 
@@ -358,11 +380,11 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect(screen.queryByTestId("inquiry-modal")).toBeNull();
     });
 
-    it("tests modal close on Escape key press", () => {
+    it("tests modal close on Escape key press", async () => {
       render(<ReferenceSourcingHub />);
 
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       const modal = screen.getByTestId("inquiry-modal");
       expect(modal).toBeInTheDocument();
@@ -378,11 +400,11 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       expect(screen.queryByTestId("inquiry-modal"), "Modal should close upon pressing Escape key").toBeNull();
     });
 
-    it("tests modal close on backdrop click", () => {
+    it("tests modal close on backdrop click", async () => {
       render(<ReferenceSourcingHub />);
 
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       const backdrop = screen.getByTestId("inquiry-modal");
       expect(backdrop).toBeInTheDocument();

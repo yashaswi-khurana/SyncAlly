@@ -536,7 +536,7 @@ def _number_with_currency_is_present(value: str, currency: str, text: str) -> bo
     number = _numeric_pattern(value)
     currency_token = re.escape(currency)
     alternatives = [
-        rf"(?<![A-Za-z]){currency_token}\s*{number}(?![\w.,])"
+        rf"(?<![A-Za-z]){currency_token}\s*\$?\s*{number}(?![\w.,])"
         rf"|(?<![\w.,+-]){number}\s*{currency_token}(?![A-Za-z])"
     ]
     if currency.upper() == "USD":

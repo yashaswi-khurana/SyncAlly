@@ -241,9 +241,13 @@ class DemoAISuggestionProvider:
         quantity = value(FactField.QUANTITY)
         unit = value(FactField.UNIT)
         price = value(FactField.UNIT_PRICE)
+        price_source = values.get(FactField.UNIT_PRICE) or stored.get(FactField.UNIT_PRICE.value)
+        currency = price_source.currency_or_unit if price_source is not None else None
         destination = value(FactField.DELIVERY_DESTINATION)
         delivery_date = value(FactField.DELIVERY_DATE)
-        if not all((description, quantity, unit, price, destination)):
+        if not all((description, quantity, unit, price, destination)) or not (
+            isinstance(currency, str) and re.fullmatch(r"[A-Za-z]{3}", currency)
+        ):
             raise AIPermanentError("The available context does not support complete demo terms")
         try:
             return ProposedTerms(
@@ -252,7 +256,7 @@ class DemoAISuggestionProvider:
                 quantity=Decimal(quantity),
                 unit=unit,
                 unit_price=Decimal(price),
-                currency="USD",
+                currency=currency.upper(),
                 delivery_destination=destination,
                 delivery_date=date.fromisoformat(delivery_date) if delivery_date else None,
             )

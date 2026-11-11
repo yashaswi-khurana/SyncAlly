@@ -10,6 +10,11 @@
   margin-top: 14px;
 }
 
+.message-entry .message-body {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .conversation-modal {
   position: fixed;
   inset: 0;

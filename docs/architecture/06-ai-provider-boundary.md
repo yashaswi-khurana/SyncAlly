@@ -255,9 +255,29 @@ port and now reuses grounded remote fact extraction from main.
   large-chunk warning.
 - A final sourcing lifecycle fix releases the authentication read transaction
   before provider HTTP, following the existing deal-AI route pattern. Its
-  isolated SQLite/MockTransport regression was added after those checks but
-  was not executed because additional validation was declined. The results
-  above do not certify this final patch.
+  isolated SQLite/MockTransport regression passed separately for both
+  interpretation and evaluation after those checks.
 - No live provider calls, production deployment, private-data egress, migrations,
   or payment execution were used for verification. Model quality, account
   retention, operational load, and supplier verification remain release gates.
+
+## Production readiness: open gates
+
+The checked-in deployment layouts are not production-ready: the Hostless layout
+stores Temporal state in ephemeral `/tmp`, uses expiring free PostgreSQL, and
+runs one small replica; the OCI layout has a single VM as a failure point. Before
+customer rollout, operators must provision durable database and Temporal storage,
+test backup and restore, establish a recovery plan, and validate capacity and
+availability for the intended workload.
+
+The deployment health check uses `/health` rather than database readiness, and
+the checked-in Compose workers have no health checks. Add dependency readiness,
+worker monitoring and alerts, and a deployment pipeline with automated checks
+before relying on these layouts. No checked-in CI workflow was found during this
+review.
+
+The marketplace RFQ search currently filters to organizations the actor can
+manage. Confirm the intended counterparty discovery and authorization policy
+before changing that behavior or promising cross-organization discovery.
+PayPal Sandbox is an explicitly accepted exception for this rollout, not evidence
+of live-payment readiness.

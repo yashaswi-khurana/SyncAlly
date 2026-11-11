@@ -5,6 +5,7 @@ import { ApiError, apiRequest, analyzeOpeningRequest, createCounterpartyInvitati
 import type { Invitation, OpeningRequestAnalysisResult, Organization, SuggestedSeller } from "../api/types";
 import { compactDecimal } from "../formatting";
 import Reveal from "../ui/Reveal";
+import SplitText from "../ui/SplitText";
 import type { OpeningMessageDraftInput } from "./openingMessageDraft";
 
 type DirectoryItem = Pick<Organization, "id" | "legal_name" | "country_code">;
@@ -362,7 +363,7 @@ export default function CreateDealPage({ onCreated, onOpeningMessageDraftReady, 
     <Reveal className="hero">
       <span className="eyebrow">New deal</span>
       <h1 className="display">
-        Open a <span className="gradient-text">draft.</span>
+        <SplitText text="Open a draft." accent="draft." />
       </h1>
       <p className="hero__lede">
         Start with a buyer and a seller organization. Review shareable conversation facts before

@@ -1,0 +1,353 @@
+/* ==========================================================================
+   Deal register (list of deals), the create-deal form and the counterparty
+   invitation that follows it. The deal room itself lives in deal-room.css.
+   ========================================================================== */
+
+/* ---------- register ---------- */
+
+.deal-list {
+  margin-top: 24px;
+  border-top: 1px solid var(--line-strong);
+  list-style: none;
+  counter-reset: deal;
+}
+
+.deal-list > li {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr) auto;
+  grid-template-areas:
+    "index title action"
+    "index meta action";
+  align-items: center;
+  gap: 10px 20px;
+  padding: 24px 10px 24px 4px;
+  border-bottom: 1px solid var(--line);
+  counter-increment: deal;
+}
+
+/* a wash that wipes in from the left while the row is hovered */
+.deal-list > li::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(90deg, var(--accent-soft), transparent 78%);
+  opacity: 0;
+  scale: 0 1;
+  transform-origin: 0 50%;
+  transition: scale 0.7s var(--ease-out), opacity 0.4s var(--ease-out);
+  pointer-events: none;
+}
+
+.deal-list > li:hover::after,
+.deal-list > li:focus-within::after {
+  opacity: 1;
+  scale: 1 1;
+}
+
+.deal-list > li::before {
+  content: counter(deal, decimal-leading-zero);
+  grid-area: index;
+  align-self: start;
+  padding-top: 0.5em;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  transition: color var(--dur-ui) var(--ease-out);
+}
+
+.deal-list > li:hover::before {
+  color: var(--accent);
+}
+
+.deal-list__title {
+  grid-area: title;
+  font-size: clamp(1.25rem, 2.2vw, 1.875rem);
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.036em;
+  overflow-wrap: anywhere;
+  transition: translate 0.6s var(--ease-out), color var(--dur-ui) var(--ease-out);
+}
+
+.deal-list > li:hover .deal-list__title {
+  translate: 10px 0;
+  color: var(--accent);
+}
+
+.deal-meta {
+  grid-area: meta;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+.deal-meta .mono {
+  color: var(--ink-4);
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+}
+
+.deal-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-2);
+  font-weight: 540;
+}
+
+.deal-role::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.deal-list > li > .button {
+  grid-area: action;
+}
+
+@media (max-width: 700px) {
+  .deal-list > li {
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    grid-template-areas:
+      "index title"
+      "index meta"
+      "index action";
+    padding: 20px 0;
+  }
+
+  .deal-list > li > .button {
+    justify-self: start;
+    margin-top: 6px;
+  }
+
+  .deal-list > li:hover .deal-list__title {
+    translate: none;
+  }
+}
+
+/* ---------- create a deal ---------- */
+
+/* A workspace card that holds one long form reads as two columns: what the
+   form is for on the left, the fields on the right. (Scoped to the signed-in
+   workspace: the sign-in and sign-up cards are narrow and stay stacked.) */
+@media (min-width: 900px) {
+  .workspace .card:has(> form.form) {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 8fr);
+    grid-template-rows: auto auto 1fr;
+    column-gap: clamp(28px, 5vw, 88px);
+    padding: clamp(28px, 3.4vw, 48px);
+  }
+
+  .workspace .card:has(> form.form) > :not(form) {
+    grid-column: 1;
+  }
+
+  .workspace .card:has(> form.form) > form.form {
+    grid-row: 1 / span 3;
+    grid-column: 2;
+    margin-top: 0 !important;
+  }
+
+  .workspace .card:has(> form.form) > .panel-head h2 {
+    font-size: var(--text-2xl);
+    line-height: 1.02;
+    letter-spacing: -0.04em;
+  }
+}
+
+.form > .button[type="submit"] {
+  justify-self: start;
+  min-width: 190px;
+  min-height: 52px;
+  border-radius: 26px;
+  font-size: 0.9375rem;
+}
+
+/* AI-structured requirements under the opening message */
+.normalized-requirements-card {
+  border-radius: var(--r-md) !important;
+}
+
+.normalized-requirements-card small.muted {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.suggested-sellers-list [data-testid="suggested-seller-card"] {
+  gap: 12px;
+  border-radius: var(--r-sm) !important;
+  transition: border-color var(--dur-ui) var(--ease-out), background var(--dur-ui) var(--ease-out);
+}
+
+/* counterparty search results */
+#seller-results {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  animation: rise-in 0.35s var(--ease-out) backwards;
+}
+
+#seller-results:empty {
+  display: none;
+}
+
+#seller-results > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px !important;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-size: var(--text-base);
+  font-weight: 520;
+  transition: background var(--dur-micro) var(--ease-out), padding-left var(--dur-ui) var(--ease-out);
+}
+
+#seller-results > li:last-child {
+  border-bottom: 0;
+}
+
+#seller-results > li:hover,
+#seller-results > li[aria-selected="true"] {
+  padding-left: 20px !important;
+  background: var(--accent-soft);
+}
+
+/* ---------- counterparty invitation ---------- */
+
+.counterparty-invitation-page {
+  justify-items: center;
+}
+
+.counterparty-invitation-page > * {
+  width: min(820px, 100%);
+}
+
+.counterparty-invitation {
+  display: grid;
+  gap: 18px;
+  padding: clamp(24px, 4vw, 52px);
+}
+
+.counterparty-invitation > * {
+  margin-top: 0;
+}
+
+.counterparty-invitation__eyebrow-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.counterparty-invitation h1 {
+  font-size: clamp(2.25rem, 5.4vw, 4rem);
+}
+
+.counterparty-invitation__summary {
+  max-width: 56ch;
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+
+.counterparty-invitation__label {
+  display: block;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+}
+
+.counterparty-invitation__recipient {
+  display: grid;
+  gap: 4px;
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+
+.counterparty-invitation__recipient strong {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.counterparty-invitation__link-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  padding: 20px;
+  border-radius: var(--r-md);
+  background: var(--navy);
+  color: var(--ink-inverse);
+}
+
+.counterparty-invitation__link-card > div {
+  display: grid;
+  flex: 1 1 280px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.counterparty-invitation__link-card .counterparty-invitation__label,
+.counterparty-invitation__link-card .hint {
+  color: var(--ink-inverse-2);
+}
+
+.counterparty-invitation__preview {
+  padding: 0;
+  background: none;
+  color: var(--ink-inverse);
+  font-size: 0.9375rem;
+}
+
+.counterparty-invitation__link-card .button {
+  --btn-bg: #fff;
+  --btn-fg: var(--navy);
+  --btn-border: #fff;
+  --btn-fill: var(--accent);
+  --btn-fill-fg: #fff;
+}
+
+.counterparty-invitation__full-link label {
+  display: block;
+  margin: 4px 0 7px;
+}
+
+.counterparty-invitation__expiry {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.counterparty-invitation__actions {
+  margin-top: 4px;
+}

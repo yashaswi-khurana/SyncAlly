@@ -53,11 +53,6 @@ name in a new deal, and includes forms to create a new organization and to add a
 account as a member of an organization the signed-in user administers. The draft-deal form is at
 `#/deals/new` and a single deal is at `#/deals/{deal_id}`.
 
-The interface uses a dark editorial theme adapted from the reference portfolio `huyml.co`:
-near-black canvas, electric-blue accent, oversized display type, marquees, an animated aurora
-background, film grain, a pointer-follower cursor, and scroll-reveal motion. Motion is disabled
-for users who prefer reduced motion.
-
 During local development the Vite dev server proxies `/auth`, `/dev`, `/organizations`, `/deals`,
 `/invitations`, and `/marketplace` to the backend so the browser stays same-origin. Point the proxy at a non-default backend with
 `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:8000`). To call the API from a different
@@ -86,3 +81,33 @@ matching do not verify mailbox ownership, and no email-verification claim is mad
 Use feature-oriented folders under `src/` as product flows are implemented. Keep API access in
 the shared `src/api/client.ts` module and keep server-side authorization and business rules in
 the backend.
+
+## Interface
+
+The interface is light and type-led: a cool off-white canvas, midnight ink and one cobalt accent,
+with teal for the seller side and brass for committed states. Headlines are set in Inter Tight,
+text in Geist and labels in Geist Mono, all self-hosted through `@fontsource-variable`. The craft
+reference is the portfolio `davidecarusio.it`; the direction is written up in
+[`design/direction.md`](../design/direction.md).
+
+Styles are plain CSS. `src/styles.css` imports one file per area from `src/styles/` in order
+(`tokens`, `base`, `motion`, `shell`, `auth`, `deals`, `deal-room`, `deal-desk`, `organizations`,
+`marketplace`); `tokens.css` holds the palette, type scale, radii, shadows and easings. The
+sourcing hub and the conversation dialog keep their own stylesheets next to their components.
+`src/main.tsx` imports `styles.css` before `App` so those component sheets can refine the shared
+layer.
+
+Motion is built from three libraries:
+
+- **cannon-es** simulates the spheres in the sign-in hero (`src/ui/ConvergenceScene.tsx`) and the
+  letters of the footer wordmark (`src/ui/PhysicsWordmark.tsx`, plain DOM letters moved by the
+  simulation).
+- **Three.js** renders the hero spheres, the buyer, record and seller scene
+  (`src/deals/TradeFlowScene.tsx`) and the dotted backdrop (`src/ui/AmbientField.tsx`).
+- **Anime.js** drives the per-letter headlines (`src/ui/SplitText.tsx`).
+
+`src/ui/fx.ts` adds scroll reveals, the spotlight on cards and the button fill that grows from the
+pointer. All of it is decorative: the scenes are `aria-hidden`, Three.js and cannon-es are loaded
+with `import()`, and the loops pause when off screen. With `prefers-reduced-motion` nothing
+animates: each scene holds one still frame and reveals, letter effects and transitions are
+switched off. In the test environment the motion components render plain markup.

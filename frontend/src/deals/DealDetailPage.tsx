@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import type { Deal, NegotiationView, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
+import SplitText from "../ui/SplitText";
 import { setSceneConsensus } from "../ui/motion";
 import DealConstellation from "./DealConstellation";
 import DealConversationReview from "./DealConversationReview";
@@ -788,7 +789,7 @@ export default function DealDetailPage({
                 <span className="deal-room__version">DEAL VERSION {String(deal.version).padStart(2, "0")}</span>
               </div>
               <h1 id="deal-detail-heading">
-                {deal.display_name?.trim() || `Trade with ${counterpartyName}`}
+                <SplitText text={deal.display_name?.trim() || `Trade with ${counterpartyName}`} />
               </h1>
               <p className="deal-room__lede">
                 Discuss the deal, review the details and agree on the terms together. Reviewing a

@@ -1,65 +1,93 @@
-/* Sourcing Hub Component Styles (SyncAlly Editorial Theme) */
+/* Sourcing hub: requirement input, candidate listings, the comparison matrix,
+   gap analysis and the seller inquiry dialog. Imported by SourcingHubPage;
+   tokens and primitives come from src/styles. */
 
 .sourcing-hub-container {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem 4rem;
-  color: var(--ink);
-  font-family: var(--body);
+  display: grid;
+  gap: clamp(22px, 3vw, 40px);
+  min-width: 0;
 }
 
+.sourcing-hub-container > * {
+  min-width: 0;
+}
+
+/* ---------- header ---------- */
+
 .sourcing-hub-header {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 1.25rem;
+  display: grid;
+  gap: clamp(14px, 1.8vw, 22px);
+  justify-items: start;
+  padding-bottom: clamp(20px, 3vw, 36px);
+  border-bottom: 1px solid var(--line-strong);
 }
 
 .sourcing-hub-header h1 {
-  font-family: var(--display);
-  font-size: 2rem;
-  font-weight: 700;
-  margin: 0.5rem 0 0.25rem;
-  color: var(--ink);
-  letter-spacing: -0.02em;
+  max-width: 16ch;
+  font-size: clamp(2.5rem, 6.2vw, 5.5rem);
 }
 
 .sourcing-hub-header .subtitle {
-  color: var(--ink-soft);
-  font-size: 1rem;
-  margin: 0;
-  max-width: 800px;
-  line-height: 1.5;
+  max-width: 62ch;
+  color: var(--ink-2);
+  font-size: clamp(1rem, 1.3vw, 1.1875rem);
+  line-height: 1.55;
 }
 
 .breadcrumbs {
-  font-size: 0.8125rem;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
 }
 
-.input-mode-switcher {
+.breadcrumbs > span:last-child {
+  color: var(--ink);
+}
+
+/* ---------- requirement input ---------- */
+
+.sourcing-requirement-card > * {
+  margin-top: 0;
+}
+
+.sourcing-requirement-card {
+  display: grid;
+  gap: 20px;
+}
+
+.input-mode-switcher,
+.panel-head > .input-mode-switcher {
   display: flex;
-  gap: 0.5rem;
-  background: var(--surface-2);
-  padding: 4px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
+  flex-wrap: wrap;
+  gap: 4px;
   width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
 }
 
 .input-mode-switcher button {
+  min-height: 38px;
+  padding: 7px 16px;
+  border: 0;
+  border-radius: var(--r-pill);
   background: transparent;
-  border: none;
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--ink-soft);
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+  font-weight: 540;
   cursor: pointer;
-  transition: all 0.2s var(--ease);
+  transition:
+    background var(--dur-ui) var(--ease-out),
+    color var(--dur-micro) var(--ease-out),
+    box-shadow var(--dur-ui) var(--ease-out);
 }
 
 .input-mode-switcher button:hover {
@@ -67,496 +95,488 @@
 }
 
 .input-mode-switcher button.active {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: 0 1px 3px rgba(20, 32, 26, 0.12);
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 6px 16px -8px rgba(10, 19, 38, 0.6);
 }
 
 .input-mode-switcher button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+  border-radius: var(--r-pill);
 }
 
-.sourcing-requirement-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1.5rem;
+/* On a phone the two labels do not fit side by side on one line: the switcher
+   spans the card as two equal halves and each label may run to two lines. */
+@media (max-width: 480px) {
+  .input-mode-switcher,
+  .panel-head > .input-mode-switcher {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    border-radius: 20px;
+  }
+
+  .input-mode-switcher button,
+  .input-mode-switcher button:focus-visible {
+    padding: 8px 10px;
+    border-radius: 16px;
+    line-height: 1.2;
+  }
 }
 
 .requirement-input-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  margin-top: 1rem;
+  display: grid;
+  gap: 16px;
+}
+
+.requirement-input-panel > div:not([class]),
+.structured-fields-grid > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
 }
 
 .requirement-input-panel textarea {
   min-height: 128px;
-  resize: vertical;
 }
 
 .structured-fields-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
 }
 
-.structured-fields-grid div {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
+@media (min-width: 560px) {
+  .structured-fields-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.structured-fields-grid label,
-.requirement-input-panel label {
-  color: var(--ink-soft);
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-/* Controls inherit the app-wide control system in styles.css; every page that
-   renders a modal borrows the same surface here so the shape never drifts. */
-.sourcing-hub-container input:not([type="checkbox"]):not([type="radio"]),
-.sourcing-hub-container select,
-.sourcing-hub-container textarea {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 44px;
-  padding: 0.6875rem 0.875rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: var(--body);
-  font-size: 0.9375rem;
-  line-height: 1.45;
-  box-shadow: var(--shadow-sm);
-  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease),
-    background-color 0.18s var(--ease);
-}
-
-.sourcing-hub-container select {
-  padding-right: 2.5rem;
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%2362716a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.875rem center;
-  cursor: pointer;
-}
-
-.sourcing-hub-container input:focus-visible,
-.sourcing-hub-container select:focus-visible,
-.sourcing-hub-container textarea:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.sourcing-hub-container input::placeholder,
-.sourcing-hub-container textarea::placeholder {
-  color: var(--muted);
-  opacity: 1;
-}
-
-.error-banner {
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  color: var(--danger);
-  border: 1px solid var(--danger);
-  font-weight: 500;
-  font-size: 0.875rem;
+@media (min-width: 900px) {
+  .structured-fields-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .evaluate-button {
-  width: fit-content;
-  padding: 0.75rem 1.5rem;
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-weight: 600;
-  font-size: 0.9375rem;
-  cursor: pointer;
-  transition: opacity 0.2s var(--ease);
+  min-height: 52px;
+  padding-inline: 26px;
+  border-radius: 26px;
 }
 
-.evaluate-button:hover {
-  opacity: 0.92;
+/* ---------- candidates ---------- */
+
+.sourcing-comparison-view {
+  display: grid;
+  gap: clamp(22px, 3vw, 40px);
+  min-width: 0;
 }
 
 .sector-filter-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
-  margin-top: 0.5rem;
+  gap: 10px 14px;
+}
+
+.sector-filter-controls label {
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .sector-filter-controls select {
   width: auto;
-  min-width: 12rem;
+  min-width: 240px;
+  border-radius: var(--r-pill);
 }
 
-.candidate-listings-section h2 {
-  font-family: var(--display);
-  font-size: 1.25rem;
-  font-weight: 700;
-  margin: 0.5rem 0 1rem;
+.candidate-listings-section,
+.detailed-evaluation-section {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.candidate-listings-section > h2,
+.detailed-evaluation-section > h2 {
+  font-size: var(--text-2xl);
+  letter-spacing: -0.04em;
 }
 
 .candidate-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 14px;
 }
 
 .candidate-card {
-  background: var(--surface);
+  position: relative;
+  display: grid;
+  /* header, seller, metrics, then the action pinned to the card's foot */
+  grid-template-rows: auto auto auto 1fr;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1.25rem;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
   cursor: pointer;
-  transition: all 0.2s var(--ease);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  transition:
+    border-color var(--dur-ui) var(--ease-out),
+    box-shadow 0.5s var(--ease-out),
+    translate 0.5s var(--ease-out);
 }
 
 .candidate-card:hover {
-  border-color: var(--line-strong);
-  transform: translateY(-1px);
+  border-color: var(--line-control);
+  box-shadow: var(--shadow-2);
+  translate: 0 -3px;
 }
 
 .candidate-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
+  box-shadow: var(--ring), var(--shadow-2);
 }
 
+/* the tier chip sits above the title so the title keeps the full measure */
 .candidate-card .card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.candidate-card .card-header > .badge {
+  order: -1;
 }
 
 .candidate-card h3 {
-  font-size: 1rem;
-  font-weight: 600;
-  margin: 0;
-  line-height: 1.35;
+  font-size: var(--text-lg);
+  letter-spacing: -0.03em;
+  text-wrap: pretty;
+  transition: color var(--dur-ui) var(--ease-out);
+}
+
+.candidate-card.selected h3,
+.candidate-card:hover h3 {
+  color: var(--accent);
 }
 
 .candidate-card .org-name {
-  color: var(--muted);
-  font-size: 0.8125rem;
-  margin: 0 0 0.75rem;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
 }
 
 .candidate-card .card-metrics {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.875rem;
-  color: var(--ink-soft);
-  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding-block: 11px;
+  border-block: 1px solid var(--line);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.candidate-card .card-metrics > span {
+  white-space: nowrap;
 }
 
 .candidate-card .card-actions {
   display: flex;
+  align-self: end;
   justify-content: flex-end;
 }
 
 .inquiry-btn {
-  padding: 0.5rem 1rem;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
+  min-height: 36px;
+  padding: 6px 16px;
+  border: 1px solid var(--line-control);
+  border-radius: var(--r-pill);
+  background: var(--surface);
   color: var(--ink);
-  transition: background 0.2s var(--ease);
+  font-size: 0.8rem;
+  font-weight: 560;
+  cursor: pointer;
+  transition:
+    background var(--dur-ui) var(--ease-out),
+    color var(--dur-ui) var(--ease-out),
+    border-color var(--dur-ui) var(--ease-out);
 }
 
-.inquiry-btn:hover {
-  background: var(--surface-3);
+.inquiry-btn:hover,
+.inquiry-btn:focus-visible {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
 }
 
 .tier-a {
-  background: #2e7d32;
-  color: #fff;
+  border-color: transparent;
+  background: var(--success-soft);
+  color: var(--success);
 }
 
 .tier-b {
-  background: #1976d2;
-  color: #fff;
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .tier-c {
-  background: #f57c00;
-  color: #fff;
+  border-color: transparent;
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .tier-d {
-  background: #d32f2f;
-  color: #fff;
+  border-color: transparent;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
+
+/* ---------- comparison matrix ---------- */
 
 .detailed-evaluation-section {
-  background: var(--surface);
+  /* one column that never grows past the card, however wide the table is */
+  grid-template-columns: minmax(0, 1fr);
+  padding: clamp(20px, 2.6vw, 36px);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1.5rem;
-  margin-top: 1rem;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
 }
 
-.detailed-evaluation-section h2 {
-  font-family: var(--display);
-  font-size: 1.25rem;
-  font-weight: 700;
-  margin: 0 0 1rem;
+.detailed-evaluation-section > h2 {
+  overflow-wrap: anywhere;
+}
+
+/* Only the table scrolls sideways on a narrow screen; the heading above it
+   and the gap analysis below keep the width of the card. */
+.comparison-matrix-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.comparison-matrix-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--r-sm);
 }
 
 .comparison-matrix-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-  margin-bottom: 2rem;
+  min-width: 640px;
 }
 
-.comparison-matrix-table th,
 .comparison-matrix-table td {
-  padding: 0.75rem 1rem;
-  text-align: left;
-  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
 }
 
-.comparison-matrix-table th {
-  background: var(--surface-2);
-  font-weight: 600;
-  color: var(--ink-soft);
-}
-
-.comparison-matrix-table tr:hover {
-  background: rgba(0, 0, 0, 0.02);
+.comparison-matrix-table td strong {
+  color: var(--ink);
 }
 
 .status-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .status-badge.status-match {
-  background: rgba(46, 125, 50, 0.15);
-  color: #2e7d32;
+  background: var(--success-soft);
+  color: var(--success);
 }
 
-.status-badge.status-acceptable {
-  background: rgba(245, 124, 0, 0.15);
-  color: #e65100;
+.status-badge.status-acceptable,
+.status-badge.status-acceptable_variance {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .status-badge.status-gap {
-  background: rgba(211, 47, 47, 0.15);
-  color: #c62828;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
+
+/* ---------- gap analysis ---------- */
 
 .gap-analysis-drawer {
+  display: grid;
+  gap: 14px;
+  padding-top: 22px;
   border-top: 1px solid var(--line);
-  padding-top: 1.5rem;
 }
 
-.gap-analysis-drawer h3 {
-  font-family: var(--display);
-  font-size: 1.125rem;
-  margin: 0 0 1rem;
+.gap-analysis-drawer > h3 {
+  font-size: var(--text-lg);
+  letter-spacing: -0.03em;
 }
 
 .gaps-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 10px;
   list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
 }
 
 .gap-item {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 16px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 1rem;
+  border-left: 3px solid var(--line-control);
+  border-radius: var(--r-sm);
   background: var(--surface-2);
   cursor: pointer;
-  transition: border-color 0.2s var(--ease);
+  transition: background var(--dur-ui) var(--ease-out), box-shadow 0.5s var(--ease-out);
 }
 
 .gap-item:hover {
-  border-color: var(--line-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
 }
 
 .gap-item.severity-critical {
-  border-left: 4px solid var(--danger);
+  border-left-color: var(--danger);
 }
 
 .gap-item.severity-moderate {
-  border-left: 4px solid #f57c00;
+  border-left-color: var(--gold);
 }
 
 .gap-item.severity-low {
-  border-left: 4px solid #1976d2;
+  border-left-color: var(--accent);
 }
 
 .gap-item-header {
   display: flex;
-  gap: 0.5rem;
+  flex-wrap: wrap;
   align-items: center;
-  margin-bottom: 0.375rem;
+  gap: 6px 8px;
 }
 
 .gap-field {
-  font-weight: 600;
-  font-size: 0.875rem;
+  margin-right: auto;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 640;
+  letter-spacing: -0.02em;
 }
 
 .category-badge {
+  border-color: transparent;
   background: var(--surface-3);
-  color: var(--ink-soft);
-  font-size: 0.75rem;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 
 .severity-badge.severity-critical {
+  border-color: transparent;
   background: var(--danger-soft);
   color: var(--danger);
-  font-size: 0.75rem;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 
 .severity-badge.severity-moderate {
-  background: rgba(245, 124, 0, 0.15);
-  color: #e65100;
-  font-size: 0.75rem;
-  padding: 2px 6px;
-  border-radius: 4px;
+  border-color: transparent;
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
-.gap-explanation {
-  margin: 0.25rem 0;
-  font-size: 0.875rem;
-  color: var(--ink);
+.severity-badge.severity-low {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
+.gap-explanation,
 .gap-action {
-  margin: 0.25rem 0 0;
-  font-size: 0.8125rem;
-  color: var(--ink-soft);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.gap-action strong {
+  color: var(--ink);
 }
 
 .inspected-gap-detail {
-  margin-top: 1rem;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-sm);
-  background: var(--surface-3);
-  font-size: 0.875rem;
-  font-weight: 500;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: var(--navy);
+  color: var(--ink-inverse);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
 }
 
 .no-gaps-text {
-  color: #2e7d32;
+  padding: 14px 16px;
+  border-left: 3px solid var(--success);
+  border-radius: var(--r-sm);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: var(--text-sm);
   font-weight: 500;
-  font-size: 0.9375rem;
 }
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 1rem;
-}
+/* ---------- seller inquiry dialog ---------- */
 
-.modal-dialog {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  max-width: 600px;
-  width: 100%;
-  padding: 1.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-}
-
-.modal-dialog input:not([type="checkbox"]):not([type="radio"]),
-.modal-dialog select,
-.modal-dialog textarea {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  padding: 0.6875rem 0.875rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: var(--body);
-  font-size: 0.9375rem;
-  line-height: 1.45;
-  box-shadow: var(--shadow-sm);
-}
-
-.modal-dialog textarea {
-  min-height: 96px;
-  resize: vertical;
-}
-
-.modal-dialog input:focus-visible,
-.modal-dialog select:focus-visible,
-.modal-dialog textarea:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.modal-dialog label {
+.modal-dialog > div:not([class]) {
   display: grid;
-  gap: 0.375rem;
-  color: var(--ink-soft);
-  font-size: 0.8125rem;
-  font-weight: 600;
+  gap: 7px;
 }
 
 .toast-notification {
-  padding: 0.625rem 1rem;
-  background: #2e7d32;
-  color: #fff;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: var(--text-sm);
   font-weight: 500;
-  text-align: center;
+  animation: rise-in 0.4s var(--ease-out) backwards;
 }
 
 .modal-buttons {
-  display: flex;
   justify-content: flex-end;
-  gap: 0.75rem;
 }
 
-.primary-deal-btn {
-  background: var(--accent);
-  color: #fff;
+@media (max-width: 640px) {
+  .sector-filter-controls select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .candidate-card .card-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .candidate-card .card-metrics > span + span {
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
 }

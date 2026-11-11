@@ -253,13 +253,7 @@ export default function OrganizationMembersSection({ organization }: Props) {
               <li
                 key={member.user_id}
                 data-testid={`member-row-${member.user_id}`}
-                style={{
-                  padding: "12px 16px",
-                  borderRadius: 6,
-                  border: "1px solid var(--line)",
-                  marginBottom: 8,
-                  background: isEditing ? "var(--surface-2)" : "transparent",
-                }}
+                className={isEditing ? "member-list__item member-list__item--editing" : "member-list__item"}
               >
                 {!isEditing ? (
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
@@ -276,10 +270,7 @@ export default function OrganizationMembersSection({ organization }: Props) {
                           {member.is_owner ? "ORG OWNER · FULL ACCESS" : (member.role_bundles || []).join(" + ") || "No access"}
                         </span>
                         {isSelf && (
-                          <span
-                            className="badge"
-                            style={{ fontSize: "0.75rem", background: "rgba(56, 189, 248, 0.15)", color: "#38bdf8" }}
-                          >
+                          <span className="badge badge--info">
                             You
                           </span>
                         )}
@@ -290,17 +281,7 @@ export default function OrganizationMembersSection({ organization }: Props) {
 
                       <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {[...(member.permissions || []), ...(member.deal_ids?.length ? [`${member.deal_ids.length} assigned deals`] : [])].map((cap) => (
-                          <span
-                            key={cap}
-                            style={{
-                              display: "inline-block",
-                              padding: "2px 8px",
-                              borderRadius: 4,
-                              fontSize: "0.75rem",
-                              background: "rgba(255, 255, 255, 0.08)",
-                              border: "1px solid var(--line)",
-                            }}
-                          >
+                          <span key={cap} className="member-capability">
                             {cap}
                           </span>
                         ))}

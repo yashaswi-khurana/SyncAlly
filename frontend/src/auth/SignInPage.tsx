@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import ConvergenceScene from "../ui/ConvergenceScene";
+import Marquee from "../ui/Marquee";
 import { initMotion } from "../ui/motion";
+import PhysicsWordmark from "../ui/PhysicsWordmark";
+import SplitText from "../ui/SplitText";
 import type { FormEvent } from "react";
 
 import { ApiError, apiRequest, login } from "../api/client";
@@ -294,56 +298,22 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
         ) : null}
       </header>
 
-      <section className="auth-hero" aria-labelledby="auth-title">
-        <div className="auth-hero__meta">
-          <span className="eyebrow">A clearer way to manage trade</span>
-          <span className="auth-hero__edition">BUYER ↔ SELLER</span>
-        </div>
-        <h1 id="auth-title" data-motion-title>
-          Bring your trade<br />
-          <span>agreements together.</span>
-        </h1>
-        <p className="auth-hero__lede">
-          Turn a buyer and seller conversation into a clear, mutually approved deal—with invoicing
-          ready to follow.
-        </p>
-
-        <div className="auth-diagram" aria-label="Conversation to suggested facts to owner review">
-          <div className="auth-diagram__topline">
-            <span>HOW IT WORKS</span>
-            <span>01 — 03</span>
+      <div className="auth-stage">
+        <ConvergenceScene className="auth-stage__scene" anchorSelector=".auth-stage__well" avoidSelector=".auth-hero h1, .auth-hero__lede, .auth-hero__footnote" />
+        <section className="auth-hero" aria-labelledby="auth-title">
+          <div className="auth-hero__meta">
+            <span className="eyebrow">A clearer way to manage trade</span>
+            <span className="auth-hero__edition">BUYER ↔ SELLER</span>
           </div>
-          <div className="auth-diagram__drawing" aria-hidden="true">
-            <TradeFlowScene />
-          </div>
-          <div className="auth-diagram__labels">
-            <div>
-              <span>01 / DISCUSS</span>
-              <strong>Discuss &amp; Extract Terms</strong>
-            </div>
-            <div>
-              <span>02 / APPROVE</span>
-              <strong>Review and approve together</strong>
-            </div>
-            <div>
-              <span>03 / INVOICE</span>
-              <strong>Request an invoice</strong>
-            </div>
-          </div>
-        </div>
-        <div className="auth-hero__footnote">
-          <span className="auth-hero__footnote-mark" aria-hidden="true">↳</span>
-          <span>Both parties approve the same terms before an invoice is created.</span>
-        </div>
-        <section className="auth-benefits" aria-labelledby="why-syncally">
-          <h2 id="why-syncally">Why SyncAlly</h2>
-          <ul>
-            <li><strong>Shared agreement</strong><span>Both sides review and approve the same version.</span></li>
-            <li><strong>Private by design</strong><span>Keep internal terms private; share only what the deal needs.</span></li>
-            <li><strong>Traceable decisions</strong><span>Review the history of your agreements and approvals.</span></li>
-          </ul>
+          <h1 id="auth-title">
+            <SplitText text={"Bring your trade\nagreements together."} accent="together." />
+          </h1>
+          <p className="auth-hero__lede">
+            Turn a buyer and seller conversation into a clear, mutually approved deal—with invoicing
+            ready to follow.
+          </p>
+          <div className="auth-stage__well" aria-hidden="true" />
         </section>
-      </section>
 
       {mode === "invite" && inviteToken ? (
         <aside className="card auth-card" aria-labelledby="invite-onboarding-heading">
@@ -542,11 +512,63 @@ export default function SignInPage({ onSignIn }: SignInPageProps) {
           </div>
         </aside>
       )}
+      </div>
+
+      <Marquee className="auth-ticker" speed={38}>
+        <span>Negotiate</span>
+        <span>Record</span>
+        <span>Review</span>
+        <span>Approve</span>
+        <span>Invoice</span>
+      </Marquee>
+
+      <section className="auth-statement" aria-label="How approval works">
+        <div className="auth-hero__footnote">
+          <span className="auth-hero__footnote-mark" aria-hidden="true">↳</span>
+          <span>
+            <SplitText effect="scrub" text="Both parties approve the same terms before an invoice is created." />
+          </span>
+        </div>
+      </section>
+
+      <div className="auth-diagram" aria-label="Conversation to suggested facts to owner review">
+        <div className="auth-diagram__topline">
+          <span>HOW IT WORKS</span>
+          <span>01 — 03</span>
+        </div>
+        <div className="auth-diagram__drawing" aria-hidden="true">
+          <TradeFlowScene />
+        </div>
+        <div className="auth-diagram__labels">
+          <div data-reveal-auto>
+            <span>01 / DISCUSS</span>
+            <strong>Discuss &amp; Extract Terms</strong>
+          </div>
+          <div data-reveal-auto>
+            <span>02 / APPROVE</span>
+            <strong>Review and approve together</strong>
+          </div>
+          <div data-reveal-auto>
+            <span>03 / INVOICE</span>
+            <strong>Request an invoice</strong>
+          </div>
+        </div>
+      </div>
+
+      <section className="auth-benefits" aria-labelledby="why-syncally">
+        <h2 id="why-syncally">Why SyncAlly</h2>
+        <ul>
+          <li><strong>Shared agreement</strong><span>Both sides review and approve the same version.</span></li>
+          <li><strong>Private by design</strong><span>Keep internal terms private; share only what the deal needs.</span></li>
+          <li><strong>Traceable decisions</strong><span>Review the history of your agreements and approvals.</span></li>
+        </ul>
+      </section>
 
       <footer className="auth-footer">
         <span>SYNCALLY / DEAL WORKSPACE</span>
         <span>NEGOTIATE &nbsp;·&nbsp; RECORD &nbsp;·&nbsp; REVIEW</span>
         <span>PRIVATE BY DEFAULT</span>
+        <PhysicsWordmark text="SyncAlly" className="auth-footer__wordmark" />
       </footer>
     </main>
   );

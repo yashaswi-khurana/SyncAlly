@@ -8,6 +8,7 @@ import { navigateToDeal, navigateToDeals, navigateToOrganizations, parseRoute } 
 import OrganizationsPanel from "./OrganizationsPanel";
 import MemberGrantFields, { type MemberGrants } from "./MemberGrantFields";
 import Reveal from "../ui/Reveal";
+import SplitText from "../ui/SplitText";
 
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
@@ -219,7 +220,7 @@ export default function OrganizationsSettingsPage({ onAccepted }: {
           <span className="eyebrow">Settings / Organizations</span>
           <span className="workspace-intro__caption">Company profiles &amp; team access</span>
         </div>
-        <h1 className="display">Organizations.</h1>
+        <h1 className="display"><SplitText text="Organizations." /></h1>
         <p className="hero__lede">
           Manage your organizations, their profiles and team members. Search for a trading
           partner when you create a deal.

@@ -7,16 +7,21 @@ system instead of adding a fifth variant of "a box you type in".
 
 ## 1. The base layer
 
-`frontend/src/styles.css` defines the base control once, at zero specificity:
+`frontend/src/styles/base.css` defines the base control once, on the elements themselves:
 
 ```css
-:where(input, textarea, select):where(:not([type="checkbox"], [type="radio"], [type="range"], …)) { … }
+input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+select,
+textarea { … }
 ```
 
-- Zero specificity (`:where()`) means any component class can refine a control and still win —
-  the base layer never needs `!important` and never fights a feature rule.
-- The base layer deliberately excludes checkboxes, radios, ranges, files and buttons, so native
-  controls stay native.
+- The rule has the specificity of one element plus one attribute. A refinement therefore needs a
+  class *and* the element (`.sector-filter-controls select`, `.requirement-input-panel textarea`); a lone class on the
+  control does not win. No refinement needs `!important`.
+- Component stylesheets load after the shared layer (`src/main.tsx` imports `styles.css` before
+  `App`), so a refinement of equal specificity wins too.
+- The base layer deliberately excludes checkboxes, radios, ranges, files and colour inputs, so
+  native controls stay native.
 - Selects drop the platform chrome and draw one shared chevron (inline SVG data URI), because the
   three previous native arrows rendered at different sizes on every page.
 
@@ -36,39 +41,42 @@ system instead of adding a fifth variant of "a box you type in".
 - Order is always label → control → hint/error, with a 7px rhythm.
 - `.field` sets `min-width: 0` and `align-content: start` so it never stretches a grid row or
   pushes its label away from its box.
-- Labels are `0.82rem / 600 / var(--ink-soft)`. The previous uppercase Sourcing Hub labels were
-  the only place that broke this, and now match.
+- Labels are `var(--text-sm)` (0.8125rem) / 560 / `var(--ink-2)`. The one exception is the
+  sourcing hub's sector filter, whose label reads as a mono caption beside its select.
+- A `<label>` that wraps its control directly (marketplace, delivery, proposal editor) gets the
+  same 7px rhythm without a `.field` wrapper.
 
 ## 3. States
 
 | State | Treatment |
 | --- | --- |
-| Default | `1px solid var(--line-strong)` frame on `var(--surface)` paper |
-| Hover | Frame lifts to the component's hover colour (auth card lifts its light frame) |
-| Focus | `border-color: var(--accent)` plus a `3px var(--accent-soft)` ring, `outline: none` |
-| Invalid | `aria-invalid="true"` gives a `var(--danger)` frame and soft danger ring |
-| Disabled | `var(--surface-2)` fill, soft text, `not-allowed` cursor, `0.75` opacity |
-| Read-only | Paper-subtle fill until focused, so it never looks editable |
-| Placeholder | `var(--muted)` at full opacity — no more browser-default grey |
+| Default | `1px solid var(--line-control)` frame on `var(--surface)`, 46px tall, `var(--r-sm)` radius |
+| Hover | The frame darkens |
+| Focus | `border-color: var(--accent)` plus the shared `var(--ring)` (4px `var(--accent-soft)`), `outline: none` |
+| Invalid | `aria-invalid="true"` gives a `var(--danger)` frame, and a soft danger ring on focus |
+| Disabled | `var(--surface-2)` fill, `var(--ink-3)` text, `not-allowed` cursor |
+| Read-only | `var(--surface-2)` fill and mono type, so it never looks editable |
+| Placeholder | `var(--ink-4)` at full opacity, not the browser-default grey |
 
-## 4. Surfaces with their own tint
+## 4. Surfaces
 
-Two surfaces intentionally re-tint the same geometry instead of re-defining controls:
+Every surface uses the base control unchanged: the glass sign-in card, workspace cards, the
+sourcing hub and dialogs. Where a control differs it is a refinement of the base layer, not a
+replacement:
 
-- **Auth card** (dark green panel): light-on-dark inputs, 48px tall, warm focus ring (`#ef9a78`).
-- **Sourcing Hub / modals**: slightly larger type (`0.9375rem`) and brighter `var(--surface)`
-  fill, but the same 44px minimum height, frame and focus ring.
-
-Both are implemented as refinements of the base layer, not replacements.
+- The sourcing hub's sector filter is a pill-shaped select sized to its content.
+- Rows of short fields (marketplace quantity, unit, price, currency) sit in a fixed column grid so
+  a date input can never push its neighbours out of the card.
 
 ## 5. Choice controls
 
 - `.control-rows` — a grid of checkbox/radio rows (permission bundles, approvers, deal access).
-  Rows are 36px minimum, hover-tinted, with a 17px accent-tinted box aligned to the first line.
+  Rows are 38px minimum, hover-tinted, with a 17px accent-tinted box aligned to the first line.
 - `.check-row` — a single acknowledgement checkbox with a long label (proposal replacement,
   import confirmation). Same geometry as one `.control-rows` row.
 - Bare `<fieldset>` groups (deal role, counterparty mode, case type) render as inline segmented
-  chips: 44px tall, accent border and soft fill when the option is checked.
+  pills: 44px tall, accent border and soft fill when the option is checked. These rules are
+  written with `:where()` at zero specificity, so any component class overrides them.
 - `.message-composer__visibility` stays a hidden-input segmented control with an explicit
   `:focus-within` ring.
 
@@ -77,15 +85,17 @@ Both are implemented as refinements of the base layer, not replacements.
 1. Wrap labelled controls in `.field`; do not hand-roll block labels and margins.
 2. Never re-declare `border`, `background`, `padding` or `border-radius` for a control to change
    its *shape* — only to change its *tint* on a dark surface.
-3. Use `.input` when a control is not inside `.field` (compact rows, modal forms).
+3. A control outside `.field` (compact rows, modal forms) needs no class: the base layer styles
+   the element. Existing `className="input"` attributes are harmless and carry no rules.
 4. Use `.control-rows` for groups of checkboxes or radios; never inline `style={{ display:
    "block", margin: "6px 0" }}` on each label.
 5. Keep copy in tests intact: placeholders, labels and button names are covered by the test suite.
 
 ## 7. Verification
 
-- `npm test` — 544 frontend tests, including the deal case modal, invite modal and sourcing flows.
-- `npm run lint:check` — ESLint plus `tsc --noEmit`.
-- `npm run build` — production bundle.
-- The stylesheets are parse-checked with `css-tree` (no parse errors, no duplicated declarations
-  inside a rule, no `url()` outside a background shorthand).
+- `npm test` — 555 frontend tests, including the deal case modal, invite modal and sourcing flows.
+- `npx eslint src` — lint.
+- `npx vite build` — production bundle.
+- `npm run lint:check` and `npm run build` also run `tsc --noEmit`, which currently stops on a type
+  error in `src/deals/AISuggestionReview.tsx` (line 279, `.size` read on an array). That error is
+  in application logic and predates the control system.

@@ -611,8 +611,8 @@ export default function AgreementReview({
             {selectors}
             {viewedVersion && !isPendingCandidate ? <p role="status">Historical version · Read-only</p> : null}
             {agreement.status === "COMMITTED" && pendingCandidate ? (
-              <div role="status" className="agreement-review__pending-notice" style={{ margin: "1rem 0", padding: "0.75rem", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: "4px" }}>
-                <p style={{ margin: "0 0 0.5rem 0" }}>An amendment (Version {pendingCandidate.version_number}) is awaiting approval.</p>
+              <div role="status" className="agreement-review__pending-notice">
+                <p>An amendment (Version {pendingCandidate.version_number}) is awaiting approval.</p>
                 <button
                   type="button"
                   className="button secondary"
@@ -686,7 +686,7 @@ export default function AgreementReview({
             </details>
 
             {amendmentImpact?.blockers && amendmentImpact.blockers.length > 0 ? (
-              <div role="alert" className="agreement-review__impact-blocker" style={{ margin: "1rem 0", padding: "1rem", background: "#fef2f2", border: "1px solid #f87171", borderRadius: "4px" }}>
+              <div role="alert" className="agreement-review__impact-blocker">
                 <h4>Amendment Policy Blockers</h4>
                 <ul>
                   {amendmentImpact.blockers.map((blocker, idx) => (
@@ -751,7 +751,7 @@ export default function AgreementReview({
                     Propose amendment
                   </button>
                 ) : (
-                  <div className="card" style={{ padding: "1rem", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                  <div className="card agreement-review__amendment-form">
                     <h3>Propose terms amendment</h3>
                     <p className="hint">
                       Proposing an amendment creates a new version against this committed version. Both organizations must approve it before it can be committed.

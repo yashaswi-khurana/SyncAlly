@@ -1,0 +1,290 @@
+/* ==========================================================================
+   Marketplace: the sourcing-agent banner, search, publishing tools and the
+   two boards (buyer requests, product listings).
+   ========================================================================== */
+
+.marketplace-page > * {
+  min-width: 0;
+}
+
+@media (min-width: 1080px) {
+  .marketplace-page {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .marketplace-page > * {
+    grid-column: 1 / -1;
+  }
+
+  /* tools and boards sit two abreast: seller beside buyer, demand beside supply */
+  .marketplace-page > .marketplace-page__publish,
+  .marketplace-page > .marketplace-page__requests,
+  .marketplace-page > .marketplace-page__listings {
+    grid-column: auto;
+  }
+}
+
+/* ---------- sourcing agent banner ---------- */
+
+.sourcing-hub-banner {
+  isolation: isolate;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px 32px;
+  padding: clamp(22px, 3vw, 40px);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(70% 150% at 88% 50%, rgba(31, 79, 224, 0.55), transparent 62%),
+    var(--navy);
+  color: var(--ink-inverse);
+}
+
+.sourcing-hub-banner:hover {
+  background:
+    radial-gradient(70% 150% at 88% 50%, rgba(31, 79, 224, 0.62), transparent 64%),
+    var(--navy);
+}
+
+/* a radar that keeps sweeping: rings, then the beam */
+.sourcing-hub-banner::before,
+.sourcing-hub-banner::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: clamp(-150px, -6vw, -60px);
+  z-index: -1;
+  width: clamp(280px, 34vw, 460px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  translate: 0 -50%;
+  pointer-events: none;
+}
+
+.sourcing-hub-banner::before {
+  background: repeating-radial-gradient(
+    circle,
+    transparent 0 34px,
+    rgba(244, 247, 253, 0.1) 34px 35px
+  );
+  mask-image: radial-gradient(circle, #000 30%, transparent 72%);
+}
+
+.sourcing-hub-banner::after {
+  background: conic-gradient(from 0deg, transparent 0 300deg, rgba(91, 140, 255, 0.5) 360deg);
+  mask-image: radial-gradient(circle, #000 20%, transparent 70%);
+  animation: radar-sweep 7s linear infinite;
+}
+
+@keyframes radar-sweep {
+  to {
+    rotate: 360deg;
+  }
+}
+
+.sourcing-hub-banner > div {
+  display: grid;
+  flex: 1 1 420px;
+  gap: 12px;
+  justify-items: start;
+  min-width: 0;
+}
+
+.sourcing-hub-banner > * {
+  margin-top: 0;
+}
+
+.sourcing-hub-banner .eyebrow {
+  color: var(--ink-inverse-2);
+}
+
+.sourcing-hub-banner .eyebrow::before {
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 4px rgba(91, 140, 255, 0.22);
+}
+
+.sourcing-hub-banner h2 {
+  color: #fff;
+  font-size: var(--text-2xl);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+
+.sourcing-hub-banner p {
+  max-width: 58ch;
+  color: var(--ink-inverse-2);
+}
+
+.sourcing-hub-banner .button {
+  --btn-bg: #fff;
+  --btn-fg: var(--navy);
+  --btn-border: #fff;
+  --btn-fill: var(--accent);
+  --btn-fill-fg: #fff;
+  flex: none;
+  min-height: 52px;
+  padding-inline: 26px;
+  border-radius: 26px;
+  white-space: nowrap;
+}
+
+/* ---------- search ---------- */
+
+.marketplace-page__filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 190px) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.marketplace-page__filters > *,
+.marketplace-page__publish > * {
+  margin-top: 0;
+}
+
+.marketplace-page__filters > .button {
+  min-height: 46px;
+}
+
+/* ---------- publishing tools ---------- */
+
+.marketplace-page__publish {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.marketplace-page__publish > div:first-child {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-bottom: 4px;
+}
+
+.marketplace-page__price-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.marketplace-page__price-fields > :only-child {
+  grid-column: 1 / -1;
+}
+
+/* two tools abreast (or a phone): the short fields pair up */
+@media (min-width: 1080px), (max-width: 700px) {
+  .marketplace-page__price-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.marketplace-page__publish > .button {
+  justify-self: start;
+}
+
+.marketplace-page :where(form, section) > p[role="alert"] {
+  padding: 11px 14px 11px 16px;
+  border-left: 3px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: var(--danger-soft);
+  color: var(--danger-strong);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+/* ---------- boards ---------- */
+
+.marketplace-page__requests,
+.marketplace-page__listings {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.marketplace-page__requests > .section-heading,
+.marketplace-page__listings > .section-heading {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.marketplace-page__requests > .section-heading h2,
+.marketplace-page__listings > .section-heading h2 {
+  font-size: var(--text-2xl);
+  letter-spacing: -0.04em;
+}
+
+.marketplace-page__listing {
+  display: grid;
+  gap: 10px;
+  transition:
+    border-color var(--dur-ui) var(--ease-out),
+    box-shadow 0.5s var(--ease-out),
+    translate 0.5s var(--ease-out);
+}
+
+.marketplace-page__listing > * {
+  margin-top: 0;
+}
+
+.marketplace-page__listing:hover {
+  border-color: var(--line-control);
+  box-shadow: var(--shadow-2);
+}
+
+.marketplace-page__listing > p {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.marketplace-page__listing > .button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.marketplace-page__item-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 20px;
+}
+
+.marketplace-page__item-heading > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.marketplace-page__item-heading h3 {
+  font-size: var(--text-lg);
+  letter-spacing: -0.03em;
+  transition: color var(--dur-ui) var(--ease-out);
+}
+
+.marketplace-page__listing:hover .marketplace-page__item-heading h3 {
+  color: var(--accent);
+}
+
+.marketplace-page__item-heading > strong {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .marketplace-page__filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sourcing-hub-banner .button {
+    width: 100%;
+  }
+}

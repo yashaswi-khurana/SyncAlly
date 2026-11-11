@@ -1,8 +1,9 @@
 import { animate, createScope, createSpring, stagger, splitText } from "animejs";
 
 /**
- * Direction.md §5 motion system — Anime.js v4.
- * Tokens mirror design/direction.md (140 / 320 / 680ms, 30ms stagger).
+ * Motion system — Anime.js v4.
+ * Tokens mirror design/direction.md (140 / 320 / 680ms, 30ms stagger) and the
+ * --dur-* custom properties in src/styles/tokens.css.
  */
 export const motion = {
   ease: {
@@ -17,10 +18,26 @@ export const motion = {
 /** Shared plain state: DOM animations write it, the WebGL scene reads it each frame. */
 export const sceneState = { consensus: 0, focus: 0 };
 
-const prefersReduced = () =>
+/**
+ * Pointer and scroll, sampled once by src/ui/fx.ts and read every frame by the
+ * WebGL scenes. Viewport pixels; `active` is false until a pointer moves, and
+ * `pressedAt` is the time of the last press on empty space (not on a control).
+ * Scroll velocity is in pixels per second.
+ */
+export const pointerState = { x: -9999, y: -9999, active: false, pressedAt: 0 };
+export const scrollState = { y: 0, velocity: 0 };
+
+export const prefersReduced = () =>
   typeof window !== "undefined" &&
   typeof window.matchMedia === "function" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** Decorative motion never runs in tests (they assert DOM text, not frames). */
+export const isTestMode = () => import.meta.env.MODE === "test";
+
+/** True when entrance and pointer motion may run: a browser, not a test, no reduced-motion preference. */
+export const motionEnabled = () =>
+  typeof window !== "undefined" && !isTestMode() && !prefersReduced();
 
 /** Reduced-motion end-state: everything visible, no transforms left behind. */
 export function applyEndState(root: ParentNode): void {

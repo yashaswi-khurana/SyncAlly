@@ -1,73 +1,91 @@
 import { useEffect, useRef, useState } from "react";
 
+import { isTestMode } from "./motion";
+
+const INTERACTIVE = "a, button, summary, select, label, [role='tab'], [role='option'], [data-cursor]";
+const TEXT_ENTRY = "input:not([type='checkbox']):not([type='radio']), textarea";
+
 /**
- * A soft pointer follower in the spirit of the reference portfolio: a small
- * filled dot that tracks precisely plus a larger ring that trails behind.
- * Disabled for coarse pointers and reduced-motion users.
+ * A ring that trails the pointer and reacts to what is under it: it opens up
+ * over anything clickable and narrows to a caret over text fields. The native
+ * cursor stays visible, so nothing about pointing or clicking changes.
+ * Disabled for touch, reduced motion and tests.
  */
 export default function CustomCursor() {
-  const dotRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
   const [enabled] = useState(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    if (isTestMode() || typeof window === "undefined" || typeof window.matchMedia !== "function") {
       return false;
     }
-    const fine = window.matchMedia("(pointer: fine)").matches;
+    const fine = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     return fine && !reduced;
   });
-  const [active, setActive] = useState(false);
 
   useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    let frame = 0;
-    const pointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-    const ring = { x: pointer.x, y: pointer.y };
+    const ring = ringRef.current;
+    if (!enabled || !ring) return;
 
-    const onMove = (event: PointerEvent) => {
-      pointer.x = event.clientX;
-      pointer.y = event.clientY;
-    };
-    const onOver = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      setActive(Boolean(target?.closest("a, button, input, select, [data-cursor]")));
-    };
+    let frame = 0;
+    let shown = false;
+    const pointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const position = { x: pointer.x, y: pointer.y };
 
     const render = () => {
-      ring.x += (pointer.x - ring.x) * 0.16;
-      ring.y += (pointer.y - ring.y) * 0.16;
-      if (dotRef.current) {
-        dotRef.current.style.transform = `translate3d(${pointer.x}px, ${pointer.y}px, 0)`;
+      position.x += (pointer.x - position.x) * 0.2;
+      position.y += (pointer.y - position.y) * 0.2;
+      ring.style.transform = `translate3d(${position.x.toFixed(1)}px, ${position.y.toFixed(1)}px, 0)`;
+      const settled = Math.abs(pointer.x - position.x) < 0.1 && Math.abs(pointer.y - position.y) < 0.1;
+      frame = settled ? 0 : window.requestAnimationFrame(render);
+    };
+
+    const onMove = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse") return;
+      pointer.x = event.clientX;
+      pointer.y = event.clientY;
+      if (!shown) {
+        shown = true;
+        position.x = pointer.x;
+        position.y = pointer.y;
+        ring.dataset.visible = "true";
       }
-      if (ringRef.current) {
-        ringRef.current.style.transform = `translate3d(${ring.x}px, ${ring.y}px, 0)`;
-      }
-      frame = window.requestAnimationFrame(render);
+      if (!frame) frame = window.requestAnimationFrame(render);
+    };
+    const onOver = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      ring.dataset.mode = target?.closest(TEXT_ENTRY) ? "text" : target?.closest(INTERACTIVE) ? "action" : "idle";
+    };
+    const onDown = () => {
+      ring.dataset.pressed = "true";
+    };
+    const onUp = () => {
+      delete ring.dataset.pressed;
+    };
+    const onLeave = () => {
+      shown = false;
+      delete ring.dataset.visible;
     };
 
     window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("pointerover", onOver, { passive: true });
-    frame = window.requestAnimationFrame(render);
-    document.documentElement.classList.add("has-custom-cursor");
+    window.addEventListener("pointerdown", onDown, { passive: true });
+    window.addEventListener("pointerup", onUp, { passive: true });
+    document.documentElement.addEventListener("pointerleave", onLeave);
 
     return () => {
+      if (frame) window.cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerover", onOver);
-      window.cancelAnimationFrame(frame);
-      document.documentElement.classList.remove("has-custom-cursor");
+      window.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointerup", onUp);
+      document.documentElement.removeEventListener("pointerleave", onLeave);
     };
   }, [enabled]);
 
-  if (!enabled) {
-    return null;
-  }
-
+  if (!enabled) return null;
   return (
-    <>
-      <div ref={dotRef} className={`cursor-dot${active ? " is-active" : ""}`} aria-hidden="true" />
-      <div ref={ringRef} className={`cursor-ring${active ? " is-active" : ""}`} aria-hidden="true" />
-    </>
+    <div ref={ringRef} className="cursor-ring" aria-hidden="true">
+      <span className="cursor-ring__shape" />
+    </div>
   );
 }

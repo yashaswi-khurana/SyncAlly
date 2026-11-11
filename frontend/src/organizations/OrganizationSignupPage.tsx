@@ -4,6 +4,8 @@ import type { FormEvent } from "react";
 import { ApiError, registerOrganization } from "../api/client";
 import type { TokenResponse } from "../api/types";
 import { navigateToOrganizations } from "../router";
+import ConvergenceScene from "../ui/ConvergenceScene";
+import SplitText from "../ui/SplitText";
 
 export default function OrganizationSignupPage({ onSignIn }: {
   onSignIn: (tokens: TokenResponse) => void;
@@ -80,12 +82,14 @@ export default function OrganizationSignupPage({ onSignIn }: {
         </nav>
       </header>
 
+      <div className="auth-stage">
+      <ConvergenceScene className="auth-stage__scene" anchorSelector=".auth-stage__well" avoidSelector=".auth-hero h1, .auth-hero__lede, .auth-hero__footnote" />
       <section className="auth-hero" aria-labelledby="org-signup-title">
         <div className="auth-hero__meta">
           <span className="eyebrow">Start your organization</span>
           <span className="auth-hero__edition">YOUR COMPANY · YOUR TEAM</span>
         </div>
-        <h1 id="org-signup-title">Set up your <span>trade desk.</span></h1>
+        <h1 id="org-signup-title"><SplitText text="Set up your trade desk." accent="desk." /></h1>
         <p className="auth-hero__lede">
           Create your owner account and company workspace together. You’ll be the first organization administrator.
         </p>
@@ -93,6 +97,7 @@ export default function OrganizationSignupPage({ onSignIn }: {
           <span className="auth-hero__footnote-mark" aria-hidden="true">↳</span>
           <span>After setup, invite teammates from your organization’s Team &amp; access page.</span>
         </div>
+        <div className="auth-stage__well" aria-hidden="true" />
       </section>
 
       <aside className="card auth-card org-signup-card" aria-labelledby="org-signup-card-title">
@@ -142,6 +147,7 @@ export default function OrganizationSignupPage({ onSignIn }: {
           <span>You become the first administrator of this organization.</span>
         </div>
       </aside>
+      </div>
 
       <footer className="auth-footer">
         <span>SYNCALLY / DEAL WORKSPACE</span>

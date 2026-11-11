@@ -90,6 +90,8 @@ export const ListingComparisonView: React.FC<ListingComparisonViewProps> = ({
       {selectedCandidate && (
         <section className="detailed-evaluation-section" aria-label="Detailed Evaluation">
           <h2>Attribute Comparison Matrix — {selectedCandidate.seller_organization_name}</h2>
+          {/* the table scrolls sideways in its own frame on narrow screens */}
+          <div className="comparison-matrix-scroll" role="group" aria-label="Attribute comparison matrix" tabIndex={0}>
           <table className="comparison-matrix-table" data-testid="comparison-matrix-table">
             <thead>
               <tr>
@@ -116,6 +118,7 @@ export const ListingComparisonView: React.FC<ListingComparisonViewProps> = ({
               ))}
             </tbody>
           </table>
+          </div>
           {children}
         </section>
       )}

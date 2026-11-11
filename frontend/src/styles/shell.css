@@ -1,0 +1,736 @@
+/* ==========================================================================
+   App shell: ambient backdrop, floating navigation, page frame, page heroes,
+   footer wordmark, toast and the dev role switcher.
+   ========================================================================== */
+
+.app-shell {
+  position: relative;
+  /* own stacking context so the backdrop can sit behind everything while
+     dialogs opened deep inside a page still rise above the navigation */
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.ambient-field {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: -1;
+  height: min(820px, 96vh);
+  mask-image: linear-gradient(180deg, #000 0%, #000 38%, transparent 96%);
+}
+
+/* ---------- navigation ---------- */
+
+.site-nav {
+  position: sticky;
+  top: 12px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(var(--page-max), 100% - 2 * var(--gutter));
+  min-height: 60px;
+  margin: 12px auto 0;
+  padding: 8px 8px 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 30px;
+  background: var(--surface-glass);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset, var(--shadow-2);
+  backdrop-filter: blur(20px) saturate(170%);
+  animation: nav-drop 0.9s var(--ease-out) backwards;
+}
+
+@keyframes nav-drop {
+  from {
+    opacity: 0;
+    translate: 0 -120%;
+  }
+}
+
+.brand {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 11px;
+  padding: 2px 6px 2px 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.brand__mark,
+.auth-wordmark__mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--ink);
+  transition: rotate 0.7s var(--spring), background var(--dur-ui) var(--ease-out);
+}
+
+.brand__mark svg,
+.auth-wordmark__mark svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.brand__mark path,
+.auth-wordmark__mark path {
+  stroke-dasharray: 90;
+  stroke-dashoffset: 0;
+  animation: mark-draw 1.4s var(--ease-in-out) 0.3s backwards;
+}
+
+.brand:hover .brand__mark,
+.auth-wordmark:hover .auth-wordmark__mark {
+  rotate: -12deg;
+  background: var(--accent);
+}
+
+.brand:hover .brand__mark svg,
+.auth-wordmark:hover .auth-wordmark__mark svg {
+  stroke: #fff;
+}
+
+.brand:hover .brand__mark path,
+.auth-wordmark:hover .auth-wordmark__mark path {
+  animation: mark-redraw 0.9s var(--ease-in-out);
+}
+
+@keyframes mark-draw {
+  from {
+    stroke-dashoffset: 90;
+  }
+}
+
+@keyframes mark-redraw {
+  from {
+    stroke-dashoffset: 90;
+  }
+}
+
+.brand__type {
+  display: grid;
+  text-align: left;
+}
+
+.brand__type > span {
+  font-family: var(--font-display);
+  font-size: 1.1875rem;
+  font-weight: 720;
+  line-height: 1;
+  letter-spacing: -0.045em;
+}
+
+.brand__type > small {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.site-nav__meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.site-nav__environment {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+.site-nav__environment::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  --pulse: rgba(14, 122, 79, 0.45);
+  animation: pulse-ring 2.4s var(--ease-out) infinite;
+}
+
+.site-nav__links {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.site-nav__links > .nav-link:first-of-type {
+  margin-left: auto;
+}
+
+.nav-link {
+  position: relative;
+  z-index: 1;
+  min-height: 42px;
+  padding: 8px 17px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--ink-2);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  font-weight: 520;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  cursor: pointer;
+  translate: var(--mag-x, 0px) var(--mag-y, 0px);
+  transition: color var(--dur-ui) var(--ease-out), translate 0.5s var(--spring);
+}
+
+.nav-link:hover {
+  color: var(--ink);
+}
+
+.nav-link.is-active {
+  color: #fff;
+}
+
+/* until the sliding pill has been placed the active link paints its own */
+.site-nav__links:not(:has(.nav-pill--active)) .nav-link.is-active {
+  background: var(--ink);
+}
+
+.nav-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 0;
+  height: 0;
+  border-radius: var(--r-pill);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-ui) var(--ease-out);
+}
+
+.nav-pill--active {
+  background: var(--ink);
+  box-shadow: 0 6px 16px -6px rgba(10, 19, 38, 0.5);
+}
+
+.nav-pill--hover {
+  background: var(--surface-3);
+}
+
+.nav-signout {
+  margin-left: auto;
+  min-height: 42px;
+}
+
+.site-nav__toggle {
+  display: none;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--dur-micro), color var(--dur-micro), rotate 0.5s var(--spring);
+}
+
+.site-nav.is-open .site-nav__toggle {
+  rotate: 90deg;
+  background: var(--ink);
+  color: #fff;
+}
+
+@media (max-width: 940px) {
+  .site-nav {
+    padding: 8px 8px 8px 14px;
+    /* the last layer is a page-wide veil, clear until the menu opens */
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.7) inset,
+      var(--shadow-2),
+      0 0 0 200vmax rgba(243, 245, 249, 0);
+    transition: box-shadow 0.45s var(--ease-out);
+  }
+
+  /* The page recedes behind the open menu. A shadow rather than an element:
+     it adds no scrollable area and taps still reach the page beneath. */
+  .site-nav.is-open {
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.7) inset,
+      var(--shadow-2),
+      0 0 0 200vmax rgba(243, 245, 249, 0.84);
+  }
+
+  .site-nav__toggle {
+    display: grid;
+  }
+
+  .site-nav__links {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    left: 0;
+    display: grid;
+    gap: 4px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-3);
+    opacity: 0;
+    visibility: hidden;
+    clip-path: inset(0 0 100% 0 round 28px);
+    transition:
+      opacity 0.3s var(--ease-out),
+      clip-path 0.55s var(--ease-out),
+      visibility 0s linear 0.55s;
+  }
+
+  .site-nav.is-open .site-nav__links {
+    opacity: 1;
+    visibility: visible;
+    clip-path: inset(0 0 0 0 round 28px);
+    transition:
+      opacity 0.3s var(--ease-out),
+      clip-path 0.55s var(--ease-out),
+      visibility 0s;
+  }
+
+  .site-nav__links > .nav-link:first-of-type {
+    margin-left: 0;
+  }
+
+  .nav-link {
+    min-height: 56px;
+    padding: 12px 18px;
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    font-weight: 640;
+    letter-spacing: -0.035em;
+    text-align: left;
+  }
+
+  .site-nav.is-open .nav-link,
+  .site-nav.is-open .nav-signout {
+    animation: rise-in 0.6s var(--ease-out) backwards;
+  }
+
+  .site-nav.is-open .nav-link:nth-of-type(2) { animation-delay: 50ms; }
+  .site-nav.is-open .nav-link:nth-of-type(3) { animation-delay: 100ms; }
+  .site-nav.is-open .nav-link:nth-of-type(4) { animation-delay: 150ms; }
+  .site-nav.is-open .nav-link:nth-of-type(5) { animation-delay: 200ms; }
+  .site-nav.is-open .nav-signout { animation-delay: 260ms; }
+
+  .nav-signout {
+    width: 100%;
+    margin: 10px 0 0;
+    min-height: 50px;
+  }
+}
+
+/* ---------- page frame ---------- */
+
+.app-main {
+  flex: 1;
+  width: min(var(--page-max), 100% - 2 * var(--gutter));
+  margin: 0 auto;
+  padding: clamp(40px, 6.5vw, 92px) 0 clamp(48px, 7vw, 96px);
+}
+
+.workspace {
+  display: grid;
+  gap: clamp(26px, 3.6vw, 52px);
+  min-width: 0;
+}
+
+.workspace > * {
+  min-width: 0;
+}
+
+/* ---------- page hero ---------- */
+
+.hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  gap: clamp(16px, 2vw, 26px);
+  justify-items: start;
+  min-width: 0;
+  padding-bottom: clamp(4px, 1vw, 14px);
+}
+
+.app-main > .hero {
+  margin-bottom: clamp(26px, 3.6vw, 52px);
+}
+
+/* A page hero does not fade in as one block: its parts arrive in order, the
+   label first, then the headline letter by letter (SplitText), then the lede
+   and actions (scroll reveals). */
+.reveal.hero {
+  opacity: 1;
+  translate: none;
+  transition: none;
+}
+
+.hero > .eyebrow,
+.hero > .workspace-intro__meta {
+  animation: fade-in 0.9s var(--ease-out) backwards;
+}
+
+.hero h1 {
+  max-width: 14ch;
+  font-family: var(--font-display);
+  font-size: clamp(2.75rem, 7vw, 6.25rem);
+  font-weight: 700;
+  line-height: 0.96;
+  letter-spacing: -0.042em;
+  word-spacing: 0.06em;
+}
+
+.hero__lede {
+  max-width: 54ch;
+  color: var(--ink-2);
+  font-size: clamp(1rem, 1.3vw, 1.1875rem);
+  line-height: 1.55;
+}
+
+.hero > .actions {
+  margin-top: 6px;
+}
+
+.workspace-intro__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 20px;
+  justify-self: stretch;
+}
+
+.workspace-intro__caption {
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* a hero that carries the physics scene keeps room for it on the right */
+.hero--scene {
+  min-height: clamp(280px, 34vw, 440px);
+  align-content: center;
+}
+
+.hero__scene {
+  position: absolute;
+  top: clamp(-90px, -6vw, -40px);
+  right: calc(-1 * var(--gutter));
+  bottom: clamp(-70px, -5vw, -30px);
+  left: 34%;
+  z-index: -1;
+}
+
+@media (max-width: 820px) {
+  .hero__scene {
+    left: 0;
+    opacity: 0.5;
+  }
+
+  .hero__scene[data-ready="true"] {
+    opacity: 0.5;
+  }
+}
+
+/* ---------- organization access gate ---------- */
+
+.org-access-required {
+  display: grid;
+  gap: 18px;
+  justify-items: start;
+  max-width: 880px;
+  padding: clamp(28px, 5vw, 64px);
+}
+
+.org-access-required h1 {
+  font-size: clamp(2.25rem, 5vw, 4rem);
+}
+
+.org-access-required p {
+  max-width: 52ch;
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+
+.org-access-required__actions {
+  margin-top: 6px;
+}
+
+/* ---------- footer ---------- */
+
+.site-footer {
+  margin-top: clamp(40px, 6vw, 88px);
+  border-top: 1px solid var(--line);
+  overflow: clip;
+}
+
+.site-footer__inner {
+  width: min(var(--page-max), 100% - 2 * var(--gutter));
+  margin: 0 auto;
+  padding-top: 22px;
+}
+
+.site-footer__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 24px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.wordmark {
+  display: flex;
+  justify-content: space-between;
+  margin-top: clamp(18px, 3vw, 44px);
+  /* the page ends on the baseline: the letters land on its bottom edge and
+     only the descenders dip below it */
+  margin-bottom: -0.055em;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: clamp(4rem, 21.4vw, 19rem);
+  font-weight: 800;
+  line-height: 0.86;
+  /* letters are spread edge to edge by the flex row, not by tracking */
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.wordmark__letter {
+  display: inline-block;
+  transform-origin: 50% 55%;
+  will-change: transform;
+  transition: color 0.4s var(--ease-out);
+}
+
+.wordmark__letter:hover {
+  color: var(--accent);
+}
+
+/* letters wait above the fold until the footer is in view (then they drop) */
+.motion-ready .wordmark:not([data-ready]) .wordmark__letter {
+  opacity: 0;
+}
+
+/* ---------- toast ---------- */
+
+.onboarding-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 10px 10px 18px;
+  border-radius: var(--r-pill);
+  background: var(--navy);
+  color: var(--ink-inverse);
+  box-shadow: var(--shadow-3);
+  font-size: var(--text-sm);
+  translate: -50% 0;
+  animation: toast-in 0.6s var(--spring) both;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    translate: -50% 26px;
+  }
+}
+
+.onboarding-toast__message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.onboarding-toast__icon {
+  flex: none;
+  color: #6ee7b0;
+}
+
+.onboarding-toast__dismiss.button {
+  --btn-fg: var(--ink-inverse-2);
+  --btn-fill: rgba(255, 255, 255, 0.14);
+  --btn-fill-fg: #fff;
+  flex: none;
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+/* ---------- development role switcher ---------- */
+
+.dev-role-switcher {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 140;
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.dev-role-switcher__pill,
+.dev-role-switcher__menu button {
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.dev-role-switcher__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 8px 16px 8px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--r-pill);
+  background: var(--navy);
+  color: var(--ink-inverse);
+  box-shadow: var(--shadow-2);
+  transition: scale var(--dur-ui) var(--spring), box-shadow var(--dur-ui) var(--ease-out);
+}
+
+.dev-role-switcher__pill:hover {
+  scale: 1.04;
+  box-shadow: var(--shadow-3);
+}
+
+.dev-role-switcher__indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6ee7b0;
+  --pulse: rgba(110, 231, 176, 0.5);
+  animation: pulse-ring 2.4s var(--ease-out) infinite;
+}
+
+.dev-role-switcher__menu {
+  display: grid;
+  gap: 2px;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  transform-origin: 100% 100%;
+  animation: menu-pop 0.4s var(--spring) both;
+}
+
+@keyframes menu-pop {
+  from {
+    opacity: 0;
+    scale: 0.9;
+    translate: 0 8px;
+  }
+}
+
+.dev-role-switcher__menu button {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  transition: background var(--dur-micro) var(--ease-out);
+}
+
+.dev-role-switcher__menu button:hover:not(:disabled),
+.dev-role-switcher__menu button:focus-visible {
+  background: var(--surface-3);
+}
+
+.dev-role-switcher__menu button:disabled {
+  color: var(--ink-4);
+  cursor: not-allowed;
+}
+
+.dev-role-switcher__toast {
+  max-width: 280px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--navy);
+  color: var(--ink-inverse);
+  font-size: 0.8125rem;
+  animation: rise-in 0.4s var(--ease-out) both;
+}
+
+@media (max-width: 768px) {
+  .dev-role-switcher {
+    right: 12px;
+    bottom: 12px;
+  }
+}
+
+/* ---------- clock (LiveClock) ---------- */
+
+.clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.clock__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.clock__time {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,395 @@
+/* ==========================================================================
+   SyncAlly — design tokens, reset and base typography.
+   Direction: minimalist editorial business UI. Porcelain canvas, midnight
+   navy ink, one cobalt accent. Big tight display type, hairlines, generous
+   whitespace. Motion lives in motion.css and src/ui/motion.ts.
+   ========================================================================== */
+
+:root {
+  /* ---- canvas & surfaces ------------------------------------------------ */
+  --canvas: #f3f5f9;
+  --canvas-2: #e9edf4;
+  --surface: #ffffff;
+  --surface-2: #f6f8fb;
+  --surface-3: #eceff5;
+  --surface-glass: rgba(255, 255, 255, 0.74);
+
+  /* ---- ink --------------------------------------------------------------- */
+  --ink: #0a1326;
+  --ink-2: #36435c;
+  --ink-3: #5b6781;
+  --ink-4: #8a94a9;
+  --ink-inverse: #f4f7fd;
+  --ink-inverse-2: #a3b0cc;
+
+  /* ---- brand ------------------------------------------------------------- */
+  --navy: #0a1326;
+  --navy-2: #101b35;
+  --navy-3: #1a2748;
+  --accent: #1f4fe0;
+  --accent-strong: #173cb4;
+  --accent-bright: #5b8cff;
+  --accent-soft: rgba(31, 79, 224, 0.1);
+  --accent-softer: rgba(31, 79, 224, 0.055);
+  --accent-glow: rgba(31, 79, 224, 0.28);
+
+  /* party identity: buyer = cobalt, seller = teal, consensus = brass */
+  --buyer: #1f4fe0;
+  --buyer-soft: rgba(31, 79, 224, 0.1);
+  --seller: #0b8272;
+  --seller-soft: rgba(11, 130, 114, 0.11);
+  --gold: #b98a2f;
+  --gold-soft: rgba(185, 138, 47, 0.14);
+
+  /* ---- semantic ---------------------------------------------------------- */
+  --success: #0e7a4f;
+  --success-soft: rgba(14, 122, 79, 0.1);
+  --warning: #8f5a06;
+  --warning-soft: rgba(201, 138, 20, 0.14);
+  --danger: #c2302b;
+  --danger-strong: #9f231f;
+  --danger-soft: rgba(194, 48, 43, 0.09);
+
+  /* ---- lines ------------------------------------------------------------- */
+  --line: rgba(10, 19, 38, 0.09);
+  --line-strong: rgba(10, 19, 38, 0.17);
+  --line-control: rgba(10, 19, 38, 0.24);
+  --line-inverse: rgba(244, 247, 253, 0.14);
+
+  /* ---- type -------------------------------------------------------------- */
+  --font-display: "Inter Tight Variable", "Inter Tight", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body: "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-xs: 0.6875rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.625rem;
+  --text-2xl: clamp(1.75rem, 2.6vw, 2.375rem);
+  --text-hero: clamp(2.75rem, 6.2vw, 5.75rem);
+  --text-mega: clamp(3.1rem, 7.4vw, 7.25rem);
+
+  /* ---- space ------------------------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+  --s9: 96px;
+  --s10: 128px;
+  --gutter: clamp(18px, 4vw, 56px);
+  --page-max: 1360px;
+  --nav-h: 72px;
+
+  /* ---- shape ------------------------------------------------------------- */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 28px;
+  --r-pill: 999px;
+
+  /* ---- elevation --------------------------------------------------------- */
+  --shadow-1: 0 1px 2px rgba(10, 19, 38, 0.05);
+  --shadow-2: 0 10px 28px -10px rgba(10, 19, 38, 0.16), 0 2px 6px rgba(10, 19, 38, 0.04);
+  --shadow-3: 0 34px 70px -24px rgba(10, 19, 38, 0.3), 0 14px 28px -14px rgba(10, 19, 38, 0.14);
+  --ring: 0 0 0 4px var(--accent-soft);
+
+  /* ---- motion ------------------------------------------------------------ */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-soft: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-micro: 140ms;
+  --dur-ui: 320ms;
+  --dur-reveal: 680ms;
+
+  /* ---- legacy aliases (inline styles and feature CSS still read these) --- */
+  --bg: var(--canvas);
+  --bg-canvas: var(--canvas);
+  --bg-surface: var(--surface);
+  --bg-elevated: var(--surface);
+  --bg-subtle: var(--surface-3);
+  --bg-deep: var(--canvas-2);
+  --surface-sunken: var(--surface-2);
+  --ink-primary: var(--ink);
+  --ink-secondary: var(--ink-2);
+  --ink-tertiary: var(--ink-3);
+  --ink-soft: var(--ink-2);
+  --muted: var(--ink-3);
+  --border: var(--line-strong);
+  --border-subtle: var(--line);
+  --border-medium: var(--line-strong);
+  --border-strong: var(--line-control);
+  --accent-buyer: var(--buyer);
+  --accent-seller: var(--seller);
+  --accent-gold: var(--gold);
+  --radius: var(--r-md);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --shadow-sm: var(--shadow-1);
+  --shadow-md: var(--shadow-2);
+  --shadow-lg: var(--shadow-3);
+  --ease: var(--ease-out);
+  --display: var(--font-display);
+  --body: var(--font-body);
+  --mono: var(--font-mono);
+
+  color-scheme: light;
+}
+
+/* A real spring for CSS transitions where the browser supports linear(). */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --spring: linear(
+      0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017, 1.077, 1.121,
+      1.149 24.3%, 1.159, 1.163, 1.161, 1.154 29.9%, 1.129 32.8%, 1.051 39.6%, 1.017 43.1%,
+      0.991, 0.977 51%, 0.974 53.8%, 0.975 57.1%, 0.997 69.8%, 1.003 76.9%, 1.004 83.8%, 1
+    );
+  }
+}
+
+/* ---------- reset ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: calc(var(--nav-h) + 24px);
+  /* lets <details> and height:auto panels animate open (progressive enhancement) */
+  interpolate-size: allow-keywords;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  font-synthesis: none;
+  font-feature-settings: "ss01", "cv11";
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: clip;
+}
+
+#root {
+  isolation: isolate;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 650;
+  line-height: 1.08;
+  letter-spacing: -0.028em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--text-hero);
+  font-weight: 700;
+  line-height: 0.96;
+  letter-spacing: -0.042em;
+  /* tight tracking also closes the gaps between words; give those back */
+  word-spacing: 0.06em;
+}
+
+h2 {
+  font-size: var(--text-xl);
+  letter-spacing: -0.034em;
+}
+
+h3 {
+  font-size: var(--text-md);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+h4 {
+  font-size: var(--text-base);
+  letter-spacing: -0.012em;
+  line-height: 1.3;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+strong,
+b {
+  font-weight: 620;
+}
+
+small {
+  font-size: var(--text-sm);
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+dl,
+dd,
+figure,
+blockquote {
+  margin: 0;
+}
+
+img,
+svg,
+canvas,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+hr {
+  height: 1px;
+  margin: var(--s5) 0;
+  border: 0;
+  background: var(--line);
+}
+
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* thin, quiet scrollbars for inner scroll areas */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(10, 19, 38, 0.22) transparent;
+}
+
+/* ---------- utilities ---------- */
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.hint {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* .display marks a heading as display type at any size; only page titles get
+   the very tight leading */
+.display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.034em;
+}
+
+h1.display {
+  letter-spacing: -0.042em;
+  line-height: 0.96;
+  word-spacing: 0.06em;
+}
+
+.gradient-text {
+  color: var(--accent);
+}
+
+.inline-icon {
+  display: inline-block;
+  flex: none;
+  vertical-align: -0.15em;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s4);
+}
+
+@media (max-width: 640px) {
+  .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

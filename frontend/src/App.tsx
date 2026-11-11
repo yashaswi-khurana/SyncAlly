@@ -24,7 +24,13 @@ import {
   navigateToPlatform,
   parseRoute,
 } from "./router";
+import AmbientField from "./ui/AmbientField";
+import CustomCursor from "./ui/CustomCursor";
 import DevRoleSwitcher from "./ui/DevRoleSwitcher";
+import NavIndicator from "./ui/NavIndicator";
+import PhysicsWordmark from "./ui/PhysicsWordmark";
+import ScrollProgress from "./ui/ScrollProgress";
+import SplitText from "./ui/SplitText";
 import type { OpeningMessageDraft, OpeningMessageDraftInput } from "./deals/openingMessageDraft";
 
 export default function App() {
@@ -224,10 +230,16 @@ export default function App() {
   }
 
   if (!accessToken) {
-    if (route.name === "organizationSignup") {
-      return <OrganizationSignupPage onSignIn={handleSignIn} />;
-    }
-    return <SignInPage onSignIn={handleSignIn} />;
+    return (
+      <>
+        {route.name === "organizationSignup" ? (
+          <OrganizationSignupPage onSignIn={handleSignIn} />
+        ) : (
+          <SignInPage onSignIn={handleSignIn} />
+        )}
+        <CustomCursor />
+      </>
+    );
   }
 
   // const isCreate = route.name === "create";
@@ -241,8 +253,14 @@ export default function App() {
   const needsOrganizationInvitation = organizations !== null && organizations.length === 0 &&
     !hasPendingInvitation && !isPlatform && route.name !== "organizations" && !isMarketplace && !isSourcing;
 
+  // presentation only: restarts the page-change flash and re-places the nav pill
+  const viewKey = route.name === "deal" ? `deal:${route.dealId}` : route.name;
+
   return (
     <div className="app-shell">
+      <AmbientField />
+      <ScrollProgress />
+      <span key={viewKey} className="route-flash" aria-hidden="true" />
       <header className={`site-nav${navOpen ? " is-open" : ""}`}>
         <button type="button" className="brand" onClick={navigateToDeals}>
           <span className="brand__mark" aria-hidden="true">
@@ -256,7 +274,11 @@ export default function App() {
             <small>TRADE FOLIO</small>
           </span>
         </button>
+        <div className="site-nav__meta">
+          {import.meta.env.DEV ? <span className="site-nav__environment">LOCAL DEMO</span> : null}
+        </div>
         <nav id="primary-nav" className="site-nav__links" aria-label="Primary" onClick={() => setNavOpen(false)}>
+          <NavIndicator layoutKey={`${viewKey}:${isSystemAdmin ? "admin" : "member"}:${navOpen ? "open" : "closed"}`} />
           <button
             type="button"
             className={`nav-link${isWorkspace ? " is-active" : ""}`}
@@ -301,13 +323,10 @@ export default function App() {
               Platform admin
             </button>
           ) : null}
-          <button type="button" className="button ghost nav-signout" onClick={handleSignOut}>
+          <button type="button" className="button secondary nav-signout" onClick={handleSignOut}>
             Sign out
           </button>
         </nav>
-        <div className="site-nav__meta">
-          {import.meta.env.DEV ? <span className="site-nav__environment">LOCAL DEMO</span> : null}
-        </div>
         <button
           type="button"
           className="site-nav__toggle"
@@ -366,7 +385,7 @@ export default function App() {
         ) : needsOrganizationInvitation ? (
           <section className="card org-access-required" role="status">
             <span className="eyebrow">Organization access</span>
-            <h1>Your workspace is waiting for an invitation.</h1>
+            <h1><SplitText text="Your workspace is waiting for an invitation." /></h1>
             <p>Your account is not a member of an organization yet. Ask an organization administrator to invite you.</p>
             <div className="org-access-required__actions">
               <button type="button" className="button" onClick={handleSignOut}>Sign out</button>
@@ -383,9 +402,11 @@ export default function App() {
             <span>SYNCALLY / SHARED TRADE RECORD</span>
             <span>Every reviewed term stays tied to its source.</span>
           </div>
+          <PhysicsWordmark text="SyncAlly" className="site-footer__wordmark" />
         </div>
       </footer>
       <DevRoleSwitcher onSessionChanged={refreshSessionView} />
+      <CustomCursor />
 
       {toast && (
         <aside className="onboarding-toast" role="status" aria-live="polite">

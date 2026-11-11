@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ApiError, getOrganization, listDeals } from "../api/client";
 import type { DealSummary, ViewerRole } from "../api/types";
 import Reveal from "../ui/Reveal";
+import SplitText from "../ui/SplitText";
 
 type DealsState =
   | { status: "loading" }
@@ -185,7 +186,7 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
           <span className="eyebrow">01 / Deal register</span>
           <span className="workspace-intro__caption">Shared between your organizations</span>
         </div>
-        <h1 className="display">Deals, on record.</h1>
+        <h1 className="display"><SplitText text="Deals, on record." /></h1>
         <p className="hero__lede">
           Each deal has one shared reference. Open a record to read the conversation and review
           the facts connected to their source messages.

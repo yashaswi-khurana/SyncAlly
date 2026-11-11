@@ -1,0 +1,420 @@
+/* ==========================================================================
+   Motion: entrances, split text, keyframes, pointer follower, marquee.
+
+   Rule for this file: an entrance must never leave a transform, filter or
+   forwards-filling animation on an element once it has finished. Cards and
+   page wrappers contain position:fixed dialogs, and any of those would turn
+   the element into the dialog's containing block.
+   ========================================================================== */
+
+@property --spot {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+
+/* ---------- <Reveal> ---------- */
+
+.reveal {
+  opacity: 0;
+  translate: 0 26px;
+  transition: opacity 0.9s var(--ease-out), translate 0.9s var(--ease-out);
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  translate: none;
+}
+
+/* ---------- scroll reveals (src/ui/fx.ts) ---------- */
+
+.motion-ready [data-reveal]:not([data-inview]) {
+  opacity: 0;
+}
+
+.motion-ready [data-reveal][data-inview] {
+  animation: reveal-rise 0.85s var(--ease-out) backwards;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+@keyframes reveal-rise {
+  from {
+    opacity: 0;
+    translate: 0 22px;
+  }
+  to {
+    opacity: 1;
+    translate: none;
+  }
+}
+
+/* every page fades in when its route mounts */
+.app-main > * {
+  animation: page-in 0.5s var(--ease-out) backwards;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---------- card spotlight ---------- */
+
+.card,
+.panel {
+  background-image: radial-gradient(
+    520px circle at var(--sx, 50%) var(--sy, -400px),
+    var(--spot),
+    transparent 62%
+  );
+  transition:
+    border-color var(--dur-ui) var(--ease-out),
+    box-shadow 0.5s var(--ease-out),
+    --spot 0.5s var(--ease-out);
+}
+
+.card:hover,
+.panel:hover {
+  --spot: rgba(31, 79, 224, 0.06);
+}
+
+.card .card,
+.card .card:hover {
+  background-image: none;
+}
+
+/* ---------- split text (src/ui/SplitText.tsx) ---------- */
+
+.split__word {
+  display: inline-block;
+  /* the mask the letters rise out of; padding keeps ascenders and descenders */
+  margin: -0.12em -0.05em -0.2em;
+  padding: 0.12em 0.05em 0.2em;
+  overflow: clip;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.split__word--accent {
+  color: var(--accent);
+}
+
+.split__char {
+  display: inline-block;
+  transform-origin: 0 100%;
+}
+
+/* promoted to their own layers only while they wait and rise, not for good */
+.split--rise[data-state="idle"] .split__char {
+  opacity: 0;
+  transform: translateY(112%) rotate(7deg);
+  will-change: transform, opacity;
+}
+
+.split--scrub[data-state="idle"] .split__char {
+  opacity: 0.13;
+}
+
+.split--scrub .split__word {
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+/* ---------- route change + scroll progress ---------- */
+
+.scroll-progress,
+.route-flash {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 120;
+  height: 2px;
+  pointer-events: none;
+}
+
+.scroll-progress__bar {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}
+
+.route-flash {
+  z-index: 121;
+  background: linear-gradient(90deg, transparent, var(--accent-bright) 30%, var(--accent) 70%, transparent);
+  animation: route-flash 0.9s var(--ease-in-out) both;
+}
+
+@keyframes route-flash {
+  0% {
+    opacity: 1;
+    transform: translateX(-100%);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+/* ---------- pointer follower ---------- */
+
+.cursor-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 400;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: difference;
+  transition: opacity 0.3s var(--ease-out);
+}
+
+.cursor-ring[data-visible="true"] {
+  opacity: 1;
+}
+
+.cursor-ring__shape {
+  position: absolute;
+  top: -15px;
+  left: -15px;
+  width: 30px;
+  height: 30px;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  transition:
+    scale 0.45s var(--spring),
+    border-radius 0.3s var(--ease-out),
+    width 0.3s var(--ease-out),
+    left 0.3s var(--ease-out),
+    opacity 0.3s var(--ease-out),
+    border-width 0.3s var(--ease-out);
+}
+
+.cursor-ring[data-mode="action"] .cursor-ring__shape {
+  scale: 1.7;
+  border-width: 1px;
+}
+
+.cursor-ring[data-mode="text"] .cursor-ring__shape {
+  left: -1px;
+  width: 2px;
+  border-radius: 2px;
+  opacity: 0;
+}
+
+.cursor-ring[data-pressed="true"] .cursor-ring__shape {
+  scale: 0.72;
+}
+
+/* ---------- marquee ---------- */
+
+.marquee {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+.marquee__track {
+  display: flex;
+  width: max-content;
+  animation: marquee 32s linear infinite;
+}
+
+.marquee__track--reverse {
+  animation-direction: reverse;
+}
+
+.marquee:hover .marquee__track {
+  animation-play-state: paused;
+}
+
+.marquee__group {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* ---------- WebGL stages ---------- */
+
+.convergence,
+.ambient-field {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.2s var(--ease-out);
+}
+
+.convergence[data-ready="true"],
+.ambient-field[data-ready="true"] {
+  opacity: 1;
+}
+
+.convergence canvas,
+.ambient-field canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Buyer, record and seller (src/deals/TradeFlowScene.tsx). Always staged on
+   midnight; the drawn fallback shows until, or instead of, the WebGL scene. */
+.trade-flow-scene {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.trade-flow-scene canvas,
+.trade-flow-scene__fallback {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.trade-flow-scene__fallback {
+  color: rgba(255, 255, 255, 0.3);
+  fill: var(--accent-bright);
+  transition: opacity 0.8s var(--ease-out);
+}
+
+.trade-flow-scene__fallback path {
+  fill: none;
+  stroke: currentColor;
+  stroke-dasharray: 2 12;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.trade-flow-scene__fallback circle:nth-of-type(2) {
+  fill: var(--ink-inverse);
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.trade-flow-scene[data-ready="true"] .trade-flow-scene__fallback {
+  opacity: 0;
+}
+
+/* ---------- shared keyframes ---------- */
+
+@keyframes shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(26px) scale(0.96);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 var(--pulse, rgba(31, 79, 224, 0.4));
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    translate: 0 14px;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes draw-line {
+  from {
+    scale: 0 1;
+  }
+}
+
+@keyframes float-y {
+  50% {
+    translate: 0 -6px;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0s !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    translate: none;
+  }
+
+  .route-flash,
+  .cursor-ring {
+    display: none;
+  }
+
+  .convergence,
+  .ambient-field {
+    opacity: 1;
+  }
+}
+
+@media print {
+  [data-reveal],
+  .reveal {
+    opacity: 1 !important;
+    translate: none !important;
+  }
+
+  .ambient-field,
+  .convergence,
+  .cursor-ring,
+  .scroll-progress,
+  .route-flash {
+    display: none !important;
+  }
+}

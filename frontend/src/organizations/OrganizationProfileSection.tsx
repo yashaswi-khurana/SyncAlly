@@ -218,15 +218,15 @@ export default function OrganizationProfileSection({ organization }: Props) {
   if (!profile) return null;
 
   return (
-    <div className="profile-section" data-testid="profile-section" style={{ marginTop: 24, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
-      <div className="panel-head" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="profile-section profile-section--ruled" data-testid="profile-section">
+      <div className="panel-head panel-head--row">
         <div>
           <span className="eyebrow">Organization Profile</span>
-          <h4 style={{ margin: "4px 0" }}>Commercial Profile</h4>
+          <h4>Commercial Profile</h4>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div className="profile-section__status">
           <span className="badge">{profile.verification_status}</span>
-          <span className="mono" style={{ fontSize: "0.85rem" }}>v{profile.version}</span>
+          <span className="mono profile-section__version">v{profile.version}</span>
           {!isAdmin ? (
             <span className="badge badge--warning">Read-only (Non-admin)</span>
           ) : !isEditing ? (
@@ -238,14 +238,13 @@ export default function OrganizationProfileSection({ organization }: Props) {
       </div>
 
       {isStale && (
-        <div className="banner banner--warning" role="alert" style={{ marginBottom: 16, padding: "8px 12px", background: "rgba(255, 180, 0, 0.15)", borderRadius: 6 }}>
-          <p style={{ margin: 0 }}>
+        <div className="banner banner--warning profile-section__conflict" role="alert">
+          <p>
             Profile version conflict: this profile was updated by another session. Please refresh to load latest changes.
           </p>
           <button
             type="button"
             className="button"
-            style={{ marginTop: 8 }}
             onClick={refreshProfile}
           >
             Refresh profile
@@ -288,13 +287,12 @@ export default function OrganizationProfileSection({ organization }: Props) {
             />
           </div>
 
-          <div style={{ marginTop: 16, marginBottom: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <label style={{ fontWeight: 600 }}>Contacts (max 20)</label>
+          <div className="profile-contacts-editor">
+            <div className="profile-contacts-editor__head">
+              <label>Contacts (max 20)</label>
               <button
                 type="button"
-                className="button ghost"
-                style={{ fontSize: "0.85rem" }}
+                className="button ghost button--compact"
                 onClick={handleAddContact}
                 disabled={contactsDraft.length >= 20}
               >
@@ -302,25 +300,15 @@ export default function OrganizationProfileSection({ organization }: Props) {
               </button>
             </div>
             {contactsDraft.length === 0 ? (
-              <p className="muted" style={{ fontSize: "0.9rem" }}>No contacts added yet.</p>
+              <p className="muted">No contacts added yet.</p>
             ) : (
               contactsDraft.map((contact, index) => (
-                <div
-                  key={index}
-                  style={{
-                    padding: 12,
-                    marginBottom: 12,
-                    background: "var(--bg-subtle, rgba(0,0,0,0.02))",
-                    border: "1px solid var(--border)",
-                    borderRadius: 6,
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                    <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>Contact #{index + 1}</span>
+                <div key={index} className="profile-contact-draft">
+                  <div className="profile-contact-draft__head">
+                    <span className="profile-contact-draft__title">Contact #{index + 1}</span>
                     <button
                       type="button"
-                      className="button ghost"
-                      style={{ color: "var(--danger, #d32f2f)", padding: "2px 6px" }}
+                      className="button ghost button--compact profile-contact-draft__remove"
                       onClick={() => handleRemoveContact(index)}
                     >
                       Remove
@@ -404,7 +392,7 @@ export default function OrganizationProfileSection({ organization }: Props) {
             </p>
           )}
 
-          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <div className="actions">
             <button type="submit" className="button" disabled={saving}>
               {saving ? "Saving…" : "Save profile"}
             </button>
@@ -414,7 +402,7 @@ export default function OrganizationProfileSection({ organization }: Props) {
           </div>
         </form>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="profile-dimensions">
           {/* Dimensions */}
           <div>
             <span className="profile-dimension__label">
@@ -423,7 +411,7 @@ export default function OrganizationProfileSection({ organization }: Props) {
             {profile.capabilities.length === 0 ? (
               <span className="muted">No capabilities listed</span>
             ) : (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <div className="profile-tags">
                 {profile.capabilities.map((cap) => (
                   <span key={cap} className="badge">
                     {cap}
@@ -440,7 +428,7 @@ export default function OrganizationProfileSection({ organization }: Props) {
             {profile.products.length === 0 ? (
               <span className="muted">No products listed</span>
             ) : (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <div className="profile-tags">
                 {profile.products.map((prod) => (
                   <span key={prod} className="badge">
                     {prod}
@@ -457,7 +445,7 @@ export default function OrganizationProfileSection({ organization }: Props) {
             {profile.regions.length === 0 ? (
               <span className="muted">No regions listed</span>
             ) : (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <div className="profile-tags">
                 {profile.regions.map((reg) => (
                   <span key={reg} className="badge">
                     {reg}
@@ -472,28 +460,17 @@ export default function OrganizationProfileSection({ organization }: Props) {
               Contacts
             </span>
             {profile.contacts.length === 0 ? (
-              <p className="muted" style={{ fontSize: "0.9rem", margin: 0 }}>No contacts listed.</p>
+              <p className="muted">No contacts listed.</p>
             ) : (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+              <ul className="profile-contacts">
                 {profile.contacts.map((contact) => (
-                  <li
-                    key={contact.id || contact.name}
-                    style={{
-                      padding: "8px 12px",
-                      background: "var(--bg-subtle, rgba(0,0,0,0.02))",
-                      border: "1px solid var(--border)",
-                      borderRadius: 6,
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <li key={contact.id || contact.name} className="profile-contact">
+                    <div className="profile-contact__body">
+                      <div className="profile-contact__identity">
                         <strong>{contact.name}</strong>
-                        {contact.role_title && <span className="muted" style={{ fontSize: "0.85rem" }}>— {contact.role_title}</span>}
+                        {contact.role_title && <span className="muted">— {contact.role_title}</span>}
                       </div>
-                      <div className="muted" style={{ fontSize: "0.85rem", marginTop: 2 }}>
+                      <div className="muted profile-contact__detail">
                         <span>Purpose: {contact.purpose}</span>
                         {contact.email && <span> · Email: {contact.email}</span>}
                         {contact.phone && <span> · Phone: {contact.phone}</span>}

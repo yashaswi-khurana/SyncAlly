@@ -5,6 +5,7 @@ import { ApiError, closeMarketplaceRFQ, createMarketplaceListing, createMarketpl
 import type { CreateMarketplaceListingInput, CreateMarketplaceRFQInput, MarketplaceListing, MarketplaceRFQ, Organization } from "../api/types";
 import { compactDecimal } from "../formatting";
 import { navigateToCreateDeal, navigateToSourcing } from "../router";
+import SplitText from "../ui/SplitText";
 
 interface MarketplacePageProps {
   organizations: Organization[];
@@ -203,15 +204,15 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
     <div className="workspace marketplace-page">
       <header className="hero">
         <span className="eyebrow">Marketplace</span>
-        <h1 className="display">Find your next <span className="gradient-text">trade.</span></h1>
+        <h1 className="display"><SplitText text="Find your next trade." accent="trade." /></h1>
         <p className="hero__lede">Browse active product listings and buyer requests.</p>
       </header>
 
-      <section className="card sourcing-hub-banner" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
+      <section className="card sourcing-hub-banner">
         <div>
-          <span className="eyebrow" style={{ color: "var(--accent)" }}>AI Sourcing Agent</span>
-          <h2 style={{ margin: "0.25rem 0", fontSize: "1.125rem" }}>Production Buyer Sourcing Hub</h2>
-          <p style={{ margin: 0, color: "var(--ink-soft)", fontSize: "0.875rem" }}>
+          <span className="eyebrow">AI Sourcing Agent</span>
+          <h2>Production Buyer Sourcing Hub</h2>
+          <p>
             Compare candidate listings across 5 commercial dimensions, detect missing or non-compliant terms, and draft targeted inquiries.
           </p>
         </div>
@@ -219,7 +220,6 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           type="button"
           className="button"
           onClick={() => navigateToSourcing()}
-          style={{ whiteSpace: "nowrap" }}
         >
           Launch Sourcing Hub →
         </button>

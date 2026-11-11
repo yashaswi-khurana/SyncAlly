@@ -1,0 +1,660 @@
+/* ==========================================================================
+   Public pages: sign-in landing and organization sign-up.
+   Type-led hero, a glass card over the physics scene, a ticker, one statement
+   that inks in as you scroll, the three-step diagram and numbered reasons.
+   ========================================================================== */
+
+.auth-layout {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  width: min(var(--page-max), 100% - 2 * var(--gutter));
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+}
+
+/* ---------- masthead ---------- */
+
+.auth-masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  min-height: 84px;
+  padding: 18px 0;
+  animation: fade-in 0.9s var(--ease-out) backwards;
+}
+
+.auth-wordmark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 11px;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.3125rem;
+  font-weight: 720;
+  letter-spacing: -0.045em;
+}
+
+.auth-masthead__note {
+  display: flex;
+  gap: 16px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+.auth-masthead__index {
+  color: var(--accent);
+}
+
+.auth-public-nav {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 14px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+/* ---------- stage: hero + card over the physics scene ---------- */
+
+.auth-stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 440px);
+  gap: clamp(32px, 5vw, 88px);
+  align-items: start;
+  min-height: calc(100vh - 84px);
+  min-height: calc(100dvh - 84px);
+  padding: clamp(20px, 3.4vw, 52px) 0 clamp(36px, 5vw, 72px);
+}
+
+.auth-stage__scene {
+  position: absolute;
+  top: -84px;
+  bottom: 0;
+  left: 50%;
+  z-index: -1;
+  width: 100vw;
+  translate: -50% 0;
+}
+
+/* The bodies gather around the centre of this empty box. On wide screens it
+   sits in the open space between the pitch and the card, tucked slightly
+   behind the glass. */
+.auth-stage__well {
+  position: absolute;
+  right: 392px;
+  bottom: clamp(4px, 1.4vw, 20px);
+  width: clamp(300px, 28vw, 400px);
+  aspect-ratio: 1;
+  pointer-events: none;
+}
+
+/* quiet cue that the page continues */
+.auth-stage::after {
+  content: "Scroll";
+  position: absolute;
+  bottom: clamp(22px, 3vw, 44px);
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 58px;
+  background: linear-gradient(var(--ink), var(--ink)) 0 50% / 44px 1px no-repeat;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  pointer-events: none;
+  animation: auth-cue 2.6s var(--ease-in-out) 1.4s infinite backwards;
+}
+
+@keyframes auth-cue {
+  0% {
+    background-size: 0 1px;
+    background-position: 0 50%;
+  }
+
+  50% {
+    background-size: 44px 1px;
+    background-position: 0 50%;
+  }
+
+  100% {
+    background-size: 0 1px;
+    background-position: 44px 50%;
+  }
+}
+
+.auth-hero {
+  display: grid;
+  gap: clamp(18px, 2.2vw, 30px);
+  align-content: start;
+  min-width: 0;
+}
+
+.auth-hero__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 20px;
+  animation: fade-in 1s var(--ease-out) 0.15s backwards;
+}
+
+.auth-hero__edition {
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+}
+
+.auth-hero h1 {
+  font-size: clamp(2.9rem, 6.4vw, 6.5rem);
+}
+
+.auth-hero__lede {
+  max-width: 44ch;
+  color: var(--ink-2);
+  font-size: clamp(1.0625rem, 1.4vw, 1.25rem);
+  line-height: 1.5;
+  animation: rise-in 1s var(--ease-out) 0.55s backwards;
+}
+
+.auth-hero__footnote {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  animation: rise-in 1s var(--ease-out) 0.7s backwards;
+}
+
+.auth-hero__footnote-mark {
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+/* ---------- card ---------- */
+
+.auth-card {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 18px;
+  padding: clamp(24px, 2.6vw, 38px);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: var(--r-xl);
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 1px 0 #fff inset, var(--shadow-3);
+  backdrop-filter: blur(26px) saturate(170%);
+  animation: auth-card-in 1.1s var(--ease-out) 0.25s backwards;
+}
+
+.auth-card:hover {
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+@keyframes auth-card-in {
+  from {
+    opacity: 0;
+    translate: 0 44px;
+    scale: 0.97;
+  }
+}
+
+.auth-card__topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-card__number {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+}
+
+.auth-card h2 {
+  font-size: clamp(1.75rem, 2.5vw, 2.375rem);
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.auth-card__intro {
+  color: var(--ink-2);
+  font-size: 0.9375rem;
+}
+
+.auth-card .form {
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.auth-demo-fill {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px dashed var(--line-control);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.auth-demo-fill > span {
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.14em;
+}
+
+.auth-demo-fill > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.auth-demo-fill button {
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-control);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 560;
+  cursor: pointer;
+  transition:
+    background var(--dur-ui) var(--ease-out),
+    color var(--dur-ui) var(--ease-out),
+    border-color var(--dur-ui) var(--ease-out),
+    scale var(--dur-micro) var(--ease-out);
+}
+
+.auth-demo-fill button:hover {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.auth-demo-fill button:active {
+  scale: 0.96;
+}
+
+.auth-demo-fill small {
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.auth-card__submit.button {
+  justify-content: space-between;
+  width: 100%;
+  min-height: 56px;
+  margin-top: 4px;
+  padding: 8px 14px 8px 24px;
+  border-radius: 28px;
+  font-size: 1rem;
+}
+
+.auth-card__submit > span:last-child {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  transition: translate 0.5s var(--spring), background var(--dur-ui) var(--ease-out);
+}
+
+.auth-card__submit:hover:not(:disabled) > span:last-child {
+  background: rgba(255, 255, 255, 0.24);
+  translate: 4px 0;
+}
+
+.auth-card__fineprint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+
+.auth-card__fineprint-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  --pulse: rgba(14, 122, 79, 0.42);
+  animation: pulse-ring 2.4s var(--ease-out) infinite;
+}
+
+/* ---------- ticker ---------- */
+
+.auth-ticker {
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  padding: clamp(14px, 2vw, 26px) 0;
+  border-block: 1px solid var(--line-strong);
+}
+
+.auth-ticker .marquee__group span {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: clamp(2.25rem, 5.6vw, 4.75rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+/* Outlined words: the stroke is painted first and the fill (page colour) on
+   top, which hides the contour overlaps a variable font would otherwise show. */
+.auth-ticker .marquee__group span:nth-child(even) {
+  color: var(--canvas);
+  -webkit-text-stroke: max(1.8px, 0.034em) var(--ink);
+  paint-order: stroke fill;
+}
+
+.auth-ticker .marquee__group span::after {
+  content: "";
+  width: 0.2em;
+  height: 0.2em;
+  margin: 0 0.42em;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ---------- statement ---------- */
+
+.auth-statement {
+  padding: clamp(76px, 12vw, 180px) 0 clamp(64px, 10vw, 150px);
+}
+
+.auth-statement .auth-hero__footnote {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: clamp(14px, 2.4vw, 40px);
+  color: var(--ink);
+  animation: none;
+}
+
+.auth-statement .auth-hero__footnote-mark {
+  font-size: clamp(1.25rem, 2.6vw, 2.25rem);
+  line-height: 1.4;
+}
+
+.auth-statement .auth-hero__footnote > span:last-child {
+  max-width: 18ch;
+  font-family: var(--font-display);
+  font-size: clamp(2.1rem, 7.6vw, 7.5rem);
+  font-weight: 680;
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  word-spacing: 0.06em;
+  text-wrap: balance;
+}
+
+/* ---------- how it works ---------- */
+
+.auth-diagram {
+  position: relative;
+  display: grid;
+  gap: clamp(16px, 2.4vw, 32px);
+  padding: clamp(22px, 3.2vw, 48px);
+  overflow: hidden;
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(900px 420px at 50% 0%, rgba(91, 140, 255, 0.16), transparent 70%),
+    var(--navy);
+  color: var(--ink-inverse);
+}
+
+.auth-diagram__topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--ink-inverse-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+}
+
+.auth-diagram__drawing {
+  position: relative;
+  height: clamp(210px, 30vw, 400px);
+}
+
+.auth-diagram__labels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line-inverse);
+}
+
+.auth-diagram__labels > div {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: clamp(16px, 2vw, 28px) clamp(12px, 2vw, 28px) 4px 0;
+}
+
+.auth-diagram__labels > div + div {
+  padding-left: clamp(12px, 2vw, 28px);
+  border-left: 1px solid var(--line-inverse);
+}
+
+.auth-diagram__labels span {
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+}
+
+.auth-diagram__labels strong {
+  font-family: var(--font-display);
+  font-size: clamp(1.0625rem, 2vw, 1.75rem);
+  font-weight: 620;
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+}
+
+/* ---------- why SyncAlly ---------- */
+
+.auth-benefits {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+  gap: clamp(20px, 4vw, 72px);
+  align-items: start;
+  padding: clamp(68px, 10vw, 150px) 0 clamp(48px, 7vw, 96px);
+}
+
+.auth-benefits h2 {
+  position: sticky;
+  top: 28px;
+  font-size: clamp(2rem, 4.6vw, 4rem);
+  font-weight: 700;
+  line-height: 0.96;
+  letter-spacing: -0.052em;
+}
+
+.auth-benefits ul {
+  border-top: 1px solid var(--line-strong);
+  list-style: none;
+  counter-reset: benefit;
+}
+
+.auth-benefits li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 8px clamp(14px, 2.4vw, 36px);
+  align-items: baseline;
+  padding: clamp(20px, 2.8vw, 38px) 0;
+  border-bottom: 1px solid var(--line-strong);
+  counter-increment: benefit;
+  transition: padding 0.6s var(--ease-out);
+}
+
+.auth-benefits li::before {
+  content: counter(benefit, decimal-leading-zero);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  transition: color var(--dur-ui) var(--ease-out);
+}
+
+.auth-benefits li::after {
+  content: "";
+  position: absolute;
+  inset: 0 calc(-1 * clamp(10px, 1.6vw, 22px));
+  z-index: -1;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  scale: 1 0;
+  transform-origin: 50% 100%;
+  transition: scale 0.6s var(--ease-out);
+}
+
+.auth-benefits li:hover {
+  padding-left: 14px;
+}
+
+.auth-benefits li:hover::before {
+  color: var(--accent);
+}
+
+.auth-benefits li:hover::after {
+  scale: 1 1;
+}
+
+.auth-benefits li strong {
+  font-family: var(--font-display);
+  font-size: clamp(1.375rem, 2.6vw, 2.25rem);
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+
+.auth-benefits li span {
+  color: var(--ink-2);
+  font-size: clamp(0.9375rem, 1.2vw, 1.0625rem);
+}
+
+/* ---------- footer ---------- */
+
+.auth-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin-top: auto;
+  padding: 22px 0 0;
+  overflow: clip;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+}
+
+.auth-footer > span {
+  padding-bottom: 6px;
+}
+
+.auth-footer__wordmark {
+  flex: 0 0 100%;
+}
+
+/* ---------- organization sign-up ---------- */
+
+.org-signup-layout .auth-stage {
+  padding-bottom: clamp(48px, 7vw, 96px);
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1040px) {
+  .auth-masthead__note {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .auth-stage {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    min-height: 0;
+  }
+
+  .auth-card {
+    position: relative;
+    top: 0;
+  }
+
+  .auth-stage__well {
+    position: static;
+    width: auto;
+    min-height: clamp(230px, 56vw, 330px);
+    aspect-ratio: auto;
+  }
+
+  .auth-stage::after {
+    content: none;
+  }
+
+  .auth-benefits {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auth-benefits h2 {
+    position: static;
+  }
+}
+
+@media (max-width: 640px) {
+  .auth-public-nav > span {
+    display: none;
+  }
+
+  .auth-hero__edition {
+    display: none;
+  }
+
+  .auth-diagram__labels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auth-diagram__labels > div,
+  .auth-diagram__labels > div + div {
+    grid-template-columns: 96px minmax(0, 1fr);
+    align-items: baseline;
+    padding: 16px 0;
+    border-left: 0;
+  }
+
+  .auth-diagram__labels > div + div {
+    border-top: 1px solid var(--line-inverse);
+  }
+
+  .auth-benefits li {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .auth-benefits li span {
+    grid-column: 2;
+  }
+}

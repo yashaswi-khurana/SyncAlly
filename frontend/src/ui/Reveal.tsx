@@ -10,6 +10,10 @@ interface RevealProps {
 /**
  * Fades and lifts its children into view once they enter the viewport.
  * Falls back to visible when IntersectionObserver is unavailable (tests/SSR).
+ *
+ * The trigger is a line 10% above the bottom of the viewport rather than a
+ * visible-area ratio: a wrapper many screens tall (a whole deal room on a
+ * phone) can never show 12% of itself at once and would stay hidden.
  */
 export default function Reveal({ children, delay = 0, className }: RevealProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -30,7 +34,7 @@ export default function Reveal({ children, delay = 0, className }: RevealProps) 
           }
         }
       },
-      { threshold: 0.12, rootMargin: "0px 0px -8% 0px" },
+      { threshold: 0, rootMargin: "0px 0px -10% 0px" },
     );
     observer.observe(node);
     return () => observer.disconnect();

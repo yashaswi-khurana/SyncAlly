@@ -60,11 +60,15 @@ export default function TradeFlowScene() {
 
       const network = new three.Group();
       scene.add(network);
-      scene.add(new three.HemisphereLight(0xfff4df, 0x20332c, 2.1));
+      // lit for a midnight stage: cool sky, navy bounce, one soft key for the highlights
+      scene.add(new three.HemisphereLight(0xffffff, 0x16254d, 2.1));
+      const keyLight = new three.DirectionalLight(0xffffff, 1.5);
+      keyLight.position.set(-3, 4, 8);
+      scene.add(keyLight);
 
-      const buyerColor = 0xe36c48;
-      const sellerColor = 0xa8d6b3;
-      const paperColor = 0xf5edda;
+      const buyerColor = 0x4f7dff; // cobalt, lifted for the dark stage
+      const sellerColor = 0x2ec4ae; // teal
+      const paperColor = 0xf4f6fb; // porcelain
       const buyer = new three.Vector3(-2.75, 0.02, 0);
       const seller = new three.Vector3(2.75, 0.02, 0);
 
@@ -76,9 +80,9 @@ export default function TradeFlowScene() {
           new three.MeshStandardMaterial({
             color,
             emissive: color,
-            emissiveIntensity: 0.22,
-            metalness: 0.32,
-            roughness: 0.24,
+            emissiveIntensity: 0.28,
+            metalness: 0.18,
+            roughness: 0.22,
           }),
         );
         group.add(sphere);
@@ -136,13 +140,13 @@ export default function TradeFlowScene() {
       record.add(card);
 
       const ink = new three.MeshStandardMaterial({
-        color: 0x263c31,
+        color: 0x0a1326,
         roughness: 0.8,
       });
-      const coral = new three.MeshStandardMaterial({
-        color: buyerColor,
-        emissive: buyerColor,
-        emissiveIntensity: 0.15,
+      const accentMark = new three.MeshStandardMaterial({
+        color: 0x1f4fe0,
+        emissive: 0x1f4fe0,
+        emissiveIntensity: 0.2,
       });
       const addMark = (width: number, y: number, material: Three.Material, x = 0) => {
         const mark = new three.Mesh(new three.BoxGeometry(width, 0.035, 0.018), material);
@@ -150,22 +154,22 @@ export default function TradeFlowScene() {
         record.add(mark);
       };
 
-      addMark(0.32, 0.4, coral, -0.22);
+      addMark(0.32, 0.4, accentMark, -0.22);
       addMark(0.62, 0.12, ink);
       addMark(0.62, -0.05, ink);
       addMark(0.45, -0.22, ink, -0.08);
 
       const seal = new three.Mesh(
         new three.CircleGeometry(0.12, 32),
-        new three.MeshBasicMaterial({ color: 0x64876a }),
+        new three.MeshBasicMaterial({ color: 0x8a97b8 }),
       );
       seal.position.set(0.29, -0.48, 0.12);
       record.add(seal);
       network.add(record);
 
-      // direction §2: seal settles into gold as consensus rises
-      const sealSettled = new three.Color(0x64876a);
-      const sealGold = new three.Color(0xc28b38);
+      // direction §2: the seal settles from slate into brass as consensus rises
+      const sealSettled = new three.Color(0x8a97b8);
+      const sealGold = new three.Color(0xc9a24b);
 
       const pulses = [
         { route: upperRoute, phase: 0, color: buyerColor },
@@ -229,7 +233,12 @@ export default function TradeFlowScene() {
         camera.top = halfHeight;
         camera.bottom = -halfHeight;
         camera.updateProjectionMatrix();
-        network.scale.x = Math.min(1.4, (halfWidth * 0.9) / 3.3);
+        // wide stages stretch the routes; solid objects keep their proportions
+        const stretch = Math.min(1.4, (halfWidth * 0.9) / 3.3);
+        network.scale.x = stretch;
+        for (const solid of [buyerNode, sellerNode, record, ...pulses.map(({ pulse }) => pulse)]) {
+          solid.scale.x = 1 / stretch;
+        }
         renderer.setSize(width, height, false);
         renderer.render(scene, camera);
       };
@@ -276,17 +285,30 @@ export default function TradeFlowScene() {
       };
 
       resize();
+      // the drawn fallback steps aside once the scene has painted
+      host.dataset.ready = "true";
       // always run: reduced-motion keeps time frozen (static frame) but must
       // still reflect sceneState changes such as a commitment landing
       frame = window.requestAnimationFrame(render);
-      const handleVisibilityChange = () => {
-        if (document.hidden) {
+      // draw only while the stage is on screen and the tab is visible
+      let onScreen = true;
+      const syncLoop = () => {
+        const shouldRun = onScreen && !document.hidden;
+        if (!shouldRun && frame !== 0) {
           window.cancelAnimationFrame(frame);
           frame = 0;
-        } else if (frame === 0) {
+        } else if (shouldRun && frame === 0) {
           frame = window.requestAnimationFrame(render);
         }
       };
+      const handleVisibilityChange = syncLoop;
+      const screenObserver = typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver((entries) => {
+            onScreen = entries.some((entry) => entry.isIntersecting);
+            syncLoop();
+          }, { rootMargin: "120px" });
+      screenObserver?.observe(host);
       const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
       resizeObserver?.observe(host);
       window.addEventListener("resize", resize);
@@ -294,6 +316,7 @@ export default function TradeFlowScene() {
 
       disposeScene = () => {
         window.cancelAnimationFrame(frame);
+        screenObserver?.disconnect();
         resizeObserver?.disconnect();
         window.removeEventListener("resize", resize);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -307,6 +330,7 @@ export default function TradeFlowScene() {
           }
         });
         renderer.dispose();
+        delete host.dataset.ready;
       };
     };
 

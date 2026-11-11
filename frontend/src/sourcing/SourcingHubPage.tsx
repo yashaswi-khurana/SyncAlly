@@ -18,6 +18,7 @@ import type {
   CommercialGap,
   SourcingHubProps,
 } from "./sourcingTypes";
+import SplitText from "../ui/SplitText";
 import "./sourcing.css";
 
 export const SourcingHubPage: React.FC<SourcingHubProps> = ({
@@ -154,7 +155,7 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
         <nav aria-label="Breadcrumb" className="breadcrumbs">
           <span>Marketplace</span> &gt; <span>Sourcing Hub</span>
         </nav>
-        <h1>Production Buyer Sourcing Agent</h1>
+        <h1><SplitText text="Production Buyer Sourcing Agent" /></h1>
         <p className="subtitle">
           Interpret buyer requirements, evaluate realistic marketplace listings, detect commercial gaps, and draft targeted seller inquiries.
         </p>

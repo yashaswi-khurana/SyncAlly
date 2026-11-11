@@ -60,7 +60,37 @@ logger = logging.getLogger(__name__)
 _MAX_ATTEMPTS = 8
 _LEASE_SECONDS = 60
 _EVENT_RETENTION_DAYS = 30
-_PRIVATE_DEAL_DENIAL = "I couldn't find an authorized deal to follow."
+_PRIVATE_DEAL_DENIAL = (
+    "I couldn't find a deal you can access with that ID. Check the ID or ask your "
+    "SyncAlly administrator about deal access."
+)
+_NO_FOLLOWED_STATUS = (
+    "No deal you can access is followed in this thread. Use `@SyncAlly status <deal-id>` "
+    "to check one directly, or follow a deal with `@SyncAlly follow <deal-id>`."
+)
+_AMBIGUOUS_FOLLOWED_STATUS = (
+    "More than one deal you can access is followed in this thread. Include the exact "
+    "deal ID in your status request."
+)
+_NO_FOLLOWED_PAYMENT = (
+    "No deal with payment access is followed in this thread. Use `@SyncAlly payments "
+    "<deal-id>` to check one directly, or follow a deal you can access."
+)
+_AMBIGUOUS_FOLLOWED_PAYMENT = (
+    "More than one followed deal has payment access. Include the exact deal ID in your "
+    "payments request."
+)
+_HELP_MESSAGE = (
+    "*SyncAlly commands*\n"
+    "Mention me in a message or thread. Commands use your SyncAlly permissions; "
+    "I don't read channel history.\n"
+    "• `@SyncAlly link` — link your SyncAlly account with a private code.\n"
+    "• `@SyncAlly status <deal-id>` — check a deal's status.\n"
+    "• `@SyncAlly payments <deal-id>` — check payment status when you have payment access.\n"
+    "• `@SyncAlly follow <deal-id>` / `@SyncAlly unfollow <deal-id>` — get or stop eligible updates in this thread.\n"
+    "• `@SyncAlly start buyer <organization-id>` / `@SyncAlly start seller <organization-id>` — "
+    "create an eligible draft deal without notifying the counterparty."
+)
 _SAFE_PROVIDER_FAILURES = frozenset(
     {
         "ratelimited",
@@ -1064,18 +1094,20 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             )
         )
         if existing is not None:
-            await _provider_call(api.post_message,
+            await _provider_call(api.post_ephemeral,
                 token,
                 channel=event.channel_id,
+                user=event.slack_user_id,
                 thread_ts=event.thread_ts,
                 text="Your Slack account is already linked to SyncAlly. Ask `status` for the unique deal followed in this thread, or use `status <deal-id>`.",
             )
         else:
             code = _link_code(event, installation, db)
             if not code:
-                await _provider_call(api.post_message,
+                await _provider_call(api.post_ephemeral,
                     token,
                     channel=event.channel_id,
+                    user=event.slack_user_id,
                     thread_ts=event.thread_ts,
                     text="Your Slack account is linked to SyncAlly. Ask `status` for the unique deal followed in this thread, or use `status <deal-id>`.",
                 )
@@ -1087,6 +1119,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                 token,
                 channel=event.channel_id,
                 user=event.slack_user_id,
+                thread_ts=event.thread_ts,
                 text=(
                     f"Your temporary SyncAlly link code is `{code}` (valid for 10 minutes). "
                     "Sign in to SyncAlly, open your organization's Integrations tab, and enter this code. "
@@ -1107,7 +1140,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
         else:
             actor = resolve_actor(db, link.user_id)
             if actor is None or installation.organization_id not in actor.organization_ids:
-                text = "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID."
+                text = _NO_FOLLOWED_STATUS
             else:
                 followed_deal_ids = db.scalars(
                     select(SlackDealSubscription.deal_id)
@@ -1130,9 +1163,9 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                     if deal is not None:
                         authorized_deals.append(deal)
                 if not authorized_deals:
-                    text = "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID."
+                    text = _NO_FOLLOWED_STATUS
                 elif len(authorized_deals) > 1:
-                    text = "More than one authorized deal is followed in this thread. Provide an exact deal ID."
+                    text = _AMBIGUOUS_FOLLOWED_STATUS
                 else:
                     text = f"Deal status: {authorized_deals[0].status.value}."
         await _provider_call(
@@ -1157,12 +1190,12 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
         else:
             actor = resolve_actor(db, link.user_id)
             if actor is None or installation.organization_id not in actor.organization_ids:
-                text = "I couldn't find an authorized deal with that ID."
+                text = _PRIVATE_DEAL_DENIAL
             else:
                 try:
                     deal = get_deal(actor, uuid.UUID(event.deal_id), SqlAlchemyDealRepository(db))
                 except (DealNotFound, ValueError):
-                    text = "I couldn't find an authorized deal with that ID."
+                    text = _PRIVATE_DEAL_DENIAL
                 else:
                     text = f"Deal status: {deal.status.value}."
         await _provider_call(api.post_ephemeral,
@@ -1209,9 +1242,9 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                 if deal is not None:
                     authorized_deals.append(deal)
             if not authorized_deals:
-                text = "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID."
+                text = _NO_FOLLOWED_PAYMENT
             elif len(authorized_deals) > 1:
-                text = "More than one authorized deal with payment access is followed in this thread. Provide an exact deal ID."
+                text = _AMBIGUOUS_FOLLOWED_PAYMENT
             else:
                 deal = authorized_deals[0]
                 actor = resolve_actor(db, link.user_id)
@@ -1227,7 +1260,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                         SqlAlchemyPaymentIntentRepository(db),
                     )
                 except (DealNotFound, HTTPException):
-                    text = "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID."
+                    text = _NO_FOLLOWED_PAYMENT
                 else:
                     text = _payment_summary_text(payments)
         await _provider_call(
@@ -1252,7 +1285,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
         else:
             actor = resolve_actor(db, link.user_id)
             if actor is None or installation.organization_id not in actor.organization_ids:
-                text = "I couldn't find authorized payment information for that deal."
+                text = "I couldn't find payment information you can access for that deal. Check the ID or your SyncAlly payment permissions."
             else:
                 try:
                     deal_id_value = uuid.UUID(event.deal_id)
@@ -1266,7 +1299,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                         SqlAlchemyPaymentIntentRepository(db),
                     )
                 except (DealNotFound, HTTPException):
-                    text = "I couldn't find authorized payment information for that deal."
+                    text = "I couldn't find payment information you can access for that deal. Check the ID or your SyncAlly payment permissions."
                 else:
                     text = _payment_summary_text(payments)
         await _provider_call(api.post_ephemeral,
@@ -1366,7 +1399,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
                 )
             )
             if subscription is None:
-                text = "You're not following this deal in this thread."
+                text = f"You're not following this deal in this thread. Use `@SyncAlly follow {event.deal_id}` to get eligible updates."
             else:
                 now = datetime.now(UTC)
                 db.execute(
@@ -1399,16 +1432,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             token,
             channel=event.channel_id,
             thread_ts=event.thread_ts,
-            text=(
-                "Use `@SyncAlly link` to connect your account, `@SyncAlly status` "
-                "for the unique deal you follow in this thread, or `@SyncAlly status <deal-id>` "
-                "for an exact deal, `@SyncAlly payments` for payment status of the unique deal you follow here, "
-                "or `@SyncAlly payments <deal-id>` for an exact deal, "
-                "`@SyncAlly start buyer <organization-id>` or `@SyncAlly start seller <organization-id>` "
-                "to create a draft deal without notifying the counterparty, "
-                "or `@SyncAlly follow <deal-id>` to get agreement, proposal, approval, completion, payment, fulfillment, and new-message updates in this thread. "
-                "Use an exact deal ID."
-            ),
+            text=_HELP_MESSAGE,
         )
     event.status = "DELIVERED"
     event.last_error = None

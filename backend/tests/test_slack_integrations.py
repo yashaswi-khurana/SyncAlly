@@ -167,6 +167,36 @@ class SlackIntegrationTests(unittest.TestCase):
         self.assertTrue(status.configured)
         self.assertFalse(status.connected)
 
+    def test_account_link_status_is_self_only_and_available_to_org_members(self) -> None:
+        missing = integrations.get_slack_account_link_status(self.org.id, self.member, self.db)
+        self.assertFalse(missing.workspace_connected)
+        self.assertFalse(missing.account_linked)
+
+        installation = self._installation(self.org.id)
+        self.db.add(SlackUserLink(
+            id=uuid4(), installation_id=installation.id, organization_id=self.org.id,
+            workspace_id=installation.workspace_id, slack_user_id="U-admin",
+            user_id=self.user.id, created_at=datetime.now(UTC),
+        ))
+        self.db.commit()
+        unlinked = integrations.get_slack_account_link_status(self.org.id, self.member, self.db)
+        self.assertTrue(unlinked.workspace_connected)
+        self.assertFalse(unlinked.account_linked)
+
+        self.db.add(SlackUserLink(
+            id=uuid4(), installation_id=installation.id, organization_id=self.org.id,
+            workspace_id=installation.workspace_id, slack_user_id="U-member",
+            user_id=self.member_user.id, created_at=datetime.now(UTC),
+        ))
+        self.db.commit()
+        linked = integrations.get_slack_account_link_status(self.org.id, self.member, self.db)
+        self.assertTrue(linked.workspace_connected)
+        self.assertTrue(linked.account_linked)
+
+        with self.assertRaises(HTTPException) as denied:
+            integrations.get_slack_account_link_status(uuid4(), self.member, self.db)
+        self.assertEqual(denied.exception.status_code, 404)
+
     def test_oauth_adapter_requests_only_minimum_scopes_and_no_history(self) -> None:
         client = SlackOAuthClient(client_id="id", client_secret="secret", redirect_uri="https://app/callback")
         query = parse_qs(urlparse(client.authorization_url("opaque-state")).query)

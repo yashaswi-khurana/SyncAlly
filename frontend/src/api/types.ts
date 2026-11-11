@@ -63,6 +63,11 @@ export interface SlackConnection {
   messaging_enabled: boolean;
 }
 
+export interface SlackAccountLinkStatus {
+  workspace_connected: boolean;
+  account_linked: boolean;
+}
+
 export interface OrganizationDirectoryItem {
   id: string;
   legal_name: string;

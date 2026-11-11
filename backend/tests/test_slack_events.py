@@ -559,10 +559,68 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(authorized_reply["user"], "U-authorized")
         self.assertEqual(authorized_reply["text"], "Deal status: NEGOTIATING.")
         self.assertNotIn("Private deal title", authorized_reply["text"])
-        denials = [message for message in api.messages if "authorized deal" in message["text"]]
+        denials = [message for message in api.messages if not message["text"].startswith("Deal status:")]
         self.assertEqual(len(denials), 2)
         self.assertEqual(denials[0]["text"], denials[1]["text"])
+        self.assertIn("ask your SyncAlly administrator", denials[0]["text"])
         self.assertEqual({message["user"] for message in denials}, {"U-no-read", "U-authorized"})
+
+    def test_link_replies_are_private_and_stay_in_the_request_thread(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        self.db.add(SlackUserLink(
+            id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+            workspace_id=self.installation.workspace_id, slack_user_id="U-already-linked",
+            user_id=self.admin.id, created_at=now,
+        ))
+        events = [
+            SlackEvent(
+                id=uuid4(), event_id="Ev-link-new", installation_id=self.installation.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-new-link",
+                channel_id="C-channel", message_ts="123.400", thread_ts="123.000",
+                command="LINK", deal_id=None, status="PENDING", attempts=0,
+                available_at=now,
+            ),
+            SlackEvent(
+                id=uuid4(), event_id="Ev-link-existing", installation_id=self.installation.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-already-linked",
+                channel_id="C-channel", message_ts="123.500", thread_ts="123.000",
+                command="LINK", deal_id=None, status="PENDING", attempts=0,
+                available_at=now + timedelta(seconds=1),
+            ),
+        ]
+        self.db.add_all(events)
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+                self.public_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+            async def post_message(self, _token: str, **kwargs: str) -> None:
+                self.public_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now)))
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(factory, api, now=now + timedelta(seconds=1))))
+
+        self.assertEqual(api.public_messages, [])
+        self.assertEqual(len(api.private_messages), 2)
+        self.assertEqual(
+            {message["user"] for message in api.private_messages},
+            {"U-new-link", "U-already-linked"},
+        )
+        self.assertTrue(all(message["thread_ts"] == "123.000" for message in api.private_messages))
+        self.assertTrue(any("temporary SyncAlly link code" in message["text"] for message in api.private_messages))
+        self.assertTrue(any("already linked" in message["text"] for message in api.private_messages))
 
     def test_current_status_uses_only_exact_thread_follows_and_rechecks_permissions(self) -> None:
         from syncally.cli import slack_events_worker
@@ -705,15 +763,15 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertNotIn("Secret", api.private_messages[0]["text"])
         self.assertEqual(
             api.private_messages[1]["text"],
-            "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID.",
+            "No deal you can access is followed in this thread. Use `@SyncAlly status <deal-id>` to check one directly, or follow a deal with `@SyncAlly follow <deal-id>`.",
         )
         self.assertEqual(
             api.private_messages[2]["text"],
-            "More than one authorized deal is followed in this thread. Provide an exact deal ID.",
+            "More than one deal you can access is followed in this thread. Include the exact deal ID in your status request.",
         )
         self.assertEqual(
             api.private_messages[3]["text"],
-            "No authorized deal is followed in this thread. Follow a deal or provide an exact deal ID.",
+            "No deal you can access is followed in this thread. Use `@SyncAlly status <deal-id>` to check one directly, or follow a deal with `@SyncAlly follow <deal-id>`.",
         )
 
     def _add_payment_lookup(self, deal_id, *, event_id: str, user_id: str = "U-payments", delay: int = 0):
@@ -1901,7 +1959,7 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(len(api.private_messages), 2)
         self.assertEqual(
             {message["text"] for message in api.private_messages},
-            {"I couldn't find authorized payment information for that deal."},
+            {"I couldn't find payment information you can access for that deal. Check the ID or your SyncAlly payment permissions."},
         )
         self.assertTrue(all(message["user"] == "U-payments" for message in api.private_messages))
         self.assertTrue(all(message["thread_ts"] == "124.000" for message in api.private_messages))
@@ -2029,15 +2087,15 @@ class SlackEventRouteTests(unittest.TestCase):
             self.assertNotIn(secret, unique_reply["text"])
         self.assertEqual(
             api.private_messages[1]["text"],
-            "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID.",
+            "No deal with payment access is followed in this thread. Use `@SyncAlly payments <deal-id>` to check one directly, or follow a deal you can access.",
         )
         self.assertEqual(
             api.private_messages[2]["text"],
-            "More than one authorized deal with payment access is followed in this thread. Provide an exact deal ID.",
+            "More than one followed deal has payment access. Include the exact deal ID in your payments request.",
         )
         self.assertEqual(
             api.private_messages[3]["text"],
-            "No authorized deal with payment access is followed in this thread. Follow a deal or provide an exact deal ID.",
+            "No deal with payment access is followed in this thread. Use `@SyncAlly payments <deal-id>` to check one directly, or follow a deal you can access.",
         )
         self.assertEqual(list_payments.call_count, 1)
         self.assertEqual(list_payments.call_args.args[1], first_deal_id)

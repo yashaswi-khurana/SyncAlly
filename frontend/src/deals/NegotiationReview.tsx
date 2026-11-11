@@ -12,6 +12,10 @@ import type {
 } from "../api/types";
 import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import ProposalComparison from "./ProposalComparison";
+import {
+  PAYPAL_INVOICE_CURRENCIES,
+  PAYPAL_INVOICE_CURRENCY_SET,
+} from "./paymentCurrencies";
 
 interface NegotiationReviewProps {
   deal: Deal;
@@ -286,8 +290,10 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       if (!isValidDecimal(it.quantity)) return `Enter a valid quantity for ${it.description}.`;
       if (!it.unit.trim()) return `Choose a unit for ${it.description}, such as boxes or kilograms.`;
       if (!isValidDecimal(it.unitPrice)) return `Enter a valid price per unit for ${it.description}.`;
-      if (!it.currency || it.currency.length !== 3) return `Enter a 3-letter currency code for ${it.description}, such as INR or USD.`;
-      currencies.add(it.currency);
+      if (!PAYPAL_INVOICE_CURRENCY_SET.has(it.currency.toUpperCase())) {
+        return `Choose a PayPal-supported currency for ${it.description}.`;
+      }
+      currencies.add(it.currency.toUpperCase());
     }
 
     if (!deliveryLocation.trim()) return "Delivery location is required.";
@@ -315,8 +321,10 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
       if (allIds.has(p.id)) return `There is a duplicate payment reference. Reset the draft and try again.`;
       allIds.add(p.id);
       if (!isValidDecimal(p.amount)) return `Enter a valid amount for payment stage ${i + 1}.`;
-      if (!p.currency || p.currency.length !== 3) return `Enter a 3-letter currency code for payment stage ${i + 1}.`;
-      currencies.add(p.currency);
+      if (!PAYPAL_INVOICE_CURRENCY_SET.has(p.currency.toUpperCase())) {
+        return `Choose a PayPal-supported currency for payment stage ${i + 1}.`;
+      }
+      currencies.add(p.currency.toUpperCase());
       if (!isPaymentTrigger(p.trigger)) return `Choose when payment stage ${i + 1} is due.`;
       if (!p.dueCondition.trim()) return `Choose when payment stage ${i + 1} is due.`;
       if (p.allocations.length === 0) return `Link payment stage ${i + 1} to a delivery.`;
@@ -386,7 +394,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     }));
     const proposalPayments = payments.map((payment) => {
       const amount = payments.length === 1 && orderTotal !== null ? orderTotal : payment.amount;
-      const currency = payments.length === 1 ? payment.currency || items[0]?.currency || "" : payment.currency;
+      const currency = payments.length === 1 ? items[0]?.currency || "" : payment.currency;
       return {
         ...payment,
         amount,
@@ -622,12 +630,15 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                       setItems(updated);
                       setIsDirty(true);
                     }} /></label>
-                    <label>Currency code <input type="text" aria-label={`Currency code ${idx + 1}`} placeholder="INR" maxLength={3} value={it.currency} onChange={(e) => {
+                    <label>Currency code (PayPal-supported) <select aria-label={`Currency code ${idx + 1}`} value={it.currency} onChange={(e) => {
                       const updated = [...items];
-                      updated[idx].currency = e.target.value.toUpperCase();
+                      updated[idx].currency = e.target.value;
                       setItems(updated);
                       setIsDirty(true);
-                    }} /></label>
+                    }}>
+                      <option value="">Choose currency</option>
+                      {PAYPAL_INVOICE_CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+                    </select></label>
                   </div>
                   {items.length > 1 ? <div>
                     <button type="button" className="button secondary" aria-label={`Remove product ${idx + 1}`} onClick={() => {
@@ -742,14 +753,17 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                       setIsDirty(true);
                     }} /></label>
                     {payments.length === 1 ? <p className="proposal-editor__auto-note">{calculateOrderTotal(items) !== null && items[0]?.currency ? `A single payment defaults to the full order total of ${calculateOrderTotal(items)} ${items[0].currency.toUpperCase()} when left blank.` : "A single payment defaults to the full order total. Complete the order details first."}</p> : null}
-                    {payments.length > 1 ? <label>Currency code<input type="text" aria-label={`Payment currency code ${idx + 1}`} placeholder={items[0]?.currency || "INR"} maxLength={3} value={p.currency} onChange={(e) => {
+                    {payments.length > 1 ? <label>Currency code (PayPal-supported)<select aria-label={`Payment currency code ${idx + 1}`} value={p.currency} onChange={(e) => {
                       const updated = [...payments];
-                      const currency = e.target.value.toUpperCase();
+                      const currency = e.target.value;
                       updated[idx].currency = currency;
                       updated[idx].allocations = updated[idx].allocations.map((allocation) => ({ ...allocation, currency }));
                       setPayments(updated);
                       setIsDirty(true);
-                    }} /></label> : null}
+                    }}>
+                      <option value="">Choose currency</option>
+                      {PAYPAL_INVOICE_CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+                    </select></label> : null}
                     {SUPPORTED_PAYMENT_TIMING.length === 1 ? <div className="proposal-payment-timing"><span>Payment timing</span><strong>{SUPPORTED_PAYMENT_TIMING[0].label}</strong><small>{SUPPORTED_PAYMENT_TIMING[0].dueCondition}</small></div> : <label>Payment timing<select aria-label={`Payment timing ${idx + 1}`} value={isPaymentTrigger(p.trigger) ? p.trigger : ""} onChange={(e) => {
                       if (!isPaymentTrigger(e.target.value)) return;
                       const updated = [...payments];

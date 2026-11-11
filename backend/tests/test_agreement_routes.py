@@ -5,6 +5,7 @@ import hashlib
 import json
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -24,6 +25,7 @@ from syncally.api.main import app
 from syncally.application.identity import ActorContext
 from syncally.domain.agreements.agreement import AgreementStatus, ApprovalDecision
 from syncally.domain.shared.identifiers import OrganizationId
+from syncally.domain.shared.money import Money
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     AgreementVersion,
@@ -1000,6 +1002,40 @@ class AgreementRouteTests(unittest.TestCase):
         self.assertNotIn("provider_invoice_id", response.json()[0])
         self.assertNotIn("private-", response.text)
         self.assertNotIn("provider response", response.text)
+
+    def test_paypal_unsupported_currency_is_not_marked_eligible(self) -> None:
+        amount = Money(Decimal("840000"), "INR")
+        self.terms = replace(
+            self.terms,
+            line_items=tuple(
+                replace(item, unit_price=amount) for item in self.terms.line_items
+            ),
+            payment_terms=tuple(
+                replace(term, amount=amount) for term in self.terms.payment_terms
+            ),
+        )
+        self.proposal.terms_json = json.loads(self.terms.canonical_json())
+        self.proposal.terms_hash = self.terms.terms_hash
+        self.session.commit()
+        self._commit_current_agreement()
+        self._authenticate(self._actor(self.seller_user, self.seller))
+
+        with patch("syncally.api.payments.settings.payment_mode", "PAYPAL_SANDBOX"):
+            paypal_response = self._request(
+                "GET", f"/deals/{self.deal.id}/payments/milestones"
+            )
+        self.assertEqual(paypal_response.status_code, 200, paypal_response.text)
+        paypal_milestone = paypal_response.json()[0]
+        self.assertFalse(paypal_milestone["is_eligible"])
+        self.assertEqual(paypal_milestone["lifecycle_state"], "ineligible")
+        self.assertIn("does not support INR", paypal_milestone["ineligibility_reason"])
+
+        with patch("syncally.api.payments.settings.payment_mode", "OFFLINE_DEMO"):
+            offline_response = self._request(
+                "GET", f"/deals/{self.deal.id}/payments/milestones"
+            )
+        self.assertEqual(offline_response.status_code, 200, offline_response.text)
+        self.assertTrue(offline_response.json()[0]["is_eligible"])
 
     def test_payment_status_is_empty_until_a_committed_agreement_exists(self) -> None:
         self._authenticate(self._actor(self.buyer_user, self.buyer))

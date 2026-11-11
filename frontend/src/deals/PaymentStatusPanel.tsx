@@ -17,6 +17,7 @@ import type {
   PaymentStatus,
 } from "../api/types";
 import { formatCountdown, parseTimestamp } from "./paymentCountdown";
+import { PAYPAL_INVOICE_CURRENCY_SET } from "./paymentCurrencies";
 
 type PaymentState =
   | { status: "loading" }
@@ -32,12 +33,6 @@ type PaymentState =
       buyerOrganization: OrganizationDirectoryItem | null;
       milestone: { amount: string; currency: string } | null;
     };
-
-const PAYPAL_INVOICE_CURRENCIES = new Set([
-  "AUD", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP", "HKD",
-  "HUF", "ILS", "JPY", "MXN", "MYR", "NOK", "NZD", "PHP", "PLN", "RUB",
-  "SEK", "SGD", "THB", "TWD", "USD",
-]);
 
 interface RecipientPreview {
   legalName: string;
@@ -637,7 +632,7 @@ export default function PaymentStatusPanel({
             );
             const invoiceUrl = effectivePayment?.invoice_url ?? milestone.invoice_url;
             const failureReason = effectivePayment?.failure_reason ?? milestone.failure_reason;
-            const paypalCurrencyUnsupported = !PAYPAL_INVOICE_CURRENCIES.has(milestone.currency);
+            const paypalCurrencyUnsupported = !PAYPAL_INVOICE_CURRENCY_SET.has(milestone.currency);
 
             return (
               <article

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { disconnectSlack, getSlackAccountLinkStatus, getSlackConnection, redeemSlackLink, startSlackConnection } from "../api/client";
+import { ApiError, disconnectSlack, getSlackAccountLinkStatus, getSlackConnection, redeemSlackLink, startSlackConnection } from "../api/client";
 import type { Organization, SlackConnection } from "../api/types";
 import SlackIntegrationSection from "./SlackIntegrationSection";
 
@@ -165,6 +165,42 @@ describe("SlackIntegrationSection", () => {
     expect(linkCard).toContainElement(linkedMessage);
     expect(screen.queryByLabelText("Temporary link code")).not.toBeInTheDocument();
     expect(mockedGetSlackAccountLinkStatus).toHaveBeenCalledWith(ORG_ID);
+  });
+
+  it("explains the code requirement and only enables linking for a complete code", async () => {
+    render(<SlackIntegrationSection organization={organization("MEMBER")} />);
+
+    const codeField = await screen.findByLabelText("Temporary link code");
+    const submit = screen.getByRole("button", { name: "Link Slack account" });
+    expect(submit).toBeDisabled();
+    expect(screen.getByText(/paste the private code from @syncally link.*8 or more characters/i)).toBeInTheDocument();
+
+    fireEvent.change(codeField, { target: { value: "AbCdEfG" } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(codeField, { target: { value: "AbCdEfGh" } });
+    expect(submit).toBeEnabled();
+  });
+
+  it("explains an expired SyncAlly session when link redemption is unauthorized", async () => {
+    mockedRedeemSlackLink.mockRejectedValue(new ApiError(401, "Unauthorized"));
+    render(<SlackIntegrationSection organization={organization("MEMBER")} />);
+    fireEvent.change(await screen.findByLabelText("Temporary link code"), {
+      target: { value: "AbCdEfGh1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Link Slack account" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/syncally session has expired.*sign in again/i);
+  });
+
+  it("describes identity-link conflicts without guessing which account is already linked", async () => {
+    mockedRedeemSlackLink.mockRejectedValue(new ApiError(409, "Slack identity is already linked"));
+    render(<SlackIntegrationSection organization={organization("MEMBER")} />);
+    fireEvent.change(await screen.findByLabelText("Temporary link code"), {
+      target: { value: "AbCdEfGh1234" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Link Slack account" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/slack account or syncally account is already linked/i);
   });
 
   it("shows a safe error and preserves the code after a failed redemption", async () => {

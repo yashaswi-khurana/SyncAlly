@@ -24,12 +24,15 @@ function describeError(error: unknown): string {
 }
 
 function describeLinkError(error: unknown): string {
+  if (error instanceof ApiError && error.status === 401) {
+    return "Your SyncAlly session has expired. Sign in again, then submit a fresh Slack link code.";
+  }
   const message = describeError(error);
   if (/invalid or expired/i.test(message)) {
     return "That code is invalid or expired. Mention @SyncAlly link in Slack to get a fresh code, then try again.";
   }
   if (/already linked/i.test(message)) {
-    return "This Slack account is already linked to a different SyncAlly user. Ask an organization administrator for help.";
+    return "This Slack account or SyncAlly account is already linked. Sign in to the account you want to link, or ask an organization administrator for help.";
   }
   if (/organization membership required/i.test(message)) {
     return "Your signed-in account needs active membership in this organization to link Slack.";
@@ -308,7 +311,7 @@ export default function SlackIntegrationSection({ organization }: { organization
                     onChange={(event) => { setLinkCode(event.target.value); setLinkNotice(null); }}
                     disabled={linking}
                   />
-                  <span className="hint" id="slack-link-code-help">The code is private and can only be used once.</span>
+                  <span className="hint" id="slack-link-code-help">Paste the private code from @SyncAlly link. It must have 8 or more characters; this button enables when the code is ready. Codes expire after 10 minutes and can only be used once.</span>
                 </div>
                 <button type="submit" className="button secondary" disabled={linking || linkCode.trim().length < 8}>
                   {linking ? "Linking..." : "Link Slack account"}

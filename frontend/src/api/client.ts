@@ -912,7 +912,7 @@ export function suggestDealFacts(
   return apiRequest<FactSuggestionResult>(`/deals/${encodeURIComponent(dealId)}/ai/facts`, {
     method: "POST",
     body: JSON.stringify({ organization_id: organizationId }),
-  }, "json", true, 60_000);
+  }, "json", true, 120_000);
 }
 
 export function draftDealProposal(
@@ -922,7 +922,7 @@ export function draftDealProposal(
   return apiRequest<ProposalSuggestion>(`/deals/${encodeURIComponent(dealId)}/ai/proposal`, {
     method: "POST",
     body: JSON.stringify({ organization_id: organizationId }),
-  }, "json", true, 60_000);
+  }, "json", true, 120_000);
 }
 
 export function correctDealFact(

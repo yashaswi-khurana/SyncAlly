@@ -102,6 +102,18 @@ function suggestionResult(facts: DealFact[], missing_fields: string[]) {
 }
 
 describe("AISuggestionReview readiness and manual entry", () => {
+  it("explains that AI extracts the evidence and SyncAlly compares it", async () => {
+    mockedSuggestDealFacts.mockResolvedValue(suggestionResult([], []));
+    renderReview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Suggest facts from this side's messages" }));
+
+    expect(await screen.findByRole("heading", { name: "Negotiation change radar" })).toBeInTheDocument();
+    expect(screen.getByText(/configured AI provider extracts candidate trade positions/i)).toBeInTheDocument();
+    expect(screen.getByText(/SyncAlly compares those sourced values/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not inspect every message or determine agreement/i)).toBeInTheDocument();
+  });
+
   it.each([
     ["offline", null, "Offline"],
     ["openai", null, "OpenAI"],

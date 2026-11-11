@@ -25,7 +25,7 @@ from syncally.api.auth import (
 )
 from syncally.application.identity import ActorContext
 from syncally.application.passwords import hash_password, verify_password
-from syncally.config import GmailSettings, settings
+from syncally.config import EmailSettings, settings
 from syncally.domain.deals.deal import Deal as DomainDeal
 from syncally.domain.organizations.approval_routing import ApprovalRoutingMode
 from syncally.domain.organizations.approval_routing import (
@@ -53,8 +53,12 @@ from syncally.domain.shared.identifiers import DealId, OrganizationId, UserId
 from syncally.infrastructure.counterparty_onboarding import lock_deal
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
-from syncally.infrastructure.gmail import GmailSMTPInvitationNotifier, InvitationEmailDeliveryError
-from syncally.infrastructure.identity import repair_organization_finance_membership
+from syncally.infrastructure.gmail import (
+    GmailApiEmailNotifier,
+    GmailSMTPInvitationNotifier,
+    InvitationEmailDeliveryError,
+    configured_invitation_notifier,
+)
 from syncally.infrastructure.models import (
     AgreementVersion,
     AuditEvent,
@@ -133,21 +137,21 @@ def _public_invitation_base_url() -> str:
     return value.rstrip("/")
 
 
-def _invitation_delivery() -> tuple[GmailSMTPInvitationNotifier | None, str, str | None]:
+def _invitation_delivery() -> tuple[
+    GmailSMTPInvitationNotifier | GmailApiEmailNotifier | None,
+    str,
+    str | None,
+]:
     base_url = _public_invitation_base_url()
-    config = GmailSettings()
-    username = config.gmail_smtp_username.strip()
-    password = config.gmail_app_password.get_secret_value()
-    if not username or not password.strip():
-        return None, base_url, "Email delivery is not configured. Set the Gmail SMTP sender credentials."
+    config = EmailSettings()
     try:
-        notifier = GmailSMTPInvitationNotifier(
-            username,
-            password,
-            config.gmail_from_email.strip() or None,
-        )
+        notifier = configured_invitation_notifier(config)
     except ValueError as exc:
         raise HTTPException(status_code=503, detail="Invitation email sender configuration is invalid.") from exc
+    if notifier is None:
+        return None, base_url, (
+            "Email delivery is not configured. Set the Gmail API OAuth sender settings."
+        )
     return notifier, base_url, None
 
 
@@ -157,7 +161,9 @@ def _invite_url(base_url: str, token: str) -> str:
 
 def _send_invitation_email(send_email: Any, *args: str) -> tuple[bool, str | None]:
     if send_email is None:
-        return False, "Email delivery is not configured. Set the Gmail SMTP sender credentials."
+        return False, (
+            "Email delivery is not configured. Set the Gmail API OAuth sender settings."
+        )
     try:
         send_email(*args)
     except InvitationEmailDeliveryError:

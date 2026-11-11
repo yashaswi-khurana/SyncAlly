@@ -276,7 +276,7 @@ export default function AISuggestionReview({
     conflictingFields.add("quantity");
   }
   if (!confirmedSignatures.unit && confirmedSignatures.quantity) {
-    if (quantityUnits.size === 1) {
+    if (quantityUnits.length === 1) {
       confirmedValues.unit = quantities.find((fact) => Boolean(fact.currency_or_unit))?.currency_or_unit ?? "";
       confirmedSignatures.unit = confirmedSignatures.quantity;
     }
@@ -599,7 +599,7 @@ export default function AISuggestionReview({
         <section className="ai-change-radar" aria-labelledby={`ai-change-radar-heading-${dealId}`}>
           <div className="ai-change-radar__header">
             <div>
-              <span className="eyebrow">Cross-message intelligence</span>
+              <span className="eyebrow">AI extraction · source-grounded comparison</span>
               <h3 id={`ai-change-radar-heading-${dealId}`}>Negotiation change radar</h3>
             </div>
             <span className={`ai-change-radar__count${sharedTermDrift.length ? " is-alert" : ""}`}>
@@ -607,7 +607,7 @@ export default function AISuggestionReview({
             </span>
           </div>
           <p className="ai-change-radar__intro">
-            SyncAlly compares extracted shared values. Differences may be counteroffers, and equivalent values may be written differently.
+            The configured AI provider extracts candidate trade positions from shareable messages. SyncAlly compares those sourced values; a difference may be a counteroffer, not an accepted change.
           </p>
           {sharedTermDrift.length ? (
             <ul className="ai-change-radar__list">
@@ -639,7 +639,7 @@ export default function AISuggestionReview({
             </ul>
           ) : (
             <p className="ai-change-radar__clear">
-              No differences surfaced among extracted shared values. This does not check every message or establish agreement.
+              No differences surfaced among extracted shared values in this scan. It does not inspect every message or determine agreement.
             </p>
           )}
         </section>

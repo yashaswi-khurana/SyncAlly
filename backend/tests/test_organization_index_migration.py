@@ -46,10 +46,14 @@ class OrganizationIndexMigrationTests(unittest.TestCase):
             ), {"name": INDEX}).scalar_one(), 0)
 
     def test_offline_sql_widens_before_index_and_long_revision_stamp(self) -> None:
-        environment = dict(os.environ, DATABASE_URL="postgresql+psycopg://localhost/unused")
+        environment = dict(
+            os.environ,
+            DATABASE_URL="postgresql+psycopg://localhost/unused",
+            PYTHONIOENCODING="utf-8",
+        )
         result = subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", f"{PREVIOUS}:head", "--sql"],
-            cwd=BACKEND, env=environment, capture_output=True, text=True, timeout=60,
+            cwd=BACKEND, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         sql = result.stdout

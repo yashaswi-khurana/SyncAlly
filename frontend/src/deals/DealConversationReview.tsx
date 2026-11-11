@@ -448,7 +448,7 @@ export default function DealConversationReview({
   const [actionError, setActionError] = useState<{ factId: string; message: string } | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
-  const [fullConversationOpen, setFullConversationOpen] = useState(false);
+  const [fullConversationContext, setFullConversationContext] = useState<string | null>(null);
   const fullConversationCloseRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -485,13 +485,14 @@ export default function DealConversationReview({
     (organization) => organization.id === selectedOrganizationId,
   );
   const activeOrganizationId = selectedOrganization?.id ?? "";
+  const conversationContext = `${deal.id}:${activeOrganizationId}`;
+  const fullConversationOpen = fullConversationContext === conversationContext;
   const contextGenerationRef = useRef(0);
   const removedFactIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     contextGenerationRef.current += 1;
     const removedFactIds = removedFactIdsRef.current;
     removedFactIds.clear();
-    setFullConversationOpen(false);
     return () => {
       contextGenerationRef.current += 1;
       removedFactIds.clear();
@@ -557,7 +558,7 @@ export default function DealConversationReview({
     }
     // The source message is older than the overview window: reveal the full
     // transcript modal and scroll to the traced message there.
-    setFullConversationOpen(true);
+    setFullConversationContext(conversationContext);
     window.setTimeout(() => {
       document.getElementById(`deal-message-modal-${messageId}`)?.scrollIntoView({
         behavior: "smooth",
@@ -889,7 +890,7 @@ export default function DealConversationReview({
                     setActionError(null);
                     setHighlightedMessageId(null);
                     setFactFilter("all");
-                    setFullConversationOpen(false);
+                    setFullConversationContext(null);
                     setInternalSelectedOrgId(nextOrgId);
                     onOrganizationChange?.(nextOrgId);
                   }}
@@ -935,7 +936,7 @@ export default function DealConversationReview({
                         type="button"
                         className="button secondary"
                         aria-expanded={fullConversationOpen}
-                        onClick={() => setFullConversationOpen(true)}
+                        onClick={() => setFullConversationContext(conversationContext)}
                       >
                         View all {visibleMessages.length} messages
                       </button>
@@ -1164,14 +1165,14 @@ export default function DealConversationReview({
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation();
-              setFullConversationOpen(false);
+              setFullConversationContext(null);
             }
           }}
         >
           <div
             className="conversation-modal__backdrop"
             aria-hidden="true"
-            onClick={() => setFullConversationOpen(false)}
+            onClick={() => setFullConversationContext(null)}
           />
           <div className="card communication-card conversation-modal__panel">
             <div className="panel-head">
@@ -1183,7 +1184,7 @@ export default function DealConversationReview({
                 type="button"
                 className="button secondary conversation-modal__close"
                 ref={fullConversationCloseRef}
-                onClick={() => setFullConversationOpen(false)}
+                onClick={() => setFullConversationContext(null)}
               >
                 Close
               </button>

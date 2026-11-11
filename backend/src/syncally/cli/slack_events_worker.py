@@ -6,6 +6,7 @@ import hashlib
 import logging
 import secrets
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -239,7 +240,13 @@ def _authorized_subscription_deal(
 
 
 def _normalized_deal_name(value: str | None) -> str:
-    return " ".join((value or "").split()).casefold()
+    normalized = unicodedata.normalize("NFKC", value or "")
+    normalized = "".join(
+        character
+        for character in normalized
+        if not (0xFE00 <= ord(character) <= 0xFE0F or 0xE0100 <= ord(character) <= 0xE01EF)
+    )
+    return " ".join(normalized.split()).casefold()
 
 
 def _resolve_deal_reference(
@@ -258,11 +265,14 @@ def _resolve_deal_reference(
         normalized_name = _normalized_deal_name(reference)
         if not normalized_name:
             return None, False
-        matches = [
-            deal
-            for deal in list_deals(actor, repository, organization_id)
-            if _normalized_deal_name(deal.display_name) == normalized_name
-        ]
+        matches = []
+        for deal in list_deals(actor, repository, organization_id):
+            deal_name = _normalized_deal_name(deal.display_name)
+            ui_label = _normalized_deal_name(
+                f"{deal.display_name} · {str(deal.id)[:8]}"
+            )
+            if normalized_name in {deal_name, ui_label}:
+                matches.append(deal)
         authorized = []
         for deal in matches:
             try:

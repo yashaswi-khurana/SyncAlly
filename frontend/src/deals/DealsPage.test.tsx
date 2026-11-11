@@ -99,7 +99,7 @@ describe("DealsPage", () => {
     mockedGetOrganization.mockRejectedValue(new ApiError(404, "Organization not found"));
     render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
     expect(await screen.findByText("Waiting for trading partner to join")).toBeInTheDocument();
-    expect(screen.getByText("Trading partner: Name unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Trading partner: Name unavailable")).toBeInTheDocument();
     expect(screen.getByText("Reference: deal-1")).toBeInTheDocument();
     expect(screen.getByText("Reference: deal-2")).toBeInTheDocument();
     expect(mockedGetOrganization.mock.calls.some(([id]) => id === "unclaimed-shell")).toBe(false);

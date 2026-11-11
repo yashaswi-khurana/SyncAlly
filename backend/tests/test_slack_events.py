@@ -611,7 +611,7 @@ class SlackEventRouteTests(unittest.TestCase):
             Deal(
                 id=unique_id, buyer_organization_id=self.org.id,
                 seller_organization_id=self.other_org.id,
-                display_name="Acme Annual Renewal", status=DealStatus.NEGOTIATING.value,
+                display_name="Acme Annual \u2194 Renewal", status=DealStatus.NEGOTIATING.value,
             ),
             *[
                 Deal(
@@ -643,9 +643,14 @@ class SlackEventRouteTests(unittest.TestCase):
                 status="PENDING", attempts=0, available_at=now + timedelta(milliseconds=index),
             )
             for index, (event_id, slack_user_id, reference) in enumerate((
-                ("Ev-name-ok", "U-name-ok", "  acme   annual renewal  "),
+                ("Ev-name-ok", "U-name-ok", "  acme   annual \u2194\uFE0E renewal  "),
                 ("Ev-name-ambiguous", "U-name-ok", "Duplicate Renewal"),
-                ("Ev-name-denied", "U-name-denied", "Acme Annual Renewal"),
+                ("Ev-name-denied", "U-name-denied", "Acme Annual \u2194 Renewal"),
+                (
+                    "Ev-name-ui-label",
+                    "U-name-ok",
+                    f"Acme Annual \u2194\uFE0E Renewal · {str(unique_id)[:8]}",
+                ),
             ))
         ]
         self.db.add_all(events)
@@ -671,6 +676,9 @@ class SlackEventRouteTests(unittest.TestCase):
         admin_replies = [message["text"] for message in api.messages if message["user"] == "U-name-ok"]
         denied_reply = next(message["text"] for message in api.messages if message["user"] == "U-name-denied")
         self.assertIn("Deal status: NEGOTIATING.", admin_replies)
+        self.assertEqual(
+            sum(message.startswith("Deal status:") for message in admin_replies), 2
+        )
         self.assertIn("deal you can access", denied_reply)
         self.assertTrue(any("More than one deal" in message for message in admin_replies))
 

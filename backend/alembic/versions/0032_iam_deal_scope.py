@@ -4,6 +4,7 @@ import json
 from uuid import UUID
 
 import sqlalchemy as sa
+
 from alembic import op
 from syncally.infrastructure.models.base import JSON_TYPE, UUID_TYPE
 
@@ -38,6 +39,38 @@ def upgrade() -> None:
     bind = op.get_bind()
     bind.execute(sa.text("UPDATE organization_members SET role_bundles = '[]' WHERE role_bundles IS NULL"))
     bind.execute(sa.text("UPDATE organization_members SET role_bundles = '[\"ORG_ADMIN\"]' WHERE role = 'ADMIN'"))
+    if op.get_context().as_sql:
+        # Offline Alembic connections cannot return rows for Python-side backfills.
+        # Keep the generated PostgreSQL migration equivalent with set-based updates.
+        bind.execute(sa.text("""
+            UPDATE organization_members
+            SET permissions =
+                COALESCE(permissions, '[]'::jsonb)
+                || CASE WHEN capabilities @> '["DRAFTING"]'::jsonb
+                        THEN '["deal.read_assigned","deal.edit_assigned"]'::jsonb
+                        ELSE '[]'::jsonb END
+                || CASE WHEN capabilities @> '["AGREEMENT_APPROVAL"]'::jsonb
+                        THEN '["deal.read_assigned","agreement.approve"]'::jsonb
+                        ELSE '[]'::jsonb END
+                || CASE WHEN capabilities @> '["FINANCE"]'::jsonb
+                        THEN '["deal.read_assigned","payments.read","payments.authorize"]'::jsonb
+                        ELSE '[]'::jsonb END
+                || CASE WHEN capabilities @> '["FULFILLMENT"]'::jsonb
+                        THEN '["deal.read_assigned","fulfillment.read","fulfillment.record"]'::jsonb
+                        ELSE '[]'::jsonb END
+            WHERE status = 'ACTIVE'
+        """))
+        bind.execute(sa.text("""
+            UPDATE organization_members AS member
+            SET is_owner = TRUE, role_bundles = '[]'::jsonb, permissions = '[]'::jsonb
+            FROM audit_events AS event
+            WHERE event.aggregate_type = 'organization'
+              AND event.event_type = 'organization.owner_registered'
+              AND member.organization_id = event.aggregate_id
+              AND member.user_id = COALESCE((event.payload ->> 'user_id')::uuid, event.actor_id)
+              AND member.status = 'ACTIVE'
+        """))
+        return
     member_table = sa.table(
         "organization_members",
         sa.column("organization_id", UUID_TYPE),

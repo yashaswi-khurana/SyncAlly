@@ -7,7 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from syncally.application.identity import ActorContext
-from syncally.domain.organizations.authorization import expand_grants
+from syncally.domain.organizations.authorization import (
+    LEGACY_CAPABILITY_PERMISSIONS,
+    expand_member_grants,
+)
 from syncally.domain.organizations.organization import (
     OrganizationCapability,
     OrganizationMemberRole,
@@ -55,7 +58,13 @@ def resolve_actor(db: Session, user_id: UUID) -> ActorContext | None:
         capabilities_by_organization[org_id] = resolve_effective_capabilities(
             role_str, caps_raw
         )
-        permissions = expand_grants(bundles_raw, permissions_raw, owner=bool(is_owner))
+        valid_role = role_str in {role.value for role in OrganizationMemberRole}
+        permissions = expand_member_grants(
+            bundles_raw,
+            permissions_raw,
+            caps_raw if valid_role else (),
+            owner=bool(is_owner),
+        )
         permissions_by_organization[org_id] = permissions
         if bool(is_owner):
             owned_organization_ids.add(org_id)
@@ -115,21 +124,15 @@ def verify_member_capability(
             detail="Active organization membership required",
         )
 
-    permission_by_legacy = {
-        OrganizationCapability.ADMINISTRATION: "org.members.manage",
-        OrganizationCapability.DRAFTING: "deal.edit_assigned",
-        OrganizationCapability.AGREEMENT_APPROVAL: "agreement.approve",
-        OrganizationCapability.FINANCE: "payments.authorize",
-        OrganizationCapability.FULFILLMENT: "fulfillment.record",
-    }
-    permission = permission_by_legacy[required_capability]
-    grants = set(expand_grants(member.role_bundles, member.permissions, owner=member.is_owner))
-    # Compatibility for explicitly persisted old capabilities only. Role names no longer imply grants.
-    for legacy in member.capabilities or []:
-        try:
-            grants.add(permission_by_legacy[OrganizationCapability(legacy)])
-        except (ValueError, KeyError):
-            continue
+    permission = LEGACY_CAPABILITY_PERMISSIONS[required_capability.value]
+    grants = expand_member_grants(
+        member.role_bundles,
+        member.permissions,
+        member.capabilities
+        if member.role in {role.value for role in OrganizationMemberRole}
+        else (),
+        owner=member.is_owner,
+    )
     if permission not in grants:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

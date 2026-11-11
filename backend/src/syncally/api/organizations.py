@@ -54,7 +54,6 @@ from syncally.infrastructure.counterparty_onboarding import lock_deal
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.demo_lifecycle import lock_demo_deal_creation
 from syncally.infrastructure.gmail import GmailSMTPInvitationNotifier, InvitationEmailDeliveryError
-from syncally.infrastructure.identity import repair_organization_finance_membership
 from syncally.infrastructure.models import (
     AgreementVersion,
     AuditEvent,

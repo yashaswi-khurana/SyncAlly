@@ -195,14 +195,45 @@ behavior retains the existing authorized private context.
 The fixed HTTPS endpoint verifies TLS and disables redirects/proxies/tools/URL
 fetching. `store=false` is not zero retention: approve OpenAI contractual retention
 and abuse-monitoring policy before egress. Requests/responses are bounded to
-128 KiB, output to 4096 tokens and 100 facts/citations. Two 10-second elapsed
-attempts plus 0.5-second backoff fit below the frontend's 30-second timeout.
+128 KiB and 100 facts/citations. OpenAI allows 4096 output tokens and two
+25-second attempts plus 0.5-second backoff. Gemini allows 8192 output tokens
+within one 90-second attempt, including at most one validation repair. Both fit
+below the fact/proposal frontend's 180-second timeout.
 Oversized, truncated, duplicate-key, unsupported or ungrounded results are rejected,
 never persisted. HTTP holds no DB transaction; selected membership is rechecked
 afterward. The UI exposes invocation provider/mode/model/scope/fallback reason,
 not fabricated per-fact history, and human review remains mandatory. See
 [the boundary and mocked evaluation](../docs/architecture/06-ai-provider-boundary.md).
 No migration is required for this additive, non-durable provenance.
+
+## AI-backed sourcing
+
+Natural-language `/sourcing/interpret` requests use the configured OpenAI or
+Gemini provider with explicit remote egress enabled. Only the submitted sourcing
+prompt and explicit controls are transmitted; this endpoint does not load private
+deal conversations. The deal-private-context allowlist does not apply to text
+the user explicitly submits for sourcing analysis.
+
+Interpretations require structured, locally validated output with exact prompt
+quotes. Missing commercial requirements produce clarification errors, not
+invented quantity, currency, price, delivery, warranty, or inspection defaults.
+Remote sourcing has no offline fallback: unavailable configuration or transient
+provider failure returns 503, malformed provider output returns 502, and invalid
+or incomplete requirements return 422.
+
+The sourcing UI calls server-owned interpretation, evaluation, and inquiry
+endpoints. Users review interpreted requirements before ranking. Structured
+requirements remain usable without AI; comparisons, gap arithmetic, and inquiry
+templates remain deterministic. Responses distinguish the actual AI
+provider/model from structured input. The catalogue is bundled demo data, not
+verified supplier inventory. Inquiry drafts request confirmation; they never
+place orders, promise payment, or invent commercial commitments.
+
+Opening-request analysis is a separate flow. It reuses grounded remote fact
+extraction when configured, with its own normalization and fallback policy.
+Neither mocked transport checks nor a successful HTTP response establish live
+model quality or production readiness; see the
+[production rollout gates](../docs/architecture/06-ai-provider-boundary.md#production-rollout-decisions).
 
 The API exposes public health endpoints and protected deal reads. Protected requests use
 HS256 bearer JWTs: the `sub` claim identifies the user, while active organization

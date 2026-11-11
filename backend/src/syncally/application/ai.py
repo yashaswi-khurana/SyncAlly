@@ -1011,7 +1011,7 @@ def normalize_opening_request(
     text: str,
     provider: AISuggestionProvider | None = None,
     *,
-    policy: AIRetryPolicy = AIRetryPolicy(),
+    policy: AIRetryPolicy = AIRetryPolicy(max_attempts=1),
     sleep: Callable[[float], None] = default_sleep,
 ) -> OpeningRequestNormalizationResult:
     """Normalize natural language opening request into a standardized requirement.

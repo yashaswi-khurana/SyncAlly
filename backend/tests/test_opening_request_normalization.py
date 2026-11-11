@@ -30,6 +30,15 @@ from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 
 
 class OpeningRequestNormalizationTests(unittest.TestCase):
+    def test_opening_request_does_not_retry_transient_failures_by_default(self) -> None:
+        provider = MagicMock()
+        provider.provenance = AIProvenance(provider="gemini", mode="gemini")
+        provider.normalize_opening_request.side_effect = AITransientError("timeout")
+        provider.fallback_normalize_opening_request.side_effect = AITransientError("no fallback")
+        result = normalize_opening_request("We need 12 boxes", provider)
+        self.assertEqual(provider.normalize_opening_request.call_count, 1)
+        self.assertEqual(result.provenance.provider, "offline")
+
     def test_remote_configuration_reports_ai_assisted_normalization(self) -> None:
         config = Settings(_env_file=None, app_env="test", ai_provider="openai",
                           ai_remote_egress_enabled=True, openai_model="test-model",

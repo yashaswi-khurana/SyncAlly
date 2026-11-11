@@ -1079,7 +1079,7 @@ export function analyzeOpeningRequest(
       ...(buyer_organization_id ? { buyer_organization_id } : {}),
     }),
     signal,
-  }).then((res) => ({
+  }, "json", true, 120_000).then((res) => ({
     ...res,
     suggested_sellers: (res.suggested_sellers || []).map((seller) => ({
       ...seller,

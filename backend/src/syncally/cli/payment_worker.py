@@ -12,9 +12,9 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
+from syncally.application.payment_processing import PaymentInvoiceNotifier
 from syncally.config import settings
 from syncally.infrastructure.database import SessionLocal
-from syncally.infrastructure.gmail import GmailSMTPInvoiceNotifier
 from syncally.infrastructure.offline_payments import PaymentProviderResolver
 from syncally.infrastructure.payment_outbox import (
     dispatch_pending_payment_events,
@@ -34,7 +34,7 @@ def run_forever(
     batch_size: int,
     session_factory: Callable[[], Session] = SessionLocal,
     provider: PayPalSandboxInvoiceProvider | None = None,
-    notifier: GmailSMTPInvoiceNotifier | None = None,
+    notifier: PaymentInvoiceNotifier | None = None,
 ) -> None:
     repository = SqlAlchemyPaymentProcessingRepository(session_factory)
     log_operation(logger, Operation.WORKER_STARTED, worker="payment")

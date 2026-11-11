@@ -130,7 +130,7 @@ export default function DealsPage({ onOpenDeal, onCreateDeal }: DealsPageProps) 
           </button>
         </div>
         <p className="muted">
-          Deals where your organization is the buyer or the seller. Select one to review it.
+          Each row is a separate deal with its own reference, terms, and approvals. The same trading partner can have more than one deal.
         </p>
         {state.deals.length === 0 ? (
           <p className="empty-state">

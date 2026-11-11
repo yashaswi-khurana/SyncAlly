@@ -45,6 +45,7 @@ describe("DealsPage", () => {
     expect(
       await screen.findByRole("heading", { name: "Deals shared with you" }),
     ).toBeInTheDocument();
+    expect(screen.getByText(/each row is a separate deal with its own reference/i)).toBeInTheDocument();
     expect(mockedListDeals).toHaveBeenCalledTimes(1);
     expect(screen.getByText("You are the buyer")).toBeInTheDocument();
   });
@@ -99,7 +100,7 @@ describe("DealsPage", () => {
     mockedGetOrganization.mockRejectedValue(new ApiError(404, "Organization not found"));
     render(<DealsPage onOpenDeal={vi.fn()} onCreateDeal={vi.fn()} />);
     expect(await screen.findByText("Waiting for trading partner to join")).toBeInTheDocument();
-    expect(screen.getByText("Trading partner: Name unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Trading partner: Name unavailable")).toBeInTheDocument();
     expect(screen.getByText("Reference: deal-1")).toBeInTheDocument();
     expect(screen.getByText("Reference: deal-2")).toBeInTheDocument();
     expect(mockedGetOrganization.mock.calls.some(([id]) => id === "unclaimed-shell")).toBe(false);

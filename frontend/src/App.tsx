@@ -81,6 +81,9 @@ export default function App() {
       sessionRef.current = null;
       setOpeningMessageDrafts([]);
       setOrganizations(null);
+      setIsSystemAdmin(null);
+      setCurrentUser(null);
+      setProfileMenuOpen(false);
       setToast(null);
       signOut();
     }
@@ -175,6 +178,7 @@ export default function App() {
     setIsSystemAdmin(null);
     setCurrentUser(null);
     setProfileMenuOpen(false);
+    setNavOpen(false);
     setToast(null);
     signOut();
   }
@@ -185,6 +189,7 @@ export default function App() {
     setOpeningMessageDrafts([]);
     setOrganizations(null);
     setIsSystemAdmin(null);
+    setCurrentUser(null);
     signIn(tokens);
     // A fresh sign-in must not inherit the previous session's settings route.
     // Deep links survive: create/deal routes, organization signup, and any
@@ -350,7 +355,7 @@ export default function App() {
             <button
               type="button"
               className="nav-profile__avatar"
-              aria-haspopup="true"
+              aria-haspopup="dialog"
               aria-expanded={profileMenuOpen}
               aria-label="Account menu"
               onClick={() => setProfileMenuOpen((open) => !open)}
@@ -358,7 +363,7 @@ export default function App() {
               {initialsFor(currentUser)}
             </button>
             {profileMenuOpen ? (
-              <div className="nav-profile__menu" role="menu">
+              <div className="nav-profile__menu">
                 <div className="nav-profile__identity">
                   <strong>{currentUser?.display_name ?? "Account"}</strong>
                   <span>{currentUser?.email ?? ""}</span>

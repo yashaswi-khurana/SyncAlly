@@ -1283,6 +1283,9 @@ export interface InterpretSourcingRequest {
 export interface InterpretSourcingResponse {
   requirements: BuyerRequirements;
   parsed_fields: string[];
+  ai_provider?: string;
+  ai_model?: string | null;
+  fallback_reason?: string | null;
 }
 
 export interface CompareSourcingRequest {

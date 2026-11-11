@@ -213,7 +213,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           <span className="eyebrow">AI Sourcing Agent</span>
           <h2>Production Buyer Sourcing Hub</h2>
           <p>
-            Compare candidate listings across 5 commercial dimensions, detect missing or non-compliant terms, and draft targeted inquiries.
+            Interpret requirements with AI and compare the stated details of active offers.
           </p>
         </div>
         <button

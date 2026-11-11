@@ -20,9 +20,10 @@ import type {
   SourcingHubProps,
 } from "./sourcingTypes";
 import SplitText from "../ui/SplitText";
+import LiveSourcingHub from "./LiveSourcingHub";
 import "./sourcing.css";
 
-export const SourcingHubPage: React.FC<SourcingHubProps> = ({
+export const ReferenceSourcingHub: React.FC<SourcingHubProps> = ({
   onDealInitiated,
   initialListings: suppliedListings,
   initialListingId,
@@ -439,5 +440,5 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
   );
 };
 
-export const ReferenceSourcingHub = SourcingHubPage;
+export const SourcingHubPage = LiveSourcingHub;
 export default SourcingHubPage;

@@ -170,7 +170,7 @@ def _interpret_natural(
     except AIConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Sourcing AI is not configured. Configure an enabled OpenAI or Gemini provider.",
+            detail="Sourcing AI is not configured. Configure an enabled AI provider.",
         ) from exc
     try:
         requirements, parsed_fields = provider.interpret_sourcing_requirements(
@@ -181,7 +181,7 @@ def _interpret_natural(
     except AIConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Sourcing AI is not configured. Configure an enabled OpenAI or Gemini provider.",
+            detail="Sourcing AI is not configured. Configure an enabled AI provider.",
         ) from exc
     except AITransientError as exc:
         raise HTTPException(

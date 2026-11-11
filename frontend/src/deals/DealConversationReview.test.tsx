@@ -1406,11 +1406,16 @@ describe("synchronized fact review and proposal drafts", () => {
       organization(BUYER_ID, "Buyer Co"), organization(SELLER_ID, "Seller Co"),
     ]);
     mockedListDealFacts.mockResolvedValue([
+      fact({ id: "shared-unit", field: "unit", typed_value: "balls", status: "CONFIRMED", visibility: "SHAREABLE" }),
       fact({ id: "shared-quantity", field: "quantity", typed_value: "120", currency_or_unit: "table tennis balls",
         status: "CONFIRMED", visibility: "SHAREABLE" }),
+      fact({ id: "seller-descriptive-quantity", owner_organization_id: SELLER_ID, field: "quantity", typed_value: "120",
+        currency_or_unit: "table tennis balls", status: "CONFIRMED" }),
       fact({ id: "seller-quantity", owner_organization_id: SELLER_ID, field: "quantity", typed_value: "120",
         currency_or_unit: "balls", status: "CONFIRMED" }),
       fact({ id: "seller-unit", owner_organization_id: SELLER_ID, field: "unit", typed_value: "balls",
+        status: "CONFIRMED" }),
+      fact({ id: "seller-singular-unit", owner_organization_id: SELLER_ID, field: "unit", typed_value: "ball",
         status: "CONFIRMED" }),
     ]);
 
@@ -1436,5 +1441,107 @@ describe("synchronized fact review and proposal drafts", () => {
       facts: [fact({ id: "late-private", typed_value: "Old secret" })] }));
     expect(screen.queryByText("Old secret")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Fact suggestions for review")).not.toBeInTheDocument();
+  });
+
+  describe("long conversation preview and full transcript modal", () => {
+    it("renders all messages inline and hides the expand button when there are 3 or fewer messages", async () => {
+      mockedListOrganizations.mockResolvedValue([
+        organization(BUYER_ID, "Buyer Co"),
+        organization(SELLER_ID, "Seller Co"),
+      ]);
+      mockedListDealFacts.mockResolvedValue([]);
+      mockedListDealMessages.mockResolvedValue([
+        message({ id: "m1", body: "First message" }),
+        message({ id: "m2", body: "Second message" }),
+        message({ id: "m3", body: "Third message" }),
+      ]);
+
+      render(<DealConversationReview deal={DEAL} selectedOrganizationId={BUYER_ID} revalidateIntervalMs={0} />);
+
+      expect(await screen.findByText("First message")).toBeInTheDocument();
+      expect(screen.getByText("Second message")).toBeInTheDocument();
+      expect(screen.getByText("Third message")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /view all/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/showing the latest/i)).not.toBeInTheDocument();
+    });
+
+    it("truncates inline overview to the latest 3 messages and provides an expand trigger when message count exceeds 3", async () => {
+      mockedListOrganizations.mockResolvedValue([
+        organization(BUYER_ID, "Buyer Co"),
+        organization(SELLER_ID, "Seller Co"),
+      ]);
+      mockedListDealFacts.mockResolvedValue([]);
+      mockedListDealMessages.mockResolvedValue([
+        message({ id: "m1", body: "First message" }),
+        message({ id: "m2", body: "Second message" }),
+        message({ id: "m3", body: "Third message" }),
+        message({ id: "m4", body: "Fourth message" }),
+        message({ id: "m5", body: "Fifth message" }),
+      ]);
+
+      render(<DealConversationReview deal={DEAL} selectedOrganizationId={BUYER_ID} revalidateIntervalMs={0} />);
+
+      await screen.findByText("Fifth message");
+
+      // Inline list only shows the latest 3 messages
+      expect(screen.queryByText("First message")).not.toBeInTheDocument();
+      expect(screen.queryByText("Second message")).not.toBeInTheDocument();
+      expect(screen.getByText("Third message")).toBeInTheDocument();
+      expect(screen.getByText("Fourth message")).toBeInTheDocument();
+      expect(screen.getByText("Fifth message")).toBeInTheDocument();
+
+      // Hint and trigger button are shown
+      expect(screen.getByText("Showing the latest 3 of 5 messages.")).toBeInTheDocument();
+      const viewAllButton = screen.getByRole("button", { name: "View all 5 messages" });
+      expect(viewAllButton).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("opens full transcript modal, displays all messages, focuses Close, and restores focus on close", async () => {
+      mockedListOrganizations.mockResolvedValue([
+        organization(BUYER_ID, "Buyer Co"),
+        organization(SELLER_ID, "Seller Co"),
+      ]);
+      mockedListDealFacts.mockResolvedValue([]);
+      mockedListDealMessages.mockResolvedValue([
+        message({ id: "m1", body: "First message" }),
+        message({ id: "m2", body: "Second message" }),
+        message({ id: "m3", body: "Third message" }),
+        message({ id: "m4", body: "Fourth message" }),
+        message({ id: "m5", body: "Fifth message" }),
+      ]);
+
+      render(<DealConversationReview deal={DEAL} selectedOrganizationId={BUYER_ID} revalidateIntervalMs={0} />);
+
+      const viewAllButton = await screen.findByRole("button", { name: "View all 5 messages" });
+      fireEvent.click(viewAllButton);
+
+      // Modal dialog is present
+      const modal = screen.getByRole("dialog", { name: "Full conversation" });
+      expect(modal).toHaveAttribute("aria-modal", "true");
+
+      // Inside the modal, all 5 messages are rendered
+      const modalList = within(modal).getByRole("list", { name: "Full conversation messages" });
+      expect(within(modalList).getByText("First message")).toBeInTheDocument();
+      expect(within(modalList).getByText("Second message")).toBeInTheDocument();
+      expect(within(modalList).getByText("Third message")).toBeInTheDocument();
+      expect(within(modalList).getByText("Fourth message")).toBeInTheDocument();
+      expect(within(modalList).getByText("Fifth message")).toBeInTheDocument();
+
+      // Close button received focus
+      const closeButton = within(modal).getByRole("button", { name: "Close" });
+      expect(closeButton).toHaveFocus();
+
+      // Closing via click restores focus to viewAllButton
+      fireEvent.click(closeButton);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(viewAllButton).toHaveFocus();
+
+      // Reopen and test close via Escape key
+      fireEvent.click(viewAllButton);
+      const reopenedModal = screen.getByRole("dialog", { name: "Full conversation" });
+      fireEvent.keyDown(reopenedModal, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(viewAllButton).toHaveFocus();
+    });
   });
 });

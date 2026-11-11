@@ -230,7 +230,7 @@ export default function App() {
     return <SignInPage onSignIn={handleSignIn} />;
   }
 
-  const isCreate = route.name === "create";
+  // const isCreate = route.name === "create";
   const isOrganizations = route.name === "organizations";
   const isMarketplace = route.name === "marketplace";
   const isSourcing = route.name === "sourcing";
@@ -278,13 +278,13 @@ export default function App() {
           >
             Sourcing Hub
           </button>
-          <button
+          {/* <button
             type="button"
             className={`nav-link${isCreate ? " is-active" : ""}`}
             onClick={() => navigateToCreateDeal()}
           >
             New deal
-          </button>
+          </button> */}
           <button
             type="button"
             className={`nav-link${isOrganizations ? " is-active" : ""}`}

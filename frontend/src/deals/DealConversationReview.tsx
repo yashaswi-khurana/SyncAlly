@@ -449,7 +449,9 @@ export default function DealConversationReview({
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
   const [fullConversationContext, setFullConversationContext] = useState<string | null>(null);
+  const wasModalOpenRef = useRef(false);
   const fullConversationCloseRef = useRef<HTMLButtonElement | null>(null);
+  const viewAllButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -534,9 +536,16 @@ export default function DealConversationReview({
   });
 
   // Focus the close button when the full transcript modal opens so keyboard
-  // users land inside the dialog, and unlock scrolling when it closes.
+  // users land inside the dialog, unlock scrolling when it closes, and restore focus to trigger button.
   useEffect(() => {
-    if (!fullConversationOpen) return;
+    if (!fullConversationOpen) {
+      if (wasModalOpenRef.current) {
+        wasModalOpenRef.current = false;
+        viewAllButtonRef.current?.focus();
+      }
+      return;
+    }
+    wasModalOpenRef.current = true;
     fullConversationCloseRef.current?.focus();
     if (typeof document === "undefined") return;
     const previousOverflow = document.body.style.overflow;
@@ -933,6 +942,7 @@ export default function DealConversationReview({
                     ) : null}
                     {hiddenMessageCount > 0 ? (
                       <button
+                        ref={viewAllButtonRef}
                         type="button"
                         className="button secondary"
                         aria-expanded={fullConversationOpen}

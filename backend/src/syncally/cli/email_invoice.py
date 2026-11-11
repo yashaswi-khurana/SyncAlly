@@ -1,11 +1,11 @@
-"""Send a Gmail copy of an existing PayPal Sandbox invoice."""
+"""Send an email copy of an existing PayPal Sandbox invoice."""
 
 from __future__ import annotations
 
 import argparse
 
-from syncally.config import GmailSettings, PayPalSettings
-from syncally.infrastructure.gmail import GmailSMTPInvoiceNotifier
+from syncally.config import EmailSettings, PayPalSettings
+from syncally.infrastructure.gmail import configured_invoice_notifier
 from syncally.infrastructure.paypal import PayPalSandboxInvoiceProvider
 
 
@@ -15,22 +15,21 @@ def main() -> None:
     args = parser.parse_args()
 
     paypal_settings = PayPalSettings()
-    gmail_settings = GmailSettings()
-    gmail_username = gmail_settings.gmail_smtp_username.strip()
-    gmail_password = gmail_settings.gmail_app_password.get_secret_value()
-    if not gmail_username or not gmail_password:
-        parser.error("set GMAIL_SMTP_USERNAME and GMAIL_APP_PASSWORD in backend/.env first")
+    email_settings = EmailSettings()
+    try:
+        notifier = configured_invoice_notifier(email_settings)
+    except ValueError as error:
+        parser.error(f"invalid email configuration: {error}")
+    if notifier is None:
+        parser.error(
+            "set Gmail API OAuth settings or Gmail SMTP credentials in backend/.env first"
+        )
 
     provider = PayPalSandboxInvoiceProvider(
         paypal_settings.paypal_client_id,
         paypal_settings.paypal_client_secret.get_secret_value(),
     )
     notice = provider.get_invoice_notice(args.invoice_id)
-    notifier = GmailSMTPInvoiceNotifier(
-        gmail_username,
-        gmail_password,
-        gmail_settings.gmail_from_email.strip() or None,
-    )
     notifier.send_invoice_notice(notice)
     print("Invoice email copy sent.")
 

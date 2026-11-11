@@ -66,13 +66,14 @@ class PaymentProviderResolver:
     def notifier(self, work: PaymentWorkItem):
         if work.execution_mode != "PAYPAL_SANDBOX":
             return None
-        from syncally.config import GmailSettings
-        from syncally.infrastructure.gmail import GmailSMTPInvoiceNotifier
+        from syncally.config import EmailSettings
+        from syncally.infrastructure.gmail import configured_invoice_notifier
 
-        config = GmailSettings()
-        username, password, sender = config.gmail_smtp_username.strip(), config.gmail_app_password.get_secret_value(), config.gmail_from_email.strip()
-        if not (username or password or sender):
-            return None
-        if not username or not password:
-            raise PaymentNeedsAction("PAYMENT_PROVIDER_CONFIGURATION_MISSING", "Invoice email configuration is incomplete.")
-        return GmailSMTPInvoiceNotifier(username, password, sender or None)
+        config = EmailSettings()
+        try:
+            return configured_invoice_notifier(config)
+        except ValueError as error:
+            raise PaymentNeedsAction(
+                "PAYMENT_PROVIDER_CONFIGURATION_MISSING",
+                "Invoice email configuration is incomplete.",
+            ) from error

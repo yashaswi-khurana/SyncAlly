@@ -45,6 +45,7 @@ describe("DealsPage", () => {
     expect(
       await screen.findByRole("heading", { name: "Deals shared with you" }),
     ).toBeInTheDocument();
+    expect(screen.getByText(/each row is a separate deal with its own reference/i)).toBeInTheDocument();
     expect(mockedListDeals).toHaveBeenCalledTimes(1);
     expect(screen.getByText("You are the buyer")).toBeInTheDocument();
   });

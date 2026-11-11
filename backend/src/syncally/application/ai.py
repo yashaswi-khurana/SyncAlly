@@ -12,7 +12,7 @@ from __future__ import annotations
 import decimal
 import re
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from time import monotonic
@@ -1019,27 +1019,18 @@ def normalize_opening_request(
 ) -> OpeningRequestNormalizationResult:
     """Normalize natural language opening request into a standardized requirement.
 
-    If a provider is supplied and supports normalization, delegates to it with
-    bounded retry on transient failures. If the provider fails or is unconfigured/offline,
-    it falls back gracefully to offline extraction without raising unhandled errors.
+    Without a provider, or with a provider that has no normalization capability,
+    the deterministic offline extractor is used. A configured provider is called
+    with bounded retry; only exhausted transient failures may use the provider's
+    own fallback, which raises unless offline fallback was explicitly configured.
+    Permanent, configuration and unexpected errors propagate to the caller.
     """
-    if provider is None:
-        try:
-            req = extract_normalized_requirement(text)
-        except Exception:
-            req = NormalizedRequirement(raw_text=text)
+    if provider is None or not hasattr(provider, "normalize_opening_request"):
+        # The deterministic extractor ran, so never report a remote provider or model.
         return OpeningRequestNormalizationResult(
-            requirements=req,
+            requirements=extract_normalized_requirement(text),
             provenance=AIProvenance(provider="offline", mode="offline", context_scope="authorized"),
         )
-
-    provenance = provider_provenance(provider)
-    if not hasattr(provider, "normalize_opening_request"):
-        try:
-            req = extract_normalized_requirement(text)
-        except Exception:
-            req = NormalizedRequirement(raw_text=text)
-        return OpeningRequestNormalizationResult(requirements=req, provenance=provenance)
 
     try:
         req = call_with_bounded_retry(
@@ -1047,42 +1038,10 @@ def normalize_opening_request(
             policy,
             sleep=sleep,
         )
-        return OpeningRequestNormalizationResult(
-            requirements=req,
-            provenance=provider_provenance(provider),
-        )
     except AITransientError:
         fallback_fn = getattr(provider, "fallback_normalize_opening_request", None)
-        if fallback_fn is not None:
-            try:
-                req = fallback_fn(text)
-                return OpeningRequestNormalizationResult(
-                    requirements=req,
-                    provenance=provider_provenance(provider),
-                )
-            except Exception:
-                pass
-        try:
-            req = extract_normalized_requirement(text)
-        except Exception:
-            req = NormalizedRequirement(raw_text=text)
-        fallback_prov = replace(
-            provenance,
-            provider="offline",
-            model=None,
-            fallback_reason="transient_exhausted",
-        )
-        return OpeningRequestNormalizationResult(requirements=req, provenance=fallback_prov)
-    except Exception:
-        try:
-            req = extract_normalized_requirement(text)
-        except Exception:
-            req = NormalizedRequirement(raw_text=text)
-        fallback_prov = replace(
-            provenance,
-            provider="offline",
-            model=None,
-            fallback_reason="transient_exhausted" if provenance.fallback_reason is None else provenance.fallback_reason,
-        )
-        return OpeningRequestNormalizationResult(requirements=req, provenance=fallback_prov)
+        if fallback_fn is None:
+            raise
+        req = fallback_fn(text)
+    return OpeningRequestNormalizationResult(requirements=req, provenance=provider_provenance(provider))
 

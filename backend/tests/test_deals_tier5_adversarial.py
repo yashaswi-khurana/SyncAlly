@@ -9,9 +9,12 @@ Empirical verification of white-box edge cases:
 6. Non-blocking standard deal creation with opening_request preserved
 """
 
+from contextlib import contextmanager
 from decimal import Decimal
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -25,7 +28,9 @@ from syncally.application.identity import ActorContext
 from syncally.application.seller_suggestions import (
     SellerSuggestionService,
 )
+from syncally.config import Settings
 from syncally.domain.ai.contracts import NormalizedRequirement
+from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models.base import Base
 from syncally.infrastructure.models.identity import (
@@ -265,3 +270,122 @@ async def test_adversarial_injection_payload_in_opening_request(test_app_and_ses
             assert resp.status_code == 200
             data = resp.json()
             assert data["requirements"]["raw_text"] == p
+
+
+@contextmanager
+def _analysis_ai(handler=None, **config):
+    """Route analysis through an isolated AI configuration and mocked transport."""
+    # Copy rather than validate so production-only settings unrelated to AI are not required.
+    app_env = config.pop("app_env", "test")
+    values = {
+        "app_env": "test",
+        "ai_provider": "openai",
+        "ai_remote_egress_enabled": True,
+        "openai_model": "test-model",
+        "openai_api_key": "test-only-key",
+        **config,
+    }
+    transport = httpx.MockTransport(handler) if handler is not None else None
+    with (
+        patch(
+            "syncally.api.deals.settings",
+            Settings(_env_file=None, **values).model_copy(update={"app_env": app_env}),
+        ),
+        patch(
+            "syncally.api.deals.ConfiguredAIProvider",
+            side_effect=lambda cfg: ConfiguredAIProvider(cfg, transport=transport),
+        ),
+    ):
+        yield
+
+
+def _timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("timed out", request=request)
+
+
+async def _analyze(app, buyer_org_id):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.post(
+            "/deals/opening-request/analyze",
+            json={"text": "Need 500 bolts in Germany", "buyer_organization_id": str(buyer_org_id)},
+        )
+
+
+@pytest.mark.anyio
+async def test_analyze_strict_remote_timeout_returns_503_without_offline_result(test_app_and_session):
+    app, _, buyer_org_id, _, _ = test_app_and_session
+    with _analysis_ai(_timeout):
+        resp = await _analyze(app, buyer_org_id)
+    assert resp.status_code == 503
+    assert "requirements" not in resp.json()
+
+
+@pytest.mark.anyio
+async def test_analyze_strict_remote_permanent_rejection_returns_safe_502(test_app_and_session):
+    app, _, buyer_org_id, _, _ = test_app_and_session
+    with _analysis_ai(lambda request: httpx.Response(401, json={"error": {"code": "invalid_api_key"}})):
+        resp = await _analyze(app, buyer_org_id)
+    assert resp.status_code == 502
+    assert "test-only-key" not in resp.text
+    assert "authentication" not in resp.text.lower()
+
+
+@pytest.mark.anyio
+async def test_analyze_configured_fallback_reports_exhausted_transient_provenance(test_app_and_session):
+    app, _, buyer_org_id, _, _ = test_app_and_session
+    with _analysis_ai(_timeout, ai_provider="openai_with_offline_fallback"):
+        resp = await _analyze(app, buyer_org_id)
+    assert resp.status_code == 200
+    provenance = resp.json()["provenance"]
+    assert provenance["provider"] == "offline"
+    assert provenance["mode"] == "openai_with_offline_fallback"
+    assert provenance["fallback_reason"] == "transient_exhausted"
+
+
+@pytest.mark.anyio
+async def test_analyze_configured_fallback_does_not_mask_permanent_rejection(test_app_and_session):
+    app, _, buyer_org_id, _, _ = test_app_and_session
+    with _analysis_ai(
+        lambda request: httpx.Response(401, json={"error": {"code": "invalid_api_key"}}),
+        ai_provider="openai_with_offline_fallback",
+    ):
+        resp = await _analyze(app, buyer_org_id)
+    assert resp.status_code == 502
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"openai_api_key": ""},
+        {"ai_remote_egress_enabled": False},
+        {"ai_provider": "offline", "app_env": "production"},
+    ],
+)
+async def test_analyze_missing_ai_configuration_returns_503(test_app_and_session, config):
+    app, _, buyer_org_id, _, _ = test_app_and_session
+    with _analysis_ai(**config):
+        resp = await _analyze(app, buyer_org_id)
+    assert resp.status_code == 503
+    assert "not configured" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_analyze_explicit_offline_mode_in_test_environment_is_offline(test_app_and_session):
+    app, _, buyer_org_id, _, _ = test_app_and_session
+    with _analysis_ai(ai_provider="offline"):
+        resp = await _analyze(app, buyer_org_id)
+    assert resp.status_code == 200
+    assert resp.json()["provenance"]["provider"] == "offline"
+    assert resp.json()["provenance"]["fallback_reason"] is None
+
+
+@pytest.mark.anyio
+async def test_analyze_unexpected_provider_exception_propagates(test_app_and_session):
+    app, _, buyer_org_id, _, _ = test_app_and_session
+    with (
+        _analysis_ai(),
+        patch.object(ConfiguredAIProvider, "normalize_opening_request", side_effect=RuntimeError("bug")),
+        pytest.raises(RuntimeError, match="bug"),
+    ):
+        await _analyze(app, buyer_org_id)

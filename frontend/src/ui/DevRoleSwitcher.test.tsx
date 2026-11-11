@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiRequest, listOrganizations } from "../api/client";
 import { clearAccessToken, getAccessToken, setAccessToken } from "../api/tokenStore";
@@ -11,6 +11,7 @@ const mockedApiRequest = vi.mocked(apiRequest);
 const mockedListOrganizations = vi.mocked(listOrganizations);
 
 describe("DevRoleSwitcher", () => {
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     vi.clearAllMocks();
     clearAccessToken();
@@ -18,6 +19,23 @@ describe("DevRoleSwitcher", () => {
       { id: "buyer-org", legal_name: "Demo Buyer Co", country_code: "US", role: "ADMIN" },
     ]);
     vi.stubGlobal("confirm", vi.fn(() => true));
+  });
+
+  it("does not expose developer controls in production even when enabled", () => {
+    vi.stubEnv("DEV", false);
+    vi.stubEnv("VITE_APP_ENV", "production");
+    vi.stubEnv("VITE_ENABLE_DEV_SWITCHER", "true");
+    render(<DevRoleSwitcher onSessionChanged={vi.fn()} />);
+    expect(screen.queryByLabelText("Development role switcher")).not.toBeInTheDocument();
+    expect(mockedListOrganizations).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit developer controls in a test deployment", () => {
+    vi.stubEnv("DEV", false);
+    vi.stubEnv("VITE_APP_ENV", "test");
+    vi.stubEnv("VITE_ENABLE_DEV_SWITCHER", "true");
+    render(<DevRoleSwitcher onSessionChanged={vi.fn()} />);
+    expect(screen.getByLabelText("Development role switcher")).toBeInTheDocument();
   });
 
   it("switches to Seller, stores both tokens, and refreshes the current view", async () => {

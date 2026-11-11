@@ -32,6 +32,7 @@ from syncally.api.sourcing import SourcingService
 from syncally.application.ai import AIConfigurationError, AIPermanentError
 from syncally.application.identity import ActorContext
 from syncally.config import Settings
+from syncally.domain.sourcing.contracts import BuyerRequirements
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
@@ -39,6 +40,7 @@ from syncally.infrastructure.ai.sourcing import _grounded, interpret_sourcing_re
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     Base,
+    MarketplaceListing,
     Organization,
     OrganizationMember,
     User,
@@ -128,6 +130,113 @@ class SourcingApiIntegrationTests(unittest.TestCase):
         )
         self.session.commit()
         return user, buyer_org
+
+    def test_marketplace_browsing_remains_available_but_sourcing_catalogue_fails_closed(self) -> None:
+        seller = Organization(legal_name="Actual Seller", country_code="FR", status="ACTIVE")
+        inactive_seller = Organization(legal_name="Inactive Seller", country_code="GB", status="INACTIVE")
+        self.session.add_all([seller, inactive_seller])
+        self.session.flush()
+
+        def listing(org, title, status):
+            return MarketplaceListing(
+                organization_id=org.id, title=title, description="Actual offer",
+                category="Hardware", available_quantity=Decimal("3"), unit="pieces",
+                unit_price=Decimal("0"), currency="EUR", status=status,
+            )
+        self.session.add_all([
+            listing(seller, "Actual bolts", "ACTIVE"),
+            listing(seller, "Hidden bolts", "INACTIVE"),
+            listing(inactive_seller, "Inactive seller bolts", "ACTIVE"),
+        ])
+        self.session.add_all(
+            listing(seller, f"Extra offer {number}", "ACTIVE") for number in range(100)
+        )
+        self.session.commit()
+
+        for params in (
+            {},
+            {"q": "bolts"},
+            {"category": "hard", "completeness": "unknown"},
+            {"completeness": "FULL_COMPLETE"},
+            {"q": "%"},
+        ):
+            with self.subTest(params=params):
+                response = self._request("GET", "/sourcing/listings", params=params)
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("Marketplace", response.json()["detail"])
+                self.assertIn("/marketplace/listings", response.json()["detail"])
+                self.assertNotIn("listings", response.json())
+                self.assertNotIn("total", response.json())
+
+        response = self._request("GET", "/marketplace/listings", params={"q": "bolts"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()), 1)
+        item = response.json()[0]
+        self.assertEqual(item["organization_name"], "Actual Seller")
+        self.assertEqual(item["organization_id"], str(seller.id))
+        self.assertEqual(item["currency"], "EUR")
+        self.assertEqual(Decimal(item["unit_price"]), 0)
+        self.assertEqual(
+            len(self._request("GET", "/marketplace/listings", params={"category": "hard", "limit": 100}).json()),
+            100,
+        )
+        self.assertEqual(
+            len(self._request("GET", "/marketplace/listings", params={"category": "hard", "offset": 100}).json()),
+            1,
+        )
+        self.assertEqual(self._request("GET", "/marketplace/listings", params={"q": "%"}).json(), [])
+        seller.status = "INACTIVE"
+        self.session.commit()
+        self.assertEqual(self._request("GET", "/marketplace/listings").json(), [])
+
+    def test_sourcing_scoring_and_drafts_fail_closed_without_provider_calls(self) -> None:
+        requirements = self._sample_requirements()
+        seller = Organization(legal_name="Recorded Seller", country_code="FR", status="ACTIVE")
+        self.session.add(seller)
+        self.session.flush()
+        listing = MarketplaceListing(
+            organization_id=seller.id, title="Recorded bolts", description="",
+            category="Hardware", available_quantity=Decimal("3"), unit="pieces",
+            unit_price=Decimal("1"), currency="EUR",
+        )
+        self.session.add(listing)
+        self.session.commit()
+        for path, payload in (
+            ("/sourcing/compare", {"requirements": requirements, "listing_ids": ["bundled-id"]}),
+            ("/sourcing/compare", {"requirements": requirements, "listing_ids": [str(listing.id)]}),
+            ("/sourcing/gap-analysis", {"requirements": requirements, "listing_id": "bundled-id"}),
+            ("/sourcing/draft-inquiry", {"requirements": requirements, "listing_id": "bundled-id"}),
+            ("/sourcing/draft-inquiry", {"requirements": requirements, "listing_id": str(listing.id)}),
+            ("/sourcing/evaluate", {"prompt": "Please source bolts"}),
+            ("/sourcing/evaluate", {"requirements": requirements}),
+        ):
+            with self.subTest(path=path), patch("syncally.api.sourcing._interpret_natural") as interpret:
+                response = self._request("POST", path, json=payload)
+                self.assertEqual(response.status_code, 503, response.text)
+                self.assertIn("Browse active offers", response.json()["detail"])
+                interpret.assert_not_called()
+
+    def test_sourcing_catalogue_and_unavailable_operations_require_authentication(self) -> None:
+        self._authenticate(None)
+        self.assertEqual(self._request("GET", "/sourcing/listings").status_code, 401)
+        requirements = self._sample_requirements()
+        for path, payload in (
+            ("/sourcing/compare", {"requirements": requirements}),
+            ("/sourcing/gap-analysis", {"requirements": requirements, "listing_id": "id"}),
+            ("/sourcing/draft-inquiry", {"requirements": requirements, "listing_id": "id"}),
+            ("/sourcing/evaluate", {"prompt": "bolts"}),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(self._request("POST", path, json=payload).status_code, 401)
+
+    def test_demo_service_rejects_production_access(self) -> None:
+        with patch("syncally.application.sourcing.service.settings", SimpleNamespace(app_env="production")):
+            with self.assertRaisesRegex(RuntimeError, "only in development or test"):
+                SourcingService.get_listings()
+            with self.assertRaisesRegex(RuntimeError, "only in development or test"):
+                SourcingService.get_listing_by_id("demo")
+            with self.assertRaisesRegex(RuntimeError, "only in development or test"):
+                SourcingService.compare_listings(BuyerRequirements.model_validate(self._sample_requirements()))
 
     def _authenticate(self, actor: ActorContext | None) -> None:
         app.dependency_overrides[get_db] = lambda: self.session
@@ -339,7 +448,7 @@ class SourcingApiIntegrationTests(unittest.TestCase):
             "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
             "12 month warranty and factory mill certificate."
         )
-        for path in ("/sourcing/interpret", "/sourcing/evaluate"):
+        for path in ("/sourcing/interpret",):
             with self.subTest(path=path):
                 self.session.execute(select(User.id)).first()
                 self.assertTrue(self.session.in_transaction())
@@ -567,276 +676,10 @@ class SourcingApiIntegrationTests(unittest.TestCase):
     # 2. GET /sourcing/listings
     # =========================================================================
 
-    def test_get_listings_all(self) -> None:
-        res = self._request("GET", "/sourcing/listings")
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIn("listings", data)
-        self.assertIn("total", data)
-        self.assertGreaterEqual(data["total"], 14)
-        self.assertEqual(len(data["listings"]), data["total"])
-
-    def test_get_listings_filter_by_category(self) -> None:
-        res = self._request("GET", "/sourcing/listings", params={"category": "Fasteners"})
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertGreaterEqual(data["total"], 4)
-        for item in data["listings"]:
-            self.assertIn("fastener", item["category"].lower())
-
-    def test_get_listings_filter_by_completeness(self) -> None:
-        res = self._request("GET", "/sourcing/listings", params={"completeness": "FULL_COMPLETE"})
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertGreaterEqual(data["total"], 5)
-        for item in data["listings"]:
-            self.assertEqual(item["completeness_tier"], "FULL_COMPLETE")
-
-    def test_get_listings_filter_by_query_text(self) -> None:
-        res = self._request("GET", "/sourcing/listings", params={"q": "Berlin"})
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertGreaterEqual(data["total"], 1)
-        self.assertTrue(any("berlin" in item["organization_name"].lower() for item in data["listings"]))
-
-    def test_get_listings_nonexistent_filter_returns_empty(self) -> None:
+    def test_get_listings_nonexistent_filter_still_reports_unavailable(self) -> None:
         res = self._request("GET", "/sourcing/listings", params={"category": "NonExistentSector999"})
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertEqual(data["total"], 0)
-        self.assertEqual(len(data["listings"]), 0)
-
-    # =========================================================================
-    # 3. POST /sourcing/compare
-    # =========================================================================
-
-    def test_compare_evaluates_and_ranks_candidates(self) -> None:
-        req = self._sample_requirements()
-        res = self._request("POST", "/sourcing/compare", json={"requirements": req})
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIn("results", data)
-        results = data["results"]
-        self.assertGreaterEqual(len(results), 8)
-
-        # Verify Berlin is top match (Tier A)
-        top = results[0]
-        self.assertIn("Berlin", top["seller_organization_name"])
-        self.assertEqual(top["match_tier"], "A")
-        self.assertGreaterEqual(top["composite_score"], 90.0)
-
-        # Check required schema fields
-        for item in results:
-            self.assertIn("spec_score", item)
-            self.assertIn("price_score", item)
-            self.assertIn("quantity_score", item)
-            self.assertIn("lead_time_score", item)
-            self.assertIn("terms_score", item)
-            self.assertIn("composite_score", item)
-            self.assertIn("match_tier", item)
-            self.assertIn(item["match_tier"], ["A", "B", "C", "D"])
-            self.assertIn("attribute_matrix", item)
-            self.assertGreaterEqual(len(item["attribute_matrix"]), 5)
-
-    def test_compare_with_specific_listing_ids(self) -> None:
-        req = self._sample_requirements()
-        chosen_ids = [
-            "00000000-0000-4000-8000-000000000101",
-            "00000000-0000-4000-8000-000000000102",
-        ]
-        res = self._request("POST", "/sourcing/compare", json={"requirements": req, "listing_ids": chosen_ids})
-        self.assertEqual(res.status_code, 200)
-        results = res.json()["results"]
-        self.assertEqual(len(results), 2)
-        returned_ids = {r["listing_id"] for r in results}
-        self.assertEqual(returned_ids, set(chosen_ids))
-
-    def test_compare_boundary_zero_target_price_safe(self) -> None:
-        req = self._sample_requirements(target_price="0.00", max_price="0.00")
-        res = self._request("POST", "/sourcing/compare", json={"requirements": req})
-        self.assertEqual(res.status_code, 200)
-        results = res.json()["results"]
-        self.assertTrue(len(results) > 0)
-
-    def test_compare_rejects_implicit_commercial_defaults(self) -> None:
-        req = self._sample_requirements()
-        req["pricing"].pop("currency")
-        req["commercial_terms"].pop("min_warranty_months")
-        req["commercial_terms"].pop("inspection_requirement")
-
-        response = self._request("POST", "/sourcing/compare", json={"requirements": req})
-
-        self.assertEqual(response.status_code, 422)
-        self.assertIn("price currency", response.json()["detail"])
-        self.assertIn("inspection requirement", response.json()["detail"])
-
-    # =========================================================================
-    # 4. POST /sourcing/gap-analysis
-    # =========================================================================
-
-    def test_gap_analysis_compliant_listing(self) -> None:
-        req = self._sample_requirements()
-        # Berlin listing is benchmark compliant
-        res = self._request(
-            "POST",
-            "/sourcing/gap-analysis",
-            json={"requirements": req, "listing_id": "00000000-0000-4000-8000-000000000101"},
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIn("listing", data)
-        self.assertIn("gaps", data)
-        self.assertIn("overall_severity", data)
-        self.assertEqual(data["overall_severity"], "NONE")
-        self.assertEqual(len(data["gaps"]), 0)
-
-    def test_gap_analysis_missing_lead_time_gap(self) -> None:
-        req = self._sample_requirements()
-        # Apex is missing lead time and Incoterms
-        res = self._request(
-            "POST",
-            "/sourcing/gap-analysis",
-            json={"requirements": req, "listing_id": "00000000-0000-4000-8000-000000000102"},
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        categories = {g["category"] for g in data["gaps"]}
-        self.assertIn("MISSING", categories)
-        self.assertIn(data["overall_severity"], ["MODERATE", "CRITICAL"])
-
-    def test_gap_analysis_critical_moq_barrier(self) -> None:
-        # Baltic has 5,000 MOQ vs buyer demand of 500
-        req = self._sample_requirements(target_qty=500)
-        res = self._request(
-            "POST",
-            "/sourcing/gap-analysis",
-            json={"requirements": req, "listing_id": "00000000-0000-4000-8000-000000000104"},
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        moq_gap = next((g for g in data["gaps"] if "moq" in g["field_name"].lower()), None)
-        self.assertIsNotNone(moq_gap)
-        self.assertEqual(moq_gap["severity"], "CRITICAL")
-        self.assertEqual(data["overall_severity"], "CRITICAL")
-
-    def test_gap_analysis_not_found(self) -> None:
-        req = self._sample_requirements()
-        res = self._request(
-            "POST",
-            "/sourcing/gap-analysis",
-            json={"requirements": req, "listing_id": "99999999-9999-9999-9999-999999999999"},
-        )
-        self.assertEqual(res.status_code, 404)
-        self.assertIn("not found", res.json()["detail"].lower())
-
-    # =========================================================================
-    # 5. POST /sourcing/draft-inquiry
-    # =========================================================================
-
-    def test_draft_inquiry_compliant_listing_purchase_intent(self) -> None:
-        req = self._sample_requirements()
-        res = self._request(
-            "POST",
-            "/sourcing/draft-inquiry",
-            json={
-                "requirements": req,
-                "listing_id": "00000000-0000-4000-8000-000000000101",
-                "buyer_organization_id": str(self.buyer_org.id),
-            },
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIn("subject", data)
-        self.assertIn("body", data)
-        self.assertIn("gaps_addressed", data)
-        self.assertIn("proposed_terms", data)
-
-        body = data["body"]
-        self.assertIn("Apex Global Procurement AG", body)
-        self.assertIn("Elena Vance", body)
-        self.assertTrue("order confirmation" in body.lower() or "rfq" in body.lower() or "purchase" in body.lower())
-
-    def test_draft_inquiry_addresses_specific_gaps(self) -> None:
-        req = self._sample_requirements()
-        # Apex has missing lead time
-        res = self._request(
-            "POST",
-            "/sourcing/draft-inquiry",
-            json={
-                "requirements": req,
-                "listing_id": "00000000-0000-4000-8000-000000000102",
-                "buyer_organization_id": str(self.buyer_org.id),
-            },
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        body = data["body"].lower()
-        self.assertTrue("lead time" in body or "delivery" in body or "dispatch" in body)
-
-    def test_draft_inquiry_not_found(self) -> None:
-        req = self._sample_requirements()
-        res = self._request(
-            "POST",
-            "/sourcing/draft-inquiry",
-            json={
-                "requirements": req,
-                "listing_id": "99999999-9999-9999-9999-999999999999",
-            },
-        )
-        self.assertEqual(res.status_code, 404)
-
-    # =========================================================================
-    # 6. POST /sourcing/evaluate
-    # =========================================================================
-
-    def test_evaluate_end_to_end_from_prompt(self) -> None:
-        prompt = (
-            "We are sourcing 1,000 boxes of M8x30 Grade 316 stainless steel hex cap bolts for our automotive "
-            "assembly facility in Berlin, Germany. Delivery required within 30 days under DDP terms. "
-            "Target price $12.00, maximum budget $14.00 USD per box. Minimum 12-month warranty with EN 10204 3.1 Mill Certificate."
-        )
-        res = self._request(
-            "POST",
-            "/sourcing/evaluate",
-            json={
-                "prompt": prompt,
-                "buyer_organization_id": str(self.buyer_org.id),
-            },
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertIn("requirements", data)
-        self.assertIn("comparisons", data)
-        self.assertIn("inquiries", data)
-        self.assertIn("total_listings_evaluated", data)
-
-        comparisons = data["comparisons"]
-        self.assertGreaterEqual(len(comparisons), 3)
-        top = comparisons[0]
-        self.assertIn("Berlin", top["seller_organization_name"])
-        self.assertEqual(top["match_tier"], "A")
-        self.assertGreaterEqual(top["composite_score"], 90.0)
-
-        inquiries = data["inquiries"]
-        self.assertIn("00000000-0000-4000-8000-000000000101", inquiries)
-        berlin_inquiry = inquiries["00000000-0000-4000-8000-000000000101"]
-        self.assertIn("subject", berlin_inquiry)
-        self.assertIn("body", berlin_inquiry)
-
-    def test_evaluate_with_explicit_requirements(self) -> None:
-        req = self._sample_requirements()
-        res = self._request(
-            "POST",
-            "/sourcing/evaluate",
-            json={
-                "requirements": req,
-                "buyer_organization_id": str(self.buyer_org.id),
-            },
-        )
-        self.assertEqual(res.status_code, 200)
-        data = res.json()
-        self.assertEqual(data["requirements"]["category"], "Industrial Fasteners")
-        self.assertGreaterEqual(len(data["comparisons"]), 1)
+        self.assertEqual(res.status_code, 503)
+        self.assertIn("Marketplace", res.json()["detail"])
 
     # =========================================================================
     # 7. Security, Auth, and Middleware

@@ -1,8 +1,8 @@
-"""Sourcing application service.
+"""Legacy demo sourcing application service.
 
-Orchestrates buyer requirement interpretation, candidate listing comparison,
-gap taxonomy analysis, and seller inquiry generation.
-Operates 100% locally with zero external network or LLM dependencies.
+The bundled dataset is fictional and is available to direct callers only in
+explicit development or test environments. Public sourcing evaluation routes
+are unavailable until persisted listings support reliable scoring.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from syncally.application.sourcing.comparison_engine import ComparisonEngine
 from syncally.application.sourcing.gap_analyzer import GapAnalyzer
 from syncally.application.sourcing.inquiry_drafter import InquiryDrafter
 from syncally.application.sourcing.interpreter import RequirementInterpreter
+from syncally.config import settings
 from syncally.domain.sourcing.contracts import (
     BuyerRequirements,
     CommercialGap,
@@ -32,7 +33,12 @@ from syncally.infrastructure.sourcing.bundled_dataset import (
 
 
 class SourcingService:
-    """Core orchestration service for buyer sourcing workflows."""
+    """Orchestrate the offline demo sourcing workflow."""
+
+    @staticmethod
+    def _require_demo_environment() -> None:
+        if settings.app_env.lower() not in {"development", "test"}:
+            raise RuntimeError("Bundled sourcing data is available only in development or test.")
 
     @classmethod
     def interpret_requirements(
@@ -51,6 +57,7 @@ class SourcingService:
         query: str | None = None,
     ) -> list[MarketplaceListingDetail]:
         """Query bundled candidate marketplace listings."""
+        cls._require_demo_environment()
         return get_bundled_listings(category=category, completeness=completeness, query=query)
 
     @classmethod
@@ -58,6 +65,7 @@ class SourcingService:
         cls, listing_id: str, db: Session | None = None
     ) -> MarketplaceListingDetail | None:
         """Retrieve a specific marketplace listing by its unique identifier."""
+        cls._require_demo_environment()
         bundled = get_bundled_listing_by_id(listing_id)
         if bundled is not None:
             return bundled
@@ -99,6 +107,7 @@ class SourcingService:
         db: Session | None = None,
     ) -> list[ComparisonResult]:
         """Evaluate candidate marketplace listings against buyer requirements."""
+        cls._require_demo_environment()
         if listing_ids:
             clean_ids = {lid.strip().lower() for lid in listing_ids}
             candidates = [

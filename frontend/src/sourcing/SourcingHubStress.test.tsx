@@ -14,9 +14,15 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import { ReferenceSourcingHub } from "./SourcingHubPage";
+import { ReferenceSourcingHub as SourcingHub } from "./SourcingHubPage";
+import { MOCK_BUNDLED_LISTINGS } from "./bundledListings";
+import type { SourcingHubProps } from "./sourcingTypes";
 import { interpretSourcingRequirements } from "../api/client";
 import { evaluateNaturalRequirements, installSourcingMocks, openServerInquiry } from "./sourcingTestFixtures";
+
+const ReferenceSourcingHub = (props: SourcingHubProps) => (
+  <SourcingHub initialListings={MOCK_BUNDLED_LISTINGS} {...props} />
+);
 
 vi.mock("../api/client", () => ({
   draftSourcingInquiry: vi.fn(),
@@ -428,7 +434,7 @@ describe("SourcingHub Empirical Stress & Resilience Suite (challenger_sourcing_m
       render(<ReferenceSourcingHub initialListings={[]} />);
 
       expect(screen.getByTestId("sourcing-hub-page")).toBeInTheDocument();
-      expect(screen.getByText(/candidate listings \(0\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/comparison unavailable/i)).toBeInTheDocument();
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 

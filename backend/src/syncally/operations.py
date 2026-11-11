@@ -53,6 +53,7 @@ _PAYMENT_STATUSES = frozenset(
 )
 _ERROR_CODES = frozenset(
     {
+        "GEMINI_BAD_REQUEST",
         "GMAIL_SMTP_AUTH_FAILED",
         "GMAIL_SMTP_REJECTED",
         "GMAIL_SMTP_RECIPIENT_REJECTED",
@@ -126,6 +127,56 @@ _ERROR_CODES = frozenset(
         "PAYPAL_OUTCOME_UNKNOWN",
     }
 )
+_GEMINI_ERROR_STATUSES = frozenset(
+    {
+        "INVALID_ARGUMENT",
+        "FAILED_PRECONDITION",
+        "NOT_FOUND",
+        "PERMISSION_DENIED",
+        "RESOURCE_EXHAUSTED",
+        "UNAUTHENTICATED",
+        "UNAVAILABLE",
+        "UNKNOWN",
+    }
+)
+_GEMINI_ERROR_FIELDS = frozenset(
+    {
+        "additionalProperties",
+        "anyOf",
+        "contents",
+        "currency",
+        "currency_or_unit",
+        "delivery_date",
+        "delivery_destination",
+        "description",
+        "facts",
+        "field",
+        "generationConfig",
+        "insufficient_context",
+        "items",
+        "maxItems",
+        "maxOutputTokens",
+        "message_id",
+        "properties",
+        "proposal",
+        "quantity",
+        "quote",
+        "required",
+        "responseJsonSchema",
+        "responseMimeType",
+        "schema_version",
+        "source",
+        "systemInstruction",
+        "thinkingConfig",
+        "thinkingLevel",
+        "type",
+        "unit",
+        "unit_price",
+        "unknown_reason",
+        "value",
+        "citations",
+    }
+)
 _WORKERS = frozenset({"workflow", "outbox", "payment"})
 _UUID_FIELDS = ("correlation_id", "deal_id", "payment_intent_id", "outbox_event_id")
 _WORKFLOW_MESSAGES = {
@@ -194,6 +245,8 @@ class SafeOperationalFormatter(logging.Formatter):
                 ("worker", _WORKERS),
                 ("payment_status", _PAYMENT_STATUSES),
                 ("error_code", _ERROR_CODES),
+                ("provider_error_status", _GEMINI_ERROR_STATUSES),
+                ("provider_error_field", _GEMINI_ERROR_FIELDS),
             ):
                 value = record.__dict__.get(key)
                 if isinstance(value, str) and value in values:

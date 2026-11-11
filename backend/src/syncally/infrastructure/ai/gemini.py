@@ -28,6 +28,31 @@ from syncally.operations import Operation, log_operation
 
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/"
 logger = logging.getLogger(__name__)
+_UNKNOWN_FIELD = re.compile(r"""Unknown name\s+["'](?P<field>[A-Za-z][A-Za-z0-9_]*)["']""")
+_INVALID_VALUE = re.compile(r"""Invalid value at ['"](?P<path>[A-Za-z0-9_.\[\]]+)['"]""")
+
+
+def _safe_error_diagnostics(body: bytearray) -> tuple[str | None, str | None]:
+    try:
+        envelope = _json(body)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return None, None
+    error = envelope.get("error") if isinstance(envelope, dict) else None
+    if not isinstance(error, dict):
+        return None, None
+
+    status = error.get("status")
+    if not isinstance(status, str):
+        status = None
+
+    message = error.get("message")
+    unknown_field = _UNKNOWN_FIELD.search(message) if isinstance(message, str) else None
+    invalid_value = _INVALID_VALUE.search(message) if isinstance(message, str) else None
+    field = unknown_field.group("field") if unknown_field else None
+    if field is None and invalid_value:
+        path_fields = re.findall(r"[A-Za-z][A-Za-z0-9_]*", invalid_value.group("path"))
+        field = path_fields[-1] if path_fields else None
+    return status, field
 
 
 class GeminiGenerateContent(OpenAIChatCompletions):
@@ -189,6 +214,17 @@ class GeminiGenerateContent(OpenAIChatCompletions):
                     raise AIPermanentError("Gemini API authentication failed; check the configured Google API key")
                 if response.status_code == 403:
                     raise AIPermanentError("Gemini API denied access; check the key's project and model access")
+                if response.status_code == 400:
+                    error_status, error_field = _safe_error_diagnostics(body)
+                    log_operation(
+                        logger,
+                        Operation.AI_PROVIDER_FAILURE,
+                        failure_kind="PERMANENT",
+                        error_code="GEMINI_BAD_REQUEST",
+                        http_status=response.status_code,
+                        provider_error_status=error_status,
+                        provider_error_field=error_field,
+                    )
                 if response.status_code != 200:
                     raise AIPermanentError(
                         f"Gemini API rejected the request (HTTP {response.status_code}); "

@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from "react";
-import { MOCK_BUNDLED_LISTINGS } from "./bundledListings";
 import { BuyerRequirementForm } from "./BuyerRequirementForm";
 import { GapAnalysisInspector } from "./GapAnalysisInspector";
 import { ListingComparisonView } from "./ListingComparisonView";
@@ -25,9 +24,10 @@ import "./sourcing.css";
 
 export const SourcingHubPage: React.FC<SourcingHubProps> = ({
   onDealInitiated,
-  initialListings = MOCK_BUNDLED_LISTINGS,
+  initialListings: suppliedListings,
   initialListingId,
 }) => {
+  const initialListings = import.meta.env.MODE === "test" ? suppliedListings ?? [] : [];
   const [prompt, setPrompt] = useState("");
   const [inputMode, setInputMode] = useState<"natural" | "structured">("natural");
   const [title, setTitle] = useState("");
@@ -168,7 +168,7 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
       seller_organization_name: result.seller_organization_name,
       country_code: result.country_code,
       listing_title: result.listing_title,
-      category: result.category || catalogueListing?.category || "Catalogue demo",
+      category: result.category || catalogueListing?.category || "Unknown",
       unit_price: result.unit_price,
       currency: result.currency,
       available_quantity: result.available_quantity,
@@ -340,16 +340,21 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
         </nav>
         <h1><SplitText text="Buyer Sourcing Agent" /></h1>
         <p className="subtitle">
-          AI interprets buyer requirements; deterministic backend scoring and inquiry templates use a bundled demo catalogue.
+          Explore sourcing requirements and browse active marketplace offers.
         </p>
       </header>
 
       <div role="note" className="sourcing-demo-notice">
-        <strong>Demo catalogue:</strong> bundled sample suppliers and listing data are not verified marketplace offers.
-        Candidate ranking and gap arithmetic are deterministic, not AI-generated.
+        {initialListings.length > 0 ? (
+          <><strong>Test catalogue:</strong> bundled sample suppliers and listing data are not verified marketplace offers.</>
+        ) : (
+          <><strong>Comparison unavailable:</strong> marketplace offers do not yet include all details needed for reliable scoring or inquiry drafts.{" "}
+          <a href="#/marketplace">Browse Marketplace</a> and confirm terms directly.</>
+        )}
         {interpretationSource && <span> Requirement source: {interpretationSource}.</span>}
       </div>
 
+      {initialListings.length > 0 && <>
       {/* Dual-Mode Buyer Requirement Input Form */}
       <BuyerRequirementForm
         inputMode={inputMode}
@@ -429,6 +434,7 @@ export const SourcingHubPage: React.FC<SourcingHubProps> = ({
         onInitiateDeal={handleInitiateDeal}
         onClose={() => setIsInquiryModalOpen(false)}
       />
+      </>}
     </div>
   );
 };

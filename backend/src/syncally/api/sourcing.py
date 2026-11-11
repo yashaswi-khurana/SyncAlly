@@ -2,11 +2,9 @@
 
 Exposes REST APIs for:
 - POST /sourcing/interpret: configured-provider NLP or explicit structured-control validation
-- GET /sourcing/listings: bundled demo catalogue retrieval
-- POST /sourcing/compare: deterministic multi-candidate ranking and matrix evaluation
-- POST /sourcing/gap-analysis: Deep discrepancy taxonomy and commercial delta detection
-- POST /sourcing/draft-inquiry: Targeted seller inquiry letter generation
-- POST /sourcing/evaluate: deterministic evaluation; prompt-only requests first require configured AI interpretation
+- GET /sourcing/listings: unavailable; browse /marketplace/listings instead
+- POST /sourcing/compare, /gap-analysis, /draft-inquiry, /evaluate: unavailable
+  until persisted offers support reliable scoring and inquiry drafting
 """
 
 from __future__ import annotations
@@ -295,16 +293,26 @@ def get_listings(
     q: str | None = Query(default=None),
     _actor: ActorContext = Depends(get_current_actor),
 ) -> dict[str, Any]:
-    """Query bundled candidate marketplace listings with optional category and completeness filters."""
-    listings = SourcingService.get_listings(
-        category=category,
-        completeness=completeness,
-        query=q,
+    """Do not misrepresent unavailable listing details or a page count as a total."""
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "The sourcing catalogue is unavailable because its response cannot accurately "
+            "represent marketplace data. Browse active offers in Marketplace or use "
+            "GET /marketplace/listings instead."
+        ),
     )
-    return {
-        "listings": listings,
-        "total": len(listings),
-    }
+
+
+def _scoring_unavailable() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "Sourcing comparison and inquiry drafting are unavailable: marketplace listings "
+            "do not contain the commercial and technical details required for reliable scoring. "
+            "Browse active offers in Marketplace and confirm terms directly."
+        ),
+    )
 
 
 @router.post("/compare", response_model=CompareResponse)
@@ -312,6 +320,7 @@ def compare_listings(
     payload: CompareRequest,
     _actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
+    _availability: None = Depends(_scoring_unavailable),
 ) -> dict[str, Any]:
     """Evaluate candidate listings against buyer requirements across 5 weighted dimensions."""
     try:
@@ -339,6 +348,7 @@ def gap_analysis(
     payload: GapAnalysisRequest,
     _actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
+    _availability: None = Depends(_scoring_unavailable),
 ) -> dict[str, Any]:
     """Perform detailed gap detection between buyer requirements and a specific listing."""
     try:
@@ -377,6 +387,7 @@ def draft_inquiry(
     payload: DraftInquiryRequest,
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
+    _availability: None = Depends(_scoring_unavailable),
 ) -> InquiryDraft:
     """Generate professional B2B inquiry letter proposing targeted compromises for all detected gaps."""
     try:
@@ -417,6 +428,7 @@ def evaluate_sourcing(
     payload: EvaluateRequest,
     actor: ActorContext = Depends(get_current_actor),
     db: Session = Depends(get_db),
+    _availability: None = Depends(_scoring_unavailable),
 ) -> dict[str, Any]:
     """Rank the catalogue with explicit requirements, interpreting a prompt through configured AI."""
     buyer_org_id = payload.buyer_organization_id or (

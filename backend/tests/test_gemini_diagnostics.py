@@ -83,3 +83,71 @@ class GeminiDiagnosticsTests(unittest.TestCase):
         self.assertEqual(event["event"], "ai.provider_failure")
         self.assertEqual(event["http_status"], 429)
         self.assertNotIn("private", json.dumps(event))
+
+    def test_bad_request_logs_safe_google_validation_diagnostics(self):
+        response = {
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": (
+                    "Unknown name \"additionalProperties\" at "
+                    "'generation_config.response_json_schema.properties': Cannot find field."
+                ),
+                "details": [{"private": "message content"}],
+            },
+        }
+        provider = GeminiGenerateContent(
+            api_key=SecretStr("private-key"), model="gemini-3.1-flash-lite",
+            transport=httpx.MockTransport(lambda _: httpx.Response(400, json=response)),
+        )
+        with self.assertLogs("syncally.infrastructure.ai.gemini", level="INFO") as captured:
+            with self.assertRaisesRegex(AIPermanentError, "Gemini API rejected the request"):
+                asyncio.run(provider._http(b"{}", 1))
+
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertEqual(event["error_code"], "GEMINI_BAD_REQUEST")
+        self.assertEqual(event["provider_error_status"], "INVALID_ARGUMENT")
+        self.assertEqual(event["provider_error_field"], "additionalProperties")
+        self.assertNotIn("private", json.dumps(event))
+        self.assertNotIn("Cannot find field", json.dumps(event))
+
+    def test_bad_request_diagnostics_discard_unrecognized_provider_values(self):
+        response = {
+            "error": {
+                "status": "PRIVATE_STATUS",
+                "message": 'Unknown name "buyer_private_data" at an untrusted path',
+            },
+        }
+        provider = GeminiGenerateContent(
+            api_key=SecretStr("private-key"), model="gemini-3.1-flash-lite",
+            transport=httpx.MockTransport(lambda _: httpx.Response(400, json=response)),
+        )
+        with self.assertLogs("syncally.infrastructure.ai.gemini", level="INFO") as captured:
+            with self.assertRaises(AIPermanentError):
+                asyncio.run(provider._http(b"{}", 1))
+
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertNotIn("provider_error_status", event)
+        self.assertNotIn("provider_error_field", event)
+        self.assertNotIn("buyer_private_data", json.dumps(event))
+
+    def test_bad_request_logs_field_from_invalid_value_path(self):
+        response = {
+            "error": {
+                "status": "INVALID_ARGUMENT",
+                "message": (
+                    "Invalid value at "
+                    "'generation_config.response_json_schema.properties[maxItems]': Invalid value."
+                ),
+            },
+        }
+        provider = GeminiGenerateContent(
+            api_key=SecretStr("key"), model="gemini-3.1-flash-lite",
+            transport=httpx.MockTransport(lambda _: httpx.Response(400, json=response)),
+        )
+        with self.assertLogs("syncally.infrastructure.ai.gemini", level="INFO") as captured:
+            with self.assertRaises(AIPermanentError):
+                asyncio.run(provider._http(b"{}", 1))
+
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertEqual(event["provider_error_field"], "maxItems")

@@ -1,15 +1,9 @@
-"""Opaque-box E2E test suite for Production Buyer Sourcing Agent across 4 systematic tiers.
+"""Buyer sourcing contract and explicitly isolated legacy demo behavior tests.
 
-Derived strictly from:
-- ORIGINAL_REQUEST.md (Requirements R1, R2, R3, R4)
-- PROJECT.md (§ Feature Inventory F1-F22, § Interface Contracts)
-- Spec Miner Findings (.agents/teamwork/spec_miner_survey_sourcing/handoff.md)
-
-Tiers:
-- Tier 1: Feature Coverage (>=5 tests per core feature across F1-F14)
-- Tier 2: Boundary & Corner Cases (>=5 tests per feature: empty inputs, zero price, huge quantity, past dates, extreme tolerances, missing fields)
-- Tier 3: Cross-Feature Combinations (pairwise interactions: high price + missing lead time, non-compliant MOQ + ambiguous terms, missing certs + tight delivery, etc.)
-- Tier 4: Real-World Application Scenarios (end-to-end buyer procurement journeys across all 5 industrial sectors: Fasteners, Electronics, Agriculture, Textiles, Medical)
+Legacy scoring, gap and inquiry scenarios override the availability gate only
+inside these tests to preserve coverage of the fictional bundled dataset.
+Public-contract tests use ``_public_request`` and never override the gate.
+No live AI provider is used.
 """
 
 from __future__ import annotations
@@ -19,6 +13,7 @@ import unittest
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 from sqlalchemy import create_engine
@@ -27,6 +22,8 @@ from sqlalchemy.pool import StaticPool
 
 from syncally.api.auth import get_current_actor
 from syncally.api.main import app
+from syncally.api.sourcing import _scoring_unavailable
+from syncally.application.ai import AIConfigurationError
 from syncally.application.identity import ActorContext
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
@@ -54,7 +51,7 @@ def _is_route_available(path: str, method: str = "POST") -> bool:
 
 
 class BaseBuyerSourcingE2ETest(unittest.TestCase):
-    """Base fixture for opaque-box buyer sourcing E2E tests."""
+    """HTTP fixture; demo tests explicitly enable legacy scoring in test only."""
 
     def setUp(self) -> None:
         self.engine = create_engine(
@@ -257,8 +254,15 @@ class BaseBuyerSourcingE2ETest(unittest.TestCase):
             organization_ids=frozenset({self.buyer_org.id}),
         )
         self._authenticate(self.actor)
+        app.dependency_overrides[_scoring_unavailable] = lambda: None
+        self.ai_patch = patch(
+            "syncally.api.sourcing.ConfiguredAIProvider",
+            side_effect=AIConfigurationError("No provider configured for this test"),
+        )
+        self.ai_provider_mock = self.ai_patch.start()
 
     def tearDown(self) -> None:
+        self.ai_patch.stop()
         app.dependency_overrides.clear()
         self.session.close()
         Base.metadata.drop_all(self.engine)
@@ -284,6 +288,35 @@ class BaseBuyerSourcingE2ETest(unittest.TestCase):
                 return await client.request(method, path, params=params, json=json)
 
         return asyncio.run(send())
+
+    def _public_request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Exercise the real availability gate, without the legacy demo override."""
+        override = app.dependency_overrides.pop(_scoring_unavailable)
+        try:
+            return self._request(method, path, **kwargs)
+        finally:
+            app.dependency_overrides[_scoring_unavailable] = override
+
+    @staticmethod
+    def _complete_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
+        """Supply explicit baseline controls while retaining each scenario's values."""
+        result: dict[str, Any] = {
+            "title": "M8 fasteners",
+            "category": "Industrial Fasteners",
+            "pricing": {"currency": "USD"},
+            "quantity": {"target_quantity": "1000", "unit": "boxes"},
+            "delivery": {"destination_country_code": "DE"},
+            "commercial_terms": {
+                "min_warranty_months": 12,
+                "inspection_requirement": "FACTORY_MILL_CERTIFICATE",
+            },
+        }
+        for key, value in overrides.items():
+            if isinstance(value, dict) and isinstance(result.get(key), dict):
+                result[key].update(value)
+            else:
+                result[key] = value
+        return result
 
     def _seed_seller(
         self,
@@ -348,7 +381,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
     # --------------------------------------------------------------------------
 
     def test_tier1_interpret_fasteners_material_tolerance_standards(self) -> None:
-        """F1/F2: Parses natural language prompt for fasteners extracting materials, tolerances, standards, and certs."""
+        """Fastener prompts cannot be interpreted without a configured provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
@@ -358,27 +391,11 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
             "Target price $12.00/box, max $14.00 USD. Deliver to Berlin, Germany by 2026-12-08 under DDP terms."
         )
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        req = data["requirements"]
-
-        self.assertIn("bolt", req["title"].lower())
-        self.assertIn("fastener", req["category"].lower())
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("1000"))
-        self.assertEqual(req["quantity"]["unit"].lower(), "boxes")
-        self.assertEqual(Decimal(str(req["pricing"]["target_unit_price"])), Decimal("12.00"))
-        self.assertEqual(Decimal(str(req["pricing"]["max_unit_price"])), Decimal("14.00"))
-        self.assertEqual(req["pricing"]["currency"], "USD")
-        self.assertEqual(req["delivery"]["destination_country_code"], "DE")
-
-        specs = req["technical_specs"]
-        materials = [m.lower() for m in specs.get("materials", [])]
-        self.assertTrue(any("316" in m for m in materials))
-        self.assertIn("CE", specs.get("certifications", []))
-        self.assertIn("RoHS", specs.get("certifications", []))
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("requirements", response.json())
 
     def test_tier1_interpret_electronics_wire_gauge_jaso(self) -> None:
-        """F1/F2: Parses prompt for electronics wiring harness with gauge, JASO standard, and RoHS."""
+        """Electronics prompts cannot be interpreted without a configured provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
@@ -387,17 +404,11 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
             "and RoHS certified. Budget is target $7.00 per unit, max $8.00 USD. Deliver to Tokyo, Japan."
         )
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
-        req = response.json()["requirements"]
-
-        self.assertIn("wire", req["title"].lower())
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("2000"))
-        self.assertEqual(req["delivery"]["destination_country_code"], "JP")
-        specs = req["technical_specs"]
-        self.assertTrue(any("jaso" in s.lower() for s in specs.get("standards", [])))
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("requirements", response.json())
 
     def test_tier1_interpret_agriculture_fair_trade_organic(self) -> None:
-        """F1/F2: Parses prompt for agricultural commodities extracting certifications and bulk quantity."""
+        """Agricultural prompts cannot be interpreted without a configured provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
@@ -406,16 +417,11 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
             "Max budget $5.00/kg USD. CIF Hamburg, Germany by 2026-12-15. Pre-shipment SGS inspection required."
         )
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
-        req = response.json()["requirements"]
-
-        self.assertIn("coffee", req["title"].lower())
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("20000"))
-        self.assertEqual(req["quantity"]["unit"].lower(), "kg")
-        self.assertEqual(req["delivery"]["destination_country_code"], "DE")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("requirements", response.json())
 
     def test_tier1_interpret_textiles_oeko_tex_gsm(self) -> None:
-        """F1/F2: Parses textile prompt with fabric weight (GSM) and OEKO-TEX Standard 100."""
+        """Textile prompts cannot be interpreted without a configured provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
@@ -424,15 +430,11 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
             "Target unit price $3.00, max $3.50 USD. Destination London, GB under DDP terms."
         )
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
-        req = response.json()["requirements"]
-
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("5000"))
-        self.assertEqual(req["quantity"]["unit"].lower(), "yards")
-        self.assertEqual(req["delivery"]["destination_country_code"], "GB")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("requirements", response.json())
 
     def test_tier1_interpret_medical_fda_astm_cleanroom(self) -> None:
-        """F1/F2: Parses medical supplies requirement with ASTM and FDA 510(k) standards."""
+        """Medical prompts cannot be interpreted without a configured provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
@@ -441,15 +443,8 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
             "Must comply with ASTM D6319 and FDA 510(k) clearance. Target $8.50, max $9.50/box USD. Destination Chicago, US."
         )
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
-        req = response.json()["requirements"]
-
-        self.assertIn("glove", req["title"].lower())
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("10000"))
-        self.assertEqual(req["delivery"]["destination_country_code"], "US")
-        specs = req["technical_specs"]
-        certs = [c.upper() for c in specs.get("certifications", [])]
-        self.assertTrue(any("FDA" in c for c in certs))
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("requirements", response.json())
 
     # --------------------------------------------------------------------------
     # Group 2: Pricing & Volume MOQ Validation (F3 & F4)
@@ -467,7 +462,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "currency": "USD",
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         pricing = response.json()["requirements"]["pricing"]
         self.assertEqual(Decimal(str(pricing["target_unit_price"])), Decimal("12.00"))
@@ -484,7 +479,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "currency": "USD",
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Decimal(str(response.json()["requirements"]["pricing"]["max_total_budget"])), Decimal("50000.00"))
 
@@ -500,7 +495,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "unit": "boxes",
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         qty = response.json()["requirements"]["quantity"]
         self.assertEqual(Decimal(str(qty["target_quantity"])), Decimal("5000"))
@@ -517,6 +512,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         results = response.json()["results"]
         # Find Berlin listing (MOQ: 500)
         berlin = next((r for r in results if "Berlin" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(berlin)
         if berlin:
             self.assertGreaterEqual(berlin["quantity_score"], 90.0)
 
@@ -532,7 +528,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "packaging_preference": "100 pcs per moisture-sealed box",
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["requirements"]["quantity"]["packaging_preference"], "100 pcs per moisture-sealed box")
 
@@ -554,7 +550,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "max_lead_time_days": 30,
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         deliv = response.json()["requirements"]["delivery"]
         self.assertEqual(deliv["max_lead_time_days"], 30)
@@ -572,7 +568,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "min_warranty_months": 12,
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         terms = response.json()["requirements"]["commercial_terms"]
         self.assertEqual(terms["preferred_incoterm"], "DDP")
@@ -588,7 +584,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "preferred_payment_term": "NET_30",
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["requirements"]["commercial_terms"]["preferred_payment_term"], "NET_30")
 
@@ -602,7 +598,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "min_warranty_months": 24,
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["requirements"]["commercial_terms"]["min_warranty_months"], 24)
 
@@ -616,7 +612,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
                 "inspection_requirement": "FACTORY_MILL_CERTIFICATE",
             }
         }
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["requirements"]["commercial_terms"]["inspection_requirement"], "FACTORY_MILL_CERTIFICATE")
 
@@ -624,15 +620,17 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
     # Group 4: Bundled Dataset & Multi-Factor Scoring Engine (F7 & F8)
     # --------------------------------------------------------------------------
 
-    def test_tier1_bundled_listings_repository_retrieval(self) -> None:
-        """F7: Verifies bundled dataset is retrieved with listings across all 5 industrial sectors."""
+    def test_tier1_marketplace_listings_repository_retrieval(self) -> None:
+        """Active persisted marketplace offers remain browsable across sectors."""
         if not _is_route_available("/sourcing/listings", "GET"):
             self.skipTest("GET /sourcing/listings not yet mounted in app")
 
-        response = self._request("GET", "/sourcing/listings")
+        unavailable = self._public_request("GET", "/sourcing/listings")
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertNotIn("listings", unavailable.json())
+        response = self._public_request("GET", "/marketplace/listings")
         self.assertEqual(response.status_code, 200)
-        data = response.json()
-        listings = data.get("listings", [])
+        listings = response.json()
         self.assertGreaterEqual(len(listings), 8)
 
         categories = {item["category"].lower() for item in listings}
@@ -672,6 +670,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         results = response.json()["results"]
 
         berlin = next((r for r in results if "Berlin" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(berlin)
         if berlin:
             self.assertEqual(berlin["match_tier"], "A")
             self.assertGreaterEqual(berlin["composite_score"], 90.0)
@@ -700,6 +699,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         results = response.json()["results"]
 
         nordic = next((r for r in results if "Nordic" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(nordic)
         if nordic:
             self.assertEqual(nordic["match_tier"], "D")
             self.assertLess(nordic["composite_score"], 50.0)
@@ -718,6 +718,8 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         self.assertEqual(response.status_code, 200)
         results = response.json()["results"]
         berlin = next((r for r in results if "Berlin" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(berlin)
+        self.assertIn("attribute_matrix", berlin)
         if berlin and "attribute_matrix" in berlin:
             statuses = [row["status"] for row in berlin["attribute_matrix"]]
             self.assertIn("MATCH", statuses)
@@ -731,6 +733,8 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         response = self._request("POST", "/sourcing/compare", json={"requirements": req})
         self.assertEqual(response.status_code, 200)
         results = response.json()["results"]
+        self.assertTrue(results)
+        self.assertIn("attribute_matrix", results[0])
         if results and "attribute_matrix" in results[0]:
             matrix = results[0]["attribute_matrix"]
             self.assertTrue(any(row.get("attribute") for row in matrix))
@@ -745,6 +749,8 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         self.assertEqual(response.status_code, 200)
         results = response.json()["results"]
         baltic = next((r for r in results if "Baltic" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(baltic)
+        self.assertIn("attribute_matrix", baltic)
         if baltic and "attribute_matrix" in baltic:
             statuses = [row["status"] for row in baltic["attribute_matrix"]]
             self.assertIn("GAP", statuses)
@@ -759,8 +765,10 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         self.assertEqual(response.status_code, 200)
         results = response.json()["results"]
         berlin = next((r for r in results if "Berlin" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(berlin)
         if berlin and "attribute_matrix" in berlin:
             price_row = next((r for r in berlin["attribute_matrix"] if "price" in r["attribute"].lower()), None)
+            self.assertIsNotNone(price_row)
             if price_row:
                 self.assertTrue(len(price_row.get("variance", "")) > 0)
 
@@ -774,8 +782,10 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         self.assertEqual(response.status_code, 200)
         results = response.json()["results"]
         apex = next((r for r in results if "Apex" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(apex)
         if apex and "attribute_matrix" in apex:
             lead_row = next((r for r in apex["attribute_matrix"] if "lead" in r["attribute"].lower()), None)
+            self.assertIsNotNone(lead_row)
             if lead_row:
                 self.assertEqual(lead_row["status"], "GAP")
 
@@ -849,6 +859,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         self.assertEqual(response.status_code, 200)
         gaps = response.json()["gaps"]
         moq_gap = next((g for g in gaps if "moq" in g["field_name"].lower()), None)
+        self.assertIsNotNone(moq_gap)
         if moq_gap:
             self.assertEqual(moq_gap["severity"], "CRITICAL")
 
@@ -867,6 +878,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
         self.assertEqual(response.status_code, 200)
         gaps = response.json()["gaps"]
         price_gap = next((g for g in gaps if "price" in g["field_name"].lower()), None)
+        self.assertIsNotNone(price_gap)
         if price_gap:
             self.assertIn("24", price_gap["explanation"])
             self.assertIn("14", price_gap["explanation"])
@@ -964,7 +976,7 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
     # --------------------------------------------------------------------------
 
     def test_tier1_api_interpret_endpoint(self) -> None:
-        """F13: POST /sourcing/interpret endpoint contract verification."""
+        """Natural interpretation reports the unavailable provider without guessing."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
@@ -973,65 +985,83 @@ class TestBuyerSourcingTier1FeatureCoverage(BaseBuyerSourcingE2ETest):
             "/sourcing/interpret",
             json={"prompt": "1000 units M8 bolts at $10 each to Berlin, Germany."},
         )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertIn("requirements", data)
-        self.assertIn("parsed_fields", data)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("not configured", response.json()["detail"])
 
     def test_tier1_api_listings_endpoint_filtering(self) -> None:
-        """F13: GET /sourcing/listings endpoint supports category filtering."""
+        """Unavailable sourcing catalogue directs clients to marketplace filtering."""
         if not _is_route_available("/sourcing/listings", "GET"):
             self.skipTest("GET /sourcing/listings not yet mounted in app")
 
-        response = self._request("GET", "/sourcing/listings", params={"category": "Fasteners"})
+        response = self._public_request("GET", "/sourcing/listings", params={"category": "Fasteners"})
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("/marketplace/listings", response.json()["detail"])
+        response = self._public_request("GET", "/marketplace/listings", params={"category": "Fasteners"})
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertIn("listings", data)
-        for item in data["listings"]:
+        self.assertGreater(len(data), 0)
+        for item in data:
             self.assertIn("fastener", item["category"].lower())
 
     def test_tier1_api_compare_endpoint(self) -> None:
-        """F13: POST /sourcing/compare endpoint returns candidate evaluations."""
+        """Public comparison fails closed."""
         if not _is_route_available("/sourcing/compare"):
             self.skipTest("POST /sourcing/compare not yet mounted in app")
 
         req = self._make_sample_requirements()
-        response = self._request("POST", "/sourcing/compare", json={"requirements": req})
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("results", response.json())
+        response = self._public_request("POST", "/sourcing/compare", json={"requirements": req})
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("results", response.json())
 
     def test_tier1_api_gap_analysis_endpoint(self) -> None:
-        """F13: POST /sourcing/gap-analysis returns structured gap details."""
+        """Public gap analysis fails closed."""
         if not _is_route_available("/sourcing/gap-analysis"):
             self.skipTest("POST /sourcing/gap-analysis not yet mounted in app")
 
         req = self._make_sample_requirements()
-        response = self._request(
+        response = self._public_request(
             "POST",
             "/sourcing/gap-analysis",
             json={"requirements": req, "listing_id": "00000000-0000-4000-8000-000000000101"},
         )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertIn("listing", data)
-        self.assertIn("gaps", data)
-        self.assertIn("overall_severity", data)
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("gaps", response.json())
 
     def test_tier1_deal_handoff_bridge_prefilled_terms(self) -> None:
-        """F14: Sourcing Hub deal creation handoff provides pre-filled negotiated terms."""
+        """Public evaluation does not produce a deal handoff or inquiry drafts."""
         if not _is_route_available("/sourcing/evaluate"):
             self.skipTest("POST /sourcing/evaluate not yet mounted in app")
 
         req = self._make_sample_requirements()
-        response = self._request(
+        response = self._public_request(
             "POST",
             "/sourcing/evaluate",
             json={"requirements": req, "buyer_organization_id": str(self.buyer_org.id)},
         )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertIn("comparisons", data)
-        self.assertIn("inquiries", data)
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("comparisons", response.json())
+        self.assertNotIn("inquiries", response.json())
+
+    def test_public_draft_inquiry_fails_closed(self) -> None:
+        response = self._public_request(
+            "POST",
+            "/sourcing/draft-inquiry",
+            json={"requirements": self._make_sample_requirements(), "listing_id": "demo-id"},
+        )
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("body", response.json())
+
+    def test_public_sourcing_requires_authentication(self) -> None:
+        app.dependency_overrides.pop(get_current_actor)
+        try:
+            response = self._public_request("GET", "/sourcing/listings")
+            self.assertEqual(response.status_code, 401)
+            response = self._public_request(
+                "POST", "/sourcing/compare", json={"requirements": self._make_sample_requirements()}
+            )
+            self.assertEqual(response.status_code, 401)
+        finally:
+            app.dependency_overrides[get_current_actor] = lambda: self.actor
 
     def _make_sample_requirements(
         self,
@@ -1088,63 +1118,59 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
     # --------------------------------------------------------------------------
 
     def test_tier2_parsing_empty_string(self) -> None:
-        """Boundary: Empty string returns blank requirements without exception or 500 crash."""
+        """Empty input requests clarification instead of fabricated requirements."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         response = self._request("POST", "/sourcing/interpret", json={"prompt": ""})
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertIn("requirements", data)
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Please enter or confirm", response.json()["detail"])
 
     def test_tier2_parsing_whitespace_only(self) -> None:
-        """Boundary: Whitespace-only string returns blank requirements gracefully."""
+        """Whitespace input requests clarification."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         response = self._request("POST", "/sourcing/interpret", json={"prompt": "   \n\t   "})
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 422)
 
     def test_tier2_parsing_extreme_long_prompt(self) -> None:
-        """Boundary: Prompt up to 8,000 characters processed without timeout or overflow."""
+        """A long valid prompt does not bypass the provider requirement."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         prompt = "We require 500 units of bolts. " + ("Additional technical specifications and notes. " * 150)
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 503)
 
     def test_tier2_parsing_conflicting_budget_and_unit_price(self) -> None:
-        """Boundary: Conflicting inputs (e.g. unit price $10 vs total budget $50,000 for 100 units)."""
+        """A conflicting prompt cannot be interpreted without a provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         prompt = "Need 100 units of bolts at $10 each, but total budget is $50,000."
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
-        req = response.json()["requirements"]
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("100"))
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("requirements", response.json())
 
     def test_tier2_parsing_past_delivery_date(self) -> None:
-        """Boundary: Delivery date in past (e.g. 2020-01-01) handled safely."""
+        """A past-date prompt cannot be interpreted without a provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         prompt = "Deliver 1000 units bolts by 2020-01-01 to Berlin, Germany."
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
-        # Delivery date in past should be nullified or marked invalid rather than crashing
-        deliv = response.json()["requirements"]["delivery"]
-        self.assertTrue(deliv.get("required_delivery_date") is None or "2020" in str(deliv.get("required_delivery_date")))
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("requirements", response.json())
 
     def test_tier2_parsing_unparseable_alphanumeric_quantity(self) -> None:
-        """Boundary: Vague quantity ('a few hundred boxes') leaves quantity as None or default."""
+        """A vague-quantity prompt cannot be interpreted without a provider."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         prompt = "Need a few hundred boxes of bolts to Berlin."
         response = self._request("POST", "/sourcing/interpret", json={"prompt": prompt})
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 503)
 
     # --------------------------------------------------------------------------
     # Boundary 2.2: Pricing Boundaries
@@ -1177,8 +1203,9 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         overrides = {"pricing": {"max_total_budget": "0.00"}}
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.json()["requirements"]["pricing"]["max_total_budget"]), 0)
 
     def test_tier2_pricing_currency_mismatch_without_fx(self) -> None:
         """Boundary: Currency mismatch (USD buyer vs EUR seller) flagged as MODERATE gap rather than crash."""
@@ -1200,8 +1227,9 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         overrides = {"pricing": {"target_unit_price": "0.0075"}}
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.json()["requirements"]["pricing"]["target_unit_price"]), Decimal("0.0075"))
 
     # --------------------------------------------------------------------------
     # Boundary 2.3: Quantity & MOQ Boundaries
@@ -1222,8 +1250,9 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         overrides = {"quantity": {"target_quantity": "0.25", "unit": "metric_tons"}}
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.json()["requirements"]["quantity"]["target_quantity"]), Decimal("0.25"))
 
     def test_tier2_quantity_seller_moq_100x_buyer_demand(self) -> None:
         """Boundary: Seller MOQ 100x buyer demand triggers CRITICAL deal blocker."""
@@ -1239,6 +1268,7 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
         )
         self.assertEqual(response.status_code, 200)
         moq_gap = next((g for g in response.json()["gaps"] if "moq" in g["field_name"].lower()), None)
+        self.assertIsNotNone(moq_gap)
         if moq_gap:
             self.assertEqual(moq_gap["severity"], "CRITICAL")
 
@@ -1261,21 +1291,23 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         overrides = {"quantity": {"target_quantity": "500", "unit": "liters"}}
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["requirements"]["quantity"]["unit"], "liters")
 
     # --------------------------------------------------------------------------
     # Boundary 2.4: Lead Time & Delivery Boundaries
     # --------------------------------------------------------------------------
 
     def test_tier2_lead_time_zero_days(self) -> None:
-        """Boundary: Zero lead time days handled as immediate stock dispatch."""
+        """A one-day maximum lead time is preserved."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         overrides = {"delivery": {"max_lead_time_days": 1, "destination_country_code": "DE"}}
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["requirements"]["delivery"]["max_lead_time_days"], 1)
 
     def test_tier2_lead_time_extreme_days(self) -> None:
         """Boundary: Lead time of 730 days (2 years) flagged as deal-blocking non-compliant."""
@@ -1324,6 +1356,7 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
         )
         self.assertEqual(response.status_code, 200)
         lead_gap = next((g for g in response.json()["gaps"] if "lead" in g["field_name"].lower()), None)
+        self.assertIsNotNone(lead_gap)
         if lead_gap:
             self.assertEqual(lead_gap["category"], "MISSING")
 
@@ -1332,13 +1365,14 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
     # --------------------------------------------------------------------------
 
     def test_tier2_commercial_terms_unrecognized_incoterm(self) -> None:
-        """Boundary: Non-standard Incoterm ('CUSTOM_PORT') flagged as AMBIGUOUS."""
+        """An explicitly requested EXW Incoterm is preserved."""
         if not _is_route_available("/sourcing/interpret"):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         overrides = {"commercial_terms": {"preferred_incoterm": "EXW"}}
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["requirements"]["commercial_terms"]["preferred_incoterm"], "EXW")
 
     def test_tier2_commercial_terms_missing_warranty(self) -> None:
         """Boundary: None warranty scored 0 pts and flagged MISSING."""
@@ -1381,6 +1415,7 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
         )
         self.assertEqual(response.status_code, 200)
         warranty_gap = next((g for g in response.json()["gaps"] if "warranty" in g["field_name"].lower()), None)
+        self.assertIsNotNone(warranty_gap)
         if warranty_gap:
             self.assertEqual(warranty_gap["category"], "AMBIGUOUS")
 
@@ -1390,8 +1425,9 @@ class TestBuyerSourcingTier2BoundaryCases(BaseBuyerSourcingE2ETest):
             self.skipTest("POST /sourcing/interpret not yet mounted in app")
 
         overrides = {"commercial_terms": {"acceptable_incoterms": []}}
-        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": overrides})
+        response = self._request("POST", "/sourcing/interpret", json={"structured_overrides": self._complete_overrides(overrides)})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["requirements"]["commercial_terms"]["acceptable_incoterms"], [])
 
     def _make_sample_requirements(self, **kwargs: Any) -> dict[str, Any]:
         return TestBuyerSourcingTier1FeatureCoverage._make_sample_requirements(self, **kwargs)
@@ -1451,6 +1487,7 @@ class TestBuyerSourcingTier3CrossFeatureCombinations(BaseBuyerSourcingE2ETest):
         results = response.json()["results"]
         # Fasteners without aerospace or medical certs should have penalized scores
         apex = next((r for r in results if "Apex" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(apex)
         if apex:
             self.assertLess(apex["composite_score"], 60.0)
 
@@ -1483,6 +1520,7 @@ class TestBuyerSourcingTier3CrossFeatureCombinations(BaseBuyerSourcingE2ETest):
         results = response.json()["results"]
         # MediShield (Medical Gloves) should be heavily penalized on specs despite $8.50 price
         medishield = next((r for r in results if "MediShield" in r.get("seller_organization_name", "")), None)
+        self.assertIsNotNone(medishield)
         if medishield:
             self.assertLess(medishield["spec_score"], 30.0)
 
@@ -1542,20 +1580,25 @@ class TestBuyerSourcingTier3CrossFeatureCombinations(BaseBuyerSourcingE2ETest):
 
 
 class TestBuyerSourcingTier4RealWorldJourneys(BaseBuyerSourcingE2ETest):
-    """Tier 4: End-to-end buyer procurement journeys across all 5 industrial sectors."""
+    """Public buyers can browse offers but cannot evaluate or draft inquiries."""
+
+    def _assert_browse_and_unavailable(self, prompt: str, category: str) -> None:
+        browse = self._public_request("GET", "/marketplace/listings", params={"category": category})
+        self.assertEqual(browse.status_code, 200)
+        self.assertGreater(len(browse.json()), 0)
+        self.assertTrue(all(category.lower() in item["category"].lower() for item in browse.json()))
+        response = self._public_request(
+            "POST",
+            "/sourcing/evaluate",
+            json={"prompt": prompt, "buyer_organization_id": str(self.buyer_org.id)},
+        )
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("comparisons", response.json())
+        self.assertNotIn("inquiries", response.json())
+        self.ai_provider_mock.assert_not_called()
 
     def test_tier4_journey_fasteners_automotive_oem(self) -> None:
-        """Journey 4.1: Industrial Fasteners — Automotive OEM procurement for German assembly plant.
-
-        Flow:
-        1. Interpret free-text requirement for DIN 933 M8 bolts.
-        2. Filter marketplace listings for Fasteners.
-        3. Compare candidate offerings (Berlin vs Baltic vs Nordic vs Apex).
-        4. Detect gaps in Baltic (excessive MOQ) and Apex (missing lead time).
-        5. Verify Berlin achieves Tier A ideal match (>=90%).
-        6. Draft formal purchase intent inquiry for Berlin.
-        7. Initiate bilateral deal room on SyncAlly.
-        """
+        """Fastener buyers browse real offers; evaluation remains unavailable."""
         if not _is_route_available("/sourcing/evaluate"):
             self.skipTest("POST /sourcing/evaluate not yet mounted in app")
 
@@ -1565,43 +1608,10 @@ class TestBuyerSourcingTier4RealWorldJourneys(BaseBuyerSourcingE2ETest):
             "Target price $12.00, maximum budget $14.00 USD per box. Minimum 12-month warranty with EN 10204 3.1 Mill Certificate."
         )
 
-        response = self._request(
-            "POST",
-            "/sourcing/evaluate",
-            json={"prompt": prompt, "buyer_organization_id": str(self.buyer_org.id)},
-        )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        req = data["requirements"]
-
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("1000"))
-        self.assertEqual(req["delivery"]["destination_country_code"], "DE")
-
-        comparisons = data["comparisons"]
-        self.assertGreaterEqual(len(comparisons), 3)
-
-        # Berlin should be rank #1 / Tier A
-        top_match = comparisons[0]
-        self.assertIn("Berlin", top_match["seller_organization_name"])
-        self.assertEqual(top_match["match_tier"], "A")
-        self.assertGreaterEqual(top_match["composite_score"], 90.0)
-
-        # Inquiries should contain draft for Berlin
-        inquiries = data["inquiries"]
-        self.assertIn("00000000-0000-4000-8000-000000000101", inquiries)
-        berlin_inquiry = inquiries["00000000-0000-4000-8000-000000000101"]
-        self.assertIn("subject", berlin_inquiry)
-        self.assertIn("body", berlin_inquiry)
+        self._assert_browse_and_unavailable(prompt, "Fasteners")
 
     def test_tier4_journey_electronics_iot_cable_harness(self) -> None:
-        """Journey 4.2: Electronics & Wiring — IoT hardware manufacturer procuring 2m 28AWG wiring harness.
-
-        Flow:
-        1. Interpret prompt for 28AWG wire harness with JASO D611 and RoHS.
-        2. Evaluate Tokyo Micro-Conductor candidate listing.
-        3. Identify ambiguous warranty and negotiable payment gaps.
-        4. Draft targeted inquiry requesting 24-month warranty and Net 30 terms.
-        """
+        """Electronics buyers browse real offers; evaluation remains unavailable."""
         if not _is_route_available("/sourcing/evaluate"):
             self.skipTest("POST /sourcing/evaluate not yet mounted in app")
 
@@ -1610,31 +1620,10 @@ class TestBuyerSourcingTier4RealWorldJourneys(BaseBuyerSourcingE2ETest):
             "JASO D611 and RoHS. Target price $7.00, max $8.00 USD to Tokyo, Japan. Need delivery in 35 days."
         )
 
-        response = self._request(
-            "POST",
-            "/sourcing/evaluate",
-            json={"prompt": prompt, "buyer_organization_id": str(self.buyer_org.id)},
-        )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        tokyo = next((c for c in data["comparisons"] if "Tokyo" in c.get("seller_organization_name", "")), None)
-        if tokyo:
-            self.assertIn(tokyo["match_tier"], ["B", "C"])
-            # Inquiry for Tokyo must clarify negotiable terms
-            tokyo_inquiry = data["inquiries"].get("00000000-0000-4000-8000-000000000103")
-            if tokyo_inquiry:
-                self.assertTrue("warranty" in tokyo_inquiry["body"].lower() or "payment" in tokyo_inquiry["body"].lower())
+        self._assert_browse_and_unavailable(prompt, "Electronics")
 
     def test_tier4_journey_agriculture_specialty_coffee(self) -> None:
-        """Journey 4.3: Agricultural Commodities — Coffee roaster procuring 20 metric tons organic Arabica green coffee.
-
-        Flow:
-        1. Interpret prompt for 20,000 kg Arabica coffee with Fair Trade certification.
-        2. Evaluate Andean High-Altitude Coffee Co.
-        3. Verify CIF Hamburg terms, SGS quality inspection, and competitive pricing.
-        4. Confirm Tier A match and prepare trade deal initiation.
-        """
+        """Agricultural buyers browse real offers; evaluation remains unavailable."""
         if not _is_route_available("/sourcing/evaluate"):
             self.skipTest("POST /sourcing/evaluate not yet mounted in app")
 
@@ -1643,29 +1632,10 @@ class TestBuyerSourcingTier4RealWorldJourneys(BaseBuyerSourcingE2ETest):
             "Max budget $5.00/kg USD delivered CIF Hamburg port by 2026-12-15. Pre-shipment SGS inspection certificate required."
         )
 
-        response = self._request(
-            "POST",
-            "/sourcing/evaluate",
-            json={"prompt": prompt, "buyer_organization_id": str(self.buyer_org.id)},
-        )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        req = data["requirements"]
-        self.assertEqual(Decimal(str(req["quantity"]["target_quantity"])), Decimal("20000"))
-
-        andean = next((c for c in data["comparisons"] if "Andean" in c.get("seller_organization_name", "")), None)
-        if andean:
-            self.assertGreaterEqual(andean["composite_score"], 80.0)
+        self._assert_browse_and_unavailable(prompt, "Agricultural")
 
     def test_tier4_journey_textiles_organic_canvas(self) -> None:
-        """Journey 4.4: Textiles & Apparel — Fashion manufacturer sourcing 5,000 yards organic cotton canvas.
-
-        Flow:
-        1. Interpret prompt for 320 GSM OEKO-TEX 100 canvas.
-        2. Evaluate Lancashire Weaving Mills listing.
-        3. Identify missing lead time and EXW freight limitation.
-        4. Synthesize inquiry proposing DDP London freight quote and dispatch timeline confirmation.
-        """
+        """Textile buyers browse real offers; evaluation remains unavailable."""
         if not _is_route_available("/sourcing/evaluate"):
             self.skipTest("POST /sourcing/evaluate not yet mounted in app")
 
@@ -1674,30 +1644,10 @@ class TestBuyerSourcingTier4RealWorldJourneys(BaseBuyerSourcingE2ETest):
             "Budget max $3.50/yard USD. Destination London, GB under DDP terms."
         )
 
-        response = self._request(
-            "POST",
-            "/sourcing/evaluate",
-            json={"prompt": prompt, "buyer_organization_id": str(self.buyer_org.id)},
-        )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        lancashire = next((c for c in data["comparisons"] if "Lancashire" in c.get("seller_organization_name", "")), None)
-        if lancashire:
-            self.assertIn(lancashire["match_tier"], ["B", "C"])
-            inquiry = data["inquiries"].get("00000000-0000-4000-8000-000000000106")
-            if inquiry:
-                self.assertTrue("lead time" in inquiry["body"].lower() or "freight" in inquiry["body"].lower() or "exw" in inquiry["body"].lower())
+        self._assert_browse_and_unavailable(prompt, "Textiles")
 
     def test_tier4_journey_medical_ppe_hospital_replenishment(self) -> None:
-        """Journey 4.5: Medical Supplies & PPE — Hospital network emergency replenishment of nitrile gloves.
-
-        Flow:
-        1. Interpret prompt for 10,000 boxes powder-free nitrile examination gloves.
-        2. Evaluate MediShield Global Corp listing.
-        3. Verify FDA 510(k), ISO 13485, CE certifications, and 10-day lead time.
-        4. Confirm Tier A match and initiate high-priority deal room.
-        """
+        """Medical buyers browse real offers; evaluation remains unavailable."""
         if not _is_route_available("/sourcing/evaluate"):
             self.skipTest("POST /sourcing/evaluate not yet mounted in app")
 
@@ -1707,19 +1657,4 @@ class TestBuyerSourcingTier4RealWorldJourneys(BaseBuyerSourcingE2ETest):
             "Delivery within 14 days under DDP terms."
         )
 
-        response = self._request(
-            "POST",
-            "/sourcing/evaluate",
-            json={"prompt": prompt, "buyer_organization_id": str(self.buyer_org.id)},
-        )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        medishield = next((c for c in data["comparisons"] if "MediShield" in c.get("seller_organization_name", "")), None)
-        if medishield:
-            self.assertEqual(medishield["match_tier"], "A")
-            self.assertGreaterEqual(medishield["composite_score"], 90.0)
-            inquiry = data["inquiries"].get("00000000-0000-4000-8000-000000000108")
-            if inquiry:
-                self.assertIn("subject", inquiry)
-                self.assertIn("body", inquiry)
+        self._assert_browse_and_unavailable(prompt, "Medical")

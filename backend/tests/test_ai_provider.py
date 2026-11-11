@@ -62,6 +62,7 @@ from syncally.domain.shared.identifiers import (
 )
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.fake import DeterministicFakeAIProvider
+from syncally.infrastructure.ai.graph import draft_proposal_with_graph
 from syncally.infrastructure.ai.openai import MAX_BYTES
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.operations import SafeOperationalFormatter
@@ -202,7 +203,7 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertIs(result.result.status, ValidationStatus.VALID)
         self.assertEqual(len(result.candidates), 1)
         self.assertEqual(len(calls), 2)
-        self.assertIn("previous extraction failed validation", calls[1]["contents"][0]["parts"][0]["text"])
+        self.assertIn("previous extraction failed validation", calls[1]["systemInstruction"]["parts"][0]["text"])
 
     def test_gemini_repairs_a_rejected_proposal_once_with_grounded_citations(self) -> None:
         context = self._demo_context(
@@ -253,7 +254,7 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertIs(result.result.status, ValidationStatus.VALID)
         self.assertEqual(result.proposal, self.proposal)
         self.assertEqual(len(calls), 2)
-        self.assertIn("previous proposal failed validation", calls[1]["contents"][0]["parts"][0]["text"])
+        self.assertIn("previous proposal failed validation", calls[1]["systemInstruction"]["parts"][0]["text"])
 
     def test_gemini_proposal_separates_item_words_from_count_unit(self) -> None:
         context = self._demo_context(
@@ -315,7 +316,7 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertEqual(result.proposal.unit, "balls")
         self.assertEqual(len(calls), 1)
         prompt = calls[0]["contents"][0]["parts"][0]["text"]
-        self.assertIn("For quantity citations", prompt)
+        self.assertIn("For quantity citations", calls[0]["systemInstruction"]["parts"][0]["text"])
         self.assertIn("120 table tennis balls", prompt)
 
     def test_gemini_does_not_retry_an_explicit_insufficient_context_result(self) -> None:
@@ -1172,6 +1173,66 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertEqual(len(first), 1)
         self.assertEqual([fact.id for fact in second], [first[0].id])
         self.assertEqual(self.repository.fact_persistence_locks, 2)
+
+    def test_fact_deduplication_preserves_currency_and_quantity_unit(self) -> None:
+        for field, body, value, units in (
+            ("unit_price", "USD 12 each; CAD 12 each.", "12", ("USD", "CAD")),
+            ("quantity", "12 boxes or 12 pallets.", "12", ("boxes", "pallets")),
+        ):
+            with self.subTest(field=field):
+                self.buyer_private_message = replace(self.buyer_private_message, body=body)
+                self.repository.messages[0] = self.buyer_private_message
+                facts = [
+                    ExtractedFact.from_mapping(_fact_payload(
+                        field=field, value=value, currency_or_unit=unit,
+                        source={
+                            "schema_version": 1,
+                            "message_id": str(self.buyer_private_message.id),
+                            "quote": body, "unknown_reason": None,
+                        },
+                    ))
+                    for unit in units
+                ]
+                result = self._extract(DeterministicFakeAIProvider(facts=facts))
+                saved = persist_fact_candidates(self.actor, self.deal.id, result, self.repository)
+                replay = persist_fact_candidates(self.actor, self.deal.id, result, self.repository)
+                self.assertEqual([fact.currency_or_unit for fact in saved], list(units))
+                self.assertEqual([fact.id for fact in replay], [fact.id for fact in saved])
+                self.assertNotEqual(saved[0].id, saved[1].id)
+
+    def test_remote_price_with_explicit_currency_and_symbol_reaches_candidates(self) -> None:
+        message = replace(self.buyer_private_message, body="Unit price CAD $12 each.",
+                          visibility=Visibility.SHAREABLE)
+        payload = {"schema_version": 1, "facts": [_fact_payload(
+            field="unit_price", value="12", currency_or_unit="CAD",
+            source={
+                "schema_version": 1, "message_id": str(message.id),
+                "quote": message.body, "unknown_reason": None,
+            },
+        )]}
+        provider = ConfiguredAIProvider(self._remote_config(), transport=httpx.MockTransport(
+            lambda _: self._completion(payload),
+        ))
+        result = extract_facts_from_context(
+            replace(self._remote_context(), messages=(message,)), provider,
+        )
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(result.candidates[0].fact.currency_or_unit, "CAD")
+
+    def test_proposal_readiness_does_not_ignore_messages_when_facts_are_partial(self) -> None:
+        provider = DeterministicFakeAIProvider(proposal=self.proposal)
+        context = self._remote_context()
+        result = draft_proposal_with_graph(context, provider)
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(provider.call_count, 1)
+
+    def test_proposal_readiness_without_messages_requests_missing_facts(self) -> None:
+        provider = DeterministicFakeAIProvider(proposal=self.proposal)
+        context = replace(self._remote_context(), messages=())
+        result = draft_proposal_with_graph(context, provider)
+        self.assertIsNone(result.proposal)
+        self.assertEqual(result.result.issues[0].code, "AI_REQUIRED_FACTS_MISSING")
+        self.assertEqual(provider.call_count, 0)
 
     def test_deterministic_fake_satisfies_the_port_contract(self) -> None:
         provider = DeterministicFakeAIProvider()

@@ -50,6 +50,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [navRoute, setNavRoute] = useState(route);
@@ -134,6 +135,22 @@ export default function App() {
       cancelled = true;
     };
   }, [accessToken, sessionVersion]);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const updateNavHeight = () => {
+      document.documentElement.style.setProperty("--nav-h", `${nav.getBoundingClientRect().height + 12}px`);
+    };
+    updateNavHeight();
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateNavHeight);
+    resizeObserver?.observe(nav);
+    window.addEventListener("resize", updateNavHeight);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateNavHeight);
+    };
+  }, []);
 
   useEffect(() => {
     if (!profileMenuOpen) return;
@@ -289,7 +306,7 @@ export default function App() {
       <AmbientField />
       <ScrollProgress />
       <span key={viewKey} className="route-flash" aria-hidden="true" />
-      <header className={`site-nav${navOpen ? " is-open" : ""}`}>
+      <header ref={navRef} className={`site-nav${navOpen ? " is-open" : ""}`}>
         <button type="button" className="brand" onClick={navigateToDeals}>
           <span className="brand__mark" aria-hidden="true">
             <svg viewBox="0 0 28 28" focusable="false">

@@ -823,8 +823,6 @@ aside.deal-onboarding-banner h2::before {
 }
 
 .deal-desk__tabs {
-  position: sticky;
-  top: calc(var(--nav-h) + 10px);
   z-index: 30;
   flex-wrap: nowrap;
   width: fit-content;

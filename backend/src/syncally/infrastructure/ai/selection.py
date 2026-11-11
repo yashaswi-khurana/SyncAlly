@@ -24,7 +24,7 @@ from syncally.domain.ai.contracts import (
 from syncally.domain.conversations import Message, MessageSourceType, Visibility
 from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
-from syncally.infrastructure.ai.nvidia import NvidiaChatCompletions
+from syncally.infrastructure.ai.groq import GroqChatCompletions
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions, transmitted_context
 from syncally.infrastructure.ai.sourcing import interpret_sourcing_requirements
 
@@ -35,13 +35,14 @@ class ConfiguredAIProvider:
         self._config = config
         mode = config.ai_provider
         self.provenance = AIProvenance(provider="offline", mode=mode, context_scope="authorized")
-        self._remote: OpenAIChatCompletions | GeminiGenerateContent | NvidiaChatCompletions | None = None
+        self._remote: OpenAIChatCompletions | GeminiGenerateContent | NvidiaChatCompletions | GroqChatCompletions | None = None
         if mode == "offline":
             if config.app_env.lower() not in {"development", "test"}:
                 raise AIConfigurationError("AI suggestions are not configured")
             return
         is_gemini = mode.startswith("gemini")
         is_nvidia = mode.startswith("nvidia")
+        is_groq = mode.startswith("groq")
         if is_gemini:
             model = config.gemini_model
             api_key = config.google_api_key
@@ -52,6 +53,11 @@ class ConfiguredAIProvider:
             api_key = config.nvidia_api_key
             provider_name = "nvidia"
             adapter = NvidiaChatCompletions
+        elif is_groq:
+            model = config.groq_model
+            api_key = config.groq_api_key
+            provider_name = "groq"
+            adapter = GroqChatCompletions
         else:
             model = config.openai_model
             api_key = config.openai_api_key

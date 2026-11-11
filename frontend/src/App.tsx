@@ -278,13 +278,13 @@ export default function App() {
           >
             Sourcing Hub
           </button>
-          <button
+          {/* <button
             type="button"
             className={`nav-link${isCreate ? " is-active" : ""}`}
             onClick={() => navigateToCreateDeal()}
           >
             New deal
-          </button>
+          </button> */}
           <button
             type="button"
             className={`nav-link${isOrganizations ? " is-active" : ""}`}

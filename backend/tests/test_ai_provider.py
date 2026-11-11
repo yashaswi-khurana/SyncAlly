@@ -64,6 +64,7 @@ from syncally.infrastructure.ai.demo import DemoAISuggestionProvider
 from syncally.infrastructure.ai.fake import DeterministicFakeAIProvider
 from syncally.infrastructure.ai.openai import MAX_BYTES
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
+from syncally.operations import SafeOperationalFormatter
 
 _AI_MODULE_FILES = (
     Path(__file__).resolve().parents[1] / "src/syncally/application/ai.py",
@@ -563,6 +564,45 @@ class AISuggestionProviderTests(unittest.TestCase):
             self.assertIsNone(result.provenance.fallback_reason)
             if index == 0:
                 self.assertEqual(result.proposal, self.proposal)
+
+    def test_remote_proposal_grounding_logs_only_the_safe_citation_failure_stage(self) -> None:
+        context = self._demo_context(
+            "Item: Widget, 12 boxes at USD 2.50 each; deliver to Toronto by 2026-12-01."
+        )
+        facts = DemoAISuggestionProvider().extract_facts(
+            FactExtractionRequest(context), timeout_seconds=1
+        )
+        citations = [{
+            "schema_version": 1,
+            "field": fact.field.value,
+            "value": fact.value,
+            "currency_or_unit": fact.currency_or_unit,
+            "source": {
+                "schema_version": 1,
+                "message_id": str(fact.source.message_id),
+                "quote": fact.source.quote,
+                "unknown_reason": None,
+            },
+        } for fact in facts]
+        citations[0]["source"]["quote"] = "private invalid citation"
+        output = {
+            "schema_version": 1,
+            "insufficient_context": False,
+            "proposal": _proposal_payload(),
+            "citations": citations,
+        }
+        provider = ConfiguredAIProvider(
+            self._remote_config(),
+            transport=httpx.MockTransport(lambda _: self._completion(output)),
+        )
+
+        with self.assertLogs("syncally.infrastructure.ai.openai", level="INFO") as captured:
+            result = draft_proposal_from_context(context, provider, policy=AIRetryPolicy(max_attempts=1))
+
+        self.assertIs(result.result.status, ValidationStatus.INVALID)
+        events = [SafeOperationalFormatter().format(record) for record in captured.records]
+        self.assertTrue(any('"error_code":"AI_PROPOSAL_CITATION_SOURCE"' in event for event in events))
+        self.assertNotIn("private invalid citation", "".join(events))
 
     def test_remote_currency_requires_explicit_noncontradictory_cited_currency(self) -> None:
         for price, valid in (

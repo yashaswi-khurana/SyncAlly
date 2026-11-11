@@ -281,12 +281,23 @@ class OpenAIChatCompletions:
     ) -> None:
         for citation in citations:
             if citation.source.message_id is not None:
-                self._ground((citation,), context)
+                try:
+                    self._ground((citation,), context)
+                except (ValueError, TypeError, KeyError, AIContractError, AIPermanentError):
+                    log_operation(
+                        logger, Operation.AI_PROVIDER_FAILURE,
+                        failure_kind="PERMANENT", error_code="AI_PROPOSAL_CITATION_SOURCE",
+                    )
+                    raise
             elif citation.source.unknown_reason != "transmitted_term" or not any(
                 term.field == citation.field.value and term.typed_value == citation.value
                 and term.currency_or_unit == citation.currency_or_unit
                 for term in context.constraints
             ):
+                log_operation(
+                    logger, Operation.AI_PROVIDER_FAILURE,
+                    failure_kind="PERMANENT", error_code="AI_PROPOSAL_STORED_TERM",
+                )
                 raise ValueError("Unsupported term citation")
         expected = {
             FactField.ITEM_DESCRIPTION: proposal.description,
@@ -297,13 +308,29 @@ class OpenAIChatCompletions:
         if proposal.delivery_date is not None:
             expected[FactField.DELIVERY_DATE] = proposal.delivery_date.isoformat()
         if len(citations) != len(expected) or {fact.field for fact in citations} != set(expected):
+            log_operation(
+                logger, Operation.AI_PROVIDER_FAILURE,
+                failure_kind="PERMANENT", error_code="AI_PROPOSAL_CITATION_SET",
+            )
             raise ValueError("Incomplete citations")
         for citation in citations:
             if citation.value != expected[citation.field]:
+                log_operation(
+                    logger, Operation.AI_PROVIDER_FAILURE,
+                    failure_kind="PERMANENT", error_code="AI_PROPOSAL_CITATION_VALUE",
+                )
                 raise ValueError("Citation does not support proposal")
             if citation.field is FactField.QUANTITY and citation.currency_or_unit not in {None, proposal.unit}:
+                log_operation(
+                    logger, Operation.AI_PROVIDER_FAILURE,
+                    failure_kind="PERMANENT", error_code="AI_PROPOSAL_QUANTITY_UNIT",
+                )
                 raise ValueError("Quantity unit mismatch")
             if citation.field is FactField.UNIT_PRICE and citation.currency_or_unit != proposal.currency:
+                log_operation(
+                    logger, Operation.AI_PROVIDER_FAILURE,
+                    failure_kind="PERMANENT", error_code="AI_PROPOSAL_PRICE_CURRENCY",
+                )
                 raise ValueError("Price currency mismatch")
 
     def _call(self, context: AiContext, operation: str, schema: dict[str, Any], timeout: float) -> Any:

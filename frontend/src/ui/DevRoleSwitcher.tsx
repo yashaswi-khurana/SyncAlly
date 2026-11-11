@@ -4,10 +4,13 @@ import { apiRequest, listOrganizations } from "../api/client";
 import { getAccessToken, setTokens } from "../api/tokenStore";
 import type { TokenResponse } from "../api/types";
 
-const SWITCHER_ENABLED =
-  import.meta.env.DEV ||
-  (import.meta.env as ImportMetaEnv & { VITE_ENABLE_DEV_SWITCHER?: string })
-    .VITE_ENABLE_DEV_SWITCHER === "true";
+function switcherEnabled() {
+  const environment = import.meta.env.VITE_APP_ENV?.trim().toLowerCase();
+  const isLocal = environment
+    ? environment === "development" || environment === "test"
+    : import.meta.env.DEV;
+  return isLocal && (import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEV_SWITCHER === "true");
+}
 
 type DemoRole = "Buyer" | "Seller" | "Admin";
 
@@ -16,13 +19,14 @@ interface DevRoleSwitcherProps {
 }
 
 export default function DevRoleSwitcher({ onSessionChanged }: DevRoleSwitcherProps) {
+  const enabled = switcherEnabled();
   const [open, setOpen] = useState(false);
   const [role, setRole] = useState<DemoRole>("Admin");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
 
   useEffect(() => {
-    if (!SWITCHER_ENABLED) return;
+    if (!enabled) return;
 
     let disposed = false;
 
@@ -62,9 +66,9 @@ export default function DevRoleSwitcher({ onSessionChanged }: DevRoleSwitcherPro
       disposed = true;
       window.removeEventListener("storage", handleStorage);
     };
-  }, []);
+  }, [enabled]);
 
-  if (!SWITCHER_ENABLED) return null;
+  if (!enabled) return null;
 
   async function switchRole(targetRole: DemoRole) {
     const sessionToken = getAccessToken();

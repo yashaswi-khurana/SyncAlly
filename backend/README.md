@@ -208,8 +208,8 @@ No migration is required for this additive, non-durable provenance.
 
 ## AI-backed sourcing
 
-Natural-language `/sourcing/interpret` requests use the configured OpenAI or
-Gemini provider with explicit remote egress enabled. Only the submitted sourcing
+Natural-language `/sourcing/interpret` requests use the configured remote
+provider with explicit remote egress enabled. Only the submitted sourcing
 prompt and explicit controls are transmitted; this endpoint does not load private
 deal conversations. The deal-private-context allowlist does not apply to text
 the user explicitly submits for sourcing analysis.
@@ -228,12 +228,15 @@ Browse active offers through `GET /marketplace/listings` instead; it supports
 `limit` and `offset` and does not verify seller claims. A future sourcing
 catalogue needs an explicit unknown-aware, paginated contract.
 
-Comparison, gap analysis, inquiry drafting and evaluation return 503 in every
+Scored comparison, gap analysis, inquiry drafting and evaluation return 503 in every
 environment until the persisted schema and scoring can reliably represent missing
-information, currencies, units and commercial terms. The UI directs users to
-Marketplace instead; it does not display fictional suppliers. Bundled examples
-remain available only to direct offline development/test service callers, and
-UI test fixtures require explicit injection. No inquiry is sent automatically.
+information, currencies, units and commercial terms. The sourcing page uses
+`/marketplace/listings` for paginated browsing and a side-by-side comparison of
+seller-stated details, without match scores. It offers AI interpretation for
+review and supports manual search even when AI is unavailable. Buyers can start
+a deal using an active listing; missing structured terms must be confirmed with
+the seller. Bundled examples remain available only to direct offline
+development/test service callers. No inquiry is sent automatically.
 Re-enabling these operations also requires buyer-organization authorization and
 human review of any generated inquiry.
 

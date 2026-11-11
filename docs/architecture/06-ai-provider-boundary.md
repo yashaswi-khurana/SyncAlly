@@ -222,18 +222,20 @@ separate release requirements: an AI-generated ranking cannot certify a supplier
 ### Sourcing implementation boundary
 
 The backend `/sourcing/interpret` endpoint supports natural-language
-interpretation using the configured OpenAI/Gemini transport; strict field
+interpretation using the configured remote transport; strict field
 contracts and quoted source evidence are validated locally. Unknown required
 fields cause clarification, not speculative commercial defaults. Structured
 user input is explicitly labeled separately. Provider failures are surfaced
 without offline substitution for sourcing.
 
-Sourcing comparison, gap analysis, evaluation and inquiry drafting are currently
+Scored sourcing comparison, gap analysis, evaluation and inquiry drafting remain
 unavailable because persisted offers lack the data and unknown-value semantics
-needed for reliable scoring. The page directs users to the existing Marketplace
-instead of displaying fictional suppliers. Bundled data is restricted to direct
-development/test service callers. Interpretation is not currently exposed on the
-production sourcing page. Marketplace offers are not supplier verification.
+needed for reliable scoring. The sourcing page can interpret requirements for
+human review, search active marketplace listings, compare up to three offers'
+stated details without scores, and start a deal from a selected offer. Search
+remains usable when AI is unavailable. Unstructured seller terms require
+confirmation; marketplace offers are not supplier verification. Bundled data is
+restricted to direct development/test service callers and test fixtures.
 
 Sourcing transmits the prompt and controls the user submits for this purpose; it
 does not retrieve organization-private deal data. Operator remote-egress and

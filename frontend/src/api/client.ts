@@ -344,9 +344,10 @@ export function searchOrganizationDirectory(
 
 export function searchMarketplaceListings(
   filters: { q?: string; country_code?: string; category?: string } = {},
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; limit?: number; offset?: number },
 ): Promise<MarketplaceListing[]> {
-  const params = new URLSearchParams({ limit: "100" });
+  const params = new URLSearchParams({ limit: String(options?.limit ?? 100) });
+  if (options?.offset !== undefined) params.set("offset", String(options.offset));
   for (const [key, value] of Object.entries(filters)) {
     if (value?.trim()) params.set(key, value.trim());
   }
@@ -360,8 +361,8 @@ export function createMarketplaceListing(input: CreateMarketplaceListingInput): 
   });
 }
 
-export function getMarketplaceListing(listingId: string): Promise<MarketplaceListing> {
-  return apiRequest<MarketplaceListing>(`/marketplace/listings/${encodeURIComponent(listingId)}`);
+export function getMarketplaceListing(listingId: string, options?: { signal?: AbortSignal }): Promise<MarketplaceListing> {
+  return apiRequest<MarketplaceListing>(`/marketplace/listings/${encodeURIComponent(listingId)}`, { signal: options?.signal });
 }
 
 export function deactivateMarketplaceListing(listingId: string): Promise<{ status: string }> {

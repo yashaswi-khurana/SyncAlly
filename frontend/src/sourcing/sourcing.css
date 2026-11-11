@@ -12,6 +12,24 @@
   min-width: 0;
 }
 
+.sourcing-offer-table-wrap {
+  overflow-x: auto;
+}
+
+.sourcing-offer-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sourcing-offer-table th,
+.sourcing-offer-table td {
+  min-width: 150px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
 /* ---------- header ---------- */
 
 .sourcing-hub-header {

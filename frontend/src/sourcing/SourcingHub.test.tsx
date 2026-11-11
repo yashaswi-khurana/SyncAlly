@@ -8,8 +8,17 @@
  * - Tier 4: Real-World Procurement Journeys across all 5 sectors (Fasteners, Electronics, Agriculture, Textiles, Medical)
  */
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { evaluateSourcing } from "../api/client";
+import { MOCK_BUNDLED_LISTINGS as CATALOGUE_LISTINGS } from "./bundledListings";
+import { evaluateNaturalRequirements, installSourcingMocks, openServerInquiry } from "./sourcingTestFixtures";
+
+vi.mock("../api/client", () => ({
+  draftSourcingInquiry: vi.fn(),
+  evaluateSourcing: vi.fn(),
+  interpretSourcingRequirements: vi.fn(),
+}));
 
 // ==============================================================================
 // CONTRACT TYPES & FIXTURES (Aligned with PROJECT.md and spec_miner handoff)
@@ -354,6 +363,7 @@ import { ReferenceSourcingHub } from "./SourcingHubPage";
 describe("SourcingHub Frontend Test Suite", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    installSourcingMocks();
     window.location.hash = "";
   });
 
@@ -368,7 +378,7 @@ describe("SourcingHub Frontend Test Suite", () => {
   describe("Tier 1: UI Feature Coverage", () => {
     it("1.1 renders Sourcing Hub title, breadcrumbs, and active navigation state", () => {
       render(<ReferenceSourcingHub />);
-      expect(screen.getByRole("heading", { name: /production buyer sourcing agent/i })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /buyer sourcing agent/i })).toBeInTheDocument();
       expect(screen.getByRole("navigation", { name: /breadcrumb/i })).toHaveTextContent(/sourcing hub/i);
     });
 
@@ -379,23 +389,20 @@ describe("SourcingHub Frontend Test Suite", () => {
 
       expect(screen.getByLabelText(/item title/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/target quantity/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/max budget/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/maximum unit price/i)).toBeInTheDocument();
 
       const naturalTab = screen.getByRole("button", { name: /natural language prompt/i });
       fireEvent.click(naturalTab);
       expect(screen.getByLabelText(/procurement requirement/i)).toBeInTheDocument();
     });
 
-    it("1.3 submits natural language requirement prompt and updates evaluation", () => {
+    it("1.3 submits natural language requirement prompt and updates evaluation", async () => {
       render(<ReferenceSourcingHub />);
-      const textarea = screen.getByLabelText(/procurement requirement/i);
-      fireEvent.change(textarea, { target: { value: "Need 1000 boxes of M8 bolts" } });
-
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
-      fireEvent.click(evalButton);
+      await evaluateNaturalRequirements("Need 1000 boxes of M8 bolts");
 
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       expect(screen.getByText(/candidate listings/i)).toBeInTheDocument();
+      expect(evaluateSourcing).toHaveBeenCalledOnce();
     });
 
     it("1.4 renders candidate listing comparison cards with match score badges and completeness tier", () => {
@@ -427,11 +434,10 @@ describe("SourcingHub Frontend Test Suite", () => {
       expect(within(drawer).getByText(/exceeds requested volume/i)).toBeInTheDocument();
     });
 
-    it("1.7 opens seller inquiry modal and renders customizable letter addressing detected gaps", () => {
+    it("1.7 opens seller inquiry modal and renders customizable letter addressing detected gaps", async () => {
       render(<ReferenceSourcingHub />);
-      const balticCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000104");
-      const inquiryBtn = within(balticCard).getByRole("button", { name: /draft inquiry/i });
-      fireEvent.click(inquiryBtn);
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000104");
 
       const modal = screen.getByTestId("inquiry-modal");
       expect(modal).toBeInTheDocument();
@@ -449,8 +455,8 @@ describe("SourcingHub Frontend Test Suite", () => {
       });
 
       render(<ReferenceSourcingHub />);
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       const copyBtn = screen.getByRole("button", { name: /copy to clipboard/i });
       fireEvent.click(copyBtn);
@@ -459,10 +465,10 @@ describe("SourcingHub Frontend Test Suite", () => {
       expect(await screen.findByRole("status")).toHaveTextContent(/copied inquiry to clipboard/i);
     });
 
-    it("1.9 bridges selected candidate and inquiry into Deal Creation form (#/deals/new)", () => {
+    it("1.9 bridges selected candidate and inquiry into Deal Creation form (#/deals/new)", async () => {
       render(<ReferenceSourcingHub />);
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       const dealBtn = screen.getByRole("button", { name: /initiate deal room/i });
       fireEvent.click(dealBtn);
@@ -480,7 +486,7 @@ describe("SourcingHub Frontend Test Suite", () => {
   describe("Tier 2: UI Boundary & Error Handling", () => {
     it("2.1 displays validation error when submitting empty requirement input", () => {
       render(<ReferenceSourcingHub />);
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
+      const evalButton = screen.getByRole("button", { name: /interpret requirements/i });
       fireEvent.click(evalButton);
 
       expect(screen.getByRole("alert")).toHaveTextContent(/please enter sourcing requirements/i);
@@ -523,16 +529,38 @@ describe("SourcingHub Frontend Test Suite", () => {
   // ============================================================================
 
   describe("Tier 3: Cross-Feature Combinations", () => {
-    it("3.1 recalculates candidate tiers dynamically when user modifies max budget", () => {
+    it("3.1 sends a changed maximum unit price to the server for evaluation", async () => {
       render(<ReferenceSourcingHub />);
-      // Switch to structured mode and increase max budget to $30 (Nordic is $24)
+      const nordic = CATALOGUE_LISTINGS.find((candidate) =>
+        candidate.listing_id === "00000000-0000-4000-8000-000000000105"
+      )!;
+      vi.mocked(evaluateSourcing).mockResolvedValueOnce({
+        comparisons: [{ ...nordic, tier: "Tier B", match_tier: "B", composite_score: 78 }],
+        inquiries: {},
+        total_listings_evaluated: 1,
+      } as never);
       fireEvent.click(screen.getByRole("button", { name: /structured field controls/i }));
-      const maxBudgetInput = screen.getByLabelText(/max budget/i);
+      fireEvent.change(screen.getByLabelText(/item title/i), { target: { value: "Fasteners" } });
+      fireEvent.change(screen.getByLabelText(/^category$/i), { target: { value: "Industrial Fasteners" } });
+      fireEvent.change(screen.getByLabelText(/target quantity/i), { target: { value: "1000" } });
+      fireEvent.change(screen.getByLabelText(/^unit$/i), { target: { value: "boxes" } });
+      fireEvent.change(screen.getByLabelText(/delivery country code/i), { target: { value: "DE" } });
+      fireEvent.change(screen.getByLabelText(/sourcing currency/i), { target: { value: "USD" } });
+      fireEvent.change(screen.getByLabelText(/minimum warranty/i), { target: { value: "12" } });
+      fireEvent.change(screen.getByLabelText(/inspection requirement/i), { target: { value: "NONE" } });
+      const maxBudgetInput = screen.getByLabelText(/maximum unit price/i);
       fireEvent.change(maxBudgetInput, { target: { value: "30.00" } });
 
-      fireEvent.click(screen.getByRole("button", { name: /evaluate marketplace listings/i }));
-      // Nordic should no longer be severely disqualified
-      expect(screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000105")).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /evaluate marketplace listings/i }));
+      });
+      expect(evaluateSourcing).toHaveBeenCalledWith(expect.objectContaining({
+        requirements: expect.objectContaining({
+          pricing: expect.objectContaining({ max_unit_price: "30.00" }),
+        }),
+      }));
+      const nordicCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000105");
+      expect(within(nordicCard).getByText(/tier b \(78%\)/i)).toBeInTheDocument();
     });
 
     it("3.2 clicking candidate card immediately switches comparison matrix and gap list", () => {
@@ -544,10 +572,10 @@ describe("SourcingHub Frontend Test Suite", () => {
       expect(screen.getByText(/warranty terms state 'standard'/i)).toBeInTheDocument();
     });
 
-    it("3.3 editing inquiry draft in modal retains custom buyer changes upon deal initiation", () => {
+    it("3.3 editing inquiry draft in modal retains custom buyer changes upon deal initiation", async () => {
       render(<ReferenceSourcingHub />);
-      const tokyoCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000103");
-      fireEvent.click(within(tokyoCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000103");
 
       const bodyTextarea = screen.getByLabelText(/inquiry letter body/i);
       fireEvent.change(bodyTextarea, { target: { value: "Custom modified inquiry text for Tokyo Micro-Conductor" } });
@@ -575,13 +603,9 @@ describe("SourcingHub Frontend Test Suite", () => {
   // ============================================================================
 
   describe("Tier 4: Real-World Procurement Journeys across 5 Sectors", () => {
-    it("4.1 Industrial Fasteners Journey: OEM engineer evaluates bolts, inspects Baltic MOQ gap, selects Berlin, and initiates deal", () => {
+    it("4.1 Industrial Fasteners Journey: OEM engineer evaluates bolts, inspects Baltic MOQ gap, selects Berlin, and initiates deal", async () => {
       render(<ReferenceSourcingHub />);
-      const promptInput = screen.getByLabelText(/procurement requirement/i);
-      fireEvent.change(promptInput, {
-        target: { value: "1,000 boxes M8 DIN 933 Grade 316 stainless steel bolts to Berlin, DDP" },
-      });
-      fireEvent.click(screen.getByRole("button", { name: /evaluate marketplace listings/i }));
+      await evaluateNaturalRequirements("1,000 boxes M8 DIN 933 Grade 316 stainless steel bolts to Berlin, DDP");
 
       // Select Baltic to inspect MOQ barrier
       const balticCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000104");
@@ -589,28 +613,31 @@ describe("SourcingHub Frontend Test Suite", () => {
       expect(screen.getByText(/seller moq of 5,000 boxes exceeds requested volume/i)).toBeInTheDocument();
 
       // Switch to Berlin (Tier A ideal match)
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       // Initiate deal
       fireEvent.click(screen.getByRole("button", { name: /initiate deal room/i }));
       expect(window.location.hash).toContain("00000000-0000-4000-8000-000000000101");
     });
 
-    it("4.2 Electronics & Wiring Journey: IoT maker evaluates harness and prepares inquiry clarifying ambiguous warranty", () => {
+    it("4.2 Electronics & Wiring Journey: IoT maker evaluates harness and prepares inquiry clarifying ambiguous warranty", async () => {
       render(<ReferenceSourcingHub />);
+      await evaluateNaturalRequirements("Need 1000 units of wire harness");
       const sectorSelect = screen.getByLabelText(/filter by sector:/i);
       fireEvent.change(sectorSelect, { target: { value: "Electronics" } });
 
-      const tokyoCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000103");
-      fireEvent.click(within(tokyoCard).getByRole("button", { name: /draft inquiry/i }));
+      await openServerInquiry("00000000-0000-4000-8000-000000000103");
 
       const modal = screen.getByTestId("inquiry-modal");
-      expect(within(modal).getByText(/warranty terms state 'standard'/i)).toBeInTheDocument();
-      expect(within(modal).getByText(/request formal 12-month defect warranty/i)).toBeInTheDocument();
+      expect(within(modal).getByLabelText(/inquiry letter body/i)).toBe(
+        within(modal).getByDisplayValue(/warranty terms state 'standard'/i),
+      );
+      expect(within(modal).getByLabelText(/inquiry letter body/i)).toBe(
+        within(modal).getByDisplayValue(/request formal 12-month defect warranty/i),
+      );
     });
 
-    it("4.3 Agricultural Commodities Journey: Coffee buyer verifies organic green coffee with Fair Trade and CIF terms", () => {
+    it("4.3 Agricultural Commodities Journey: Coffee buyer verifies organic green coffee with Fair Trade and CIF terms", async () => {
       render(<ReferenceSourcingHub />);
 
       // Filter by sector Agriculture
@@ -619,13 +646,15 @@ describe("SourcingHub Frontend Test Suite", () => {
       expect(screen.getByText(/candidate listings \(3\)/i)).toBeInTheDocument();
 
       // Enter coffee procurement requirements in prompt
-      const promptInput = screen.getByLabelText(/procurement requirement/i);
-      fireEvent.change(promptInput, {
-        target: {
-          value: "500 bags of Certified Organic Arabica Green Coffee Beans with Fair Trade certs to Hamburg CIF, max $220.00",
-        },
-      });
-      fireEvent.click(screen.getByRole("button", { name: /evaluate marketplace listings/i }));
+      await evaluateNaturalRequirements(
+        "500 bags of Certified Organic Arabica Green Coffee Beans with Fair Trade certs to Hamburg CIF, max $220.00",
+      );
+      expect(evaluateSourcing).toHaveBeenCalledWith(expect.objectContaining({
+        requirements: expect.objectContaining({
+          category: "Agricultural Commodities",
+          quantity: { target_quantity: "500", unit: "bags" },
+        }),
+      }));
 
       // Candidate 112 (Valley Organic Farms) evaluated as top match
       const coffeeCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000112");
@@ -636,10 +665,12 @@ describe("SourcingHub Frontend Test Suite", () => {
       // Click card to inspect attribute matrix
       fireEvent.click(coffeeCard);
       const matrixTable = screen.getByTestId("comparison-matrix-table");
-      expect(within(matrixTable).getAllByText(/certified organic arabica green coffee beans/i).length).toBeGreaterThanOrEqual(1);
+      expect(within(matrixTable).getByText(/organic arabica green coffee/i)).toBeInTheDocument();
+      expect(within(matrixTable).getByText(/usda organic, fair trade certified/i)).toBeInTheDocument();
+      expect(within(matrixTable).getByText(/cif supported/i)).toBeInTheDocument();
 
       // Draft inquiry and initiate deal room
-      fireEvent.click(within(coffeeCard).getByRole("button", { name: /draft inquiry/i }));
+      await openServerInquiry("00000000-0000-4000-8000-000000000112");
       const modal = screen.getByTestId("inquiry-modal");
       expect(within(modal).getByText(/seller inquiry: valley organic farms cooperative/i)).toBeInTheDocument();
 
@@ -648,30 +679,32 @@ describe("SourcingHub Frontend Test Suite", () => {
       expect(window.location.hash).toContain("11111111-0000-4000-8000-000000000012");
     });
 
-    it("4.4 Textiles & Apparel Journey: Fashion brand evaluates cotton canvas and drafts lead time inquiry", () => {
+    it("4.4 Textiles & Apparel Journey: Fashion brand evaluates cotton canvas and drafts lead time inquiry", async () => {
       render(<ReferenceSourcingHub />);
+      await evaluateNaturalRequirements("Need 1000 yards of cotton canvas");
       const sectorSelect = screen.getByLabelText(/filter by sector:/i);
       fireEvent.change(sectorSelect, { target: { value: "Textiles" } });
 
-      const lancashireCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000106");
-      fireEvent.click(within(lancashireCard).getByRole("button", { name: /draft inquiry/i }));
+      await openServerInquiry("00000000-0000-4000-8000-000000000106");
 
       const bodyValue = (screen.getByLabelText(/inquiry letter body/i) as HTMLTextAreaElement).value;
       expect(bodyValue).toContain("Lancashire Weaving Mills");
       expect(bodyValue).toContain("Lead time is unstated");
     });
 
-    it("4.5 Medical Supplies & PPE Journey: Hospital replenishes 10,000 boxes nitrile examination gloves with FDA certs", () => {
+    it("4.5 Medical Supplies & PPE Journey: Hospital replenishes 10,000 boxes nitrile examination gloves with FDA certs", async () => {
       render(<ReferenceSourcingHub />);
+      await evaluateNaturalRequirements("Need 10000 boxes nitrile examination gloves");
       const sectorSelect = screen.getByLabelText(/filter by sector:/i);
       fireEvent.change(sectorSelect, { target: { value: "Medical" } });
 
       const medishieldCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000108");
       expect(within(medishieldCard).getByText(/tier a \(96%\)/i)).toBeInTheDocument();
 
-      fireEvent.click(within(medishieldCard).getByRole("button", { name: /draft inquiry/i }));
+      await openServerInquiry("00000000-0000-4000-8000-000000000108");
       fireEvent.click(screen.getByRole("button", { name: /initiate deal room/i }));
       expect(window.location.hash).toContain("00000000-0000-4000-8000-000000000108");
+      expect(window.location.hash).toContain("quantity=10000");
     });
   });
 });

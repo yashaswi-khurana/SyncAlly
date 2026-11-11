@@ -1,9 +1,8 @@
 /**
- * Production Buyer Sourcing Agent Client-Side Evaluation Engine.
+ * Legacy deterministic sourcing helpers retained for isolated UI tests.
  *
- * Provides deterministic requirement parsing, 5-dimension comparative evaluation,
- * structured commercial gap detection, and targeted seller inquiry drafting.
- * Enables 100% self-contained local operation without external dependencies (R4).
+ * SourcingHubPage delegates interpretation, evaluation, and inquiry drafting
+ * to the backend; these helpers are not the production sourcing request path.
  */
 
 import type {

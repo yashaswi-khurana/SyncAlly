@@ -3,7 +3,7 @@
  * Agent: challenger_sourcing_m3_2
  *
  * EMPIRICAL INVESTIGATION MATRIX:
- * 1. Air-Gapped Offline Execution (R4)
+ * 1. Local rendering of the disclosed demo catalogue
  * 2. Prompt Interpretation Regex Bug (copper -> ppe -> Medical Supplies)
  * 3. SourcingHubPage Natural Language Evaluation Disconnection
  * 4. Sector Dropdown Filtering across 5 Sectors (Missing Agricultural Commodities)
@@ -12,17 +12,31 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, within } from "@testing-library/react";
 import { ReferenceSourcingHub } from "./SourcingHubPage";
 import { MOCK_BUNDLED_LISTINGS } from "./bundledListings";
 import { parseRoute } from "../router";
 import { interpretPrompt } from "./sourcingEngine";
+import { evaluateNaturalRequirements, installSourcingMocks, openServerInquiry } from "./sourcingTestFixtures";
+import {
+  draftSourcingInquiry,
+  evaluateSourcing,
+  interpretSourcingRequirements,
+} from "../api/client";
+
+vi.mock("../api/client", () => ({
+  draftSourcingInquiry: vi.fn(),
+  evaluateSourcing: vi.fn(),
+  interpretSourcingRequirements: vi.fn(),
+}));
 
 describe("Challenger Empirical Verification: Milestone M3", () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
   let xhrOpenSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    vi.resetAllMocks();
+    installSourcingMocks();
     window.location.hash = "";
     fetchSpy = vi.spyOn(window, "fetch");
     xhrOpenSpy = vi.spyOn(window.XMLHttpRequest.prototype, "open");
@@ -35,21 +49,15 @@ describe("Challenger Empirical Verification: Milestone M3", () => {
   });
 
   // ============================================================================
-  // REQUIREMENT 1: AIR-GAPPED OFFLINE EVALUATION (R4)
+  // REQUIREMENT 1: LOCAL DEMO CATALOGUE RENDERING
   // ============================================================================
-  describe("1. Air-Gapped Offline Self-Containment (R4)", () => {
-    it("proves client-side UI executes without any remote network calls (air-gapped)", () => {
+  describe("1. Bundled Demo Catalogue Disclosure", () => {
+    it("renders the bundled catalogue locally and labels it as unverified demo data", () => {
       render(<ReferenceSourcingHub />);
 
-      const promptInput = screen.getByLabelText(/procurement requirement/i);
-      fireEvent.change(promptInput, {
-        target: { value: "10,000 boxes nitrile examination gloves with FDA certs, max $9.00 USD" },
-      });
-
-      const evalButton = screen.getByRole("button", { name: /evaluate marketplace listings/i });
-      fireEvent.click(evalButton);
-
-      // Verify zero network calls were attempted
+      expect(screen.getByText(/bundled sample suppliers and listing data are not verified marketplace offers/i))
+        .toBeInTheDocument();
+      expect(screen.getAllByRole("heading", { level: 3 }).length).toBeGreaterThan(0);
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(xhrOpenSpy).not.toHaveBeenCalled();
     });
@@ -62,26 +70,223 @@ describe("Challenger Empirical Verification: Milestone M3", () => {
       expect(parsed.category).toBe("Electronics");
     });
 
-    it("verifies SourcingHubPage handleEvaluate invokes sourcing engine and updates candidate ranking based on prompt", () => {
+    it("interprets and evaluates through the backend sourcing endpoints", async () => {
       render(<ReferenceSourcingHub />);
 
-      // Initial top candidate is Berlin Fastener (Industrial Fasteners, bolts)
       const initialCards = screen.getAllByRole("heading", { level: 3 });
       expect(initialCards[0].textContent).toContain("M8x30 Grade 316 Stainless Steel Hex Cap Bolts");
 
-      // Enter a prompt exclusively requesting Medical Supplies (Nitrile Gloves)
+      const requirements = {
+        title: "Nitrile examination gloves",
+        category: "Medical Supplies & PPE",
+        description: "Nitrile examination gloves",
+        technical_specs: { materials: [], certifications: [], standards: [] },
+        pricing: { currency: "USD" },
+        quantity: { target_quantity: "10000", unit: "boxes" },
+        delivery: { destination_country_code: "DE" },
+        commercial_terms: {
+          acceptable_incoterms: [],
+          min_warranty_months: 12,
+          inspection_requirement: "NONE",
+        },
+      };
+      vi.mocked(interpretSourcingRequirements).mockResolvedValue({
+        requirements,
+        parsed_fields: ["quantity", "category"],
+        ai_provider: "openai",
+        ai_model: "test-model",
+        fallback_reason: null,
+      } as never);
+      vi.mocked(evaluateSourcing).mockResolvedValue({
+        requirements,
+        comparisons: [{
+          listing_id: "demo-medical-1",
+          listing_title: "Nitrile Examination Gloves",
+          seller_organization_id: "demo-supplier",
+          seller_organization_name: "Demo Medical Supplier",
+          country_code: "DE",
+          unit_price: "10.00",
+          currency: "USD",
+          available_quantity: "20000",
+          moq: "100",
+          unit: "boxes",
+          lead_time_days: 10,
+          composite_score: 90,
+          tier: "Tier A",
+          match_tier: "A",
+          score_breakdown: {
+            specifications: 90,
+            pricing: 90,
+            quantity_and_moq: 90,
+            lead_time: 90,
+            commercial_terms: 90,
+            composite: 90,
+          },
+          attribute_matrix: [],
+          detected_gaps: [],
+        }],
+        inquiries: {},
+        total_listings_evaluated: 1,
+      } as never);
+      vi.mocked(draftSourcingInquiry).mockResolvedValue({
+        listing_id: "demo-medical-1",
+        seller_organization_name: "Demo Medical Supplier",
+        subject: "Demo RFQ",
+        body: "Please confirm availability.",
+        gaps_addressed: [],
+      });
+
       const promptInput = screen.getByLabelText(/procurement requirement/i);
       fireEvent.change(promptInput, {
         target: { value: "Hospital urgently replenishing 10000 boxes sterile powder-free nitrile examination gloves" },
       });
-      fireEvent.click(screen.getByRole("button", { name: /evaluate marketplace listings/i }));
+      fireEvent.click(screen.getByRole("button", { name: /interpret requirements/i }));
+      await screen.findByText(/review the interpreted requirements before ranking/i);
+      expect(evaluateSourcing).not.toHaveBeenCalled();
 
-      // SourcingHubPage handleEvaluate genuinely evaluates BUNDLED_MARKETPLACE_LISTING_DETAILS
-      const postEvalCards = screen.getAllByRole("heading", { level: 3 });
-      console.log("Top candidate after evaluating medical gloves prompt:", postEvalCards[0].textContent);
+      fireEvent.click(screen.getByRole("button", { name: /confirm requirements and evaluate/i }));
 
-      // Top candidate is now medical supplies (Nitrile Examination Gloves)
-      expect(postEvalCards[0].textContent).toContain("Nitrile Examination Gloves");
+      expect(await screen.findByRole("heading", { name: "Nitrile Examination Gloves" })).toBeInTheDocument();
+      expect(interpretSourcingRequirements).toHaveBeenCalledOnce();
+      expect(evaluateSourcing).toHaveBeenCalledOnce();
+      fireEvent.click(screen.getByRole("button", { name: /draft inquiry/i }));
+      await screen.findByRole("dialog");
+      expect(draftSourcingInquiry).toHaveBeenCalledWith({
+        requirements,
+        listing_id: "demo-medical-1",
+      });
+    });
+
+    it("discards stale interpretation and inquiry responses after context changes", async () => {
+      const deferred = <T,>() => {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>((complete) => {
+          resolve = complete;
+        });
+        return { promise, resolve };
+      };
+      const staleInterpretation =
+        deferred<Awaited<ReturnType<typeof interpretSourcingRequirements>>>();
+      const currentInterpretation =
+        deferred<Awaited<ReturnType<typeof interpretSourcingRequirements>>>();
+      const currentRequirements = {
+        title: "Current item",
+        category: "Industrial Fasteners",
+        description: "Current item",
+        technical_specs: { materials: [], certifications: [], standards: [] },
+        pricing: { currency: "USD" },
+        quantity: { target_quantity: "1000", unit: "boxes" },
+        delivery: { destination_country_code: "DE" },
+        commercial_terms: {
+          acceptable_incoterms: [],
+          min_warranty_months: 12,
+          inspection_requirement: "NONE",
+        },
+      };
+      const oldRequirements = { ...currentRequirements, title: "Stale item" };
+      vi.mocked(interpretSourcingRequirements)
+        .mockReturnValueOnce(staleInterpretation.promise)
+        .mockReturnValueOnce(currentInterpretation.promise);
+      vi.mocked(evaluateSourcing).mockResolvedValue({
+        requirements: currentRequirements,
+        comparisons: [
+          {
+            listing_id: "current-supplier-a",
+            listing_title: "Current Listing A",
+            seller_organization_id: "supplier-a",
+            seller_organization_name: "Current Supplier A",
+            country_code: "DE",
+            unit_price: "10.00",
+            currency: "USD",
+            available_quantity: "2000",
+            moq: "100",
+            lead_time_days: 10,
+            composite_score: 90,
+            tier: "Tier A",
+            match_tier: "A",
+            attribute_matrix: [],
+            detected_gaps: [],
+          },
+          {
+            listing_id: "current-supplier-b",
+            listing_title: "Current Listing B",
+            seller_organization_id: "supplier-b",
+            seller_organization_name: "Current Supplier B",
+            country_code: "DE",
+            unit_price: "11.00",
+            currency: "USD",
+            available_quantity: "2000",
+            moq: "100",
+            lead_time_days: 12,
+            composite_score: 85,
+            tier: "Tier B",
+            match_tier: "B",
+            attribute_matrix: [],
+            detected_gaps: [],
+          },
+        ],
+        inquiries: {},
+        total_listings_evaluated: 2,
+      } as never);
+      const staleInquiry =
+        deferred<Awaited<ReturnType<typeof draftSourcingInquiry>>>();
+      vi.mocked(draftSourcingInquiry).mockReturnValueOnce(staleInquiry.promise);
+
+      render(<ReferenceSourcingHub />);
+      const promptInput = screen.getByLabelText(/procurement requirement/i);
+      fireEvent.change(promptInput, { target: { value: "Old requirement" } });
+      fireEvent.click(screen.getByRole("button", { name: /interpret requirements/i }));
+      expect(screen.getByRole("button", { name: /working/i })).toBeDisabled();
+      fireEvent.change(promptInput, { target: { value: "Current requirement" } });
+      expect(screen.getByRole("button", { name: /interpret requirements/i })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: /interpret requirements/i }));
+
+      await act(async () => {
+        staleInterpretation.resolve({
+          requirements: oldRequirements,
+          parsed_fields: ["title"],
+          ai_provider: "openai",
+          ai_model: "stale-model",
+          fallback_reason: null,
+        } as never);
+      });
+      expect(screen.queryByText(/review the interpreted requirements before ranking/i)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /working/i })).toBeDisabled();
+
+      await act(async () => {
+        currentInterpretation.resolve({
+          requirements: currentRequirements,
+          parsed_fields: ["title", "quantity"],
+          ai_provider: "openai",
+          ai_model: "test-model",
+          fallback_reason: null,
+        } as never);
+      });
+      await screen.findByText(/review the interpreted requirements before ranking/i);
+      expect(screen.getByText(/Current item/)).toBeInTheDocument();
+      expect(screen.queryByText(/Stale item/)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /confirm requirements and evaluate/i }));
+      await screen.findByText("Candidate Listings (2)");
+
+      fireEvent.click(
+        within(screen.getByTestId("listing-card-current-supplier-a"))
+          .getByRole("button", { name: /draft inquiry/i }),
+      );
+      fireEvent.click(screen.getByTestId("listing-card-current-supplier-b"));
+      await act(async () => {
+        staleInquiry.resolve({
+          listing_id: "current-supplier-a",
+          seller_organization_name: "Current Supplier A",
+          subject: "Stale inquiry",
+          body: "Stale inquiry body",
+          gaps_addressed: [],
+        });
+      });
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: /Attribute Comparison Matrix — Current Supplier B/i }),
+      ).toBeInTheDocument();
     });
   });
 
@@ -149,12 +354,11 @@ describe("Challenger Empirical Verification: Milestone M3", () => {
   // REQUIREMENT 3: DEAL CREATION BRIDGE & POPULATED TERMS
   // ============================================================================
   describe("3. Deal Creation Bridge URL Hash & Terms", () => {
-    it("verifies handleInitiateDeal assigns sellerOrganizationId properly in URL hash", () => {
+    it("verifies handleInitiateDeal assigns sellerOrganizationId properly in URL hash", async () => {
       render(<ReferenceSourcingHub />);
 
-      // Select Berlin Fastener (Listing: ...101, Org: ...001)
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
 
       // Click Initiate Deal Room
       fireEvent.click(screen.getByRole("button", { name: /initiate deal room/i }));
@@ -191,11 +395,11 @@ describe("Challenger Empirical Verification: Milestone M3", () => {
       }
     });
 
-    it("verifies populated terms format in deal URL", () => {
+    it("verifies populated terms format in deal URL", async () => {
       render(<ReferenceSourcingHub />);
 
-      const berlinCard = screen.getByTestId("listing-card-00000000-0000-4000-8000-000000000101");
-      fireEvent.click(within(berlinCard).getByRole("button", { name: /draft inquiry/i }));
+      await evaluateNaturalRequirements();
+      await openServerInquiry("00000000-0000-4000-8000-000000000101");
       fireEvent.click(screen.getByRole("button", { name: /initiate deal room/i }));
 
       const params = new URLSearchParams(window.location.hash.slice(window.location.hash.indexOf("?")));

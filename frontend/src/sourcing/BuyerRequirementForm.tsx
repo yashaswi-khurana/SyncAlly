@@ -17,7 +17,17 @@ export interface BuyerRequirementFormProps {
   setTargetPrice: (value: string) => void;
   maxPrice: string;
   setMaxPrice: (value: string) => void;
+  destinationCountryCode: string;
+  setDestinationCountryCode: (value: string) => void;
+  currency: string;
+  setCurrency: (value: string) => void;
+  minWarrantyMonths: string;
+  setMinWarrantyMonths: (value: string) => void;
+  inspectionRequirement: string;
+  setInspectionRequirement: (value: string) => void;
   validationError: string | null;
+  isEvaluating: boolean;
+  confirmationPending: boolean;
   onEvaluate: () => void;
 }
 
@@ -38,9 +48,24 @@ export const BuyerRequirementForm: React.FC<BuyerRequirementFormProps> = ({
   setTargetPrice,
   maxPrice,
   setMaxPrice,
+  destinationCountryCode,
+  setDestinationCountryCode,
+  currency,
+  setCurrency,
+  minWarrantyMonths,
+  setMinWarrantyMonths,
+  inspectionRequirement,
+  setInspectionRequirement,
   validationError,
+  isEvaluating,
+  confirmationPending,
   onEvaluate,
 }) => {
+  let actionLabel = "Interpret requirements";
+  if (isEvaluating) actionLabel = "Working…";
+  else if (inputMode === "structured") actionLabel = "Evaluate Marketplace Listings";
+  else if (confirmationPending) actionLabel = "Confirm requirements and evaluate";
+
   return (
     <div className="card sourcing-requirement-card">
       <div className="panel-head">
@@ -98,15 +123,65 @@ export const BuyerRequirementForm: React.FC<BuyerRequirementFormProps> = ({
               <input id="field-unit" value={unit} onChange={(e) => setUnit(e.target.value)} />
             </div>
             <div>
-              <label htmlFor="field-target-price">Target Price ($)</label>
+              <label htmlFor="field-target-price">Target Unit Price{currency ? ` (${currency})` : ""}</label>
               <input id="field-target-price" value={targetPrice} onChange={(e) => setTargetPrice(e.target.value)} />
             </div>
             <div>
-              <label htmlFor="field-max-price">Max Budget ($)</label>
+              <label htmlFor="field-max-price">Maximum Unit Price{currency ? ` (${currency})` : ""}</label>
               <input id="field-max-price" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} />
             </div>
           </div>
         )}
+
+        <fieldset className="structured-fields-grid sourcing-confirmation-fields">
+          <legend>Confirm sourcing controls</legend>
+          <p>
+            Required values must be stated in the prompt or entered here; missing commercial terms are never defaulted.
+          </p>
+          <div>
+            <label htmlFor="field-destination-country">Delivery Country Code</label>
+            <input
+              id="field-destination-country"
+              maxLength={2}
+              placeholder="DE"
+              value={destinationCountryCode}
+              onChange={(e) => setDestinationCountryCode(e.target.value.toUpperCase())}
+            />
+          </div>
+          <div>
+            <label htmlFor="field-currency">Sourcing Currency</label>
+            <input
+              id="field-currency"
+              maxLength={3}
+              placeholder="USD"
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+            />
+          </div>
+          <div>
+            <label htmlFor="field-warranty">Minimum Warranty (months)</label>
+            <input
+              id="field-warranty"
+              inputMode="numeric"
+              value={minWarrantyMonths}
+              onChange={(e) => setMinWarrantyMonths(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="field-inspection">Inspection Requirement</label>
+            <select
+              id="field-inspection"
+              value={inspectionRequirement}
+              onChange={(e) => setInspectionRequirement(e.target.value)}
+            >
+              <option value="">Select or specify in your prompt</option>
+              <option value="FACTORY_MILL_CERTIFICATE">Factory / mill certificate</option>
+              <option value="PRE_SHIPMENT_THIRD_PARTY">Pre-shipment third-party</option>
+              <option value="BUYER_RECEIVING_INSPECTION">Buyer receiving inspection</option>
+              <option value="NONE">No inspection requirement</option>
+            </select>
+          </div>
+        </fieldset>
 
         {validationError && (
           <div role="alert" className="error-banner">
@@ -115,8 +190,8 @@ export const BuyerRequirementForm: React.FC<BuyerRequirementFormProps> = ({
         )}
 
         <div className="panel-actions">
-          <button type="button" className="button evaluate-button" onClick={onEvaluate}>
-            Evaluate Marketplace Listings
+          <button type="button" className="button evaluate-button" onClick={onEvaluate} disabled={isEvaluating}>
+            {actionLabel}
           </button>
         </div>
       </section>

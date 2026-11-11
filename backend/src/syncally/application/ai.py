@@ -173,9 +173,8 @@ def _retry_policy_for_provider(
     if policy is not None:
         return policy
     if provider_provenance(provider).provider == "gemini":
-        # One longer call avoids spending twice on a slow Gemini response while
-        # fitting Render Free's wake-up allowance within the UI deadline.
-        return AIRetryPolicy(max_attempts=1, timeout_seconds=45.0, backoff_seconds=0.0)
+        # Leave 30s within the frontend's 120s deadline for cold start and response handling.
+        return AIRetryPolicy(max_attempts=1, timeout_seconds=90.0, backoff_seconds=0.0)
     return AIRetryPolicy()
 
 

@@ -94,9 +94,15 @@ class SafeOperationsTests(unittest.TestCase):
     def test_allowlisted_provider_and_payment_failures_keep_their_stable_codes(self):
         codes = {
             "AI_PROPOSAL_CONTRACT",
+            "AI_PROPOSAL_CITATION_SET",
+            "AI_PROPOSAL_CITATION_SOURCE",
+            "AI_PROPOSAL_CITATION_VALUE",
             "AI_PROPOSAL_GROUNDING",
             "AI_PROPOSAL_INSUFFICIENT_CONTEXT",
+            "AI_PROPOSAL_PRICE_CURRENCY",
+            "AI_PROPOSAL_QUANTITY_UNIT",
             "AI_PROPOSAL_SHAPE",
+            "AI_PROPOSAL_STORED_TERM",
             "GMAIL_SMTP_AUTH_FAILED",
             "GMAIL_SMTP_REJECTED",
             "GMAIL_SMTP_RECIPIENT_REJECTED",

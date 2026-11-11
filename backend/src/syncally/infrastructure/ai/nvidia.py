@@ -79,6 +79,7 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
             "model": self.model,
             "store": False,
             "max_completion_tokens": 8192,
+            "stream": False,
             "chat_template_kwargs": {"enable_thinking": False},
             "messages": [
                 {"role": "system", "content": instruction},

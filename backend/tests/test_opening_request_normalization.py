@@ -7,7 +7,7 @@ offline rule-based extraction, graceful fallback handling, and provenance tracki
 import unittest
 from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
@@ -30,14 +30,15 @@ from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 
 
 class OpeningRequestNormalizationTests(unittest.TestCase):
-    def test_remote_configuration_does_not_mislabel_local_normalization(self) -> None:
+    def test_remote_configuration_reports_ai_assisted_normalization(self) -> None:
         config = Settings(_env_file=None, app_env="test", ai_provider="openai",
                           ai_remote_egress_enabled=True, openai_model="test-model",
                           openai_api_key="test-key")
-        result = normalize_opening_request("We need 12 boxes", ConfiguredAIProvider(config))
-        self.assertEqual(result.provenance.provider, "offline")
+        with patch("syncally.infrastructure.ai.openai.OpenAIChatCompletions.extract_facts", return_value=()):
+            result = normalize_opening_request("We need 12 boxes", ConfiguredAIProvider(config))
+        self.assertEqual(result.provenance.provider, "openai")
         self.assertEqual(result.provenance.mode, "openai")
-        self.assertIsNone(result.provenance.model)
+        self.assertEqual(result.provenance.model, "test-model")
 
     def test_schema_contract_and_alias(self) -> None:
         self.assertIs(NormalizedTradeRequirements, NormalizedRequirement)

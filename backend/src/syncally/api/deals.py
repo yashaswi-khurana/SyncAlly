@@ -344,6 +344,8 @@ def analyze_opening_request_route(
     except Exception:
         provider = None
 
+    # Do not hold the authentication transaction while waiting for a remote model.
+    db.rollback()
     norm_result = normalize_opening_request(payload.text, provider=provider)
 
     suggested_sellers = SellerSuggestionService.suggest_sellers(

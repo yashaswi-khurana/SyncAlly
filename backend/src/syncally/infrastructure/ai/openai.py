@@ -222,10 +222,13 @@ class OpenAIChatCompletions:
     ) -> ProposedTerms:
         context = transmitted_context(request.context)
         payload = self._call(context, "proposal", PROPOSAL_SCHEMA, timeout_seconds)
+        stage = "AI_PROPOSAL_SHAPE"
         try:
             wrapper = _shape(payload, {"schema_version", "insufficient_context", "proposal", "citations"})
+            stage = "AI_PROPOSAL_CONTRACT"
             if wrapper["insufficient_context"] is not False:
-                raise ValueError("Insufficient context")
+                stage = "AI_PROPOSAL_INSUFFICIENT_CONTEXT"
+                raise AIPermanentError("AI provider does not have enough grounded context for a proposal")
             proposal = parse_proposed_terms(wrapper["proposal"])
             for field in ("quantity", "unit_price"):
                 if re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", wrapper["proposal"][field]) is None:
@@ -233,9 +236,16 @@ class OpenAIChatCompletions:
             if proposal.delivery_date is not None and wrapper["proposal"]["delivery_date"] != proposal.delivery_date.isoformat():
                 raise ValueError("Noncanonical date")
             citations = self._facts(wrapper["citations"])
+            stage = "AI_PROPOSAL_GROUNDING"
             self._ground_proposal(proposal, citations, context)
             return proposal
-        except (ValueError, TypeError, KeyError, AIContractError, AIPermanentError):
+        except AIPermanentError:
+            log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="PERMANENT", error_code=stage)
+            if stage == "AI_PROPOSAL_INSUFFICIENT_CONTEXT":
+                raise
+            raise AIPermanentError("AI provider returned invalid, incomplete or ungrounded terms") from None
+        except (ValueError, TypeError, KeyError, AIContractError):
+            log_operation(logger, Operation.AI_PROVIDER_FAILURE, failure_kind="PERMANENT", error_code=stage)
             raise AIPermanentError("AI provider returned invalid, incomplete or ungrounded terms") from None
 
     @staticmethod

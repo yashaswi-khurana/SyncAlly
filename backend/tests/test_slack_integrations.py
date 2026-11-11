@@ -458,8 +458,9 @@ class SlackIntegrationTests(unittest.TestCase):
         migration_0033 = runpy.run_path(str(versions / "0033_slack_integrations.py"))
         migration_0034 = runpy.run_path(str(versions / "0034_slack_events_and_links.py"))
         migration_0035 = runpy.run_path(str(versions / "0035_slack_deal_subscriptions.py"))
+        migration_0036 = runpy.run_path(str(versions / "0036_slack_deal_name_references.py"))
 
-        for migration in (migration_0033, migration_0034, migration_0035):
+        for migration in (migration_0033, migration_0034, migration_0035, migration_0036):
             with engine.begin() as connection:
                 context = MigrationContext.configure(connection)
                 with Operations.context(context):
@@ -483,6 +484,11 @@ class SlackIntegrationTests(unittest.TestCase):
             {constraint["name"] for constraint in inspector.get_check_constraints("slack_events")},
             {"ck_slack_event_status"},
         )
+        deal_reference_column = next(
+            column for column in inspector.get_columns("slack_events")
+            if column["name"] == "deal_reference"
+        )
+        self.assertTrue(deal_reference_column["nullable"])
         self.assertEqual(
             {constraint["name"] for constraint in inspector.get_unique_constraints("slack_user_links")},
             {"uq_slack_user_link_slack_identity", "uq_slack_user_link_syncally_identity"},
@@ -525,6 +531,7 @@ class SlackIntegrationTests(unittest.TestCase):
         with engine.begin() as connection:
             context = MigrationContext.configure(connection)
             with Operations.context(context):
+                migration_0036["downgrade"]()
                 migration_0035["downgrade"]()
                 migration_0034["downgrade"]()
         tables_after = set(inspect(engine).get_table_names())

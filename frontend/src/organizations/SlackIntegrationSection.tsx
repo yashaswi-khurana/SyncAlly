@@ -327,11 +327,12 @@ export default function SlackIntegrationSection({ organization }: { organization
         <h4 id="slack-commands-heading">What members can do in Slack</h4>
         <p className="muted">Mention @SyncAlly in a message or thread. Deal replies are visible only to you. Use the commands below with deals your SyncAlly account can access.</p>
         <ul className="slack-command-list">
-          <li><code>@SyncAlly status &lt;deal-id&gt;</code><span>Check the deal's current status.</span></li>
-          <li><code>@SyncAlly payments &lt;deal-id&gt;</code><span>View payment status when you have payment access.</span></li>
-          <li><code>@SyncAlly follow &lt;deal-id&gt;</code><span>Get eligible deal updates in that thread. Use <code>@SyncAlly unfollow &lt;deal-id&gt;</code> to stop.</span></li>
+          <li><code>@SyncAlly status &lt;deal-name&gt;</code><span>Check a uniquely named deal's current status, for example <code>status Acme renewal</code>.</span></li>
+          <li><code>@SyncAlly payments &lt;deal-name&gt;</code><span>View payment status when you have payment access.</span></li>
+          <li><code>@SyncAlly follow &lt;deal-name&gt;</code><span>Get eligible deal updates in that thread. Use <code>@SyncAlly unfollow &lt;deal-name&gt;</code> to stop.</span></li>
           <li><code>@SyncAlly start buyer &lt;organization-id&gt;</code><span>Create a draft deal with an organization you can work with. If your organization is the seller, use <code>@SyncAlly start seller &lt;organization-id&gt;</code>.</span></li>
         </ul>
+        <p className="hint">Use the exact deal name; matching ignores letter case. If multiple deals share the name, use the exact deal ID instead. Unnamed drafts still need their ID.</p>
         <p className="hint">Replies use your SyncAlly permissions. Linking Slack confirms your identity; it does not grant access to deals or payments.</p>
       </article>
 

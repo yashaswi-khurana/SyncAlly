@@ -127,7 +127,8 @@ describe("SlackIntegrationSection", () => {
 
     expect(await screen.findByText("Acme Slack")).toBeInTheDocument();
     expect(screen.getByText(/syncally handles messages that mention @syncally/i)).toBeInTheDocument();
-    expect(screen.getByText(/@syncally status <deal-id>/i)).toBeInTheDocument();
+    expect(screen.getByText(/@syncally status <deal-name>/i)).toBeInTheDocument();
+    expect(screen.getByText(/matching ignores letter case.*multiple deals share the name/i)).toBeInTheDocument();
     expect(screen.queryByText("T-acme")).not.toBeInTheDocument();
     expect(screen.queryByText(/app_mentions:read, chat:write/i)).not.toBeInTheDocument();
 

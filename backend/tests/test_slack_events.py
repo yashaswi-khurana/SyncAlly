@@ -128,6 +128,22 @@ class SlackEventCommandTests(unittest.TestCase):
                 ("HELP", None),
             )
 
+    def test_deal_commands_accept_multiword_names_and_quoted_names(self) -> None:
+        cases = (
+            ("status Acme renewal", ("STATUS", "Acme renewal")),
+            ("payments Acme renewal", ("PAYMENTS", "Acme renewal")),
+            ("follow \"Acme renewal\"", ("FOLLOW", "Acme renewal")),
+            ("unfollow Acme renewal", ("UNFOLLOW", "Acme renewal")),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(slack_events._event_command(f"<@BBOT> {text}", "BBOT"), expected)
+        self.assertEqual(slack_events._event_command("", "BBOT"), ("HELP", None))
+        self.assertEqual(
+            slack_events._event_command("<@BBOT> status " + "x" * 161, "BBOT"),
+            ("HELP", None),
+        )
+
 
 def _signed_request(payload: dict[str, object], *, timestamp: int | None = None) -> Request:
     timestamp = int(time.time()) if timestamp is None else timestamp
@@ -385,6 +401,26 @@ class SlackEventRouteTests(unittest.TestCase):
             select(SlackEvent.id).where(SlackEvent.event_id == "Ev-payments")
         ), payments_event.id)
 
+        title_payload = self._mention_payload(
+            event_id="Ev-deal-name",
+            text="<@BBOT> status Acme annual renewal",
+        )
+        with patch.object(slack_events.settings, "integration_token_encryption_key", SecretStr(FERNET_KEY)):
+            self._receive(title_payload)
+        named_event = self.db.scalar(
+            select(SlackEvent).where(SlackEvent.event_id == "Ev-deal-name")
+        )
+        self.assertIsNotNone(named_event)
+        assert named_event is not None
+        self.assertEqual(named_event.command, "STATUS")
+        self.assertIsNone(named_event.deal_id)
+        self.assertNotEqual(named_event.deal_reference, "Acme annual renewal")
+        self.assertEqual(
+            SlackTokenCipher(FERNET_KEY).decrypt(named_event.deal_reference),
+            "Acme annual renewal",
+        )
+        self.assertFalse(hasattr(named_event, "message_text"))
+
     def test_start_event_intake_normalizes_counterparty_and_deduplicates_provider_event(self) -> None:
         payload = self._mention_payload(
             event_id="Ev-start-intake",
@@ -564,6 +600,161 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(denials[0]["text"], denials[1]["text"])
         self.assertIn("ask your SyncAlly administrator", denials[0]["text"])
         self.assertEqual({message["user"] for message in denials}, {"U-no-read", "U-authorized"})
+
+    def test_worker_resolves_exact_deal_names_with_current_permissions_and_handles_ambiguity(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        unique_id = uuid4()
+        duplicate_ids = [uuid4(), uuid4()]
+        self.db.add_all([
+            Deal(
+                id=unique_id, buyer_organization_id=self.org.id,
+                seller_organization_id=self.other_org.id,
+                display_name="Acme Annual Renewal", status=DealStatus.NEGOTIATING.value,
+            ),
+            *[
+                Deal(
+                    id=deal_id, buyer_organization_id=self.org.id,
+                    seller_organization_id=self.other_org.id,
+                    display_name="Duplicate Renewal", status=DealStatus.DRAFT.value,
+                )
+                for deal_id in duplicate_ids
+            ],
+        ])
+        self.db.add_all([
+            SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id=self.installation.workspace_id, slack_user_id=slack_user_id,
+                user_id=user.id, created_at=now,
+            )
+            for slack_user_id, user in (
+                ("U-name-ok", self.admin),
+                ("U-name-denied", self.member),
+            )
+        ])
+        cipher = SlackTokenCipher(FERNET_KEY)
+        events = [
+            SlackEvent(
+                id=uuid4(), event_id=event_id, installation_id=self.installation.id,
+                workspace_id=self.installation.workspace_id, slack_user_id=slack_user_id,
+                channel_id="C-channel", message_ts=f"124.{index:03d}", thread_ts="124.000",
+                command="STATUS", deal_reference=cipher.encrypt(reference),
+                status="PENDING", attempts=0, available_at=now + timedelta(milliseconds=index),
+            )
+            for index, (event_id, slack_user_id, reference) in enumerate((
+                ("Ev-name-ok", "U-name-ok", "  acme   annual renewal  "),
+                ("Ev-name-ambiguous", "U-name-ok", "Duplicate Renewal"),
+                ("Ev-name-denied", "U-name-denied", "Acme Annual Renewal"),
+            ))
+        ]
+        self.db.add_all(events)
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=cipher):
+            for index in range(len(events)):
+                self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                    factory, api, now=now + timedelta(seconds=index),
+                )))
+
+        admin_replies = [message["text"] for message in api.messages if message["user"] == "U-name-ok"]
+        denied_reply = next(message["text"] for message in api.messages if message["user"] == "U-name-denied")
+        self.assertIn("Deal status: NEGOTIATING.", admin_replies)
+        self.assertIn("deal you can access", denied_reply)
+        self.assertTrue(any("More than one deal" in message for message in admin_replies))
+
+    def test_worker_resolves_named_payment_request_and_keeps_payment_permission_gate(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id = uuid4()
+        self.db.add(Deal(
+            id=deal_id, buyer_organization_id=self.org.id, seller_organization_id=self.other_org.id,
+            display_name="Acme freight renewal", status=DealStatus.NEGOTIATING.value,
+        ))
+        self.db.add_all([
+            SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-named-payment",
+                user_id=self.admin.id, created_at=now,
+            ),
+            SlackUserLink(
+                id=uuid4(), installation_id=self.installation.id, organization_id=self.org.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-named-payment-denied",
+                user_id=self.member.id, created_at=now,
+            ),
+        ])
+        cipher = SlackTokenCipher(FERNET_KEY)
+        self.db.add_all([
+            SlackEvent(
+                id=uuid4(), event_id="Ev-named-payment", installation_id=self.installation.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-named-payment",
+                channel_id="C-channel", message_ts="124.100", thread_ts="124.000",
+                command="PAYMENTS", deal_reference=cipher.encrypt("Acme freight renewal"),
+                status="PENDING", attempts=0, available_at=now,
+            ),
+            SlackEvent(
+                id=uuid4(), event_id="Ev-named-payment-denied", installation_id=self.installation.id,
+                workspace_id=self.installation.workspace_id, slack_user_id="U-named-payment-denied",
+                channel_id="C-channel", message_ts="124.200", thread_ts="124.000",
+                command="PAYMENTS", deal_reference=cipher.encrypt("Acme freight renewal"),
+                status="PENDING", attempts=0, available_at=now + timedelta(milliseconds=1),
+            ),
+        ])
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        actor = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={
+                self.org.id: frozenset({"deal.read_all", "payments.read"}),
+            },
+        )
+        actor_without_payment_permission = ActorContext(
+            user_id=self.member.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={self.org.id: frozenset({"deal.read_assigned"})},
+        )
+        api = FakeAPI()
+        with (
+            patch.object(slack_events_worker, "_cipher", return_value=cipher),
+            patch.object(
+                slack_events_worker, "resolve_actor",
+                side_effect=[actor, actor_without_payment_permission],
+            ),
+            patch.object(slack_events_worker, "list_current_payment_statuses", return_value=[]) as payment_lookup,
+        ):
+            for index in range(2):
+                self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                    factory, api, now=now + timedelta(seconds=index),
+                )))
+
+        self.assertEqual(len(api.messages), 2)
+        self.assertEqual(api.messages[0]["text"], "No payment status is available for this deal yet.")
+        self.assertNotIn(str(deal_id), api.messages[0]["text"])
+        self.assertIn("payment information you can access", api.messages[1]["text"])
+        payment_lookup.assert_called_once()
 
     def test_link_replies_are_private_and_stay_in_the_request_thread(self) -> None:
         from syncally.cli import slack_events_worker
@@ -763,15 +954,15 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertNotIn("Secret", api.private_messages[0]["text"])
         self.assertEqual(
             api.private_messages[1]["text"],
-            "No deal you can access is followed in this thread. Use `@SyncAlly status <deal-id>` to check one directly, or follow a deal with `@SyncAlly follow <deal-id>`.",
+            "No deal you can access is followed in this thread. Use `@SyncAlly status <deal-name>` to check one directly, or follow a deal with `@SyncAlly follow <deal-name>`.",
         )
         self.assertEqual(
             api.private_messages[2]["text"],
-            "More than one deal you can access is followed in this thread. Include the exact deal ID in your status request.",
+            "More than one deal you can access is followed in this thread. Include the exact deal name or ID in your status request.",
         )
         self.assertEqual(
             api.private_messages[3]["text"],
-            "No deal you can access is followed in this thread. Use `@SyncAlly status <deal-id>` to check one directly, or follow a deal with `@SyncAlly follow <deal-id>`.",
+            "No deal you can access is followed in this thread. Use `@SyncAlly status <deal-name>` to check one directly, or follow a deal with `@SyncAlly follow <deal-name>`.",
         )
 
     def _add_payment_lookup(self, deal_id, *, event_id: str, user_id: str = "U-payments", delay: int = 0):
@@ -873,7 +1064,8 @@ class SlackEventRouteTests(unittest.TestCase):
         *,
         event_id: str,
         command: str,
-        deal_id,
+        deal_id=None,
+        deal_reference: str | None = None,
         user_id: str = "U-follow",
         now=None,
     ) -> SlackEvent:
@@ -888,7 +1080,8 @@ class SlackEventRouteTests(unittest.TestCase):
             message_ts=f"126.{len(event_id):03d}",
             thread_ts="125.000",
             command=command,
-            deal_id=str(deal_id),
+            deal_id=str(deal_id) if deal_id is not None else None,
+            deal_reference=deal_reference,
             status="PENDING",
             attempts=0,
             available_at=now,
@@ -1104,7 +1297,8 @@ class SlackEventRouteTests(unittest.TestCase):
         ))
         self.db.commit()
         self._add_slack_command_event(
-            event_id="Ev-follow-1", command="FOLLOW", deal_id=deal_id, now=now,
+            event_id="Ev-follow-1", command="FOLLOW",
+            deal_reference=SlackTokenCipher(FERNET_KEY).encrypt("Private deal"), now=now,
         )
 
         class FakeAPI:
@@ -1133,7 +1327,7 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(subscription.thread_ts, "125.000")
         self.assertEqual(api.public_messages, [])
         self.assertEqual(api.private_messages[0]["user"], "U-follow")
-        self.assertIn(str(deal_id), api.private_messages[0]["text"])
+        self.assertIn("@SyncAlly unfollow <deal-name>", api.private_messages[0]["text"])
         self.assertIsNotNone(self.db.scalar(
             select(AuditEvent).where(AuditEvent.event_type == "integration.deal_followed")
         ))
@@ -1173,7 +1367,8 @@ class SlackEventRouteTests(unittest.TestCase):
         self.db.commit()
 
         self._add_slack_command_event(
-            event_id="Ev-unfollow", command="UNFOLLOW", deal_id=deal_id,
+            event_id="Ev-unfollow", command="UNFOLLOW",
+            deal_reference=SlackTokenCipher(FERNET_KEY).encrypt("Private deal"),
             now=now + timedelta(seconds=2),
         )
         with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
@@ -1959,7 +2154,7 @@ class SlackEventRouteTests(unittest.TestCase):
         self.assertEqual(len(api.private_messages), 2)
         self.assertEqual(
             {message["text"] for message in api.private_messages},
-            {"I couldn't find payment information you can access for that deal. Check the ID or your SyncAlly payment permissions."},
+            {"I couldn't find payment information you can access for that deal name or ID. Check it or your SyncAlly payment permissions."},
         )
         self.assertTrue(all(message["user"] == "U-payments" for message in api.private_messages))
         self.assertTrue(all(message["thread_ts"] == "124.000" for message in api.private_messages))
@@ -2087,7 +2282,7 @@ class SlackEventRouteTests(unittest.TestCase):
             self.assertNotIn(secret, unique_reply["text"])
         self.assertEqual(
             api.private_messages[1]["text"],
-            "No deal with payment access is followed in this thread. Use `@SyncAlly payments <deal-id>` to check one directly, or follow a deal you can access.",
+            "No deal with payment access is followed in this thread. Use `@SyncAlly payments <deal-name>` to check one directly, or follow a deal you can access.",
         )
         self.assertEqual(
             api.private_messages[2]["text"],
@@ -2095,7 +2290,7 @@ class SlackEventRouteTests(unittest.TestCase):
         )
         self.assertEqual(
             api.private_messages[3]["text"],
-            "No deal with payment access is followed in this thread. Use `@SyncAlly payments <deal-id>` to check one directly, or follow a deal you can access.",
+            "No deal with payment access is followed in this thread. Use `@SyncAlly payments <deal-name>` to check one directly, or follow a deal you can access.",
         )
         self.assertEqual(list_payments.call_count, 1)
         self.assertEqual(list_payments.call_args.args[1], first_deal_id)

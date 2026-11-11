@@ -112,6 +112,7 @@ class SlackEvent(Base):
     thread_ts: Mapped[str] = mapped_column(String(32), nullable=False)
     command: Mapped[str] = mapped_column(String(32), nullable=False)
     deal_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    deal_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

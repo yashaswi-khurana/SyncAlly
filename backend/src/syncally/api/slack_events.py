@@ -19,6 +19,7 @@ from syncally.api.auth import get_current_actor
 from syncally.application.identity import ActorContext
 from syncally.config import settings
 from syncally.infrastructure.database import get_db
+from syncally.infrastructure.integrations.slack import SlackTokenCipher
 from syncally.infrastructure.integrations.slack_events import (
     SlackEventVerificationError,
     verify_slack_request,
@@ -36,6 +37,27 @@ from syncally.infrastructure.repositories._timestamps import as_utc
 router = APIRouter(tags=["integrations"])
 MAX_SLACK_EVENT_BODY_BYTES = 256 * 1024
 _DEAL_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
+_MAX_DEAL_NAME_LENGTH = 160
+
+
+def _deal_reference(parts: list[str], command: str) -> tuple[str, str] | None:
+    if len(parts) < 2:
+        return None
+    if len(parts) > 2 and _DEAL_ID.fullmatch(parts[1]):
+        return None
+    reference = " ".join(parts[1:]).strip()
+    if len(reference) >= 2 and reference[0] == reference[-1] and reference[0] in {"'", '"'}:
+        reference = reference[1:-1].strip()
+    if not reference:
+        return None
+    if _DEAL_ID.fullmatch(reference):
+        try:
+            return command, str(uuid.UUID(reference))
+        except ValueError:
+            pass
+    if len(reference) <= _MAX_DEAL_NAME_LENGTH:
+        return command, reference
+    return None
 
 
 def _event_command(text: object, bot_user_id: str) -> tuple[str, str | None]:
@@ -59,33 +81,11 @@ def _event_command(text: object, bot_user_id: str) -> tuple[str, str | None]:
             return f"START_{parts[1].upper()}", str(uuid.UUID(parts[2]))
         except ValueError:
             pass
-    if (
-        len(parts) == 2
-        and parts[0].casefold() in {"follow", "unfollow"}
-        and _DEAL_ID.fullmatch(parts[1])
-    ):
-        try:
-            return parts[0].upper(), str(uuid.UUID(parts[1]))
-        except ValueError:
-            pass
-    if (
-        len(parts) == 2
-        and parts[0].casefold() == "status"
-        and _DEAL_ID.fullmatch(parts[1])
-    ):
-        try:
-            return "STATUS", str(uuid.UUID(parts[1]))
-        except ValueError:
-            pass
-    if (
-        len(parts) == 2
-        and parts[0].casefold() == "payments"
-        and _DEAL_ID.fullmatch(parts[1])
-    ):
-        try:
-            return "PAYMENTS", str(uuid.UUID(parts[1]))
-        except ValueError:
-            pass
+    if parts and parts[0].casefold() in {"follow", "unfollow", "status", "payments"}:
+        command = parts[0].upper()
+        parsed = _deal_reference(parts, command)
+        if parsed is not None:
+            return parsed
     return "HELP", None
 
 
@@ -150,7 +150,17 @@ async def receive_slack_event(request: Request, db: Session = Depends(get_db)):
     )
     if installation is None or user_id == installation.bot_user_id:
         return {"ok": True}
-    command, deal_id = _event_command(event.get("text"), installation.bot_user_id)
+    command, reference = _event_command(event.get("text"), installation.bot_user_id)
+    deal_id = reference
+    deal_reference = None
+    if command in {"STATUS", "PAYMENTS", "FOLLOW", "UNFOLLOW"} and reference is not None:
+        try:
+            deal_id = str(uuid.UUID(reference))
+        except ValueError:
+            deal_id = None
+            deal_reference = SlackTokenCipher(
+                settings.integration_token_encryption_key.get_secret_value()
+            ).encrypt(reference)
     db.add(
         SlackEvent(
             id=uuid.uuid4(),
@@ -163,6 +173,7 @@ async def receive_slack_event(request: Request, db: Session = Depends(get_db)):
             thread_ts=event.get("thread_ts") or message_ts,
             command=command,
             deal_id=deal_id,
+            deal_reference=deal_reference,
             status="PENDING",
             attempts=0,
             available_at=datetime.now(UTC),

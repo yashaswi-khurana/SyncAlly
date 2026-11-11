@@ -91,8 +91,12 @@ class SafeOperationsTests(unittest.TestCase):
         self.assertNotIn("error_code", rows[1])
         self.assertEqual(len(rows), 4)
 
-    def test_allowlisted_payment_failures_keep_their_stable_codes(self):
+    def test_allowlisted_provider_and_payment_failures_keep_their_stable_codes(self):
         codes = {
+            "AI_PROPOSAL_CONTRACT",
+            "AI_PROPOSAL_GROUNDING",
+            "AI_PROPOSAL_INSUFFICIENT_CONTEXT",
+            "AI_PROPOSAL_SHAPE",
             "GMAIL_SMTP_AUTH_FAILED",
             "GMAIL_SMTP_REJECTED",
             "GMAIL_SMTP_RECIPIENT_REJECTED",

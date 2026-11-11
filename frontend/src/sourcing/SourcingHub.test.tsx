@@ -353,7 +353,9 @@ export const MOCK_BUNDLED_LISTINGS: CandidateComparisonResult[] = [
 // PRODUCTION SOURCING HUB UI COMPONENT IMPORT
 // ==============================================================================
 
-import { ReferenceSourcingHub } from "./SourcingHubPage";
+import { ReferenceSourcingHub as SourcingHub } from "./SourcingHubPage";
+
+const ReferenceSourcingHub = () => <SourcingHub initialListings={CATALOGUE_LISTINGS} />;
 
 
 // ==============================================================================

@@ -194,10 +194,11 @@ Release in independently reviewable slices:
    private egress policy, currency/unit identity, bounded calls, and explicit
    rejection. Exercise malformed output, outage, and duplicate extraction as
    well as the happy path.
-2. **Genuine sourcing:** route the UI through server-owned interpretation and
-   evaluation. Label actual provider execution separately from deterministic
-   ranking and bundled catalogue data. Never promote missing requirements to
-   inferred quantity, price, currency, destination, or payment commitments.
+2. **Genuine sourcing:** restore evaluation only over persisted offers with
+   explicit unknown values, compatible units and currencies, and authorized
+   buyer context. Label actual provider execution separately from deterministic
+   ranking. Never promote missing requirements to inferred quantity, price,
+   currency, destination, or payment commitments.
 3. **Measured production gate:** evaluate the configured model against reviewed,
    consented examples before rollout. Require zero unauthorized-data disclosures
    and zero accepted unsupported commercial values in the release fixture set.
@@ -220,18 +221,19 @@ separate release requirements: an AI-generated ranking cannot certify a supplier
 
 ### Sourcing implementation boundary
 
-The sourcing page now uses the backend `/sourcing` endpoints rather than local
-browser evaluation. Natural-language interpretation calls the configured
-OpenAI/Gemini transport; strict field contracts and quoted source evidence are
-validated locally. Unknown required fields cause clarification, not speculative
-commercial defaults. Structured user input is explicitly labeled separately.
-Provider failures are surfaced without offline substitution for sourcing.
+The backend `/sourcing/interpret` endpoint supports natural-language
+interpretation using the configured OpenAI/Gemini transport; strict field
+contracts and quoted source evidence are validated locally. Unknown required
+fields cause clarification, not speculative commercial defaults. Structured
+user input is explicitly labeled separately. Provider failures are surfaced
+without offline substitution for sourcing.
 
-Ranking, commercial gap arithmetic, and inquiry templates remain deterministic
-application services over bundled demo catalogue data. The catalogue disclosure
-is a product boundary, not a supplier-verification claim. Users review interpreted
-requirements before ranking; inquiries remain drafts asking suppliers to confirm
-terms, not purchase orders or payment commitments.
+Sourcing comparison, gap analysis, evaluation and inquiry drafting are currently
+unavailable because persisted offers lack the data and unknown-value semantics
+needed for reliable scoring. The page directs users to the existing Marketplace
+instead of displaying fictional suppliers. Bundled data is restricted to direct
+development/test service callers. Interpretation is not currently exposed on the
+production sourcing page. Marketplace offers are not supplier verification.
 
 Sourcing transmits the prompt and controls the user submits for this purpose; it
 does not retrieve organization-private deal data. Operator remote-egress and
@@ -256,7 +258,13 @@ port and now reuses grounded remote fact extraction from main.
 - A final sourcing lifecycle fix releases the authentication read transaction
   before provider HTTP, following the existing deal-AI route pattern. Its
   isolated SQLite/MockTransport regression passed separately for both
-  interpretation and evaluation after those checks.
+  interpretation and evaluation after those checks; evaluation is now disabled.
+- Subsequent sourcing checks passed 148 backend tests and 62 frontend tests.
+  Some legacy backend tests explicitly override the availability gate to exercise
+  isolated demo logic; they do not prove the public sourcing workflow is available.
+- Opening analysis hardening passed 77 focused backend tests and two subtests.
+  The separate opening end-to-end suite still has 13 pre-existing failures at deal
+  creation authorization.
 - No live provider calls, production deployment, private-data egress, migrations,
   or payment execution were used for verification. Model quality, account
   retention, operational load, and supplier verification remain release gates.

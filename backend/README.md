@@ -221,13 +221,21 @@ Remote sourcing has no offline fallback: unavailable configuration or transient
 provider failure returns 503, malformed provider output returns 502, and invalid
 or incomplete requirements return 422.
 
-The sourcing UI calls server-owned interpretation, evaluation, and inquiry
-endpoints. Users review interpreted requirements before ranking. Structured
-requirements remain usable without AI; comparisons, gap arithmetic, and inquiry
-templates remain deterministic. Responses distinguish the actual AI
-provider/model from structured input. The catalogue is bundled demo data, not
-verified supplier inventory. Inquiry drafts request confirmation; they never
-place orders, promise payment, or invent commercial commitments.
+`GET /sourcing/listings` returns 503 in every environment. Its response shape
+cannot distinguish unknown certifications, materials, standards or Incoterms
+from explicitly empty lists, and has no pagination for an accurate total.
+Browse active offers through `GET /marketplace/listings` instead; it supports
+`limit` and `offset` and does not verify seller claims. A future sourcing
+catalogue needs an explicit unknown-aware, paginated contract.
+
+Comparison, gap analysis, inquiry drafting and evaluation return 503 in every
+environment until the persisted schema and scoring can reliably represent missing
+information, currencies, units and commercial terms. The UI directs users to
+Marketplace instead; it does not display fictional suppliers. Bundled examples
+remain available only to direct offline development/test service callers, and
+UI test fixtures require explicit injection. No inquiry is sent automatically.
+Re-enabling these operations also requires buyer-organization authorization and
+human review of any generated inquiry.
 
 Opening-request analysis is a separate flow. It reuses grounded remote fact
 extraction when configured, with its own normalization and fallback policy.

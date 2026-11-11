@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, fireEvent, within } from "@testing-library/react";
-import { ReferenceSourcingHub } from "./SourcingHubPage";
+import { ReferenceSourcingHub as SourcingHub } from "./SourcingHubPage";
 import { MOCK_BUNDLED_LISTINGS } from "./bundledListings";
 import { parseRoute } from "../router";
 import { interpretPrompt } from "./sourcingEngine";
@@ -23,6 +23,8 @@ import {
   evaluateSourcing,
   interpretSourcingRequirements,
 } from "../api/client";
+
+const ReferenceSourcingHub = () => <SourcingHub initialListings={MOCK_BUNDLED_LISTINGS} />;
 
 vi.mock("../api/client", () => ({
   draftSourcingInquiry: vi.fn(),

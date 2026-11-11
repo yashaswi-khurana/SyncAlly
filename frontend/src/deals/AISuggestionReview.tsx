@@ -38,8 +38,30 @@ const PROPOSAL_FIELDS: Array<[keyof ProposalSuggestionDraft, string]> = [
   ["deliveryDate", "Delivery date"],
 ];
 
+function normalizedCountUnit(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+function countUnitsAgree(left: string, right: string): boolean {
+  const a = normalizedCountUnit(left);
+  const b = normalizedCountUnit(right);
+  if (a === b) return true;
+  const isPluralOf = (singular: string, plural: string) => singular.length >= 3
+    && (plural === `${singular}s`
+      || plural === `${singular}es`
+      || (singular.endsWith("y") && plural === `${singular.slice(0, -1)}ies`));
+  return isPluralOf(a, b) || isPluralOf(b, a);
+}
+
+function countUnitValuesAgree(values: string[]): boolean {
+  return values.every((value, index) => values.slice(index + 1)
+    .every((other) => countUnitsAgree(value, other)));
+}
+
 function quantityUnitMatchesExplicitUnit(quantityUnit: string, explicitUnit: string): boolean {
-  return quantityUnit === explicitUnit || quantityUnit.endsWith(` ${explicitUnit}`);
+  const unitTokens = normalizedCountUnit(quantityUnit).split(" ");
+  const lastToken = unitTokens.at(-1) ?? "";
+  return countUnitsAgree(quantityUnit, explicitUnit) || countUnitsAgree(lastToken, explicitUnit);
 }
 
 function describeError(caught: unknown): string {
@@ -208,7 +230,8 @@ export default function AISuggestionReview({
     const field = fieldNames[key];
     if (!matching.length) continue;
     confirmedSignatures[field] = JSON.stringify(matching.map((fact) => [fact.id, fact.version, fact.typed_value, fact.currency_or_unit]).sort());
-    if (new Set(matching.map((fact) => fact.typed_value)).size > 1) conflictingFields.add(field);
+    const values = matching.map((fact) => fact.typed_value);
+    if (field === "unit" ? !countUnitValuesAgree(values) : new Set(values).size > 1) conflictingFields.add(field);
     else confirmedValues[field] = matching[0].typed_value;
   }
   const unitPrices = confirmed.filter((fact) => requiredTradeField(fact.field) === "unit_price");
@@ -229,26 +252,25 @@ export default function AISuggestionReview({
     }
   }
   const explicitUnits = confirmed.filter((fact) => requiredTradeField(fact.field) === "unit");
-  const explicitUnitValues = new Set(
-    explicitUnits.map((fact) => fact.typed_value.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
-  );
-  if (explicitUnitValues.size > 1) {
+  const explicitUnitValues = explicitUnits.map((fact) => fact.typed_value).filter((unit) => unit.trim());
+  if (!countUnitValuesAgree(explicitUnitValues)) {
     conflictingFields.add("unit");
   }
   const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
-  const quantityUnits = new Set(
-    quantities.map((fact) => fact.currency_or_unit?.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
-  );
-  const explicitUnit = explicitUnitValues.size === 1 ? [...explicitUnitValues][0] : null;
-  const quantityUnitsConflict = quantityUnits.size > 1
+  const quantityUnits = [...new Set(
+    quantities.map((fact) => fact.currency_or_unit?.trim().toLocaleLowerCase()).filter((unit) => Boolean(unit)),
+  )];
+  const explicitUnit = explicitUnitValues.length > 0 && countUnitValuesAgree(explicitUnitValues)
+    ? explicitUnitValues[0] : null;
+  const quantityUnitsConflict = quantityUnits.length > 1
     && (!explicitUnit
-      || [...quantityUnits].some((unit) => !quantityUnitMatchesExplicitUnit(unit, explicitUnit)));
+      || quantityUnits.some((unit) => !quantityUnitMatchesExplicitUnit(unit ?? "", explicitUnit)));
   if (quantityUnitsConflict) {
     conflictingFields.add("quantity");
     conflictingFields.add("unit");
   }
-  if (explicitUnit && [...quantityUnits].some(
-    (unit) => !quantityUnitMatchesExplicitUnit(unit, explicitUnit),
+  if (explicitUnit && quantityUnits.some(
+    (unit) => !quantityUnitMatchesExplicitUnit(unit ?? "", explicitUnit),
   )) {
     conflictingFields.add("unit");
     conflictingFields.add("quantity");

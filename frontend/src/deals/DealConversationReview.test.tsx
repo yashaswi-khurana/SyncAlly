@@ -1406,11 +1406,16 @@ describe("synchronized fact review and proposal drafts", () => {
       organization(BUYER_ID, "Buyer Co"), organization(SELLER_ID, "Seller Co"),
     ]);
     mockedListDealFacts.mockResolvedValue([
+      fact({ id: "shared-unit", field: "unit", typed_value: "balls", status: "CONFIRMED", visibility: "SHAREABLE" }),
       fact({ id: "shared-quantity", field: "quantity", typed_value: "120", currency_or_unit: "table tennis balls",
         status: "CONFIRMED", visibility: "SHAREABLE" }),
+      fact({ id: "seller-descriptive-quantity", owner_organization_id: SELLER_ID, field: "quantity", typed_value: "120",
+        currency_or_unit: "table tennis balls", status: "CONFIRMED" }),
       fact({ id: "seller-quantity", owner_organization_id: SELLER_ID, field: "quantity", typed_value: "120",
         currency_or_unit: "balls", status: "CONFIRMED" }),
       fact({ id: "seller-unit", owner_organization_id: SELLER_ID, field: "unit", typed_value: "balls",
+        status: "CONFIRMED" }),
+      fact({ id: "seller-singular-unit", owner_organization_id: SELLER_ID, field: "unit", typed_value: "ball",
         status: "CONFIRMED" }),
     ]);
 

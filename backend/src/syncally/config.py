@@ -7,6 +7,7 @@ from typing import Literal
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
+from cryptography.fernet import Fernet
 from jwt.algorithms import HMACAlgorithm, get_default_algorithms
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -115,6 +116,13 @@ class Settings(BaseSettings):
     openai_model: str = ""
     google_api_key: SecretStr = SecretStr("")
     gemini_model: str = ""
+    slack_client_id: str = ""
+    slack_client_secret: SecretStr = SecretStr("")
+    slack_redirect_uri: str = ""
+    slack_signing_secret: SecretStr = SecretStr("")
+    slack_events_poll_interval_seconds: float = 2.0
+    slack_events_batch_size: int = 20
+    integration_token_encryption_key: SecretStr = SecretStr("")
 
     @model_validator(mode="after")
     def validate_auth_configuration(self) -> "Settings":
@@ -124,6 +132,22 @@ class Settings(BaseSettings):
             raise ValueError("SYSTEM_ADMIN_BOOTSTRAP_TOKEN must contain at least 32 characters")
         if self.payment_mode == "OFFLINE_DEMO" and not local_environment:
             raise ValueError("OFFLINE_DEMO payments are only allowed in development/test")
+        slack_oauth_values = (
+            self.slack_client_id.strip(),
+            self.slack_client_secret.get_secret_value().strip(),
+            self.slack_redirect_uri.strip(),
+            self.integration_token_encryption_key.get_secret_value().strip(),
+        )
+        if any(slack_oauth_values) and not all(slack_oauth_values):
+            raise ValueError(
+                "SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_REDIRECT_URI, and "
+                "INTEGRATION_TOKEN_ENCRYPTION_KEY must be configured together"
+            )
+        if all(slack_oauth_values):
+            try:
+                Fernet(slack_oauth_values[3].encode("ascii"))
+            except (ValueError, UnicodeEncodeError) as error:
+                raise ValueError("INTEGRATION_TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from error
         if not self.database_url.strip():
             if local_environment:
                 self.database_url = "postgresql+psycopg://localhost:5432/syncally"
@@ -147,6 +171,22 @@ class Settings(BaseSettings):
             )
         else:
             raise ValueError(f"JWT_ALGORITHM {self.jwt_algorithm!r} is not supported")
+        if self.slack_redirect_uri:
+            try:
+                slack_redirect = urlsplit(self.slack_redirect_uri)
+                slack_port = slack_redirect.port
+            except ValueError as error:
+                raise ValueError("SLACK_REDIRECT_URI must be a valid HTTPS callback URL") from error
+            if (
+                slack_redirect.scheme not in ({"http", "https"} if local_environment else {"https"})
+                or not slack_redirect.hostname
+                or slack_redirect.username is not None
+                or slack_redirect.password is not None
+                or slack_redirect.query
+                or slack_redirect.fragment
+                or (slack_port is not None and not 1 <= slack_port <= 65535)
+            ):
+                raise ValueError("SLACK_REDIRECT_URI must be a valid HTTPS callback URL")
         if self.dev_auth_user_id and not local_environment:
             raise ValueError("DEV_AUTH_USER_ID is only allowed in development/test")
         if self.access_token_ttl_minutes <= 0 or self.refresh_token_ttl_days <= 0:
@@ -157,6 +197,10 @@ class Settings(BaseSettings):
             raise ValueError("OUTBOX_BATCH_SIZE must be positive")
         if self.outbox_poll_interval_seconds <= 0:
             raise ValueError("OUTBOX_POLL_INTERVAL_SECONDS must be positive")
+        if self.slack_events_batch_size <= 0:
+            raise ValueError("SLACK_EVENTS_BATCH_SIZE must be positive")
+        if self.slack_events_poll_interval_seconds <= 0:
+            raise ValueError("SLACK_EVENTS_POLL_INTERVAL_SECONDS must be positive")
         if (
             not local_environment
             and not self.temporal_tls

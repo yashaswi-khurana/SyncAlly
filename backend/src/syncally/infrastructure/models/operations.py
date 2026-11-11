@@ -16,6 +16,7 @@ class OutboxEvent(Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
         Index("ix_outbox_events_status_next_attempt_created", "status", "next_attempt_at", "created_at"),
+        Index("ix_outbox_events_type_created", "event_type", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=uuid.uuid4)

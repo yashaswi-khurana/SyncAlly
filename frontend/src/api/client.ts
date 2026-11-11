@@ -41,6 +41,7 @@ import type {
   CreateMarketplaceRFQInput,
   OrganizationMember,
   OrganizationProfile,
+  SlackConnection,
   PlatformOrganization,
   PlatformUser,
   PlatformOrganizationMember,
@@ -293,6 +294,30 @@ export function updatePlatformUserStatus(
 
 export function listOrganizations(): Promise<Organization[]> {
   return apiRequest<Organization[]>("/organizations");
+}
+
+export function getSlackConnection(organizationId: string): Promise<SlackConnection> {
+  return apiRequest<SlackConnection>(`/organizations/${encodeURIComponent(organizationId)}/integrations/slack`);
+}
+
+export function startSlackConnection(organizationId: string): Promise<{ authorization_url: string }> {
+  return apiRequest<{ authorization_url: string }>(
+    `/organizations/${encodeURIComponent(organizationId)}/integrations/slack/oauth/start`,
+    { method: "POST" },
+  );
+}
+
+export function disconnectSlack(organizationId: string): Promise<SlackConnection> {
+  return apiRequest<SlackConnection>(`/organizations/${encodeURIComponent(organizationId)}/integrations/slack`, {
+    method: "DELETE",
+  });
+}
+
+export function redeemSlackLink(code: string): Promise<{ linked: boolean }> {
+  return apiRequest<{ linked: boolean }>("/integrations/slack/link", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
 }
 
 export function getOrganization(organizationId: string, options?: { signal?: AbortSignal }): Promise<OrganizationDirectoryItem> {

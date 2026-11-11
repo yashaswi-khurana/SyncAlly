@@ -53,6 +53,16 @@ export interface Organization {
   regions?: string[];
 }
 
+export interface SlackConnection {
+  configured: boolean;
+  connected: boolean;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  granted_scopes: string[];
+  connected_at: string | null;
+  messaging_enabled: boolean;
+}
+
 export interface OrganizationDirectoryItem {
   id: string;
   legal_name: string;

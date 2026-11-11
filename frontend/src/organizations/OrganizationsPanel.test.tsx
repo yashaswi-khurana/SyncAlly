@@ -1,14 +1,15 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getOrganizationProfile, listOrganizations, updateOrganizationProfile } from "../api/client";
-import type { Organization, OrganizationProfile } from "../api/types";
+import { ApiError, getOrganizationProfile, getSlackConnection, listOrganizations, updateOrganizationProfile } from "../api/client";
+import type { Organization, OrganizationProfile, SlackConnection } from "../api/types";
 import OrganizationsPanel from "./OrganizationsPanel";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    getSlackConnection: vi.fn(),
     listOrganizations: vi.fn(),
     getOrganizationProfile: vi.fn(),
     updateOrganizationProfile: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("../api/client", async (importOriginal) => {
 
 const mockedListOrganizations = vi.mocked(listOrganizations);
 const mockedGetOrganizationProfile = vi.mocked(getOrganizationProfile);
+const mockedGetSlackConnection = vi.mocked(getSlackConnection);
 const mockedUpdateOrganizationProfile = vi.mocked(updateOrganizationProfile);
 
 const ORG_ID = "33333333-3333-3333-3333-333333333333";
@@ -59,6 +61,7 @@ describe("OrganizationsPanel", () => {
   });
 
   afterEach(() => {
+    window.location.hash = "";
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });
@@ -71,6 +74,27 @@ describe("OrganizationsPanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/loading your organizations/i);
     expect(await screen.findByText("Demo Seller Co (US)")).toBeInTheDocument();
     expect(screen.getByText(ORG_ID)).toBeInTheDocument();
+  });
+
+  it("opens the integrations tab after returning from Slack authorization", async () => {
+    mockedListOrganizations.mockResolvedValue([organization()]);
+    const slackConnection: SlackConnection = {
+      configured: true,
+      connected: false,
+      workspace_id: null,
+      workspace_name: null,
+      granted_scopes: [],
+      connected_at: null,
+      messaging_enabled: true,
+    };
+    mockedGetSlackConnection.mockResolvedValue(slackConnection);
+    window.location.hash = "#/settings/organizations?integration=connected";
+
+    render(<OrganizationsPanel />);
+
+    expect(await screen.findByRole("heading", { name: "Integrations" })).toBeInTheDocument();
+    expect(await screen.findByText(/slack workspace connected\. members can link accounts and ask for deal status/i)).toBeInTheDocument();
+    expect(mockedGetSlackConnection).toHaveBeenCalledWith(ORG_ID);
   });
 
   it("shows an empty state when the account has no organizations", async () => {

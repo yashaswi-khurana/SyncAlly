@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: "happy-dom",
       setupFiles: ["./src/test-setup.ts"],
+      maxWorkers: 1,
     },
   };
 });

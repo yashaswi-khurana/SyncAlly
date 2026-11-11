@@ -143,13 +143,26 @@ class AiContextSelectionTests(unittest.TestCase):
         self.repository.conversation_owner[self.buyer_conversation_id] = self.buyer_id
         self.repository.conversation_owner[self.seller_conversation_id] = self.seller_id
 
+    def _actor(self, user_id: UUID, organizations: frozenset[UUID]) -> ActorContext:
+        return ActorContext(
+            user_id,
+            organizations,
+            permissions_by_organization={
+                organization_id: frozenset({"deal.read_assigned"})
+                for organization_id in organizations
+            },
+            assigned_deals=frozenset(
+                (organization_id, self.deal.id) for organization_id in organizations
+            ),
+        )
+
     def _grant(self, organization_id: UUID, user_id: UUID) -> None:
         self.repository.memberships.add((organization_id, user_id))
 
     def test_buyer_perspective_sees_buyer_private_and_both_shareable(self) -> None:
         user_id = uuid4()
         self._grant(self.buyer_id, user_id)
-        actor = ActorContext(user_id, frozenset({self.buyer_id}))
+        actor = self._actor(user_id, frozenset({self.buyer_id}))
 
         context = select_ai_context(actor, self.deal.id, self.buyer_id, self.repository)
 
@@ -164,7 +177,7 @@ class AiContextSelectionTests(unittest.TestCase):
     def test_seller_perspective_sees_seller_private_and_both_shareable(self) -> None:
         user_id = uuid4()
         self._grant(self.seller_id, user_id)
-        actor = ActorContext(user_id, frozenset({self.seller_id}))
+        actor = self._actor(user_id, frozenset({self.seller_id}))
 
         context = select_ai_context(actor, self.deal.id, self.seller_id, self.repository)
 
@@ -185,7 +198,7 @@ class AiContextSelectionTests(unittest.TestCase):
     def test_actor_not_member_of_requested_perspective_organization_is_denied(self) -> None:
         user_id = uuid4()
         self._grant(self.buyer_id, user_id)
-        actor = ActorContext(user_id, frozenset({self.buyer_id}))
+        actor = self._actor(user_id, frozenset({self.buyer_id}))
 
         with self.assertRaises(OrganizationAccessDenied):
             select_ai_context(actor, self.deal.id, self.seller_id, self.repository)
@@ -195,7 +208,7 @@ class AiContextSelectionTests(unittest.TestCase):
         user_id = uuid4()
         self._grant(self.buyer_id, user_id)
         self._grant(self.seller_id, user_id)
-        actor = ActorContext(user_id, frozenset({self.buyer_id, self.seller_id}))
+        actor = self._actor(user_id, frozenset({self.buyer_id, self.seller_id}))
 
         buyer_view = select_ai_context(actor, self.deal.id, self.buyer_id, self.repository)
         seller_view = select_ai_context(actor, self.deal.id, self.seller_id, self.repository)
@@ -209,7 +222,7 @@ class AiContextSelectionTests(unittest.TestCase):
         user_id = uuid4()
         outsider_org = OrganizationId(uuid4())
         self._grant(self.buyer_id, user_id)
-        actor = ActorContext(user_id, frozenset({self.buyer_id, outsider_org}))
+        actor = self._actor(user_id, frozenset({self.buyer_id, outsider_org}))
 
         with self.assertRaises(CommunicationNotFound):
             select_ai_context(actor, self.deal.id, outsider_org, self.repository)
@@ -217,7 +230,7 @@ class AiContextSelectionTests(unittest.TestCase):
     def test_missing_deal_is_denied_same_as_inaccessible(self) -> None:
         user_id = uuid4()
         self._grant(self.buyer_id, user_id)
-        actor = ActorContext(user_id, frozenset({self.buyer_id}))
+        actor = self._actor(user_id, frozenset({self.buyer_id}))
 
         with self.assertRaises(CommunicationNotFound):
             select_ai_context(actor, DealId(uuid4()), self.buyer_id, self.repository)
@@ -225,7 +238,7 @@ class AiContextSelectionTests(unittest.TestCase):
     def test_context_repr_does_not_leak_message_or_constraint_content(self) -> None:
         user_id = uuid4()
         self._grant(self.buyer_id, user_id)
-        actor = ActorContext(user_id, frozenset({self.buyer_id}))
+        actor = self._actor(user_id, frozenset({self.buyer_id}))
 
         context = select_ai_context(actor, self.deal.id, self.buyer_id, self.repository)
 

@@ -302,9 +302,13 @@ class PayPalSettings(BaseSettings):
     )
 
 
-class GmailSettings(BaseSettings):
-    """Optional Gmail SMTP credentials for payment and invitation notifications."""
+class EmailSettings(BaseSettings):
+    """Optional transactional email API credentials."""
 
+    gmail_api_client_id: str = ""
+    gmail_api_client_secret: SecretStr = SecretStr("")
+    gmail_api_refresh_token: SecretStr = SecretStr("")
+    gmail_api_sender_email: str = ""
     gmail_smtp_username: str = ""
     gmail_app_password: SecretStr = SecretStr("")
     gmail_from_email: str = ""
@@ -314,3 +318,6 @@ class GmailSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+
+GmailSettings = EmailSettings

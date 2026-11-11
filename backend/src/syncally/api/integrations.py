@@ -55,6 +55,11 @@ class SlackConnectionResponse(BaseModel):
     messaging_enabled: bool = False
 
 
+class SlackAccountLinkStatusResponse(BaseModel):
+    workspace_connected: bool
+    account_linked: bool
+
+
 def _configured() -> bool:
     return bool(
         settings.slack_client_id.strip()
@@ -174,6 +179,37 @@ def get_slack_connection(
         )
     )
     return _connection_response(installation)
+
+
+@router.get(
+    "/organizations/{organization_id}/integrations/slack/link-status",
+    response_model=SlackAccountLinkStatusResponse,
+)
+def get_slack_account_link_status(
+    organization_id: uuid.UUID,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+) -> SlackAccountLinkStatusResponse:
+    """Report only the caller's Slack link state within an active organization."""
+    if organization_id not in actor.organization_ids:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    installation = db.scalar(
+        select(SlackInstallation).where(
+            SlackInstallation.organization_id == organization_id,
+            SlackInstallation.status == "CONNECTED",
+        )
+    )
+    if installation is None:
+        return SlackAccountLinkStatusResponse(workspace_connected=False, account_linked=False)
+    linked = db.scalar(
+        select(SlackUserLink.id).where(
+            SlackUserLink.installation_id == installation.id,
+            SlackUserLink.organization_id == organization_id,
+            SlackUserLink.workspace_id == installation.workspace_id,
+            SlackUserLink.user_id == actor.user_id,
+        )
+    ) is not None
+    return SlackAccountLinkStatusResponse(workspace_connected=True, account_linked=linked)
 
 
 @router.post("/organizations/{organization_id}/integrations/slack/oauth/start")

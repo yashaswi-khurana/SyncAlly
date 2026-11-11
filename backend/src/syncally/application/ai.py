@@ -166,6 +166,19 @@ class AIRetryPolicy:
             raise ValueError("backoff_seconds must be zero or greater")
 
 
+def _retry_policy_for_provider(
+    provider: AISuggestionProvider,
+    policy: AIRetryPolicy | None,
+) -> AIRetryPolicy:
+    if policy is not None:
+        return policy
+    if provider_provenance(provider).provider == "gemini":
+        # One longer call avoids spending twice on a slow Gemini response while
+        # fitting Render Free's wake-up allowance within the UI deadline.
+        return AIRetryPolicy(max_attempts=1, timeout_seconds=45.0, backoff_seconds=0.0)
+    return AIRetryPolicy()
+
+
 @dataclass(frozen=True, slots=True)
 class FactExtractionRequest:
     """Authorized, organization-scoped input for one extraction call."""
@@ -293,7 +306,7 @@ def extract_facts(
     repository: CommunicationRepository,
     provider: AISuggestionProvider,
     *,
-    policy: AIRetryPolicy = AIRetryPolicy(),
+    policy: AIRetryPolicy | None = None,
     sleep: Callable[[float], None] = default_sleep,
 ) -> FactExtractionResult:
     """Suggest facts from one organization's authorized context.
@@ -310,10 +323,11 @@ def extract_facts_from_context(
     context: AiContext,
     provider: AISuggestionProvider,
     *,
-    policy: AIRetryPolicy = AIRetryPolicy(),
+    policy: AIRetryPolicy | None = None,
     sleep: Callable[[float], None] = default_sleep,
 ) -> FactExtractionResult:
     """Call the provider and validate candidates after authorized context is loaded."""
+    policy = _retry_policy_for_provider(provider, policy)
     context = _provider_context(context, provider)
     request = FactExtractionRequest(context=context)
 
@@ -348,7 +362,7 @@ def draft_proposal(
     repository: CommunicationRepository,
     provider: AISuggestionProvider,
     *,
-    policy: AIRetryPolicy = AIRetryPolicy(),
+    policy: AIRetryPolicy | None = None,
     sleep: Callable[[float], None] = default_sleep,
 ) -> ProposalDraftResult:
     """Draft one non-binding proposal from a single organization's context."""
@@ -360,10 +374,11 @@ def draft_proposal_from_context(
     context: AiContext,
     provider: AISuggestionProvider,
     *,
-    policy: AIRetryPolicy = AIRetryPolicy(),
+    policy: AIRetryPolicy | None = None,
     sleep: Callable[[float], None] = default_sleep,
 ) -> ProposalDraftResult:
     """Call a provider with an already authorized, transaction-free context."""
+    policy = _retry_policy_for_provider(provider, policy)
     context = _provider_context(context, provider)
     request = ProposalDraftRequest(context=context)
 

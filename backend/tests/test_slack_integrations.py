@@ -167,6 +167,36 @@ class SlackIntegrationTests(unittest.TestCase):
         self.assertTrue(status.configured)
         self.assertFalse(status.connected)
 
+    def test_account_link_status_is_self_only_and_available_to_org_members(self) -> None:
+        missing = integrations.get_slack_account_link_status(self.org.id, self.member, self.db)
+        self.assertFalse(missing.workspace_connected)
+        self.assertFalse(missing.account_linked)
+
+        installation = self._installation(self.org.id)
+        self.db.add(SlackUserLink(
+            id=uuid4(), installation_id=installation.id, organization_id=self.org.id,
+            workspace_id=installation.workspace_id, slack_user_id="U-admin",
+            user_id=self.user.id, created_at=datetime.now(UTC),
+        ))
+        self.db.commit()
+        unlinked = integrations.get_slack_account_link_status(self.org.id, self.member, self.db)
+        self.assertTrue(unlinked.workspace_connected)
+        self.assertFalse(unlinked.account_linked)
+
+        self.db.add(SlackUserLink(
+            id=uuid4(), installation_id=installation.id, organization_id=self.org.id,
+            workspace_id=installation.workspace_id, slack_user_id="U-member",
+            user_id=self.member_user.id, created_at=datetime.now(UTC),
+        ))
+        self.db.commit()
+        linked = integrations.get_slack_account_link_status(self.org.id, self.member, self.db)
+        self.assertTrue(linked.workspace_connected)
+        self.assertTrue(linked.account_linked)
+
+        with self.assertRaises(HTTPException) as denied:
+            integrations.get_slack_account_link_status(uuid4(), self.member, self.db)
+        self.assertEqual(denied.exception.status_code, 404)
+
     def test_oauth_adapter_requests_only_minimum_scopes_and_no_history(self) -> None:
         client = SlackOAuthClient(client_id="id", client_secret="secret", redirect_uri="https://app/callback")
         query = parse_qs(urlparse(client.authorization_url("opaque-state")).query)
@@ -428,8 +458,9 @@ class SlackIntegrationTests(unittest.TestCase):
         migration_0033 = runpy.run_path(str(versions / "0033_slack_integrations.py"))
         migration_0034 = runpy.run_path(str(versions / "0034_slack_events_and_links.py"))
         migration_0035 = runpy.run_path(str(versions / "0035_slack_deal_subscriptions.py"))
+        migration_0036 = runpy.run_path(str(versions / "0036_slack_deal_name_references.py"))
 
-        for migration in (migration_0033, migration_0034, migration_0035):
+        for migration in (migration_0033, migration_0034, migration_0035, migration_0036):
             with engine.begin() as connection:
                 context = MigrationContext.configure(connection)
                 with Operations.context(context):
@@ -453,6 +484,11 @@ class SlackIntegrationTests(unittest.TestCase):
             {constraint["name"] for constraint in inspector.get_check_constraints("slack_events")},
             {"ck_slack_event_status"},
         )
+        deal_reference_column = next(
+            column for column in inspector.get_columns("slack_events")
+            if column["name"] == "deal_reference"
+        )
+        self.assertTrue(deal_reference_column["nullable"])
         self.assertEqual(
             {constraint["name"] for constraint in inspector.get_unique_constraints("slack_user_links")},
             {"uq_slack_user_link_slack_identity", "uq_slack_user_link_syncally_identity"},
@@ -495,6 +531,7 @@ class SlackIntegrationTests(unittest.TestCase):
         with engine.begin() as connection:
             context = MigrationContext.configure(connection)
             with Operations.context(context):
+                migration_0036["downgrade"]()
                 migration_0035["downgrade"]()
                 migration_0034["downgrade"]()
         tables_after = set(inspect(engine).get_table_names())

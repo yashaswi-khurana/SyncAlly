@@ -46,6 +46,8 @@ python -m syncally.cli.outbox_worker &
 children+=("$!")
 python -m syncally.cli.payment_worker &
 children+=("$!")
+python -m syncally.cli.slack_events_worker &
+children+=("$!")
 uvicorn syncally.api.main:app --host 0.0.0.0 --port "$PORT" &
 children+=("$!")
 

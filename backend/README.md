@@ -232,10 +232,19 @@ add that account as a regular member. The endpoint does not create accounts or a
 to choose another user's role. It emails the added member a sign-in link.
 Organization admins can also invite a new team member through
 `POST /organizations/{organization_id}/invitations`, and counterparty invitations are created
-through `POST /deals/counterparty-invitations`. All three paths send email through Gmail SMTP.
-Set `GMAIL_SMTP_USERNAME`, `GMAIL_APP_PASSWORD` (a Google App Password), and optionally
-`GMAIL_FROM_EMAIL`. Delivery status is returned to the frontend; when SMTP is unavailable,
-the invitation remains available as a copyable link and the UI reports that delivery failed.
+through `POST /deals/counterparty-invitations`. All three paths use the configured email provider.
+For Render Free, configure Gmail API OAuth with `GMAIL_API_CLIENT_ID`,
+`GMAIL_API_CLIENT_SECRET`, `GMAIL_API_REFRESH_TOKEN`, and `GMAIL_API_SENDER_EMAIL`.
+Gmail SMTP credentials remain available as a fallback on hosts that allow outbound SMTP.
+Delivery status is returned to the frontend; when email is unavailable, the invitation remains
+available as a copyable link and the UI reports that delivery failed.
+
+Gmail API uses the sender's Gmail account and the narrow `gmail.send` OAuth scope. The Google
+Cloud OAuth consent screen must be configured for an external app. A refresh token issued while
+the app remains in Testing expires after seven days; publish the consent screen before using
+the sender for unattended delivery. Google may show an unverified-app warning until the app
+completes verification. Keep the refresh token and client secret in Render's secret environment
+variables and never commit them.
 
 `PUBLIC_FRONTEND_URL` tells the API which frontend address to put in invitation emails. The
 recipient opens that address to reach the app's invitation screen; it can differ from the API
@@ -531,27 +540,30 @@ The worker creates a draft invoice and sends it as a separate PayPal request.
 It uses the buyer organization's sole active admin as the invoice contact; if
 that contact is missing or ambiguous, the intent is marked for manual action.
 PayPal Sandbox notifications do not reach real inboxes. To send a separate
-email copy with the PayPal invoice link, configure `GMAIL_SMTP_USERNAME` and
-`GMAIL_APP_PASSWORD` in the local `.env` before processing the payment. Create
-an App Password on a Google account with 2-Step Verification enabled; do not
-use the account's regular password. `GMAIL_FROM_EMAIL` is optional and defaults
-to the SMTP username. Gmail delivery is disabled when these settings are empty.
+email copy with the PayPal invoice link from Render Free, configure Gmail API OAuth
+(`GMAIL_API_CLIENT_ID`, `GMAIL_API_CLIENT_SECRET`, `GMAIL_API_REFRESH_TOKEN`, and
+`GMAIL_API_SENDER_EMAIL`) in Render. Gmail API sends as the authorized mailbox and does
+not require a custom sending domain. Its OAuth app must be published for unattended use because
+refresh tokens issued while the consent screen is in Testing expire after seven days. Google
+may show an unverified-app warning until verification is complete. On hosts that allow SMTP,
+`GMAIL_SMTP_USERNAME`, `GMAIL_APP_PASSWORD` (a Google App Password), and optional
+`GMAIL_FROM_EMAIL` remain supported.
 
-The Gmail copy runs after PayPal accepts the invoice. If SMTP delivery needs a
+The email copy runs after PayPal accepts the invoice. If delivery needs a
 retry, the durable payment outbox retries it without creating or sending a
-second PayPal invoice. Keep PayPal and Gmail credentials in the local `.env` or
+second PayPal invoice. Keep PayPal and Gmail OAuth/SMTP credentials in the local `.env` or
 deployment secret store. Do not put them in source control, database rows, or
 frontend/AI configuration. Automated tests use fake providers and do not
-require PayPal or Gmail credentials.
+require PayPal or email-provider credentials.
 
-To email an invoice that was already sent before Gmail was configured, run this
+To email an invoice that was already sent before email was configured, run this
 one-time command with its PayPal Sandbox invoice ID:
 
 ```text
 python -m syncally.cli.email_invoice INV2-...
 ```
 
-It reads the recipient and invoice link from PayPal, then sends only the Gmail
+It reads the recipient and invoice link from PayPal, then sends only the email
 copy; it does not send or recreate the PayPal invoice.
 
 Configure `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, and `TEMPORAL_TASK_QUEUE` in

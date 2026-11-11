@@ -1401,6 +1401,29 @@ describe("synchronized fact review and proposal drafts", () => {
     expect(within(proposal).getByRole("button", { name: "Submit reviewed proposal" })).toBeDisabled();
   });
 
+  it("accepts a descriptive quantity phrase that agrees with the confirmed count unit", async () => {
+    mockedListOrganizations.mockResolvedValue([
+      organization(BUYER_ID, "Buyer Co"), organization(SELLER_ID, "Seller Co"),
+    ]);
+    mockedListDealFacts.mockResolvedValue([
+      fact({ id: "shared-quantity", field: "quantity", typed_value: "120", currency_or_unit: "table tennis balls",
+        status: "CONFIRMED", visibility: "SHAREABLE" }),
+      fact({ id: "seller-quantity", owner_organization_id: SELLER_ID, field: "quantity", typed_value: "120",
+        currency_or_unit: "balls", status: "CONFIRMED" }),
+      fact({ id: "seller-unit", owner_organization_id: SELLER_ID, field: "unit", typed_value: "balls",
+        status: "CONFIRMED" }),
+    ]);
+
+    render(<DealConversationReview deal={DEAL} selectedOrganizationId={SELLER_ID} revalidateIntervalMs={0} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Draft proposed terms" }));
+    const proposal = await screen.findByLabelText("Proposed terms draft");
+
+    expect(within(proposal).getByLabelText("Quantity")).toHaveValue("120");
+    expect(within(proposal).getByLabelText("Unit")).toHaveValue("balls");
+    expect(within(proposal).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(proposal).getByRole("button", { name: "Submit reviewed proposal" })).toBeEnabled();
+  });
+
   it("ignores a suggestion completion from a previous visit to the same organization", async () => {
     let resolve!: (value: Awaited<ReturnType<typeof suggestDealFacts>>) => void;
     mockedSuggestDealFacts.mockImplementation(() => new Promise((done) => { resolve = done; }));

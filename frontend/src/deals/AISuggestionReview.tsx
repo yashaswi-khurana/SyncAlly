@@ -38,6 +38,10 @@ const PROPOSAL_FIELDS: Array<[keyof ProposalSuggestionDraft, string]> = [
   ["deliveryDate", "Delivery date"],
 ];
 
+function quantityUnitMatchesExplicitUnit(quantityUnit: string, explicitUnit: string): boolean {
+  return quantityUnit === explicitUnit || quantityUnit.endsWith(` ${explicitUnit}`);
+}
+
 function describeError(caught: unknown): string {
   if (caught instanceof ApiError) {
     return caught.status === 401 ? "Your session has expired. Sign in again." : caught.message;
@@ -224,14 +228,6 @@ export default function AISuggestionReview({
       }
     }
   }
-  const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
-  const quantityUnits = new Set(
-    quantities.map((fact) => fact.currency_or_unit?.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
-  );
-  if (quantityUnits.size > 1) {
-    conflictingFields.add("quantity");
-    conflictingFields.add("unit");
-  }
   const explicitUnits = confirmed.filter((fact) => requiredTradeField(fact.field) === "unit");
   const explicitUnitValues = new Set(
     explicitUnits.map((fact) => fact.typed_value.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
@@ -239,13 +235,23 @@ export default function AISuggestionReview({
   if (explicitUnitValues.size > 1) {
     conflictingFields.add("unit");
   }
-  if (explicitUnitValues.size === 1 && quantityUnits.size === 1) {
-    const [expUnit] = explicitUnitValues;
-    const [qtyUnit] = quantityUnits;
-    if (expUnit !== qtyUnit) {
-      conflictingFields.add("unit");
-      conflictingFields.add("quantity");
-    }
+  const quantities = confirmed.filter((fact) => requiredTradeField(fact.field) === "quantity");
+  const quantityUnits = new Set(
+    quantities.map((fact) => fact.currency_or_unit?.trim().toLowerCase()).filter((u): u is string => Boolean(u)),
+  );
+  const explicitUnit = explicitUnitValues.size === 1 ? [...explicitUnitValues][0] : null;
+  const quantityUnitsConflict = quantityUnits.size > 1
+    && (!explicitUnit
+      || [...quantityUnits].some((unit) => !quantityUnitMatchesExplicitUnit(unit, explicitUnit)));
+  if (quantityUnitsConflict) {
+    conflictingFields.add("quantity");
+    conflictingFields.add("unit");
+  }
+  if (explicitUnit && [...quantityUnits].some(
+    (unit) => !quantityUnitMatchesExplicitUnit(unit, explicitUnit),
+  )) {
+    conflictingFields.add("unit");
+    conflictingFields.add("quantity");
   }
   if (!confirmedSignatures.unit && confirmedSignatures.quantity) {
     if (quantityUnits.size === 1) {

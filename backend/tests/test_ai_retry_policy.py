@@ -15,7 +15,7 @@ class AIRetryPolicyTests(unittest.TestCase):
         policy = _retry_policy_for_provider(provider, None)
 
         self.assertEqual(policy.max_attempts, 1)
-        self.assertEqual(policy.timeout_seconds, 45.0)
+        self.assertEqual(policy.timeout_seconds, 90.0)
 
     def test_other_providers_keep_the_bounded_retry_default(self) -> None:
         provider = SimpleNamespace(provenance=AIProvenance(provider="openai"))

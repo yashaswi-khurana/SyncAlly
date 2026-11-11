@@ -18,12 +18,13 @@ import concurrent.futures
 import unittest
 from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 
 from syncally.application.ai import (
     AIConfigurationError,
+    AIPermanentError,
     AIProvenance,
     AIRetryPolicy,
     AITransientError,
@@ -180,7 +181,7 @@ class AIFallbackResilienceTests(unittest.TestCase):
         self.assertEqual(result.provenance.fallback_reason, "transient_exhausted")
 
     def test_transient_exhaustion_when_provider_fallback_itself_fails(self) -> None:
-        """Even if provider.fallback_normalize_opening_request throws, system recovers via offline extraction."""
+        """A failing provider fallback surfaces instead of being disguised as offline analysis."""
         mock_provider = MagicMock()
         mock_provider.provenance = AIProvenance(
             provider="openai",
@@ -192,22 +193,18 @@ class AIFallbackResilienceTests(unittest.TestCase):
         mock_provider.fallback_normalize_opening_request.side_effect = RuntimeError("Broken provider fallback")
 
         text = "We need 500 units of stainless steel bolts delivered to Berlin, Germany by 2026-12-01. Budget is $15 per unit."
-        result = normalize_opening_request(
-            text,
-            provider=mock_provider,
-            policy=AIRetryPolicy(max_attempts=2, timeout_seconds=1.0, backoff_seconds=0.001),
-        )
-
-        self.assertEqual(result.requirements.item_description, "stainless steel bolts")
-        self.assertEqual(result.requirements.quantity, Decimal("500"))
-        self.assertEqual(result.provenance.provider, "offline")
-        self.assertEqual(result.provenance.fallback_reason, "transient_exhausted")
+        with self.assertRaisesRegex(RuntimeError, "Broken provider fallback"):
+            normalize_opening_request(
+                text,
+                provider=mock_provider,
+                policy=AIRetryPolicy(max_attempts=2, timeout_seconds=1.0, backoff_seconds=0.001),
+            )
 
     # -------------------------------------------------------------------------
     # 4. Network Timeouts
     # -------------------------------------------------------------------------
-    def test_httpx_timeout_triggers_graceful_offline_fallback(self) -> None:
-        """Httpx timeout exception falls back to offline extraction without crash."""
+    def test_unclassified_httpx_timeout_propagates(self) -> None:
+        """Adapters classify timeouts; a raw transport exception is unexpected and must surface."""
         mock_provider = MagicMock(spec=["normalize_opening_request", "provenance"])
         mock_provider.provenance = AIProvenance(
             provider="openai",
@@ -218,45 +215,57 @@ class AIFallbackResilienceTests(unittest.TestCase):
         mock_provider.normalize_opening_request.side_effect = httpx.ReadTimeout("Read operation timed out after 10.0s")
 
         text = "RFQ: 10,000 meters of copper wire to Tokyo, Japan. Target price 2.50 USD/m."
-        result = normalize_opening_request(
-            text,
-            provider=mock_provider,
-            policy=AIRetryPolicy(max_attempts=2, timeout_seconds=0.1, backoff_seconds=0.001),
+        with self.assertRaises(httpx.ReadTimeout):
+            normalize_opening_request(
+                text,
+                provider=mock_provider,
+                policy=AIRetryPolicy(max_attempts=2, timeout_seconds=0.1, backoff_seconds=0.001),
+            )
+        self.assertEqual(mock_provider.normalize_opening_request.call_count, 1)
+
+    def test_strict_remote_timeout_surfaces_without_offline_result(self) -> None:
+        """Strict remote mode declines fallback after an adapter-classified timeout."""
+        settings = Settings(
+            _env_file=None,
+            app_env="test",
+            ai_provider="openai",
+            ai_remote_egress_enabled=True,
+            openai_model="gpt-4o",
+            openai_api_key="test-only-key",
         )
 
-        self.assertEqual(result.requirements.item_description, "copper wire")
-        self.assertEqual(result.requirements.quantity, Decimal("10000"))
-        self.assertEqual(result.requirements.destination_country_code, "JP")
-        self.assertEqual(result.provenance.provider, "offline")
-        self.assertEqual(result.provenance.fallback_reason, "transient_exhausted")
+        def timeout(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("Connection attempt timed out", request=request)
 
-    def test_connect_timeout_triggers_graceful_offline_fallback(self) -> None:
-        """Httpx connect timeout falls back to offline extraction."""
-        mock_provider = MagicMock(spec=["normalize_opening_request", "provenance"])
-        mock_provider.provenance = AIProvenance(
-            provider="openai",
-            mode="openai_with_offline_fallback",
-            model="gpt-4o",
-            context_scope="authorized",
+        provider = ConfiguredAIProvider(settings, transport=httpx.MockTransport(timeout))
+        with self.assertRaises(AITransientError):
+            normalize_opening_request("Hey, can you supply 50 boxes of packaging materials to US?", provider=provider)
+        self.assertEqual(provider.provenance.provider, "openai")
+        self.assertIsNone(provider.provenance.fallback_reason)
+
+    def test_permanent_remote_rejection_is_not_replaced_by_fallback(self) -> None:
+        """Configured fallback is for exhausted transient failures only."""
+        settings = Settings(
+            _env_file=None,
+            app_env="test",
+            ai_provider="openai_with_offline_fallback",
+            ai_remote_egress_enabled=True,
+            openai_model="gpt-4o",
+            openai_api_key="test-only-key",
         )
-        mock_provider.normalize_opening_request.side_effect = httpx.ConnectTimeout("Connection attempt timed out")
-
-        text = "Hey, can you supply 50 boxes of packaging materials to US by next month?"
-        result = normalize_opening_request(
-            text,
-            provider=mock_provider,
-            policy=AIRetryPolicy(max_attempts=1, timeout_seconds=0.05, backoff_seconds=0.001),
+        provider = ConfiguredAIProvider(
+            settings,
+            transport=httpx.MockTransport(lambda request: httpx.Response(401, json={"error": {}})),
         )
-
-        self.assertEqual(result.requirements.item_description, "packaging materials")
-        self.assertEqual(result.provenance.provider, "offline")
-        self.assertEqual(result.provenance.fallback_reason, "transient_exhausted")
+        with self.assertRaises(AIPermanentError):
+            normalize_opening_request("Need 500 bolts delivered to Germany", provider=provider)
+        self.assertIsNone(provider.provenance.fallback_reason)
 
     # -------------------------------------------------------------------------
     # 5. Rate Limits (HTTP 429)
     # -------------------------------------------------------------------------
-    def test_rate_limit_429_triggers_offline_fallback(self) -> None:
-        """Rate limit (HTTP 429) wrapped as AITransientError gracefully falls back."""
+    def test_rate_limit_429_without_fallback_capability_surfaces(self) -> None:
+        """A transient failure is not silently replaced when the provider offers no fallback."""
         mock_provider = MagicMock(spec=["normalize_opening_request", "provenance"])
         mock_provider.provenance = AIProvenance(
             provider="openai",
@@ -269,22 +278,19 @@ class AIFallbackResilienceTests(unittest.TestCase):
         )
 
         text = "Looking for precision CNC machining for 200 automotive parts in Canada under 5000 USD."
-        result = normalize_opening_request(
-            text,
-            provider=mock_provider,
-            policy=AIRetryPolicy(max_attempts=2, timeout_seconds=0.5, backoff_seconds=0.001),
-        )
-
-        self.assertEqual(result.requirements.item_description, "automotive parts")
-        self.assertEqual(result.requirements.budget, Decimal("5000"))
-        self.assertEqual(result.provenance.provider, "offline")
-        self.assertEqual(result.provenance.fallback_reason, "transient_exhausted")
+        with self.assertRaises(AITransientError):
+            normalize_opening_request(
+                text,
+                provider=mock_provider,
+                policy=AIRetryPolicy(max_attempts=2, timeout_seconds=0.5, backoff_seconds=0.001),
+            )
+        self.assertEqual(mock_provider.normalize_opening_request.call_count, 2)
 
     # -------------------------------------------------------------------------
     # 6. Rogue / Crashing Provider Exceptions
     # -------------------------------------------------------------------------
-    def test_arbitrary_runtime_error_does_not_crash_normalization(self) -> None:
-        """Unhandled exceptions (e.g. MemoryError, RuntimeError) from provider must not crash app."""
+    def test_arbitrary_runtime_error_propagates(self) -> None:
+        """Unexpected provider exceptions surface instead of returning success-shaped offline output."""
         mock_provider = MagicMock(spec=["normalize_opening_request", "provenance"])
         mock_provider.provenance = AIProvenance(
             provider="openai",
@@ -295,23 +301,38 @@ class AIFallbackResilienceTests(unittest.TestCase):
         mock_provider.normalize_opening_request.side_effect = RuntimeError("Fatal LLM crash in worker")
 
         text = "We need 500 units of stainless steel bolts delivered to Berlin, Germany by 2026-12-01. Budget is $15 per unit."
-        result = normalize_opening_request(text, provider=mock_provider)
+        with self.assertRaisesRegex(RuntimeError, "Fatal LLM crash"):
+            normalize_opening_request(text, provider=mock_provider)
 
-        self.assertIsInstance(result, OpeningRequestNormalizationResult)
-        self.assertEqual(result.requirements.item_description, "stainless steel bolts")
-        self.assertEqual(result.provenance.provider, "offline")
-        self.assertEqual(result.provenance.fallback_reason, "transient_exhausted")
-
-    def test_provider_missing_normalize_method(self) -> None:
-        """Provider without normalize_opening_request delegates directly to offline extraction."""
+    def test_provider_missing_normalize_method_reports_offline_not_remote(self) -> None:
+        """Offline extraction for a provider without normalization never claims remote provenance."""
         class BareProvider:
-            provenance = AIProvenance(provider="custom", mode="unknown")
+            provenance = AIProvenance(provider="openai", mode="openai", model="gpt-4o", context_scope="shareable_only")
 
         text = "Looking for precision CNC machining for 200 automotive parts in Canada under 5000 USD."
         result = normalize_opening_request(text, provider=BareProvider())  # type: ignore[arg-type]
 
         self.assertEqual(result.requirements.item_description, "automotive parts")
-        self.assertEqual(result.provenance.provider, "custom")
+        self.assertEqual(
+            result.provenance,
+            AIProvenance(provider="offline", mode="offline", context_scope="authorized"),
+        )
+
+    def test_deterministic_extraction_failure_propagates(self) -> None:
+        """Unexpected extractor failures surface instead of returning an empty success."""
+        class BareProvider:
+            provenance = AIProvenance(provider="offline", mode="offline")
+
+        for provider in (None, BareProvider()):
+            with (
+                self.subTest(provider=type(provider).__name__),
+                patch(
+                    "syncally.application.ai.extract_normalized_requirement",
+                    side_effect=RuntimeError("extractor bug"),
+                ),
+                self.assertRaisesRegex(RuntimeError, "extractor bug"),
+            ):
+                normalize_opening_request("Need 500 bolts", provider=provider)  # type: ignore[arg-type]
 
     # -------------------------------------------------------------------------
     # 7. Malformed, Adversarial, and Extreme Length Inputs

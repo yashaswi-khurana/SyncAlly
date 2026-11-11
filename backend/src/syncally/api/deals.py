@@ -16,8 +16,10 @@ from sqlalchemy.orm import Session
 from syncally.api.auth import get_current_actor
 from syncally.api.authorization import require_deal_action
 from syncally.application.ai import (
+    AIConfigurationError,
+    AIPermanentError,
     AIProvenance,
-    AISuggestionProvider,
+    AITransientError,
     normalize_opening_request,
 )
 from syncally.application.deal_cases import (
@@ -324,6 +326,12 @@ def create_deal_route(
     return _to_response(deal)
 
 
+_OPENING_REQUEST_AI_NOT_CONFIGURED = (
+    "Opening-request AI is not configured. Configure an enabled OpenAI or Gemini provider, "
+    "or enter the deal details manually."
+)
+
+
 @router.post("/opening-request/analyze", response_model=AnalyzeOpeningRequestResponse)
 def analyze_opening_request_route(
     payload: AnalyzeOpeningRequestRequest,
@@ -338,15 +346,33 @@ def analyze_opening_request_route(
             provenance=AIProvenance(provider="offline", mode="offline", context_scope="authorized"),
         )
 
-    provider: AISuggestionProvider | None = None
     try:
         provider = ConfiguredAIProvider(settings)
-    except Exception:
-        provider = None
+    except AIConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_OPENING_REQUEST_AI_NOT_CONFIGURED,
+        ) from exc
 
     # Do not hold the authentication transaction while waiting for a remote model.
     db.rollback()
-    norm_result = normalize_opening_request(payload.text, provider=provider)
+    try:
+        norm_result = normalize_opening_request(payload.text, provider=provider)
+    except AIConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_OPENING_REQUEST_AI_NOT_CONFIGURED,
+        ) from exc
+    except AITransientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The configured AI provider is temporarily unavailable. Retry, or enter the deal details manually.",
+        ) from exc
+    except AIPermanentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The configured AI provider rejected the request or returned invalid output. Enter the deal details manually.",
+        ) from exc
 
     suggested_sellers = SellerSuggestionService.suggest_sellers(
         db,

@@ -394,6 +394,28 @@ def _explicit_max_lead_time_days(prompt: str) -> int | None:
     return next(iter(values)) if len(values) == 1 else None
 
 
+def _explicit_target_quantity_unit(prompt: str) -> str | None:
+    units: set[str] = set()
+    for match in re.finditer(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w.])", prompt):
+        quantity = match.group().replace(",", "")
+        if not _numeric_role_match("quantity.target_quantity", quantity, prompt, match.span()):
+            continue
+        after = prompt[match.end():]
+        boundary = re.search(r"[;!?]|\.(?!\d)|\d", after)
+        if boundary:
+            after = after[:boundary.start()]
+        words = re.findall(r"[A-Za-z][\w-]*", after)
+        for index, word in enumerate(words):
+            unit = word.casefold()
+            if unit in _COUNTABLE_UNIT_FORMS:
+                if index <= 5:
+                    units.add(unit)
+                break
+            if index == 5:
+                break
+    return next(iter(units)) if len(units) == 1 else None
+
+
 def _grounded(field: str, value: str, quote: str) -> bool:
     if field == "delivery.destination_country_code":
         return _country_matches(value, quote)
@@ -689,6 +711,7 @@ def interpret_sourcing_requirements(
     ):
         unknown_fields.remove("quantity.unit")
     explicit_values = {
+        "quantity.unit": _explicit_target_quantity_unit(prompt),
         "delivery.max_lead_time_days": _explicit_max_lead_time_days(prompt),
         "pricing.currency": _explicit_pricing_currency(prompt),
         "commercial_terms.min_warranty_months": _explicit_min_warranty_months(prompt),
@@ -769,6 +792,8 @@ def interpret_sourcing_requirements(
         field = item["field"]
         if _get_path(overrides, field) is not None:
             continue
+        if field == "quantity.unit" and explicit_values[field] is not None:
+            continue
         value = item["value"].strip()
         if not _grounded(field, value, item["quote"]) or not all(
             _context_supports(field, value, clause, span)
@@ -826,6 +851,16 @@ def interpret_sourcing_requirements(
             seen_scalar_fields[field] = (value, item["quote"])
             _set_path(requirements, field, value)
         parsed_fields.append(field)
+
+    unit_path = "quantity.unit"
+    unit = explicit_values[unit_path]
+    if (
+        unit is not None
+        and _get_path(requirements, unit_path) is None
+        and _get_path(overrides, unit_path) is None
+    ):
+        _set_path(requirements, unit_path, unit)
+        parsed_fields.append(unit_path)
 
     lead_time_path = "delivery.max_lead_time_days"
     if (

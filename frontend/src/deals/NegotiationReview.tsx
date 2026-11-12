@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, getNegotiation, negotiateDeal } from "../api/client";
 import type {
   Deal,
+  DealFact,
   NegotiationAction,
   NegotiationInput,
   NegotiationProposal,
@@ -12,6 +13,27 @@ import type {
 } from "../api/types";
 import { isPaymentTrigger, SUPPORTED_PAYMENT_TIMING } from "../api/types";
 import ProposalComparison from "./ProposalComparison";
+import { conversationTermMismatches, savedTermsFromTrade, type TermMismatch } from "./suggestionPreview";
+
+function TermMismatchAlert({ mismatches }: { mismatches: TermMismatch[] }) {
+  if (mismatches.length === 0) return null;
+  return (
+    <aside className="term-mismatch" role="alert">
+      <strong>Conversation does not match this proposal</strong>
+      <p>
+        Chat and extracted facts discuss {mismatches[0].conversation}.
+        These proposal terms are {mismatches[0].saved}.
+      </p>
+      <ul>
+        {mismatches.map((mismatch) => (
+          <li key={mismatch.field}>
+            {mismatch.label}: {mismatch.conversation} vs {mismatch.saved}
+          </li>
+        ))}
+      </ul>
+    </aside>
+  );
+}
 import {
   PAYPAL_INVOICE_CURRENCIES,
   PAYPAL_INVOICE_CURRENCY_SET,
@@ -21,6 +43,7 @@ interface NegotiationReviewProps {
   deal: Deal;
   organizationId: string;
   reloadToken: number;
+  conversationFacts?: DealFact[];
   onLoaded: (view: NegotiationView | null) => void;
   onChanged: () => void;
 }
@@ -148,7 +171,7 @@ function calculateOrderTotal(items: ItemDraft[]): string | null {
   return formatScaled(total);
 }
 
-export default function NegotiationReview({ deal, organizationId, reloadToken, onLoaded, onChanged }: NegotiationReviewProps) {
+export default function NegotiationReview({ deal, organizationId, reloadToken, conversationFacts = [], onLoaded, onChanged }: NegotiationReviewProps) {
   const [loadedView, setView] = useState<NegotiationView | null>(null);
   const view = loadedView?.deal_id === deal.id && loadedView.organization_id === organizationId ? loadedView : null;
   const [error, setError] = useState("");
@@ -157,6 +180,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   const [pending, setPending] = useState(false);
   const [reload, setReload] = useState(0);
   const [replacementConfirmed, setReplacementConfirmed] = useState(false);
+  const [mismatchAcknowledged, setMismatchAcknowledged] = useState(false);
 
   // Authoring draft state
   const [items, setItems] = useState<ItemDraft[]>(defaultDraft().items);
@@ -179,6 +203,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     setAuthorError("");
     setStale(false);
     setReplacementConfirmed(false);
+    setMismatchAcknowledged(false);
     setItems(draft.items);
     setShipments(draft.shipments);
     setPayments(draft.payments);
@@ -384,6 +409,19 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   async function submitAuthoring(action: "submit" | "counter") {
     if (request.current || !view || stale || deal.pending_counterparty || !view.eligible_actions.includes(action)) return;
     if (view.current_candidate && !replacementConfirmed) return;
+    const draftMismatches = conversationTermMismatches(conversationFacts, {
+      description: items[0]?.description,
+      quantity: items[0]?.quantity,
+      unit: items[0]?.unit,
+      unitPrice: items[0]?.unitPrice,
+      currency: items[0]?.currency,
+      destination: shipments[0]?.destination || deliveryLocation,
+      deliveryDate: shipments[0]?.targetDate,
+    });
+    if (draftMismatches.length > 0 && !mismatchAcknowledged) {
+      setAuthorError("This proposal does not match the conversation. Confirm the mismatch before sending.");
+      return;
+    }
 
     const orderTotal = calculateOrderTotal(items);
     const proposalShipments = shipments.map((shipment) => ({
@@ -486,6 +524,13 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
   async function act(action: NegotiationAction) {
     if (request.current || !view || stale || deal.pending_counterparty || !view.eligible_actions.includes(action)) return;
     if (view.current_candidate && !replacementConfirmed) return;
+    if (action === "accept" && view.latest) {
+      const mismatches = conversationTermMismatches(conversationFacts, savedTermsFromTrade(view.latest.terms));
+      if (mismatches.length > 0 && !mismatchAcknowledged) {
+        setError("This proposal does not match the conversation. Confirm the mismatch before accepting.");
+        return;
+      }
+    }
     const latest = view.latest;
     const input: Omit<NegotiationInput, "command_id"> = {
       expected_deal_revision: view.deal_revision, organization_id: organizationId,
@@ -518,6 +563,21 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
     }
   }
 
+  const proposalMismatches = view?.latest
+    ? conversationTermMismatches(conversationFacts, savedTermsFromTrade(view.latest.terms))
+    : [];
+  const draftMismatches = conversationTermMismatches(conversationFacts, {
+    description: items[0]?.description,
+    quantity: items[0]?.quantity,
+    unit: items[0]?.unit,
+    unitPrice: items[0]?.unitPrice,
+    currency: items[0]?.currency,
+    destination: shipments[0]?.destination || deliveryLocation,
+    deliveryDate: shipments[0]?.targetDate,
+  });
+  const mismatchBlocksAccept = proposalMismatches.length > 0 && !mismatchAcknowledged;
+  const mismatchBlocksSubmit = draftMismatches.length > 0 && !mismatchAcknowledged;
+
   return (
     <section className="negotiation-review" aria-labelledby={`negotiation-heading-${deal.id}`}>
       <div className="panel-head">
@@ -543,6 +603,18 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
           </details>
           {view.latest.expires_at ? <p>Respond by: <time dateTime={view.latest.expires_at}>{new Date(view.latest.expires_at).toLocaleString()}</time></p> : null}
           <ProposalComparison latest={view.latest} proposals={view.proposals} />
+          <TermMismatchAlert mismatches={proposalMismatches} />
+          {proposalMismatches.length > 0 ? (
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={mismatchAcknowledged}
+                disabled={pending}
+                onChange={(event) => setMismatchAcknowledged(event.target.checked)}
+              />
+              These proposal terms do not match the conversation. Continue anyway.
+            </label>
+          ) : null}
           <div className="agreement-terms" aria-label="Latest proposal terms">
             {(view.latest.terms.line_items ?? []).map((item, index) => <dl className="agreement-terms__item" key={item.id ?? index}>
               {item.id ? <div><dt>Item ID</dt><dd>{item.id}</dd></div> : null}
@@ -578,7 +650,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
           <div className="fact-actions">
             {(["accept", "reject", "supersede", "expire"] as const).filter((action) => view.eligible_actions.includes(action)).map((action) =>
               <button type="button" className="button secondary" key={action}
-                disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed)}
+                disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed) || (action === "accept" && mismatchBlocksAccept)}
                 onClick={() => void act(action)}>{ACTION_LABELS[action]}</button>)}
           </div>
         </> : <p>No human proposal has been submitted. Extracted facts and AI suggestions still need review by a person before they can become a proposal.</p>}
@@ -592,6 +664,18 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
             </ol>
             <p className="hint">Sending shares the proposal with your partner. It does not approve or commit the agreement, request payment, or arrange delivery.</p>
             {authorError ? <p role="alert" className="form-error">{authorError}</p> : null}
+            <TermMismatchAlert mismatches={draftMismatches} />
+            {draftMismatches.length > 0 ? (
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={mismatchAcknowledged}
+                  disabled={pending}
+                  onChange={(event) => setMismatchAcknowledged(event.target.checked)}
+                />
+                These draft terms do not match the conversation. Send anyway.
+              </label>
+            ) : null}
             <p className="proposal-editor__draft-note" aria-label="Authoring draft status" aria-live="polite">{stale ? "This deal has changed. Reload the draft before sending." : pending ? "Sending draft…" : isDirty ? "Unsaved draft changes" : "This is a draft · nothing has been sent"}</p>
             <button type="button" className="button secondary proposal-editor__reset" onClick={resetEditor}>Reset draft</button>
 
@@ -847,7 +931,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                 <button
                   type="button"
                   className="button"
-                  disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed)}
+                  disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed) || mismatchBlocksSubmit}
                   onClick={() => void submitAuthoring("counter")}
                 >
                   {pending ? "Submitting counter-proposal…" : "Submit counter-proposal"}
@@ -856,7 +940,7 @@ export default function NegotiationReview({ deal, organizationId, reloadToken, o
                 <button
                   type="button"
                   className="button"
-                  disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed)}
+                  disabled={pending || stale || deal.pending_counterparty || Boolean(view.current_candidate && !replacementConfirmed) || mismatchBlocksSubmit}
                   onClick={() => void submitAuthoring("submit")}
                 >
                   {pending ? "Submitting proposal…" : "Submit proposal"}

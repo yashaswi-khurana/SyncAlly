@@ -44,6 +44,7 @@ interface DealConversationReviewProps {
   deal: Deal;
   onAgreementCreated?: () => void;
   onMessagesChanged?: (messages: DealMessage[]) => void;
+  onFactsChanged?: (facts: DealFact[]) => void;
   onMessageCreated?: () => void;
   selectedOrganizationId?: string;
   onOrganizationChange?: (organizationId: string) => void;
@@ -425,6 +426,7 @@ export default function DealConversationReview({
   onAgreementCreated = () => {},
   negotiation,
   onMessagesChanged,
+  onFactsChanged,
   onMessageCreated,
   selectedOrganizationId: controlledOrgId,
   onOrganizationChange,
@@ -662,9 +664,13 @@ export default function DealConversationReview({
 
   const conversationReady = currentConversation !== null;
   const observedMessages = currentConversation?.messages;
+  const observedFacts = currentConversation?.facts;
   useEffect(() => {
     if (observedMessages) onMessagesChanged?.(observedMessages);
   }, [observedMessages, onMessagesChanged]);
+  useEffect(() => {
+    onFactsChanged?.(observedFacts?.filter((fact) => fact.deal_id === deal.id) ?? []);
+  }, [observedFacts, onFactsChanged, deal.id]);
 
   function appendMessage(message: DealMessage) {
     setConversationState((current) =>

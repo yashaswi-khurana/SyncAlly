@@ -1893,3 +1893,24 @@
 .reminders-panel__meta--danger {
   color: var(--danger);
 }
+
+.term-mismatch {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-left: 3px solid var(--danger);
+  border-radius: var(--r-sm);
+  background: var(--danger-soft);
+  color: var(--danger-strong);
+}
+
+.term-mismatch ul {
+  margin: 0;
+  padding-left: 1.2em;
+}
+
+.term-mismatch p,
+.term-mismatch li {
+  color: inherit;
+}

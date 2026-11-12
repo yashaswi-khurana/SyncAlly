@@ -126,6 +126,7 @@ _INSTRUCTION = (
     "typical commercial requirements. Structured overrides are explicit buyer "
     "controls and take precedence; do not emit overridden fields in extractions. Every required "
     "field must appear as one grounded extraction or in unknown_fields; never omit it from both. "
+    "Never list a field in both extractions and unknown_fields. "
     "For title and category, use the exact item phrase from the prompt when no separate category "
     "is stated. Return only the requested JSON."
 )
@@ -500,10 +501,15 @@ def interpret_sourcing_requirements(
         for item in raw["extractions"]
         if isinstance(item, dict) and isinstance(item.get("field"), str)
     }
-    if set(raw["unknown_fields"]) & extracted_names:
+    conflicting_unknowns = set(raw["unknown_fields"]) & extracted_names
+    if conflicting_unknowns:
+        diagnostic_field = next(
+            field for field in raw["unknown_fields"] if field in conflicting_unknowns
+        )
         raise AIPermanentError(
             "AI marked an extracted field as unknown. Please retry or clarify the requirement.",
             diagnostic_code="AI_SOURCING_CONFLICTING_UNKNOWN",
+            diagnostic_field=diagnostic_field,
         )
 
     requirements: dict[str, Any] = {

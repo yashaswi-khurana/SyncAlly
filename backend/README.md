@@ -218,8 +218,8 @@ Interpretations require structured, locally validated output with exact prompt
 quotes. Missing commercial requirements produce clarification errors, not
 invented quantity, currency, price, delivery, warranty, or inspection defaults.
 Remote sourcing has no offline fallback: unavailable configuration or transient
-provider failure returns 503, malformed provider output returns 502, and invalid
-or incomplete requirements return 422.
+provider failure is retried once before returning 503, malformed provider output
+returns 502, and invalid or incomplete requirements return 422.
 
 `GET /sourcing/listings` returns 503 in every environment. Its response shape
 cannot distinguish unknown certifications, materials, standards or Incoterms

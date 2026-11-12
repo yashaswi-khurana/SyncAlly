@@ -29,7 +29,7 @@ from sqlalchemy.pool import StaticPool
 from syncally.api.auth import get_current_actor
 from syncally.api.main import app
 from syncally.api.sourcing import SourcingService
-from syncally.application.ai import AIConfigurationError, AIPermanentError
+from syncally.application.ai import AIConfigurationError, AIPermanentError, AITransientError
 from syncally.application.identity import ActorContext
 from syncally.config import Settings
 from syncally.domain.sourcing.contracts import BuyerRequirements
@@ -506,7 +506,7 @@ class SourcingApiIntegrationTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 503)
                 self.assertIn("temporarily unavailable", response.json()["detail"])
                 self.assertNotIn("private provider diagnostics", response.text)
-                self.assertEqual(len(requests), 1)
+                self.assertEqual(len(requests), 2)
 
     def test_interpret_nvidia_access_rejection_is_actionable(self) -> None:
         requests: list[httpx.Request] = []
@@ -833,6 +833,28 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         })
         with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
             interpret_sourcing_requirements(self.Adapter(fabricated), prompt)
+
+    def test_transient_provider_failure_is_retried_once(self) -> None:
+        class FlakyAdapter(self.Adapter):
+            def __init__(self, response: dict[str, Any]) -> None:
+                super().__init__(response)
+                self.calls = 0
+
+            def _call(self, context, operation, schema, timeout, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise AITransientError("temporary provider outage")
+                return super()._call(context, operation, schema, timeout, **kwargs)
+
+        adapter = FlakyAdapter(self._extraction())
+        requirements, _ = interpret_sourcing_requirements(
+            adapter,
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate.",
+        )
+
+        self.assertEqual(adapter.calls, 2)
+        self.assertEqual(requirements.quantity.target_quantity, Decimal("1000"))
 
     def test_identical_scalar_values_from_multiple_quotes_are_deduplicated(self) -> None:
         prompt = (

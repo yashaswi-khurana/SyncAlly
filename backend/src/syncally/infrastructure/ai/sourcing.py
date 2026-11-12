@@ -124,7 +124,10 @@ _INSTRUCTION = (
     "For quantity.unit, return only the count unit itself, without product or material modifiers "
     "(for example, '250 stainless steel water bottles' has unit 'bottles'). Do not add default or "
     "typical commercial requirements. Structured overrides are explicit buyer "
-    "controls and take precedence; do not emit overridden fields in extractions. Return only the requested JSON."
+    "controls and take precedence; do not emit overridden fields in extractions. Every required "
+    "field must appear as one grounded extraction or in unknown_fields; never omit it from both. "
+    "For title and category, use the exact item phrase from the prompt when no separate category "
+    "is stated. Return only the requested JSON."
 )
 
 
@@ -632,15 +635,19 @@ def interpret_sourcing_requirements(
             ]
     missing = missing_required_fields(requirements)
     if missing:
-        if any(
-            _get_path(requirements, path) in (None, "")
+        unmarked_missing = [
+            path
+            for path in _REQUIRED_FIELDS
+            if _get_path(requirements, path) in (None, "")
             and not _has_path(overrides, path)
             and path not in raw["unknown_fields"]
-            for path in _REQUIRED_FIELDS
-        ):
+        ]
+        if unmarked_missing:
+            diagnostic_field = unmarked_missing[0]
             raise AIPermanentError(
                 "AI omitted required sourcing fields without marking them unknown.",
                 diagnostic_code="AI_SOURCING_REQUIRED_OMITTED",
+                diagnostic_field=diagnostic_field,
             )
         raise ValueError(
             "Please specify or confirm: " + ", ".join(missing) + "."

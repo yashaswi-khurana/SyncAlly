@@ -810,6 +810,7 @@ class SourcingAIInterpretationTests(unittest.TestCase):
             "sourcing_requirements",
         )
         self.assertTrue(request_payload["response_format"]["json_schema"]["strict"])
+        self.assertIn("at most one extraction per scalar field", requests[0].content.decode())
         self.assertIn(prompt, requests[0].content.decode())
         self.assertNotIn("test-only-key", requests[0].content.decode())
         self.assertEqual(requirements.quantity.target_quantity, Decimal("1000"))
@@ -855,8 +856,9 @@ class SourcingAIInterpretationTests(unittest.TestCase):
             "quote": "France",
         })
 
-        with self.assertRaisesRegex(AIPermanentError, "conflicting values"):
+        with self.assertRaisesRegex(AIPermanentError, "conflicting values") as raised:
             interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+        self.assertEqual(raised.exception.diagnostic_field, "delivery.destination_country_code")
 
     def test_unknown_required_commercial_fields_are_not_defaulted(self) -> None:
         prompt = "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency."

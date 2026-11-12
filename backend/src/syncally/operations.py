@@ -140,6 +140,35 @@ _ERROR_CODES = frozenset(
         "PAYPAL_OUTCOME_UNKNOWN",
     }
 )
+_SOURCING_FIELDS = frozenset(
+    {
+        "title",
+        "category",
+        "technical_specs.materials",
+        "technical_specs.tolerances",
+        "technical_specs.certifications",
+        "technical_specs.standards",
+        "technical_specs.quality_grade",
+        "technical_specs.notes",
+        "pricing.target_unit_price",
+        "pricing.max_unit_price",
+        "pricing.max_total_budget",
+        "pricing.currency",
+        "quantity.target_quantity",
+        "quantity.min_acceptable_quantity",
+        "quantity.unit",
+        "quantity.packaging_preference",
+        "delivery.destination_country_code",
+        "delivery.destination_port_or_city",
+        "delivery.required_delivery_date",
+        "delivery.max_lead_time_days",
+        "commercial_terms.preferred_incoterm",
+        "commercial_terms.acceptable_incoterms",
+        "commercial_terms.preferred_payment_term",
+        "commercial_terms.min_warranty_months",
+        "commercial_terms.inspection_requirement",
+    }
+)
 _GEMINI_ERROR_STATUSES = frozenset(
     {
         "INVALID_ARGUMENT",
@@ -278,6 +307,7 @@ class SafeOperationalFormatter(logging.Formatter):
                 ("error_code", _ERROR_CODES),
                 ("provider_error_status", _GEMINI_ERROR_STATUSES),
                 ("provider_error_field", _GEMINI_ERROR_FIELDS),
+                ("sourcing_field", _SOURCING_FIELDS),
                 ("response_stage", _NVIDIA_RESPONSE_STAGES),
                 ("provider_finish_reason", _NVIDIA_FINISH_REASONS),
             ):

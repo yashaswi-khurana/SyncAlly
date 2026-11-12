@@ -952,6 +952,20 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_REQUIRED_OMITTED")
         self.assertEqual(raised.exception.diagnostic_field, "quantity.unit")
 
+    def test_extracted_and_unknown_collision_has_safe_field_diagnostic(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["unknown_fields"] = ["quantity.unit"]
+
+        with self.assertRaisesRegex(AIPermanentError, "marked an extracted field as unknown") as raised:
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_CONFLICTING_UNKNOWN")
+        self.assertEqual(raised.exception.diagnostic_field, "quantity.unit")
+
     def test_ungrounded_price_quantity_currency_and_destination_are_rejected(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "

@@ -110,6 +110,10 @@ class AITransientError(AIProviderError):
 class AIPermanentError(AIProviderError):
     """A non-retryable provider failure, such as malformed provider output."""
 
+    def __init__(self, message: str, *, diagnostic_code: str | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic_code = diagnostic_code
+
 
 class AIProviderAccessError(AIPermanentError):
     """The configured provider credentials cannot access the requested endpoint."""

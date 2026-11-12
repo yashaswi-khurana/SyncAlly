@@ -965,6 +965,38 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertIn("food-grade 304 steel", requirements.description)
         self.assertNotIn("technical_specs.notes", parsed_fields)
 
+    def test_malformed_optional_extraction_does_not_reject_required_fields(self) -> None:
+        extraction = self._extraction()
+        extraction["extractions"].append({
+            "field": "technical_specs.materials",
+            "value": "invented material",
+            "quote": "not present in the prompt",
+        })
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction),
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate.",
+        )
+
+        self.assertEqual(requirements.quantity.target_quantity, Decimal("1000"))
+        self.assertEqual(requirements.technical_specs.materials, [])
+        self.assertNotIn("technical_specs.materials", parsed_fields)
+
+    def test_malformed_required_evidence_identifies_the_field(self) -> None:
+        extraction = self._extraction()
+        title = next(item for item in extraction["extractions"] if item["field"] == "title")
+        title["quote"] = "not present in the prompt"
+
+        with self.assertRaises(AIPermanentError) as raised:
+            interpret_sourcing_requirements(
+                self.Adapter(extraction),
+                "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+                "12 month warranty and factory mill certificate.",
+            )
+
+        self.assertEqual(raised.exception.diagnostic_field, "title")
+
     def test_mumbai_quote_grounds_india_destination_country(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Mumbai, India, USD currency, "

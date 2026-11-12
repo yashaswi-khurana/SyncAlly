@@ -844,6 +844,64 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.delivery.destination_country_code, "DE")
         self.assertEqual(parsed_fields.count("delivery.destination_country_code"), 1)
 
+    def test_product_descriptors_do_not_conflict_with_the_count_unit(self) -> None:
+        prompt = (
+            "Need 250 stainless steel water bottles delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            {
+                **item,
+                **({"value": "water bottles", "quote": "stainless steel water bottles"}
+                   if item["field"] == "title" else {}),
+                **({"value": "Water Bottles", "quote": "water bottles"}
+                   if item["field"] == "category" else {}),
+                **({"value": "250", "quote": "250 stainless steel water bottles"}
+                   if item["field"] == "quantity.target_quantity" else {}),
+                **({"value": "water bottles", "quote": "250 stainless steel water bottles"}
+                   if item["field"] == "quantity.unit" else {}),
+            }
+            for item in extraction["extractions"]
+        ]
+        extraction["extractions"].append({
+            "field": "quantity.unit",
+            "value": "bottles",
+            "quote": "250 stainless steel water bottles",
+        })
+
+        requirements, parsed_fields = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.quantity.unit, "bottles")
+        self.assertEqual(parsed_fields.count("quantity.unit"), 1)
+
+    def test_distinct_count_units_remain_rejected(self) -> None:
+        prompt = (
+            "Need 250 bottles delivered to Berlin, Germany, USD currency, 12 month warranty, "
+            "factory mill certificate, packed in 5 boxes."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            {
+                **item,
+                **({"value": "bottles", "quote": "bottles"}
+                   if item["field"] in {"title", "category"} else {}),
+                **({"value": "250", "quote": "250 bottles"}
+                   if item["field"] == "quantity.target_quantity" else {}),
+                **({"value": "bottles", "quote": "250 bottles"}
+                   if item["field"] == "quantity.unit" else {}),
+            }
+            for item in extraction["extractions"]
+        ]
+        extraction["extractions"].append({
+            "field": "quantity.unit",
+            "value": "boxes",
+            "quote": "5 boxes",
+        })
+
+        with self.assertRaisesRegex(AIPermanentError, "conflicting values"):
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
     def test_conflicting_scalar_values_remain_rejected(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany or Paris, France, "

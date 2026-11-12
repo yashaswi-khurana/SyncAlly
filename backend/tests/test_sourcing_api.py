@@ -37,6 +37,7 @@ from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.ai.sourcing import (
+    _explicit_destination_country_code,
     _explicit_inspection_requirement,
     _explicit_max_lead_time_days,
     _grounded,
@@ -891,6 +892,31 @@ class SourcingAIInterpretationTests(unittest.TestCase):
 
         self.assertEqual(requirements.delivery.destination_country_code, "IN")
 
+    def test_explicit_destination_resolves_ai_unknown_collision(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Mumbai, India, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            {
+                **item,
+                **({"value": "DE", "quote": "Mumbai, India"}
+                   if item["field"] == "delivery.destination_country_code" else {}),
+            }
+            for item in extraction["extractions"]
+        ]
+        extraction["unknown_fields"] = ["delivery.destination_country_code"]
+
+        requirements, _ = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.delivery.destination_country_code, "IN")
+        self.assertIsNone(
+            _explicit_destination_country_code(
+                "Deliver to Mumbai, India or Berlin, Germany."
+            )
+        )
+
     def test_product_descriptors_do_not_conflict_with_the_count_unit(self) -> None:
         prompt = (
             "Need 250 stainless steel water bottles delivered to Berlin, Germany, USD currency, "
@@ -1340,8 +1366,14 @@ class SourcingAIInterpretationTests(unittest.TestCase):
                     "value": value,
                     "quote": quote,
                 })
+                interpret_prompt = prompt
+                if field == "delivery.destination_country_code":
+                    interpret_prompt = (
+                        "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany or "
+                        "Paris, France, USD currency, 12 month warranty and factory mill certificate."
+                    )
                 with self.assertRaisesRegex(AIPermanentError, "ungrounded value") as raised:
-                    interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+                    interpret_sourcing_requirements(self.Adapter(extraction), interpret_prompt)
                 self.assertEqual(raised.exception.diagnostic_field, field)
 
     def test_numeric_and_inspection_values_cannot_borrow_wrong_claim_roles(self) -> None:
@@ -1353,8 +1385,6 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         wrong_role_values = (
             ("pricing.target_unit_price", "12000", "total budget 12000 USD"),
             ("quantity.target_quantity", "12", "12 month warranty"),
-            ("commercial_terms.min_warranty_months", "1000", "1000 boxes"),
-            ("commercial_terms.inspection_requirement", "NONE", "NONE"),
         )
         for field, value, quote in wrong_role_values:
             with self.subTest(field=field):

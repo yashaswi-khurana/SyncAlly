@@ -385,6 +385,20 @@ def _country_matches(value: str, quote: str) -> bool:
     )
 
 
+def _explicit_destination_country_code(prompt: str) -> str | None:
+    codes = {
+        code
+        for country, code in _COUNTRY_NAME_TO_CODE.items()
+        if re.search(rf"\b{re.escape(country)}\b", prompt, re.I)
+    }
+    codes.update(
+        code
+        for city, code in _KNOWN_PORTS_CITIES
+        if re.search(rf"\b{re.escape(city)}\b", prompt, re.I)
+    )
+    return next(iter(codes)) if len(codes) == 1 else None
+
+
 def _is_relative_delivery_window(quote: str) -> bool:
     return bool(
         not re.search(r"\b\d{4}-\d{2}-\d{2}\b", quote)
@@ -722,6 +736,7 @@ def interpret_sourcing_requirements(
     explicit_values = {
         "quantity.unit": _explicit_target_quantity_unit(prompt),
         "pricing.target_unit_price": _explicit_target_unit_price(prompt),
+        "delivery.destination_country_code": _explicit_destination_country_code(prompt),
         "delivery.max_lead_time_days": _explicit_max_lead_time_days(prompt),
         "pricing.currency": _explicit_pricing_currency(prompt),
         "commercial_terms.min_warranty_months": _explicit_min_warranty_months(prompt),
@@ -802,7 +817,7 @@ def interpret_sourcing_requirements(
         field = item["field"]
         if _get_path(overrides, field) is not None:
             continue
-        if field in {"quantity.unit", "pricing.target_unit_price"} and explicit_values[field] is not None:
+        if field in explicit_values and explicit_values[field] is not None:
             continue
         value = item["value"].strip()
         if not _grounded(field, value, item["quote"]) or not all(
@@ -881,6 +896,16 @@ def interpret_sourcing_requirements(
     ):
         _set_path(requirements, target_price_path, target_price)
         parsed_fields.append(target_price_path)
+
+    country_path = "delivery.destination_country_code"
+    country = explicit_values[country_path]
+    if (
+        country is not None
+        and _get_path(requirements, country_path) is None
+        and _get_path(overrides, country_path) is None
+    ):
+        _set_path(requirements, country_path, country)
+        parsed_fields.append(country_path)
 
     lead_time_path = "delivery.max_lead_time_days"
     if (

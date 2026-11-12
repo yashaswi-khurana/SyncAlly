@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 
 from syncally.api.authorization import require_deal_action
+from syncally.application.conversations import AddMessageCommand, add_message
 from syncally.application.deals import (
     CreateDealCommand,
     DealAccessDenied,
@@ -28,6 +29,7 @@ from syncally.application.deals import (
 from syncally.application.payments import PaymentStatusRecord, list_current_payment_statuses
 from syncally.config import settings
 from syncally.domain.deals.deal import Deal as DomainDeal
+from syncally.domain.conversations import Visibility
 from syncally.domain.payments.intent import PaymentIntentStatus
 from syncally.domain.shared.money import canonical_decimal
 from syncally.infrastructure.database import SessionLocal
@@ -55,6 +57,7 @@ from syncally.infrastructure.models import (
 )
 from syncally.infrastructure.repositories._timestamps import as_utc
 from syncally.infrastructure.repositories.agreements import SqlAlchemyAgreementRepository
+from syncally.infrastructure.repositories.communications import SqlAlchemyCommunicationRepository
 from syncally.infrastructure.repositories.deals import SqlAlchemyDealRepository
 from syncally.infrastructure.repositories.payments import SqlAlchemyPaymentIntentRepository
 from syncally.operations import configure_logging
@@ -96,6 +99,7 @@ _HELP_MESSAGE = (
     "Mention me in a message or thread. Commands use your SyncAlly permissions; "
     "I don't read channel history.\n"
     "• `@SyncAlly link` — link your SyncAlly account with a private code.\n"
+    "• `@SyncAlly share <message>` — add a shareable message to the one deal followed in this thread.\n"
     "• `@SyncAlly status <deal-name>` — check a deal's status, for example `status Acme renewal`.\n"
     "• `@SyncAlly payments <deal-name>` — check payment status when you have payment access.\n"
     "• `@SyncAlly follow <deal-name>` / `@SyncAlly unfollow <deal-name>` — get or stop eligible updates in this thread.\n"
@@ -149,6 +153,7 @@ def _record_failure(
         event.last_error = failure_kind
         if uncertain or terminal or event.attempts >= _MAX_ATTEMPTS:
             event.status = "FAILED"
+            event.message_body = None
         else:
             event.status = "PENDING"
             event.available_at = datetime.now(UTC) + timedelta(
@@ -748,6 +753,7 @@ async def _deliver_notification(
 
     source_payload = source.payload if isinstance(source.payload, dict) else {}
     notification_kind: str | None = None
+    message_record: Message | None = None
     if source.aggregate_type == "agreement" and source.event_type == "AGREEMENT_COMMITTED":
         # Keep the aggregate deal scope and version record independently
         # checked because this event's aggregate_id is the deal UUID.
@@ -849,7 +855,7 @@ async def _deliver_notification(
         )
         if message is not None:
             notification_kind = "MESSAGE_RECEIVED"
-
+            message_record = message
     if notification_kind is None:
         delivery.status = "FAILED"
         delivery.last_error = "source_mismatch"
@@ -908,6 +914,20 @@ async def _deliver_notification(
 
     cipher = _cipher()
     token = cipher.decrypt(installation.encrypted_bot_token)
+    message_text = "A new message is available in SyncAlly."
+    if notification_kind == "MESSAGE_RECEIVED" and message_record is not None:
+        conversation = db.get(Conversation, message_record.conversation_id)
+        if (
+            message_record.visibility == Visibility.SHAREABLE.value
+            and conversation is not None
+            and conversation.participant_organization_id != subscription.organization_id
+        ):
+            escaped_body = (
+                message_record.body.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+            message_text = f"A shareable message from the other party was posted in SyncAlly:\n{escaped_body}"
     await _provider_call(
         api.post_ephemeral,
         token,
@@ -948,9 +968,7 @@ async def _deliver_notification(
                             )
                             if notification_kind == "FULFILLMENT_EVENT_RECORDED"
                             else (
-                                (
-                                    "A new message is available in SyncAlly."
-                                )
+                                message_text
                                 if notification_kind == "MESSAGE_RECEIVED"
                                 else (
                                     "A SyncAlly deal you follow has been completed. "
@@ -981,7 +999,7 @@ def _take_event(db: Session, now: datetime) -> uuid.UUID | None:
             SlackEvent.status == "PROCESSING",
             SlackEvent.available_at <= now,
         )
-        .values(status="FAILED", last_error="delivery_uncertain")
+        .values(status="FAILED", last_error="delivery_uncertain", message_body=None)
     )
     db.execute(
         update(SlackEvent)
@@ -990,7 +1008,7 @@ def _take_event(db: Session, now: datetime) -> uuid.UUID | None:
             SlackEvent.status == "PENDING",
             SlackEvent.attempts >= _MAX_ATTEMPTS,
         )
-        .values(status="FAILED", last_error="attempts_exhausted")
+        .values(status="FAILED", last_error="attempts_exhausted", message_body=None)
     )
     db.commit()
     event = db.scalar(
@@ -1058,6 +1076,7 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
     if installation is None or not installation.encrypted_bot_token:
         event.status = "FAILED"
         event.last_error = "installation_inactive"
+        event.message_body = None
         db.commit()
         return
     token = _cipher().decrypt(installation.encrypted_bot_token)
@@ -1529,6 +1548,83 @@ async def _deliver(db: Session, event_id: uuid.UUID, api: SlackWebAPI) -> None:
             thread_ts=event.thread_ts,
             text=text,
         )
+    elif event.command == "SHARE":
+        share_body = (
+            _cipher().decrypt(event.message_body)
+            if event.message_body is not None
+            else None
+        )
+        link = db.scalar(
+            select(SlackUserLink).where(
+                SlackUserLink.installation_id == installation.id,
+                SlackUserLink.slack_user_id == event.slack_user_id,
+                SlackUserLink.organization_id == installation.organization_id,
+                SlackUserLink.workspace_id == installation.workspace_id,
+            )
+        )
+        if link is None:
+            text = "Link your SyncAlly account first: mention `@SyncAlly link` and follow the private instructions."
+        elif not share_body:
+            text = "Include message text after `@SyncAlly share`."
+        else:
+            subscriptions = db.scalars(
+                select(SlackDealSubscription).where(
+                    SlackDealSubscription.installation_id == installation.id,
+                    SlackDealSubscription.organization_id == installation.organization_id,
+                    SlackDealSubscription.workspace_id == installation.workspace_id,
+                    SlackDealSubscription.slack_user_id == event.slack_user_id,
+                    SlackDealSubscription.user_id == link.user_id,
+                    SlackDealSubscription.channel_id == event.channel_id,
+                    SlackDealSubscription.thread_ts == event.thread_ts,
+                )
+            ).all()
+            if not subscriptions:
+                text = "Follow a deal in this thread before sharing a message: `@SyncAlly follow <deal-name>`."
+            elif len(subscriptions) > 1:
+                text = "This thread follows multiple deals. Use a separate Slack thread for each deal before sharing."
+            else:
+                subscription = subscriptions[0]
+                actor = resolve_actor(db, link.user_id)
+                deal = (
+                    _authorized_subscription_deal(
+                        db,
+                        installation,
+                        link,
+                        str(subscription.deal_id),
+                        permission="deal.edit_assigned",
+                    )
+                    if actor is not None
+                    and installation.organization_id in actor.organization_ids
+                    else None
+                )
+                if actor is None or deal is None:
+                    text = _PRIVATE_DEAL_DENIAL
+                else:
+                    add_message(
+                        actor,
+                        subscription.deal_id,
+                        AddMessageCommand(
+                            body=share_body,
+                            visibility=Visibility.SHAREABLE,
+                            organization_id=installation.organization_id,
+                            idempotency_key="slack-" + hashlib.sha256(
+                                event.event_id.encode("utf-8")
+                            ).hexdigest(),
+                        ),
+                        SqlAlchemyCommunicationRepository(db),
+                    )
+                    event.deal_id = str(subscription.deal_id)
+                    db.commit()
+                    text = "Message shared with the deal in SyncAlly. The other party's followed thread will be notified."
+        await _provider_call(
+            api.post_ephemeral,
+            token,
+            channel=event.channel_id,
+            user=event.slack_user_id,
+            thread_ts=event.thread_ts,
+            text=text,
+        )
+        event.message_body = None
     else:
         await _provider_call(api.post_message,
             token,

@@ -71,6 +71,10 @@ def _event_command(text: object, bot_user_id: str) -> tuple[str, str | None]:
         return "STATUS", None
     if len(parts) == 1 and parts[0].casefold() == "payments":
         return "PAYMENTS", None
+    if parts and parts[0].casefold() == "share":
+        body = without_mentions[len(parts[0]):].strip()
+        if body and len(body) <= 8000:
+            return "SHARE", body
     if (
         len(parts) == 3
         and parts[0].casefold() == "start"
@@ -151,7 +155,14 @@ async def receive_slack_event(request: Request, db: Session = Depends(get_db)):
     if installation is None or user_id == installation.bot_user_id:
         return {"ok": True}
     command, reference = _event_command(event.get("text"), installation.bot_user_id)
-    deal_id = reference
+    message_body = (
+        SlackTokenCipher(settings.integration_token_encryption_key.get_secret_value()).encrypt(
+            reference
+        )
+        if command == "SHARE" and reference is not None
+        else None
+    )
+    deal_id = None if command == "SHARE" else reference
     deal_reference = None
     if command in {"STATUS", "PAYMENTS", "FOLLOW", "UNFOLLOW"} and reference is not None:
         try:
@@ -174,6 +185,7 @@ async def receive_slack_event(request: Request, db: Session = Depends(get_db)):
             command=command,
             deal_id=deal_id,
             deal_reference=deal_reference,
+            message_body=message_body,
             status="PENDING",
             attempts=0,
             available_at=datetime.now(UTC),

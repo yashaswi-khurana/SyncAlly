@@ -41,7 +41,7 @@ encryption key are missing.
 
 After deployment and migrations `0033_slack_integrations`,
 `0034_slack_events_and_links`, `0035_slack_deal_subscriptions`, and
-`0036_slack_deal_name_references`, an active organization administrator can connect
+`0036_slack_deal_name_references`, and `0037_slack_message_relay`, an active organization administrator can connect
 Slack from Settings -> Organizations -> Integrations. The Render/Hostless startup
 script runs `python -m syncally.cli.slack_events_worker` alongside the API and
 other workers; Docker Compose uses the separate `slack-events-worker` service.
@@ -88,8 +88,15 @@ verified payment-state-change, generic fulfillment, and content-free new-message
 `@SyncAlly follow <deal-id>` and stop them with `@SyncAlly unfollow <deal-id>`.
 SyncAlly rechecks deal access before each notice and requires current `payments.read`
 for payment-state notices and `fulfillment.read` for fulfillment notices; message notices
-respect visibility and apply only to messages created after following. They omit message bodies,
-deal names, terms, payment details, and shipment details. A completion-triggering
+respect visibility and apply only to messages created after following. Ordinary new-message
+notices remain content-free. To relay a message, mention `@SyncAlly share <message>` in a
+thread that follows exactly one deal; the linked sender must currently have
+`deal.edit_assigned`. SyncAlly stores it as `SHAREABLE` and sends its escaped body only
+ephemerally to authorized followers in the other party's organization. The sender's own
+Slack followers receive only a content-free notice. Private and internal messages are never
+relayed. Pending share text is encrypted with the integration Fernet key and cleared after
+the private response succeeds or the event becomes terminal; retries remain encrypted.
+Notices omit deal names, terms, payment details, and shipment details. A completion-triggering
 fulfillment event produces only the deal-completion notice. Notices are sent only to the subscribing user as ephemeral
 thread replies and may be missed when Slack cannot display an ephemeral message.
 An authorized member with `deal.create` can create a draft with

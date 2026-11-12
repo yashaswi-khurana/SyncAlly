@@ -323,8 +323,13 @@ class SlackEventRouteTests(unittest.TestCase):
             slack_events.settings, "slack_signing_secret", SecretStr(SIGNING_SECRET)
         )
         self.signing_patch.start()
+        self.cipher_patch = patch.object(
+            slack_events.settings, "integration_token_encryption_key", SecretStr(FERNET_KEY)
+        )
+        self.cipher_patch.start()
 
     def tearDown(self) -> None:
+        self.cipher_patch.stop()
         self.signing_patch.stop()
         self.db.close()
         Base.metadata.drop_all(self.engine)
@@ -384,6 +389,25 @@ class SlackEventRouteTests(unittest.TestCase):
         self._receive(self._mention_payload(event_id="Ev-botid", event_fields={"bot_id": "B-other"}))
         self._receive(self._mention_payload(event_id="Ev-message", event_type="message"))
         self.assertEqual(self.db.scalar(select(SlackEvent.event_id)), "Ev-unique")
+
+        share_payload = self._mention_payload(
+            event_id="Ev-share",
+            text="<@BBOT> share The revised delivery date is December 15.",
+        )
+        self.assertEqual(self._receive(share_payload), {"ok": True})
+        self.assertEqual(self._receive(share_payload), {"ok": True})
+        share_event = self.db.scalar(
+            select(SlackEvent).where(SlackEvent.event_id == "Ev-share")
+        )
+        self.assertIsNotNone(share_event)
+        assert share_event is not None
+        self.assertEqual(share_event.command, "SHARE")
+        self.assertIsNone(share_event.deal_id)
+        self.assertNotEqual(share_event.message_body, "The revised delivery date is December 15.")
+        self.assertEqual(
+            SlackTokenCipher(FERNET_KEY).decrypt(share_event.message_body),
+            "The revised delivery date is December 15.",
+        )
 
         payments_payload = self._mention_payload(
             event_id="Ev-payments",
@@ -2667,6 +2691,7 @@ class SlackEventRouteTests(unittest.TestCase):
             conversation_org_id=self.other_org.id,
             now=now + timedelta(seconds=1),
         )
+        shareable_message.body = "The counterparty confirmed the delivery date."
         own_private_message, own_private_source = self._add_message_notification(
             deal_id=deal_id,
             visibility="PRIVATE",
@@ -2763,12 +2788,188 @@ class SlackEventRouteTests(unittest.TestCase):
             self.assertEqual(reply["user"], subscription.slack_user_id)
             self.assertEqual(reply["channel"], subscription.channel_id)
             self.assertEqual(reply["thread_ts"], subscription.thread_ts)
-            self.assertEqual(reply["text"], "A new message is available in SyncAlly.")
-            self.assertNotIn("private message body", reply["text"])
+        self.assertIn("The counterparty confirmed the delivery date.", api.private_messages[0]["text"])
+        self.assertEqual(api.private_messages[1]["text"], "A new message is available in SyncAlly.")
+        self.assertNotIn("private message body", api.private_messages[1]["text"])
         self.db.refresh(shareable_source)
         self.db.refresh(own_private_source)
         self.assertEqual(shareable_source.status, "DELIVERED")
         self.assertEqual(own_private_source.status, "DELIVERED")
+
+    def test_share_command_persists_once_and_relays_only_to_counterparty_followers(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, agreement_event_id, sender_subscription = self._add_follow_setup(
+            now=now
+        )
+        agreement_source = self.db.get(OutboxEvent, agreement_event_id)
+        assert agreement_source is not None
+        agreement_source.event_type = "ALREADY_CONSUMED"
+
+        counterparty_member = self.db.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.organization_id == self.other_org.id,
+                OrganizationMember.user_id == self.other.id,
+            )
+        )
+        assert counterparty_member is not None
+        counterparty_member.permissions = ["deal.read_all"]
+        counterparty_installation = SlackInstallation(
+            id=uuid4(),
+            organization_id=self.other_org.id,
+            workspace_id="T-counterparty",
+            workspace_name="Counterparty Slack",
+            bot_user_id="B-counterparty",
+            encrypted_bot_token=SlackTokenCipher(FERNET_KEY).encrypt("xoxb-counterparty"),
+            granted_scopes=["app_mentions:read", "chat:write"],
+            status="CONNECTED",
+            connected_by_user_id=self.other.id,
+            connected_at=now,
+        )
+        self.db.add(counterparty_installation)
+        self.db.flush()
+        self.db.add_all([
+            SlackUserLink(
+                id=uuid4(),
+                installation_id=counterparty_installation.id,
+                organization_id=self.other_org.id,
+                workspace_id=counterparty_installation.workspace_id,
+                slack_user_id="U-counterparty",
+                user_id=self.other.id,
+                created_at=now,
+            ),
+            SlackDealSubscription(
+                id=uuid4(),
+                installation_id=counterparty_installation.id,
+                organization_id=self.other_org.id,
+                workspace_id=counterparty_installation.workspace_id,
+                slack_user_id="U-counterparty",
+                user_id=self.other.id,
+                deal_id=deal_id,
+                channel_id="C-counterparty",
+                thread_ts="900.000",
+                created_at=now,
+            ),
+        ])
+        body = "Confirmed: deliver 12 units on December 15."
+        event = SlackEvent(
+            id=uuid4(),
+            event_id="Ev-share-relay",
+            installation_id=self.installation.id,
+            workspace_id=self.installation.workspace_id,
+            slack_user_id=sender_subscription.slack_user_id,
+            channel_id=sender_subscription.channel_id,
+            message_ts="901.000",
+            thread_ts=sender_subscription.thread_ts,
+            command="SHARE",
+            message_body=SlackTokenCipher(FERNET_KEY).encrypt(body),
+            status="PENDING",
+            attempts=0,
+            available_at=now,
+            created_at=now,
+        )
+        self.db.add(event)
+        self.db.commit()
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=1),
+            )))
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=2),
+            )))
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=3),
+            )))
+
+        self.db.refresh(event)
+        self.assertEqual(event.status, "DELIVERED")
+        self.assertIsNone(event.message_body)
+        self.assertEqual(event.deal_id, str(deal_id))
+        message = self.db.scalar(select(Message).where(Message.idempotency_key.like("slack-%")))
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertEqual(message.body, body)
+        self.assertEqual(message.visibility, "SHAREABLE")
+        self.assertEqual(message.author_user_id, self.admin.id)
+        self.assertEqual(len(api.private_messages), 3)
+        recipient_notice = next(
+            item for item in api.private_messages if item["user"] == "U-counterparty"
+        )
+        sender_notice = next(
+            item for item in api.private_messages if item["user"] == sender_subscription.slack_user_id
+            and body not in item["text"]
+        )
+        self.assertIn(body, recipient_notice["text"])
+        self.assertNotIn(body, sender_notice["text"])
+
+    def test_share_command_requires_current_deal_edit_permission(self) -> None:
+        from syncally.cli import slack_events_worker
+
+        now = datetime.now(UTC)
+        deal_id, _agreement_id, _source_id, subscription = self._add_follow_setup(now=now)
+        body = "A message that must not be persisted."
+        event = SlackEvent(
+            id=uuid4(),
+            event_id="Ev-share-read-only",
+            installation_id=self.installation.id,
+            workspace_id=self.installation.workspace_id,
+            slack_user_id=subscription.slack_user_id,
+            channel_id=subscription.channel_id,
+            message_ts="902.000",
+            thread_ts=subscription.thread_ts,
+            command="SHARE",
+            message_body=SlackTokenCipher(FERNET_KEY).encrypt(body),
+            status="PENDING",
+            attempts=0,
+            available_at=now,
+            created_at=now,
+        )
+        self.db.add(event)
+        self.db.commit()
+        reader_actor = ActorContext(
+            user_id=self.admin.id,
+            organization_ids=frozenset({self.org.id}),
+            permissions_by_organization={self.org.id: frozenset({"deal.read_all"})},
+        )
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.private_messages: list[dict[str, str]] = []
+
+            async def post_ephemeral(self, _token: str, **kwargs: str) -> None:
+                self.private_messages.append(kwargs)
+
+        def factory() -> Session:
+            return Session(self.engine, expire_on_commit=False)
+
+        api = FakeAPI()
+        with (
+            patch.object(slack_events_worker, "_cipher", return_value=SlackTokenCipher(FERNET_KEY)),
+            patch.object(slack_events_worker, "resolve_actor", return_value=reader_actor),
+        ):
+            self.assertTrue(asyncio.run(slack_events_worker.process_one(
+                factory, api, now=now + timedelta(seconds=1),
+            )))
+
+        self.assertEqual(len(api.private_messages), 1)
+        self.assertEqual(api.private_messages[0]["text"], slack_events_worker._PRIVATE_DEAL_DENIAL)
+        self.assertIsNone(self.db.scalar(select(Message.id).where(Message.body == body)))
+        self.db.refresh(event)
+        self.assertEqual(event.status, "DELIVERED")
+        self.assertIsNone(event.message_body)
 
     def test_message_notification_rejects_mismatched_source_and_does_not_backfill_history(self) -> None:
         from syncally.cli import slack_events_worker

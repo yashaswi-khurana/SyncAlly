@@ -688,6 +688,15 @@ def interpret_sourcing_requirements(
         and _has_grounded_count_unit(raw["extractions"], prompt)
     ):
         unknown_fields.remove("quantity.unit")
+    explicit_values = {
+        "delivery.max_lead_time_days": _explicit_max_lead_time_days(prompt),
+        "pricing.currency": _explicit_pricing_currency(prompt),
+        "commercial_terms.min_warranty_months": _explicit_min_warranty_months(prompt),
+        "commercial_terms.inspection_requirement": _explicit_inspection_requirement(prompt),
+    }
+    for field, value in explicit_values.items():
+        if value is not None and field in unknown_fields:
+            unknown_fields.remove(field)
     conflicting_unknowns = set(unknown_fields) & extracted_names & set(_REQUIRED_FIELDS)
     if conflicting_unknowns:
         diagnostic_field = next(
@@ -823,7 +832,7 @@ def interpret_sourcing_requirements(
         _get_path(requirements, lead_time_path) is None
         and _get_path(overrides, lead_time_path) is None
     ):
-        lead_time_days = _explicit_max_lead_time_days(prompt)
+        lead_time_days = explicit_values[lead_time_path]
         if lead_time_days is not None:
             _set_path(requirements, lead_time_path, lead_time_days)
             parsed_fields.append(lead_time_path)
@@ -834,7 +843,7 @@ def interpret_sourcing_requirements(
         requirements["pricing"]["currency"] is None
         and _get_path(overrides, "pricing.currency") is None
     ):
-        currency = _explicit_pricing_currency(prompt)
+        currency = explicit_values["pricing.currency"]
         if currency is not None:
             requirements["pricing"]["currency"] = currency
             parsed_fields.append("pricing.currency")
@@ -846,7 +855,7 @@ def interpret_sourcing_requirements(
         _get_path(requirements, warranty_path) is None
         and _get_path(overrides, warranty_path) is None
     ):
-        warranty_months = _explicit_min_warranty_months(prompt)
+        warranty_months = explicit_values[warranty_path]
         if warranty_months is not None:
             _set_path(requirements, warranty_path, warranty_months)
             parsed_fields.append(warranty_path)
@@ -858,7 +867,7 @@ def interpret_sourcing_requirements(
         _get_path(requirements, inspection_path) is None
         and _get_path(overrides, inspection_path) is None
     ):
-        inspection = _explicit_inspection_requirement(prompt)
+        inspection = explicit_values[inspection_path]
         if inspection is not None:
             _set_path(requirements, inspection_path, inspection)
             parsed_fields.append(inspection_path)

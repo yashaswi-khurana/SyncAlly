@@ -67,6 +67,11 @@ _OBJECT_FIELDS = {
     "delivery",
     "commercial_terms",
 }
+_COUNTABLE_UNIT_HEADS = {
+    "bottle", "box", "case", "unit", "piece", "pc", "bag", "roll", "set",
+    "pair", "carton", "pallet", "can", "jar", "drum", "barrel", "container",
+    "tablet", "sheet", "pack", "bundle", "item",
+}
 _ENUMS = {
     "commercial_terms.preferred_incoterm": {
         "EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF",
@@ -116,13 +121,47 @@ _INSTRUCTION = (
     "Do not infer prices, currency from symbols, delivery countries from assumptions, warranty, "
     "inspection, Incoterms, payment terms, lead times, quantities, units, or acceptable terms. "
     "Country codes may be returned only when the country name/code or a known destination city is quoted. "
-    "Do not add default or typical commercial requirements. Structured overrides are explicit buyer "
+    "For quantity.unit, return only the count unit itself, without product or material modifiers "
+    "(for example, '250 stainless steel water bottles' has unit 'bottles'). Do not add default or "
+    "typical commercial requirements. Structured overrides are explicit buyer "
     "controls and take precedence; do not emit overridden fields in extractions. Return only the requested JSON."
 )
 
 
 def _normalise(value: str) -> str:
     return re.sub(r"[\W_]+", "", value.casefold())
+
+
+def _same_countable_unit(left: str, right: str) -> bool:
+    """Match a count noun with the same noun preceded by product descriptors."""
+
+    def tokens(value: str) -> list[str]:
+        result = re.findall(r"[a-z0-9]+", value.casefold())
+        if result:
+            head = result[-1]
+            if head.endswith("ies") and len(head) > 3:
+                result[-1] = head[:-3] + "y"
+            elif head.endswith("s") and not head.endswith(("ss", "us", "is")):
+                result[-1] = head[:-1]
+        return result
+
+    left_tokens = tokens(left)
+    right_tokens = tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    if left_tokens == right_tokens:
+        return left_tokens[-1] in _COUNTABLE_UNIT_HEADS
+    shorter, longer = sorted((left_tokens, right_tokens), key=len)
+    head = shorter[-1]
+    return (
+        head in _COUNTABLE_UNIT_HEADS
+        and longer[-len(shorter):] == shorter
+        and len(longer) > len(shorter)
+    )
+
+
+def _overlapping_quotes(left: str, right: str) -> bool:
+    return _normalise(left) in _normalise(right) or _normalise(right) in _normalise(left)
 
 
 def _numeric_match(value: str, quote: str) -> bool:
@@ -189,7 +228,9 @@ def _numeric_role_match(
                     return True
         elif field in {"quantity.target_quantity", "quantity.min_acceptable_quantity"}:
             count_units = re.search(
-                r"^\s*(?:boxes?|units?|pieces?|pcs?|pc|metric tons?|tonnes?|tons?|mt|"
+                r"^\s*(?:(?!\d)[A-Za-z][\w-]*\s+){0,5}"
+                r"(?:boxes?|units?|pieces?|pcs?|pc|bottles?|cans?|jars?|cartons?|pallets?|"
+                r"containers?|tablets?|sheets?|packs?|items?|metric tons?|tonnes?|tons?|mt|"
                 r"kg|kilograms?|yards?|yd|meters?|m|bags?|rolls?|sets?|pairs?)\b",
                 after,
                 re.I,
@@ -502,7 +543,7 @@ def interpret_sourcing_requirements(
         "raw_prompt": prompt,
     }
     parsed_fields: list[str] = []
-    seen_scalar_fields: dict[str, str] = {}
+    seen_scalar_fields: dict[str, tuple[str, str]] = {}
     for item in raw["extractions"]:
         if (
             not isinstance(item, dict)
@@ -545,14 +586,30 @@ def interpret_sourcing_requirements(
             _set_path(requirements, field, current)
         else:
             if field in seen_scalar_fields:
-                if seen_scalar_fields[field] == value:
+                previous_value, previous_quote = seen_scalar_fields[field]
+                if previous_value == value:
+                    continue
+                if (
+                    field == "quantity.unit"
+                    and _same_countable_unit(previous_value, value)
+                    and _overlapping_quotes(previous_quote, item["quote"])
+                ):
+                    canonical_value = min(
+                        (previous_value, value),
+                        key=lambda candidate: (
+                            len(re.findall(r"[a-z0-9]+", candidate.casefold())),
+                            len(candidate),
+                        ),
+                    )
+                    seen_scalar_fields[field] = (canonical_value, previous_quote)
+                    _set_path(requirements, field, canonical_value)
                     continue
                 raise AIPermanentError(
                     f"AI returned conflicting values for {field}. Please clarify the requirement.",
                     diagnostic_code="AI_SOURCING_CONFLICTING_VALUE",
                     diagnostic_field=field,
                 )
-            seen_scalar_fields[field] = value
+            seen_scalar_fields[field] = (value, item["quote"])
             _set_path(requirements, field, value)
         parsed_fields.append(field)
 

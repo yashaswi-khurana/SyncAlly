@@ -40,6 +40,7 @@ from syncally.infrastructure.ai.sourcing import (
     _explicit_destination_country_code,
     _explicit_inspection_requirement,
     _explicit_max_lead_time_days,
+    _explicit_target_quantity,
     _grounded,
     interpret_sourcing_requirements,
 )
@@ -982,6 +983,44 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.quantity.unit, "bottles")
         self.assertEqual(parsed_fields.count("quantity.unit"), 1)
 
+    def test_explicit_target_quantity_resolves_ai_unknown_collision(self) -> None:
+        prompt = (
+            "Need 250 stainless steel water bottles delivered to Berlin, Germany, "
+            "target price USD 8 each, 12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        replacements = {
+            "title": ("water bottles", "water bottles"),
+            "category": ("Water Bottles", "water bottles"),
+            "pricing.currency": ("USD", "USD 8"),
+            "quantity.target_quantity": ("300", "250 stainless steel water bottles"),
+            "quantity.unit": ("cartons", "250 stainless steel water bottles"),
+            "delivery.destination_country_code": ("DE", "Germany"),
+            "commercial_terms.min_warranty_months": ("12", "12 month warranty"),
+            "commercial_terms.inspection_requirement": (
+                "FACTORY_MILL_CERTIFICATE",
+                "factory mill certificate",
+            ),
+        }
+        extraction["extractions"] = [
+            {**item, "value": replacements[item["field"]][0], "quote": replacements[item["field"]][1]}
+            if item["field"] in replacements else item
+            for item in extraction["extractions"]
+        ]
+        extraction["unknown_fields"] = ["quantity.target_quantity"]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(requirements.quantity.target_quantity, Decimal("250"))
+        self.assertIn("quantity.target_quantity", parsed_fields)
+        self.assertIsNone(
+            _explicit_target_quantity(
+                "Need 250 boxes or 500 units of M8 fasteners."
+            )
+        )
+
     def test_distinct_count_units_remain_rejected(self) -> None:
         prompt = (
             "Need 250 bottles delivered to Berlin, Germany, USD currency, 12 month warranty, "
@@ -1372,6 +1411,11 @@ class SourcingAIInterpretationTests(unittest.TestCase):
                         "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany or "
                         "Paris, France, USD currency, 12 month warranty and factory mill certificate."
                     )
+                elif field == "quantity.target_quantity":
+                    interpret_prompt = (
+                        "Need 1000 boxes or 200 units of M8 fasteners delivered to Berlin, "
+                        "Germany, USD currency, 12 month warranty and factory mill certificate."
+                    )
                 with self.assertRaisesRegex(AIPermanentError, "ungrounded value") as raised:
                     interpret_sourcing_requirements(self.Adapter(extraction), interpret_prompt)
                 self.assertEqual(raised.exception.diagnostic_field, field)
@@ -1399,8 +1443,15 @@ class SourcingAIInterpretationTests(unittest.TestCase):
                     "value": value,
                     "quote": quote,
                 })
+                interpret_prompt = prompt
+                if field == "quantity.target_quantity":
+                    interpret_prompt = (
+                        "Need 1000 boxes or 200 units of M8 fasteners delivered to Germany "
+                        "in USD currency, 12 month warranty, factory mill certificate, "
+                        "total budget 12000 USD, and payment code NONE."
+                    )
                 with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
-                    interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+                    interpret_sourcing_requirements(self.Adapter(extraction), interpret_prompt)
 
     def test_role_units_inspection_and_category_grounding(self) -> None:
         cases = (

@@ -323,6 +323,15 @@ def _explicit_target_unit_price(prompt: str) -> str | None:
     return next(iter(values)) if len(values) == 1 else None
 
 
+def _explicit_target_quantity(prompt: str) -> str | None:
+    values: set[str] = set()
+    for match in re.finditer(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w.])", prompt):
+        value = match.group().replace(",", "")
+        if _numeric_role_match("quantity.target_quantity", value, prompt, match.span()):
+            values.add(value)
+    return next(iter(values)) if len(values) == 1 else None
+
+
 def _explicit_min_warranty_months(prompt: str) -> int | None:
     values: set[int] = set()
     for match in re.finditer(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w.])", prompt):
@@ -734,6 +743,7 @@ def interpret_sourcing_requirements(
     ):
         unknown_fields.remove("quantity.unit")
     explicit_values = {
+        "quantity.target_quantity": _explicit_target_quantity(prompt),
         "quantity.unit": _explicit_target_quantity_unit(prompt),
         "pricing.target_unit_price": _explicit_target_unit_price(prompt),
         "delivery.destination_country_code": _explicit_destination_country_code(prompt),
@@ -886,6 +896,16 @@ def interpret_sourcing_requirements(
     ):
         _set_path(requirements, unit_path, unit)
         parsed_fields.append(unit_path)
+
+    target_quantity_path = "quantity.target_quantity"
+    target_quantity = explicit_values[target_quantity_path]
+    if (
+        target_quantity is not None
+        and _get_path(requirements, target_quantity_path) is None
+        and _get_path(overrides, target_quantity_path) is None
+    ):
+        _set_path(requirements, target_quantity_path, target_quantity)
+        parsed_fields.append(target_quantity_path)
 
     target_price_path = "pricing.target_unit_price"
     target_price = explicit_values[target_price_path]

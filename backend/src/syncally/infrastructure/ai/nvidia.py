@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -13,12 +14,16 @@ from syncally.application.ai import (
     AIPermanentError,
     AIProviderAccessError,
     AITransientError,
+    ProposalDraftRequest,
 )
 from syncally.application.conversations import AiContext
+from syncally.domain.ai.contracts import ProposedTerms
 from syncally.infrastructure.ai.openai import (
     MAX_BYTES,
+    PROPOSAL_SCHEMA,
     OpenAIChatCompletions,
     _json,
+    transmitted_context,
 )
 from syncally.operations import Operation, log_operation
 
@@ -49,6 +54,25 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
             raise ValueError("Invalid NVIDIA model name length")
         super().__init__(api_key=api_key, model=model.strip(), transport=transport)
 
+    def draft_proposal(self, request: ProposalDraftRequest, *, timeout_seconds: float) -> ProposedTerms:
+        deadline = monotonic() + timeout_seconds
+        context = transmitted_context(request.context)
+        payload = self._call(context, "proposal", PROPOSAL_SCHEMA, timeout_seconds)
+        try:
+            return self._parse_proposal_payload(payload, context)
+        except AIPermanentError as error:
+            remaining = deadline - monotonic()
+            if remaining <= 0 or error.diagnostic_code not in {
+                "AI_PROPOSAL_SHAPE", "AI_PROPOSAL_CONTRACT", "AI_PROPOSAL_GROUNDING",
+            }:
+                raise
+            try:
+                payload = self._call(context, "proposal", PROPOSAL_SCHEMA, remaining, repair=True)
+            except AITransientError:
+                # The initial validation failure must not restart the whole call sequence.
+                raise error from None
+            return self._parse_proposal_payload(payload, context)
+
     def _call(
         self,
         context: AiContext | None,
@@ -58,6 +82,7 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
         *,
         user_payload: dict | None = None,
         instruction: str | None = None,
+        repair: bool = False,
     ) -> Any:
         if user_payload is None:
             if context is None:
@@ -77,6 +102,13 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
             "source. If a required value is missing or ambiguous, return insufficient_context true, "
             "proposal null and citations []. Delivery date is optional for the draft: return null "
             "when there is no explicit calendar date. "
+            "For a complete proposal, return exactly one citation for each of item_description, "
+            "quantity, unit, unit_price, and delivery_destination, plus delivery_date only if it "
+            "is non-null. The unit_price citation carries currency; do not add a currency citation. "
+            "Each citation value must exactly match its proposal value. For a quantity cited from a "
+            "message, set currency_or_unit to null if product words separate the number and count "
+            "unit (for example, '120 table tennis balls'). Cite 'balls' separately as the unit. "
+            "A non-null quantity unit must exactly match proposal.unit, with no product words. "
             "For quantity and unit_price, 'value' MUST be a plain numeric decimal string containing only digits "
             "(e.g., '100', '25', '10.5'). Do not include currency names, symbols, or unit words in 'value' "
             "(e.g. use value '25' not 'USD 25 per unit'; use value '100' not '100 units'). "
@@ -87,6 +119,11 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
             "never infer currency from a symbol or currency name alone or convert another currency. "
             "Dates must be YYYY-MM-DD and numbers plain decimal strings."
         )
+        if repair:
+            instruction += (
+                " The previous draft failed validation. Rebuild it from the supplied evidence. "
+                "Check the citation count, exact values and quantity unit before returning it."
+            )
         raw = json.dumps({
             "model": self.model,
             "store": False,

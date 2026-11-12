@@ -25,7 +25,10 @@ class _ProposalState(TypedDict, total=False):
 
 def _check_readiness(state: _ProposalState) -> dict[str, object]:
     context = state["context"]
-    missing = missing_trade_fields(context.constraints) if not context.messages else []
+    # A delivery date is needed for complete trade terms, but a draft may leave it blank.
+    missing = [] if context.messages else [
+        field for field in missing_trade_fields(context.constraints) if field != "delivery_date"
+    ]
     if not missing:
         return {"missing_fields": []}
     issue = ValidationIssue(

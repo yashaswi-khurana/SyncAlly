@@ -256,7 +256,7 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("previous proposal failed validation", calls[1]["systemInstruction"]["parts"][0]["text"])
 
-    def test_gemini_proposal_separates_item_words_from_count_unit(self) -> None:
+    def test_proposal_separates_item_words_from_count_unit_and_repairs_nvidia_output(self) -> None:
         context = self._demo_context(
             "TEST ONLY: Please deliver 120 table tennis balls at USD 12 per ball "
             "to Toronto by 2026-12-15."
@@ -318,6 +318,33 @@ class AISuggestionProviderTests(unittest.TestCase):
         prompt = calls[0]["contents"][0]["parts"][0]["text"]
         self.assertIn("For quantity citations", calls[0]["systemInstruction"]["parts"][0]["text"])
         self.assertIn("120 table tennis balls", prompt)
+
+        citations = payload["citations"]
+        wrong_unit = [*citations]
+        wrong_unit[1] = citation("quantity", "120", "120", "table tennis balls")
+        for first, second, expected_calls, expected_status in (
+            ({**payload, "citations": wrong_unit}, payload, 2, ValidationStatus.VALID),
+            ({**payload, "citations": citations[:-1]}, payload, 2, ValidationStatus.VALID),
+            ({**payload, "insufficient_context": None}, payload, 2, ValidationStatus.VALID),
+            ({**payload, "citations": wrong_unit}, {**payload, "citations": []}, 2, ValidationStatus.INVALID),
+            ({**payload, "insufficient_context": True, "proposal": None, "citations": []},
+             payload, 1, ValidationStatus.INVALID),
+        ):
+            with self.subTest(first=first, expected_status=expected_status):
+                calls.clear()
+
+                def nvidia_respond(request: httpx.Request) -> httpx.Response:
+                    calls.append(json.loads(request.content))
+                    return self._completion(first if len(calls) == 1 else second)
+
+                nvidia = ConfiguredAIProvider(self._remote_config(
+                    ai_provider="nvidia", nvidia_model="test-model", nvidia_api_key="test-key",
+                ), transport=httpx.MockTransport(nvidia_respond))
+                repaired = draft_proposal_from_context(context, nvidia)
+                self.assertIs(repaired.result.status, expected_status)
+                self.assertEqual(len(calls), expected_calls)
+                if expected_calls == 2:
+                    self.assertIn("previous draft failed validation", calls[1]["messages"][0]["content"])
 
     def test_gemini_does_not_retry_an_explicit_insufficient_context_result(self) -> None:
         context = self._demo_context(
@@ -1242,6 +1269,21 @@ class AISuggestionProviderTests(unittest.TestCase):
         self.assertIsNone(result.proposal)
         self.assertEqual(result.result.issues[0].code, "AI_REQUIRED_FACTS_MISSING")
         self.assertEqual(provider.call_count, 0)
+
+    def test_proposal_readiness_allows_saved_terms_without_delivery_date(self) -> None:
+        provider = DeterministicFakeAIProvider(proposal=replace(self.proposal, delivery_date=None))
+        context = self._remote_context()
+        constraints = tuple(
+            replace(context.constraints[0], field=field, typed_value=value, currency_or_unit=unit)
+            for field, value, unit in (
+                ("item_description", "Widget", None), ("quantity", "12", "boxes"),
+                ("unit", "boxes", None), ("unit_price", "2.50", "USD"),
+                ("delivery_destination", "Toronto", None),
+            )
+        )
+        result = draft_proposal_with_graph(replace(context, messages=(), constraints=constraints), provider)
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(provider.call_count, 1)
 
     def test_deterministic_fake_satisfies_the_port_contract(self) -> None:
         provider = DeterministicFakeAIProvider()

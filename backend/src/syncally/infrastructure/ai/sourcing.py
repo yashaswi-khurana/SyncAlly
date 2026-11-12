@@ -72,6 +72,11 @@ _COUNTABLE_UNIT_HEADS = {
     "pair", "carton", "pallet", "can", "jar", "drum", "barrel", "container",
     "tablet", "sheet", "pack", "bundle", "item",
 }
+_COUNTABLE_UNIT_FORMS = {
+    form: unit
+    for unit in _COUNTABLE_UNIT_HEADS
+    for form in (unit, unit + ("es" if unit.endswith(("s", "x", "z", "ch", "sh")) else "s"))
+}
 _ENUMS = {
     "commercial_terms.preferred_incoterm": {
         "EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF",
@@ -122,7 +127,8 @@ _INSTRUCTION = (
     "inspection, Incoterms, payment terms, lead times, quantities, units, or acceptable terms. "
     "Country codes may be returned only when the country name/code or a known destination city is quoted. "
     "For quantity.unit, return only the count unit itself, without product or material modifiers "
-    "(for example, '250 stainless steel water bottles' has unit 'bottles'). Do not add default or "
+    "(for example, '250 stainless steel water bottles' has unit 'bottles'); quote the target count "
+    "and unit together. Do not add default or "
     "typical commercial requirements. Structured overrides are explicit buyer "
     "controls and take precedence; do not emit overridden fields in extractions. Every required "
     "field must appear as one grounded extraction or in unknown_fields; never omit it from both. "
@@ -427,10 +433,59 @@ def _has_grounded_count_unit(extractions: list[Any], prompt: str) -> bool:
         and _grounded("quantity.unit", item["value"], item["quote"])
         and any(
             _numeric_role_match("quantity.target_quantity", target["value"], item["quote"])
+            or _count_unit_quote_matches_target(
+                target["value"], item["value"], item["quote"], prompt
+            )
             for target in target_quantities
         )
         for item in extractions
     )
+
+
+def _count_unit_quote_matches_target(
+    quantity: str, unit: str, unit_quote: str, prompt: str,
+) -> bool:
+    unit_tokens = re.findall(r"[a-z]+", unit.casefold())
+    unit_head = _COUNTABLE_UNIT_FORMS.get(unit_tokens[-1]) if unit_tokens else None
+    if unit_head is None:
+        return False
+    try:
+        expected = Decimal(quantity.replace(",", ""))
+    except InvalidOperation:
+        return False
+
+    number_pattern = r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w.])"
+    for number in re.finditer(number_pattern, prompt):
+        try:
+            if Decimal(number.group().replace(",", "")) != expected:
+                continue
+        except InvalidOperation:
+            continue
+        if not _numeric_role_match(
+            "quantity.target_quantity", quantity, prompt, number.span()
+        ):
+            continue
+        for quote in re.finditer(re.escape(unit_quote), prompt):
+            if quote.start() < number.end():
+                continue
+            between = prompt[number.end():quote.start()]
+            if (
+                re.search(r"[,;!?]|\.(?!\d)|\d", between)
+                or len(re.findall(r"[A-Za-z][\w-]*", between)) > 5
+            ):
+                continue
+            words = re.findall(r"[A-Za-z][\w-]*", between + unit_quote)
+            first_count_unit = next(
+                (
+                    _COUNTABLE_UNIT_FORMS[word.casefold()]
+                    for word in words
+                    if word.casefold() in _COUNTABLE_UNIT_FORMS
+                ),
+                None,
+            )
+            if first_count_unit == unit_head:
+                return True
+    return False
 
 
 def _get_path(data: dict[str, Any], path: str) -> Any:

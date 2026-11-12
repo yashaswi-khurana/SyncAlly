@@ -88,7 +88,7 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
             "store": False,
             "max_tokens": 8192,
             "stream": False,
-            "reasoning_effort": "none",
+            "chat_template_kwargs": {"enable_thinking": False},
             "messages": [
                 {"role": "system", "content": instruction},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},

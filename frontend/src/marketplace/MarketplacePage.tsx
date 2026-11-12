@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { ApiError, closeMarketplaceRFQ, createMarketplaceListing, createMarketplaceRFQ, deactivateMarketplaceListing, searchMarketplaceListings, searchMarketplaceRFQs } from "../api/client";
-import type { CreateMarketplaceListingInput, CreateMarketplaceRFQInput, MarketplaceListing, MarketplaceRFQ, Organization } from "../api/types";
+import { ApiError, closeMarketplaceRFQ, createMarketplaceListing, createMarketplaceRFQ, searchMarketplaceRFQs } from "../api/client";
+import type { CreateMarketplaceListingInput, CreateMarketplaceRFQInput, MarketplaceRFQ, Organization } from "../api/types";
 import { compactDecimal } from "../formatting";
-import { navigateToCreateDeal, navigateToSourcing } from "../router";
+import { navigateToCreateDeal, navigateToListings, navigateToSourcing } from "../router";
 import SplitText from "../ui/SplitText";
 
 interface MarketplacePageProps {
@@ -19,12 +19,10 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
   const [product, setProduct] = useState("");
   const [country, setCountry] = useState("");
   const [filters, setFilters] = useState<{ product?: string; country_code?: string }>({});
-  const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [rfqs, setRfqs] = useState<MarketplaceRFQ[]>([]);
-  const [loadingListings, setLoadingListings] = useState(true);
   const [loadingRfqs, setLoadingRfqs] = useState(true);
-  const [listingError, setListingError] = useState("");
   const [rfqError, setRfqError] = useState("");
+  const [listingError, setListingError] = useState("");
   const [sellerOrganizationId, setSellerOrganizationId] = useState("");
   const [listingTitle, setListingTitle] = useState("");
   const [listingDescription, setListingDescription] = useState("");
@@ -34,8 +32,6 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
   const [listingPrice, setListingPrice] = useState("");
   const [listingCurrency, setListingCurrency] = useState("USD");
   const [savingListing, setSavingListing] = useState(false);
-  const [listingRefresh, setListingRefresh] = useState(0);
-  const [deactivatingId, setDeactivatingId] = useState("");
   const [buyerOrganizationId, setBuyerOrganizationId] = useState("");
   const [rfqTitle, setRfqTitle] = useState("");
   const [rfqDescription, setRfqDescription] = useState("");
@@ -54,25 +50,6 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
   const adminOrganizationIds = new Set(adminOrganizations.map((organization) => organization.id));
   const selectedSellerOrganizationId = sellerOrganizationId || adminOrganizations[0]?.id || "";
   const selectedBuyerOrganizationId = buyerOrganizationId || adminOrganizations[0]?.id || "";
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void searchMarketplaceListings({
-      q: filters.product,
-      country_code: filters.country_code,
-    }, { signal: controller.signal }).then(
-      (result) => {
-        setListings(result);
-        setListingError("");
-      },
-      (caught: unknown) => {
-        if (!controller.signal.aborted) setListingError(errorMessage(caught));
-      },
-    ).finally(() => {
-      if (!controller.signal.aborted) setLoadingListings(false);
-    });
-    return () => controller.abort();
-  }, [filters, listingRefresh]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -95,9 +72,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
 
   function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setLoadingListings(true);
     setLoadingRfqs(true);
-    setListingError("");
     setRfqError("");
     setFilters({
       product: product.trim() || undefined,
@@ -177,26 +152,10 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
       setListingQuantity("");
       setListingUnit("");
       setListingPrice("");
-      setLoadingListings(true);
-      setListingRefresh((count) => count + 1);
     } catch (caught: unknown) {
       setListingError(errorMessage(caught));
     } finally {
       setSavingListing(false);
-    }
-  }
-
-  async function takeDownListing(listingId: string) {
-    setDeactivatingId(listingId);
-    setListingError("");
-    try {
-      await deactivateMarketplaceListing(listingId);
-      setLoadingListings(true);
-      setListingRefresh((count) => count + 1);
-    } catch (caught: unknown) {
-      setListingError(errorMessage(caught));
-    } finally {
-      setDeactivatingId("");
     }
   }
 
@@ -225,6 +184,17 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
         </button>
       </section>
 
+      <section className="card listings-banner">
+        <div>
+          <span className="eyebrow">Browse</span>
+          <h2>Product listings</h2>
+          <p>Search and filter every active seller listing by product, type, dealer, country, and price.</p>
+        </div>
+        <button type="button" className="button" onClick={() => navigateToListings()}>
+          Browse listings →
+        </button>
+      </section>
+
       <form className="card marketplace-page__filters" onSubmit={search}>
         <label>
           Product or keyword
@@ -234,7 +204,7 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           Country code
           <input value={country} onChange={(event) => setCountry(event.target.value.toUpperCase())} maxLength={2} placeholder="IN" />
         </label>
-        <button className="button" type="submit" disabled={loadingListings || loadingRfqs}>Search marketplace</button>
+        <button className="button" type="submit" disabled={loadingRfqs}>Search buyer requests</button>
       </form>
 
       {adminOrganizations.length > 0 ? (
@@ -324,30 +294,6 @@ export default function MarketplacePage({ organizations }: MarketplacePageProps)
           </article>
         ))}
         {rfqError ? <p role="alert">{rfqError}</p> : null}
-      </section>
-
-      <section className="marketplace-page__listings" aria-label="Product listings" aria-live="polite">
-        <div className="section-heading"><div><span className="eyebrow">Available now</span><h2>Product listings</h2></div></div>
-        {loadingListings ? <p role="status">Loading product listings…</p> : null}
-        {!loadingListings && listings.length === 0 && !listingError ? <p className="muted">No matching product listings yet.</p> : null}
-        {listings.map((listing) => (
-          <article className="card marketplace-page__listing" key={listing.id}>
-            <div className="marketplace-page__item-heading">
-              <div><span className="eyebrow">{listing.category} · {listing.country_code}</span><h3>{listing.title}</h3></div>
-              <strong>{compactDecimal(listing.unit_price)} {listing.currency} / {listing.unit}</strong>
-            </div>
-            <p>{listing.organization_name} · {compactDecimal(listing.available_quantity)} {listing.unit} available</p>
-            {listing.description ? <p className="muted">{listing.description}</p> : null}
-            {adminOrganizationIds.has(listing.organization_id) ? (
-              <button className="button ghost" type="button" disabled={deactivatingId === listing.id} onClick={() => void takeDownListing(listing.id)}>
-                {deactivatingId === listing.id ? "Taking down…" : "Take down listing"}
-              </button>
-            ) : !ownOrganizationIds.has(listing.organization_id) && organizations.length > 0 ? (
-              <button className="button secondary" type="button" onClick={() => navigateToCreateDeal(listing.organization_id, "BUYER", undefined, listing.id)}>Start a deal</button>
-            ) : null}
-          </article>
-        ))}
-        {listingError ? <p role="alert">{listingError}</p> : null}
       </section>
 
     </div>

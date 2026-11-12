@@ -343,7 +343,7 @@ export function searchOrganizationDirectory(
 }
 
 export function searchMarketplaceListings(
-  filters: { q?: string; country_code?: string; category?: string } = {},
+  filters: { q?: string; country_code?: string; category?: string; dealer?: string; min_price?: string; max_price?: string } = {},
   options?: { signal?: AbortSignal; limit?: number; offset?: number },
 ): Promise<MarketplaceListing[]> {
   const params = new URLSearchParams({ limit: String(options?.limit ?? 100) });

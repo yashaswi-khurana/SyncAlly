@@ -4,6 +4,7 @@ export type Route =
   | { name: "deal"; dealId: string }
   | { name: "organizations"; inviteToken?: string; dealId?: string }
   | { name: "marketplace" }
+  | { name: "listings" }
   | { name: "sourcing"; listingId?: string }
   | { name: "platform" }
   | { name: "organizationSignup" }
@@ -12,6 +13,7 @@ export type Route =
 const DEAL_ROUTE = /^\/deals\/([^/]+)$/;
 const CREATE_DEAL_PATH = "/deals/new";
 const MARKETPLACE_PATH = "/marketplace";
+const LISTINGS_PATH = "/marketplace/listings";
 const SOURCING_PATH = "/sourcing";
 const ORGANIZATIONS_PATH = "/settings/organizations";
 const PLATFORM_PATH = "/platform/organizations";
@@ -36,6 +38,9 @@ export function parseRoute(hash: string): Route {
       rfqId: params.get("rfqId") || undefined,
       listingId: params.get("listingId") || undefined,
     };
+  }
+  if (path === LISTINGS_PATH || path === `${LISTINGS_PATH}/`) {
+    return { name: "listings" };
   }
   if (path === MARKETPLACE_PATH || path === `${MARKETPLACE_PATH}/`) {
     return { name: "marketplace" };
@@ -93,6 +98,10 @@ export function navigateToCreateDeal(
 
 export function navigateToMarketplace(): void {
   window.location.hash = `#${MARKETPLACE_PATH}`;
+}
+
+export function navigateToListings(): void {
+  window.location.hash = `#${LISTINGS_PATH}`;
 }
 
 export function sourcingPath(listingId?: string): string {

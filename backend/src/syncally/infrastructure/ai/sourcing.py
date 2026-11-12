@@ -9,7 +9,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from syncally.application.ai import AIPermanentError
+from syncally.application.ai import (
+    AIPermanentError,
+    AIRetryPolicy,
+    call_with_bounded_retry,
+)
 from syncally.application.sourcing.interpreter import (
     _CATEGORY_KEYWORDS,
     _COUNTRY_NAME_TO_CODE,
@@ -702,13 +706,20 @@ def interpret_sourcing_requirements(
     overrides = structured_overrides or {}
     validate_structured_overrides(overrides)
     _validate_enums(overrides)
-    raw = adapter._call(
-        None,
-        "sourcing_requirements",
-        _SCHEMA,
-        timeout_seconds,
-        user_payload={"prompt": prompt, "structured_overrides": overrides},
-        instruction=_INSTRUCTION,
+    raw = call_with_bounded_retry(
+        lambda: adapter._call(
+            None,
+            "sourcing_requirements",
+            _SCHEMA,
+            timeout_seconds,
+            user_payload={"prompt": prompt, "structured_overrides": overrides},
+            instruction=_INSTRUCTION,
+        ),
+        AIRetryPolicy(
+            max_attempts=2,
+            timeout_seconds=timeout_seconds + 1.0,
+            backoff_seconds=0.5,
+        ),
     )
     if (
         not isinstance(raw, dict)

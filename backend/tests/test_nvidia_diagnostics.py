@@ -66,6 +66,44 @@ class NvidiaDiagnosticsTests(unittest.TestCase):
         event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
         self.assertEqual(event["event"], "ai.provider_failure")
         self.assertEqual(event["error_code"], "NVIDIA_INVALID_RESPONSE")
+        self.assertEqual(event["response_stage"], "choices")
+        self.assertNotIn("private", json.dumps(event))
+
+    def test_incomplete_completion_logs_only_allowlisted_finish_reason(self) -> None:
+        provider = self._provider(httpx.Response(200, json={
+            "object": "chat.completion",
+            "model": "nvidia/nemotron-test",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": "{}"},
+            }],
+        }))
+        with self.assertLogs("syncally.infrastructure.ai.nvidia", level="INFO") as captured:
+            with self.assertRaises(AIPermanentError):
+                provider.extract_facts(self.request, timeout_seconds=1)
+
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertEqual(event["response_stage"], "finish_reason")
+        self.assertEqual(event["provider_finish_reason"], "length")
+
+    def test_unrecognized_finish_reason_is_not_logged(self) -> None:
+        provider = self._provider(httpx.Response(200, json={
+            "object": "chat.completion",
+            "model": "nvidia/nemotron-test",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "private response text",
+                "message": {"role": "assistant", "content": "{}"},
+            }],
+        }))
+        with self.assertLogs("syncally.infrastructure.ai.nvidia", level="INFO") as captured:
+            with self.assertRaises(AIPermanentError):
+                provider.extract_facts(self.request, timeout_seconds=1)
+
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertEqual(event["response_stage"], "finish_reason")
+        self.assertNotIn("provider_finish_reason", event)
         self.assertNotIn("private", json.dumps(event))
 
     def test_http_rejection_carries_diagnostic_code(self) -> None:

@@ -93,6 +93,11 @@ _ENUMS = {
         "BUYER_RECEIVING_INSPECTION", "NONE",
     },
 }
+_RELATIVE_DELIVERY_WINDOW = re.compile(
+    r"\b(?:within|in|no later than)\s+(?:(?:the\s+)?next\s+)?"
+    r"(?P<days>\d{1,3}(?:,\d{3})+|\d+)\s+(?:(?:calendar|business)\s+)?days?\b",
+    re.I,
+)
 _SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -374,12 +379,19 @@ def _country_matches(value: str, quote: str) -> bool:
 def _is_relative_delivery_window(quote: str) -> bool:
     return bool(
         not re.search(r"\b\d{4}-\d{2}-\d{2}\b", quote)
-        and re.search(
-            r"\b(?:within|in|no later than)\s+\d+\s+(?:calendar\s+|business\s+)?days?\b",
-            quote,
-            re.I,
-        )
+        and _RELATIVE_DELIVERY_WINDOW.search(quote)
     )
+
+
+def _explicit_max_lead_time_days(prompt: str) -> int | None:
+    values: set[int] = set()
+    for match in _RELATIVE_DELIVERY_WINDOW.finditer(prompt):
+        digits = match.group("days").replace(",", "")
+        if len(digits) <= 6:
+            days = int(digits)
+            if days > 0:
+                values.add(days)
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def _grounded(field: str, value: str, quote: str) -> bool:
@@ -645,15 +657,21 @@ def interpret_sourcing_requirements(
             "AI returned an invalid sourcing interpretation. Please retry or use structured controls.",
             diagnostic_code="AI_SOURCING_OUTPUT_SHAPE",
         )
+    has_absolute_delivery_date = bool(re.search(r"\b\d{4}-\d{2}-\d{2}\b", prompt))
     raw["extractions"] = [
         item
         for item in raw["extractions"]
         if not (
             isinstance(item, dict)
             and item.get("field") == "delivery.required_delivery_date"
-            and isinstance(item.get("quote"), str)
-            and item["quote"] in prompt
-            and _is_relative_delivery_window(item["quote"])
+            and (
+                not has_absolute_delivery_date
+                or (
+                    isinstance(item.get("quote"), str)
+                    and item["quote"] in prompt
+                    and _is_relative_delivery_window(item["quote"])
+                )
+            )
         )
     ]
     extracted_names = {
@@ -662,13 +680,15 @@ def interpret_sourcing_requirements(
         if isinstance(item, dict) and isinstance(item.get("field"), str)
     }
     unknown_fields = list(raw["unknown_fields"])
+    if not has_absolute_delivery_date and "delivery.required_delivery_date" in unknown_fields:
+        unknown_fields.remove("delivery.required_delivery_date")
     if (
         "quantity.unit" in unknown_fields
         and "quantity.unit" in extracted_names
         and _has_grounded_count_unit(raw["extractions"], prompt)
     ):
         unknown_fields.remove("quantity.unit")
-    conflicting_unknowns = set(unknown_fields) & extracted_names
+    conflicting_unknowns = set(unknown_fields) & extracted_names & set(_REQUIRED_FIELDS)
     if conflicting_unknowns:
         diagnostic_field = next(
             field for field in unknown_fields if field in conflicting_unknowns
@@ -797,6 +817,18 @@ def interpret_sourcing_requirements(
             seen_scalar_fields[field] = (value, item["quote"])
             _set_path(requirements, field, value)
         parsed_fields.append(field)
+
+    lead_time_path = "delivery.max_lead_time_days"
+    if (
+        _get_path(requirements, lead_time_path) is None
+        and _get_path(overrides, lead_time_path) is None
+    ):
+        lead_time_days = _explicit_max_lead_time_days(prompt)
+        if lead_time_days is not None:
+            _set_path(requirements, lead_time_path, lead_time_days)
+            parsed_fields.append(lead_time_path)
+            if lead_time_path in unknown_fields:
+                unknown_fields.remove(lead_time_path)
 
     if (
         requirements["pricing"]["currency"] is None

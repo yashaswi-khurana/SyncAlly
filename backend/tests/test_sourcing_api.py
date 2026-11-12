@@ -593,7 +593,7 @@ class SourcingApiIntegrationTests(unittest.TestCase):
     def test_interpret_missing_required_field_must_be_declared_unknown(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
-            "12 month warranty and factory mill certificate."
+            "and factory mill certificate."
         )
         field = "commercial_terms.min_warranty_months"
         for declared in (False, True):
@@ -1011,6 +1011,42 @@ class SourcingAIInterpretationTests(unittest.TestCase):
 
         self.assertEqual(requirements.pricing.currency, "USD")
         self.assertIn("pricing.currency", parsed_fields)
+
+    def test_explicit_minimum_warranty_is_recovered_when_ai_omits_it(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "minimum warranty 12 months and factory mill certificate."
+        )
+        extraction = self._extraction()
+        field = "commercial_terms.min_warranty_months"
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != field
+        ]
+        extraction["unknown_fields"] = [field]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(requirements.commercial_terms.min_warranty_months, 12)
+        self.assertIn(field, parsed_fields)
+
+    def test_conflicting_explicit_warranties_are_not_recovered(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "minimum warranty 12 months, or 24 month guarantee, and factory mill certificate."
+        )
+        extraction = self._extraction()
+        field = "commercial_terms.min_warranty_months"
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != field
+        ]
+
+        with self.assertRaises(AIPermanentError) as raised:
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_REQUIRED_OMITTED")
+        self.assertEqual(raised.exception.diagnostic_field, field)
 
     def test_currency_is_not_inferred_from_symbol_when_ai_omits_it(self) -> None:
         prompt = (

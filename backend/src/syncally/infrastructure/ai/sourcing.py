@@ -301,6 +301,19 @@ def _explicit_pricing_currency(prompt: str) -> str | None:
     return next(iter(currencies)) if len(currencies) == 1 else None
 
 
+def _explicit_min_warranty_months(prompt: str) -> int | None:
+    values: set[int] = set()
+    for match in re.finditer(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w.])", prompt):
+        value = match.group().replace(",", "")
+        if not value.isdigit():
+            continue
+        if _numeric_role_match(
+            "commercial_terms.min_warranty_months", value, prompt, match.span()
+        ):
+            values.add(int(value))
+    return next(iter(values)) if len(values) == 1 else None
+
+
 def _inspection_role_match(value: str, quote: str) -> bool:
     normalized_value = _normalise(value)
     normalized_quote = _normalise(quote)
@@ -739,6 +752,18 @@ def interpret_sourcing_requirements(
             parsed_fields.append("pricing.currency")
             if "pricing.currency" in unknown_fields:
                 unknown_fields.remove("pricing.currency")
+
+    warranty_path = "commercial_terms.min_warranty_months"
+    if (
+        _get_path(requirements, warranty_path) is None
+        and _get_path(overrides, warranty_path) is None
+    ):
+        warranty_months = _explicit_min_warranty_months(prompt)
+        if warranty_months is not None:
+            _set_path(requirements, warranty_path, warranty_months)
+            parsed_fields.append(warranty_path)
+            if warranty_path in unknown_fields:
+                unknown_fields.remove(warranty_path)
 
     _deep_merge(requirements, overrides)
     pricing = requirements.get("pricing")

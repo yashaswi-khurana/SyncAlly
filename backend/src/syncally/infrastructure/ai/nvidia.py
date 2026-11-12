@@ -26,6 +26,13 @@ NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
 logger = logging.getLogger(__name__)
 
 
+class _InvalidNvidiaResponse(ValueError):
+    def __init__(self, stage: str, *, finish_reason: object = None) -> None:
+        super().__init__(stage)
+        self.stage = stage
+        self.finish_reason = finish_reason
+
+
 class NvidiaChatCompletions(OpenAIChatCompletions):
     """NVIDIA NIM Chat Completions adapter reusing the shared contracts and validators."""
 
@@ -111,12 +118,26 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
                 error_code="NVIDIA_NETWORK",
             )
             raise AITransientError("AI provider is temporarily unavailable") from None
+        except _InvalidNvidiaResponse as exc:
+            log_operation(
+                logger,
+                Operation.AI_PROVIDER_FAILURE,
+                failure_kind="PERMANENT",
+                error_code="NVIDIA_INVALID_RESPONSE",
+                response_stage=exc.stage,
+                provider_finish_reason=exc.finish_reason,
+            )
+            raise AIPermanentError(
+                "AI provider returned invalid output",
+                diagnostic_code="NVIDIA_INVALID_RESPONSE",
+            ) from None
         except (ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError, httpx.HTTPError):
             log_operation(
                 logger,
                 Operation.AI_PROVIDER_FAILURE,
                 failure_kind="PERMANENT",
                 error_code="NVIDIA_INVALID_RESPONSE",
+                response_stage="unclassified",
             )
             raise AIPermanentError(
                 "AI provider returned invalid output",
@@ -183,36 +204,43 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
                         diagnostic_code="NVIDIA_HTTP_REJECTED",
                     )
 
-                envelope = _json(body)
+                try:
+                    envelope = _json(body)
+                except (ValueError, TypeError, UnicodeError, RecursionError):
+                    raise _InvalidNvidiaResponse("envelope_json") from None
                 if not isinstance(envelope, dict) or envelope.get("object") != "chat.completion":
-                    raise ValueError("Invalid completion envelope")
+                    raise _InvalidNvidiaResponse("envelope")
                 model = envelope.get("model")
                 if not isinstance(model, str) or not model.strip() or len(model) > 200:
-                    raise ValueError("Invalid completion model")
+                    raise _InvalidNvidiaResponse("model")
                 choices = envelope.get("choices")
                 if not isinstance(choices, list) or len(choices) != 1:
-                    raise ValueError("Invalid choices")
+                    raise _InvalidNvidiaResponse("choices")
                 choice = choices[0]
+                if not isinstance(choice, dict):
+                    raise _InvalidNvidiaResponse("choice")
                 message = choice.get("message")
                 if not isinstance(message, dict):
-                    raise ValueError("Invalid choice message")
-                if (
-                    choice.get("finish_reason") != "stop"
-                    or type(choice.get("index")) is not int
-                    or choice["index"] != 0
-                ):
-                    raise ValueError("Incomplete completion")
+                    raise _InvalidNvidiaResponse("message")
+                finish_reason = choice.get("finish_reason")
+                if finish_reason != "stop":
+                    raise _InvalidNvidiaResponse("finish_reason", finish_reason=finish_reason)
+                if type(choice.get("index")) is not int or choice["index"] != 0:
+                    raise _InvalidNvidiaResponse("choice_index")
                 if (
                     message.get("role") != "assistant"
                     or message.get("refusal") is not None
                     or message.get("tool_calls")
                     or message.get("function_call")
                 ):
-                    raise ValueError("Refused or unsupported completion")
+                    raise _InvalidNvidiaResponse("message_flags")
 
                 content = message.get("content")
                 if not isinstance(content, str):
-                    raise ValueError("Invalid content")
+                    raise _InvalidNvidiaResponse("content_type")
 
                 self.response_model = model
-                return _json(content)
+                try:
+                    return _json(content)
+                except (ValueError, TypeError, UnicodeError, RecursionError):
+                    raise _InvalidNvidiaResponse("content_json") from None

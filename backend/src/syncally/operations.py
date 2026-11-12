@@ -190,6 +190,24 @@ _GEMINI_ERROR_FIELDS = frozenset(
         "citations",
     }
 )
+_NVIDIA_RESPONSE_STAGES = frozenset(
+    {
+        "body_json",
+        "choice",
+        "choice_index",
+        "choices",
+        "content_json",
+        "content_type",
+        "envelope",
+        "envelope_json",
+        "message",
+        "message_flags",
+        "model",
+        "unclassified",
+        "finish_reason",
+    }
+)
+_NVIDIA_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls", "function_call"})
 _WORKERS = frozenset({"workflow", "outbox", "payment"})
 _UUID_FIELDS = ("correlation_id", "deal_id", "payment_intent_id", "outbox_event_id")
 _WORKFLOW_MESSAGES = {
@@ -260,6 +278,8 @@ class SafeOperationalFormatter(logging.Formatter):
                 ("error_code", _ERROR_CODES),
                 ("provider_error_status", _GEMINI_ERROR_STATUSES),
                 ("provider_error_field", _GEMINI_ERROR_FIELDS),
+                ("response_stage", _NVIDIA_RESPONSE_STAGES),
+                ("provider_finish_reason", _NVIDIA_FINISH_REASONS),
             ):
                 value = record.__dict__.get(key)
                 if isinstance(value, str) and value in values:

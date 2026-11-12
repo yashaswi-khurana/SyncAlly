@@ -1188,6 +1188,26 @@ class SourcingAIInterpretationTests(unittest.TestCase):
 
         self.assertEqual(requirements.pricing.currency, "USD")
 
+    def test_explicit_target_price_recovers_from_ungrounded_ai_value(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency; "
+            "target price USD 8 each, 12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].append({
+            "field": "pricing.target_unit_price",
+            "value": "9",
+            "quote": "USD 8",
+        })
+        extraction["unknown_fields"] = ["pricing.target_unit_price"]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(requirements.pricing.target_unit_price, Decimal("8"))
+        self.assertIn("pricing.target_unit_price", parsed_fields)
+
     def test_conflicting_explicit_price_currencies_are_not_guessed(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany; target price is USD 8 each, "

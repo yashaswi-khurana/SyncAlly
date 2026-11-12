@@ -314,6 +314,15 @@ def _explicit_pricing_currency(prompt: str) -> str | None:
     return next(iter(currencies)) if len(currencies) == 1 else None
 
 
+def _explicit_target_unit_price(prompt: str) -> str | None:
+    values: set[str] = set()
+    for match in re.finditer(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w.])", prompt):
+        value = match.group().replace(",", "")
+        if _numeric_role_match("pricing.target_unit_price", value, prompt, match.span()):
+            values.add(value)
+    return next(iter(values)) if len(values) == 1 else None
+
+
 def _explicit_min_warranty_months(prompt: str) -> int | None:
     values: set[int] = set()
     for match in re.finditer(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w.])", prompt):
@@ -712,6 +721,7 @@ def interpret_sourcing_requirements(
         unknown_fields.remove("quantity.unit")
     explicit_values = {
         "quantity.unit": _explicit_target_quantity_unit(prompt),
+        "pricing.target_unit_price": _explicit_target_unit_price(prompt),
         "delivery.max_lead_time_days": _explicit_max_lead_time_days(prompt),
         "pricing.currency": _explicit_pricing_currency(prompt),
         "commercial_terms.min_warranty_months": _explicit_min_warranty_months(prompt),
@@ -792,7 +802,7 @@ def interpret_sourcing_requirements(
         field = item["field"]
         if _get_path(overrides, field) is not None:
             continue
-        if field == "quantity.unit" and explicit_values[field] is not None:
+        if field in {"quantity.unit", "pricing.target_unit_price"} and explicit_values[field] is not None:
             continue
         value = item["value"].strip()
         if not _grounded(field, value, item["quote"]) or not all(
@@ -861,6 +871,16 @@ def interpret_sourcing_requirements(
     ):
         _set_path(requirements, unit_path, unit)
         parsed_fields.append(unit_path)
+
+    target_price_path = "pricing.target_unit_price"
+    target_price = explicit_values[target_price_path]
+    if (
+        target_price is not None
+        and _get_path(requirements, target_price_path) is None
+        and _get_path(overrides, target_price_path) is None
+    ):
+        _set_path(requirements, target_price_path, target_price)
+        parsed_fields.append(target_price_path)
 
     lead_time_path = "delivery.max_lead_time_days"
     if (

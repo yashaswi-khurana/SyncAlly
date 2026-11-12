@@ -111,6 +111,10 @@ class AIPermanentError(AIProviderError):
     """A non-retryable provider failure, such as malformed provider output."""
 
 
+class AIProviderAccessError(AIPermanentError):
+    """The configured provider credentials cannot access the requested endpoint."""
+
+
 class AIConfigurationError(AIProviderError):
     """Remote suggestions require explicit operator configuration."""
 

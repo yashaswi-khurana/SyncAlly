@@ -461,16 +461,10 @@ def _grounded(field: str, value: str, quote: str) -> bool:
             return True
         details = [
             _normalise(detail)
-            for detail in re.split(r"\s*(?:[,;]|\band\b)\s*", value, flags=re.I)
+            for detail in re.split(r"\s*(?:[,;/|\n]|\band\b)\s*", value, flags=re.I)
             if _normalise(detail)
         ]
-        quote_position = 0
-        for detail in details:
-            detail_position = normalized_quote.find(detail, quote_position)
-            if detail_position < 0:
-                return False
-            quote_position = detail_position + len(detail)
-        return len(details) > 1
+        return len(details) > 1 and all(detail in normalized_quote for detail in details)
     if field in {
         "pricing.target_unit_price",
         "pricing.max_unit_price",
@@ -846,10 +840,13 @@ def interpret_sourcing_requirements(
         if field in explicit_values and explicit_values[field] is not None:
             continue
         value = item["value"].strip()
-        if not _grounded(field, value, item["quote"]) or not all(
+        is_grounded = _grounded(field, value, item["quote"]) and all(
             _context_supports(field, value, clause, span)
             for clause, span in _quote_clauses(prompt, item["quote"])
-        ):
+        )
+        if not is_grounded:
+            if field == "technical_specs.notes":
+                continue
             raise AIPermanentError(
                 f"AI returned an ungrounded value for {field}. Please clarify it in the prompt or controls.",
                 diagnostic_code="AI_SOURCING_UNGROUNDED_VALUE",

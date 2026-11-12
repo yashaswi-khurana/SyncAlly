@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { AgreementApproval, AgreementVersion, Deal } from "../api/types";
+import type { AgreementApproval, AgreementVersion, Deal, DealFact } from "../api/types";
 import DealOverview from "./DealOverview";
 import type { OverviewSnapshot } from "./DealOverview";
 
@@ -69,6 +69,41 @@ describe("DealOverview", () => {
     expect(screen.getByText(/payment and delivery are tracked separately/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View payment" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View delivery" })).toBeInTheDocument();
+  });
+
+  it("warns when conversation facts do not match the committed agreement", () => {
+    const facts: DealFact[] = [{
+      id: "fact-item",
+      deal_id: "deal",
+      owner_organization_id: "buyer",
+      field: "item_description",
+      typed_value: "Table Tennis ball",
+      currency_or_unit: null,
+      kind: "INFORMATIONAL",
+      status: "CONFIRMED",
+      visibility: "PRIVATE",
+      source_message_id: "message-1",
+      source_span: "Table Tennis ball",
+      confirmed_by: "user",
+      confirmed_at: "2026-11-11T21:00:00Z",
+      version: 1,
+      created_at: "2026-11-11T20:49:08Z",
+    }];
+    render(<DealOverview
+      deal={{ ...deal, status: "AGREED" }}
+      organizationId="buyer"
+      reloadToken={0}
+      conversationFacts={facts}
+      snapshot={snapshot({
+        ...agreement,
+        status: "COMMITTED",
+        approvals: [approval("buyer"), approval("seller")],
+        terms: { line_items: [{ description: "Stainless Gasifiers", quantity: "7", unit: "units" }] },
+      } as unknown as AgreementVersion)}
+    />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/conversation does not match this agreement/i);
+    expect(screen.getByRole("alert")).toHaveTextContent("Table Tennis ball");
+    expect(screen.getByRole("alert")).toHaveTextContent("Stainless Gasifiers");
   });
 
   it("does not invite term discussion when the deal stage says agreement should already exist", () => {

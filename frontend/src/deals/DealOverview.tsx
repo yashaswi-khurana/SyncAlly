@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import type { AgreementVersion, Deal } from "../api/types";
+import type { AgreementVersion, Deal, DealFact } from "../api/types";
 import { initMotion } from "../ui/motion";
+import { conversationTermMismatches, savedTermsFromTrade } from "./suggestionPreview";
 
 export type OverviewSnapshot = {
   dealId: string;
@@ -16,6 +17,7 @@ interface Props {
   organizationId: string;
   reloadToken: number;
   snapshot: OverviewSnapshot | null;
+  conversationFacts?: DealFact[];
   partyNames?: { buyer?: string; seller?: string };
   onRevealPanel?: (panel: "obligations" | "invoices") => void;
 }
@@ -100,7 +102,7 @@ function nextRequiredAction(deal: Deal, organizationId: string): string {
   return "Refresh the deal to check its current stage and available actions.";
 }
 
-export default function DealOverview({ deal, organizationId, reloadToken, snapshot, partyNames, onRevealPanel }: Props) {
+export default function DealOverview({ deal, organizationId, reloadToken, snapshot, conversationFacts = [], partyNames, onRevealPanel }: Props) {
   const rootRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const handle = initMotion(rootRef.current);
@@ -192,6 +194,9 @@ export default function DealOverview({ deal, organizationId, reloadToken, snapsh
   }
 
   const activeStage = stageIndex(deal.status);
+  const termMismatches = current?.agreement
+    ? conversationTermMismatches(conversationFacts, savedTermsFromTrade(current.agreement.terms ?? {}))
+    : [];
   return <section ref={rootRef} className="card" aria-labelledby="deal-overview-heading">
     <h2 id="deal-overview-heading">Deal overview</h2>
     <ol className="stage-stepper" aria-label="Trade pipeline stages">
@@ -220,6 +225,22 @@ export default function DealOverview({ deal, organizationId, reloadToken, snapsh
     {agreementLink && current?.agreement && Array.isArray(current.agreement.terms?.line_items)
       ? <ul aria-label="Items in current agreement">{current.agreement.terms.line_items.map((item, index) =>
         <li key={index}>{item.description}: {item.quantity} {item.unit}</li>)}</ul> : null}
+    {termMismatches.length > 0 ? (
+      <aside className="term-mismatch" role="alert">
+        <strong>Conversation does not match this agreement</strong>
+        <p>
+          Chat and extracted facts discuss {termMismatches[0].conversation}.
+          The saved terms are {termMismatches[0].saved}. Review the messages before treating this as one deal.
+        </p>
+        <ul>
+          {termMismatches.map((mismatch) => (
+            <li key={mismatch.field}>
+              {mismatch.label}: {mismatch.conversation} vs {mismatch.saved}
+            </li>
+          ))}
+        </ul>
+      </aside>
+    ) : null}
     <p>{message}</p>
     {message === "Checking agreement status…" ? (
       <div className="skeleton-stack" aria-hidden="true">

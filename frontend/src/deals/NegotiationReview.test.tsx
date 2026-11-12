@@ -486,4 +486,38 @@ describe("NegotiationReview", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Delivery location is required.");
     expect(negotiateDeal).not.toHaveBeenCalled();
   });
+
+  it("blocks accepting a proposal that does not match the conversation", async () => {
+    render(<NegotiationReview
+      deal={deal}
+      organizationId="seller"
+      reloadToken={0}
+      onLoaded={vi.fn()}
+      onChanged={vi.fn()}
+      conversationFacts={[{
+        id: "fact-item",
+        deal_id: "deal",
+        owner_organization_id: "buyer",
+        field: "item_description",
+        typed_value: "Table Tennis ball",
+        currency_or_unit: null,
+        kind: "INFORMATIONAL",
+        status: "CONFIRMED",
+        visibility: "SHAREABLE",
+        source_message_id: "message-1",
+        source_span: "Table Tennis ball",
+        confirmed_by: "user",
+        confirmed_at: "2026-11-11T21:00:00Z",
+        version: 1,
+        created_at: "2026-11-11T20:49:08Z",
+      }]}
+    />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/conversation does not match this proposal/i);
+    expect(screen.getByRole("alert")).toHaveTextContent("Table Tennis ball");
+    expect(screen.getByRole("alert")).toHaveTextContent("Desk");
+    const accept = screen.getByRole("button", { name: "Accept proposal for agreement review" });
+    expect(accept).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /do not match the conversation/i }));
+    expect(accept).toBeEnabled();
+  });
 });

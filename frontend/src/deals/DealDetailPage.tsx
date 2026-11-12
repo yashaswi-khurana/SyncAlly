@@ -9,7 +9,7 @@ import {
   listDealMessages,
   listOrganizations,
 } from "../api/client";
-import type { Deal, NegotiationView, Organization } from "../api/types";
+import type { Deal, DealFact, NegotiationView, Organization } from "../api/types";
 import Reveal from "../ui/Reveal";
 import SplitText from "../ui/SplitText";
 import { setSceneConsensus } from "../ui/motion";
@@ -83,6 +83,7 @@ export default function DealDetailPage({
   const [deskTab, setDeskTab] = useState<"trade" | "obligations" | "invoices" | "audit">("trade");
   const [negotiation, setNegotiation] = useState<NegotiationView | null>(null);
   const [overview, setOverview] = useState<OverviewSnapshot | null>(null);
+  const [conversationFacts, setConversationFacts] = useState<DealFact[]>([]);
   function commercialChanged() {
     setNegotiation(null);
     setAgreementReloadToken((token) => token + 1);
@@ -125,6 +126,7 @@ export default function DealDetailPage({
     setDeskTab("trade");
     setNegotiation(null);
     setOverview(null);
+    setConversationFacts([]);
     setShowInviteModal(false);
     setInviteError(null);
     setGeneratedInvite(null);
@@ -460,9 +462,13 @@ export default function DealDetailPage({
 
   const handleOrganizationChange = useCallback((orgId: string) => {
     setNegotiation(null);
+    setConversationFacts([]);
     setSelectedOrganizationId(orgId);
     setFreshness("unknown");
     setFreshnessError(null);
+  }, []);
+  const handleFactsChanged = useCallback((facts: DealFact[]) => {
+    setConversationFacts(facts);
   }, []);
 
   // direction §2: approval progress in the DOM tweens the shared scene state
@@ -880,6 +886,7 @@ export default function DealDetailPage({
           organizationId={selectedOrganizationId}
           reloadToken={agreementReloadToken}
           snapshot={overview}
+          conversationFacts={conversationFacts}
           partyNames={partyNames}
           onRevealPanel={setDeskTab}
         />
@@ -944,6 +951,7 @@ export default function DealDetailPage({
           selectedOrganizationId={selectedOrganizationId}
           onOrganizationChange={handleOrganizationChange}
           onAgreementCreated={commercialChanged}
+          onFactsChanged={handleFactsChanged}
           onMessageCreated={() => {
             setFreshness("not-fresh");
             setFreshnessError(null);
@@ -952,6 +960,7 @@ export default function DealDetailPage({
         {selectedOrganizationId ? <NegotiationReview
           key={`negotiation:${deal.id}:${selectedOrganizationId}`}
           deal={deal} organizationId={selectedOrganizationId} reloadToken={agreementReloadToken}
+          conversationFacts={conversationFacts}
           onLoaded={setNegotiation} onChanged={commercialChanged}
         /> : null}
             </div>

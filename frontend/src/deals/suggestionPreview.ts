@@ -168,3 +168,128 @@ export function reviewActionLabel(action: FactReviewAction): string {
       return "Ask for clarification";
   }
 }
+
+export type TermMismatch = {
+  field: RequiredTradeField;
+  label: string;
+  conversation: string;
+  saved: string;
+};
+
+export type SavedTradeTerms = {
+  description?: string | null;
+  quantity?: string | null;
+  unit?: string | null;
+  unitPrice?: string | null;
+  currency?: string | null;
+  destination?: string | null;
+  deliveryDate?: string | null;
+};
+
+const MISMATCH_LABELS: Record<RequiredTradeField, string> = {
+  item_description: "Item",
+  quantity: "Quantity",
+  unit: "Unit",
+  unit_price: "Unit price",
+  delivery_destination: "Delivery destination",
+  delivery_date: "Delivery date",
+};
+
+function comparableTerm(field: RequiredTradeField, value: string, unitOrCurrency?: string | null): string {
+  const trimmed = value.trim();
+  if (field === "quantity") {
+    const quantity = normalizedDecimal(trimmed);
+    const unit = unitOrCurrency?.trim().toLocaleLowerCase() ?? "";
+    return unit ? `${quantity} ${unit}` : quantity;
+  }
+  if (field === "unit_price") {
+    return `${normalizedDecimal(trimmed)} ${(unitOrCurrency ?? "").trim().toUpperCase()}`.trim();
+  }
+  if (field === "unit") {
+    return trimmed.toLocaleLowerCase().replace(/\s+/g, " ");
+  }
+  return trimmed.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function usableFacts(facts: DealFact[], field: RequiredTradeField): DealFact[] {
+  const matching = facts.filter((fact) => (
+    requiredTradeField(fact.field) === field
+    && fact.status !== "REJECTED"
+    && fact.status !== "SUPERSEDED"
+    && fact.status !== "NEEDS_CLARIFICATION"
+  ));
+  const confirmed = matching.filter((fact) => fact.status === "CONFIRMED");
+  return confirmed.length > 0 ? confirmed : matching.filter((fact) => fact.status === "EXTRACTED");
+}
+
+function displayFact(fact: DealFact, field: RequiredTradeField): string {
+  if (field === "unit_price") {
+    return `${fact.typed_value}${fact.currency_or_unit ? ` ${fact.currency_or_unit}` : ""}`.trim();
+  }
+  if (field === "quantity" && fact.currency_or_unit) {
+    return `${fact.typed_value} ${fact.currency_or_unit}`.trim();
+  }
+  return fact.typed_value;
+}
+
+export function savedTermsFromTrade(terms: {
+  line_items?: Array<{
+    description?: string;
+    quantity?: string;
+    unit?: string;
+    unit_price?: { amount?: string; currency?: string };
+  }>;
+  shipments?: Array<{ destination?: string | null; target_date?: string | null }>;
+  delivery_location?: string | null;
+}): SavedTradeTerms {
+  const item = terms.line_items?.[0];
+  const shipment = terms.shipments?.[0];
+  return {
+    description: item?.description ?? "",
+    quantity: item?.quantity ?? "",
+    unit: item?.unit ?? "",
+    unitPrice: item?.unit_price?.amount ?? "",
+    currency: item?.unit_price?.currency ?? "",
+    destination: shipment?.destination || terms.delivery_location || "",
+    deliveryDate: shipment?.target_date || "",
+  };
+}
+
+export function conversationTermMismatches(facts: DealFact[], saved: SavedTradeTerms): TermMismatch[] {
+  const comparisons: Array<{
+    field: RequiredTradeField;
+    savedValue: string;
+    savedUnit?: string | null;
+  }> = [
+    { field: "item_description", savedValue: saved.description ?? "" },
+    { field: "quantity", savedValue: saved.quantity ?? "", savedUnit: saved.unit },
+    { field: "unit", savedValue: saved.unit ?? "" },
+    { field: "unit_price", savedValue: saved.unitPrice ?? "", savedUnit: saved.currency },
+    { field: "delivery_destination", savedValue: saved.destination ?? "" },
+    { field: "delivery_date", savedValue: saved.deliveryDate ?? "" },
+  ];
+  const mismatches: TermMismatch[] = [];
+  for (const { field, savedValue, savedUnit } of comparisons) {
+    if (!savedValue.trim()) continue;
+    const sources = usableFacts(facts, field);
+    if (sources.length === 0) continue;
+    const conversationKey = comparableTerm(
+      field,
+      sources[0].typed_value,
+      field === "unit_price" || field === "quantity" ? sources[0].currency_or_unit : null,
+    );
+    const savedKey = comparableTerm(field, savedValue, savedUnit);
+    if (!conversationKey || conversationKey === savedKey) continue;
+    mismatches.push({
+      field,
+      label: MISMATCH_LABELS[field],
+      conversation: displayFact(sources[0], field),
+      saved: field === "unit_price"
+        ? `${savedValue}${savedUnit ? ` ${savedUnit}` : ""}`.trim()
+        : field === "quantity" && savedUnit
+          ? `${savedValue} ${savedUnit}`.trim()
+          : savedValue,
+    });
+  }
+  return mismatches;
+}

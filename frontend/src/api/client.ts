@@ -1097,7 +1097,7 @@ export function interpretSourcingRequirements(
     method: "POST",
     body: JSON.stringify(input),
     signal: options?.signal,
-  });
+  }, "json", true, 75_000);
 }
 
 export function getSourcingListings(

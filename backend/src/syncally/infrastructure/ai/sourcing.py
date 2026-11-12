@@ -412,6 +412,66 @@ def _explicit_destination_country_code(prompt: str) -> str | None:
     return next(iter(codes)) if len(codes) == 1 else None
 
 
+def _explicit_destination_city(prompt: str) -> str | None:
+    cities = {
+        city for city, _ in _KNOWN_PORTS_CITIES
+        if re.search(
+            rf"\b(?:deliver(?:ed)?\s+to|ship(?:ped)?\s+to|send\s+to|"
+            rf"delivery\s+to|destination(?:\s+(?:city|port))?\s*(?:is|:)?\s*)"
+            rf"\s*{re.escape(city)}\b",
+            prompt,
+            re.I,
+        )
+    }
+    return next(iter(cities)) if len(cities) == 1 else None
+
+
+def _explicit_product_fields(prompt: str) -> tuple[str, str] | None:
+    pattern = re.compile(
+        r"\b(?:source|need|require|order|buy|procure|find)\s+"
+        r"(?:(?:\d{1,3}(?:,\d{3})*|\d+)\s+)?(?P<item>[^,;.!?\n]+)",
+        re.I,
+    )
+    products: dict[str, str] = {}
+    for match in pattern.finditer(prompt):
+        before = prompt[max(0, match.start() - 24):match.start()]
+        if re.search(r"\b(?:no|not|never|avoid|exclude|without|do\s+not|don['’]t)\s*$", before, re.I):
+            continue
+        item = re.split(
+            r"\b(?:delivered?|shipped?|deliver\s+to|ship\s+to|within|"
+            r"max(?:imum)?\s+lead(?:\s+time)?|target\s+(?:unit\s+)?price|"
+            r"unit\s+price|price|budget|warranty|inspection|with|include|including)\b",
+            match.group("item"), maxsplit=1, flags=re.I,
+        )[0].strip()
+        unit = _explicit_target_quantity_unit(prompt)
+        if unit:
+            canonical_unit = _COUNTABLE_UNIT_FORMS.get(unit.casefold(), unit.casefold())
+            forms = sorted(
+                (form for form, canonical in _COUNTABLE_UNIT_FORMS.items() if canonical == canonical_unit),
+                key=len,
+                reverse=True,
+            )
+            if forms:
+                item = re.sub(
+                    rf"^(?:{'|'.join(map(re.escape, forms))})\s+of\s+",
+                    "", item, count=1, flags=re.I,
+                ).strip()
+        if not item or re.search(r"\b(?:and|or|versus|vs\.?)\b", item, re.I):
+            continue
+        products[item.casefold()] = item
+
+    if len(products) != 1:
+        return None
+    product = next(iter(products.values()))
+    category_match = re.search(
+        r"\b(?:product\s+)?category\s*(?:is\s+|[:=]\s*)(?P<category>[^,;.!?\n]+)",
+        prompt,
+        re.I,
+    )
+    category = category_match.group("category").strip() if category_match else product
+    return product, category
+
+
 def _is_relative_delivery_window(quote: str) -> bool:
     return bool(
         not re.search(r"\b\d{4}-\d{2}-\d{2}\b", quote)
@@ -763,11 +823,15 @@ def interpret_sourcing_requirements(
         and _has_grounded_count_unit(raw["extractions"], prompt)
     ):
         unknown_fields.remove("quantity.unit")
+    product_fields = _explicit_product_fields(prompt)
     explicit_values = {
+        "title": product_fields[0] if product_fields else None,
+        "category": product_fields[1] if product_fields else None,
         "quantity.target_quantity": _explicit_target_quantity(prompt),
         "quantity.unit": _explicit_target_quantity_unit(prompt),
         "pricing.target_unit_price": _explicit_target_unit_price(prompt),
         "delivery.destination_country_code": _explicit_destination_country_code(prompt),
+        "delivery.destination_port_or_city": _explicit_destination_city(prompt),
         "delivery.max_lead_time_days": _explicit_max_lead_time_days(prompt),
         "pricing.currency": _explicit_pricing_currency(prompt),
         "commercial_terms.min_warranty_months": _explicit_min_warranty_months(prompt),
@@ -842,6 +906,8 @@ def interpret_sourcing_requirements(
             or item["quote"] not in prompt
         ):
             field = item.get("field") if isinstance(item, dict) else None
+            if isinstance(field, str) and explicit_values.get(field) is not None:
+                continue
             if isinstance(field, str) and field in _FIELDS and field not in _REQUIRED_FIELDS:
                 continue
             raise AIPermanentError(
@@ -1001,6 +1067,18 @@ def interpret_sourcing_requirements(
             parsed_fields.append(inspection_path)
             if inspection_path in unknown_fields:
                 unknown_fields.remove(inspection_path)
+
+    for path in ("title", "category", "delivery.destination_port_or_city"):
+        value = explicit_values[path]
+        if (
+            value is not None
+            and _get_path(requirements, path) is None
+            and _get_path(overrides, path) is None
+        ):
+            _set_path(requirements, path, value)
+            parsed_fields.append(path)
+            if path in unknown_fields:
+                unknown_fields.remove(path)
 
     _deep_merge(requirements, overrides)
     pricing = requirements.get("pricing")

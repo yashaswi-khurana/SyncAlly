@@ -38,6 +38,7 @@ from syncally.infrastructure.ai.openai import OpenAIChatCompletions
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.ai.sourcing import (
     _explicit_inspection_requirement,
+    _explicit_max_lead_time_days,
     _grounded,
     interpret_sourcing_requirements,
 )
@@ -1165,6 +1166,23 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_CONFLICTING_UNKNOWN")
         self.assertEqual(raised.exception.diagnostic_field, "title")
 
+    def test_unknown_optional_field_does_not_discard_grounded_extraction(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Germany in USD currency, "
+            "12 month warranty, factory mill certificate, and food-grade 304 steel."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].append({
+            "field": "technical_specs.notes",
+            "value": "food-grade 304 steel",
+            "quote": "food-grade 304 steel",
+        })
+        extraction["unknown_fields"] = ["technical_specs.notes"]
+
+        requirements, _ = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.technical_specs.notes, "food-grade 304 steel")
+
     def test_relative_delivery_window_is_not_a_calendar_date(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany within 30 days, "
@@ -1185,6 +1203,39 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertIsNone(requirements.delivery.required_delivery_date)
         self.assertEqual(requirements.delivery.max_lead_time_days, 30)
         self.assertNotIn(date_field, parsed_fields)
+
+    def test_relative_delivery_window_discards_malformed_date_and_recovers_lead_time(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany within 30 days, "
+            "USD currency, 12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        date_field = "delivery.required_delivery_date"
+        lead_time_field = "delivery.max_lead_time_days"
+        extraction["extractions"].append({
+            "field": date_field,
+            "value": "2026-12-12",
+            "quote": None,
+        })
+        extraction["unknown_fields"] = [date_field, lead_time_field]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertIsNone(requirements.delivery.required_delivery_date)
+        self.assertEqual(requirements.delivery.max_lead_time_days, 30)
+        self.assertNotIn(date_field, parsed_fields)
+        self.assertIn(lead_time_field, parsed_fields)
+
+    def test_relative_lead_time_requires_one_unambiguous_positive_window(self) -> None:
+        self.assertEqual(
+            _explicit_max_lead_time_days("Deliver within the next 30 business days."),
+            30,
+        )
+        self.assertIsNone(
+            _explicit_max_lead_time_days("Deliver within 30 days or no later than 45 days.")
+        )
 
     def test_required_delivery_date_requires_a_valid_quoted_calendar_date(self) -> None:
         cases = (

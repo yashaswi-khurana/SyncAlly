@@ -446,7 +446,8 @@ def interpret_sourcing_requirements(
         or any(not isinstance(field, str) or field not in _FIELDS for field in raw["unknown_fields"])
     ):
         raise AIPermanentError(
-            "AI returned an invalid sourcing interpretation. Please retry or use structured controls."
+            "AI returned an invalid sourcing interpretation. Please retry or use structured controls.",
+            diagnostic_code="AI_SOURCING_OUTPUT_SHAPE",
         )
     extracted_names = {
         item["field"]
@@ -454,7 +455,10 @@ def interpret_sourcing_requirements(
         if isinstance(item, dict) and isinstance(item.get("field"), str)
     }
     if set(raw["unknown_fields"]) & extracted_names:
-        raise AIPermanentError("AI marked an extracted field as unknown. Please retry or clarify the requirement.")
+        raise AIPermanentError(
+            "AI marked an extracted field as unknown. Please retry or clarify the requirement.",
+            diagnostic_code="AI_SOURCING_CONFLICTING_UNKNOWN",
+        )
 
     requirements: dict[str, Any] = {
         "title": None,
@@ -509,7 +513,10 @@ def interpret_sourcing_requirements(
             or not item["quote"].strip()
             or item["quote"] not in prompt
         ):
-            raise AIPermanentError("AI returned sourcing fields without exact prompt evidence.")
+            raise AIPermanentError(
+                "AI returned sourcing fields without exact prompt evidence.",
+                diagnostic_code="AI_SOURCING_EVIDENCE_SHAPE",
+            )
         field = item["field"]
         if _get_path(overrides, field) is not None:
             continue
@@ -519,12 +526,16 @@ def interpret_sourcing_requirements(
             for clause, span in _quote_clauses(prompt, item["quote"])
         ):
             raise AIPermanentError(
-                f"AI returned an ungrounded value for {field}. Please clarify it in the prompt or controls."
+                f"AI returned an ungrounded value for {field}. Please clarify it in the prompt or controls.",
+                diagnostic_code="AI_SOURCING_UNGROUNDED_VALUE",
             )
         if field in _ENUMS:
             enum_value = value if field == "commercial_terms.preferred_payment_term" else value.upper()
             if enum_value not in _ENUMS[field]:
-                raise AIPermanentError(f"AI returned an unsupported value for {field}.")
+                raise AIPermanentError(
+                    f"AI returned an unsupported value for {field}.",
+                    diagnostic_code="AI_SOURCING_UNSUPPORTED_ENUM",
+                )
         if field in _LIST_FIELDS:
             current = _get_path(requirements, field) or []
             if value not in current:
@@ -532,7 +543,10 @@ def interpret_sourcing_requirements(
             _set_path(requirements, field, current)
         else:
             if field in seen_scalar_fields:
-                raise AIPermanentError(f"AI returned conflicting values for {field}. Please clarify the requirement.")
+                raise AIPermanentError(
+                    f"AI returned conflicting values for {field}. Please clarify the requirement.",
+                    diagnostic_code="AI_SOURCING_CONFLICTING_VALUE",
+                )
             seen_scalar_fields.add(field)
             _set_path(requirements, field, value)
         parsed_fields.append(field)
@@ -562,7 +576,10 @@ def interpret_sourcing_requirements(
             and path not in raw["unknown_fields"]
             for path in _REQUIRED_FIELDS
         ):
-            raise AIPermanentError("AI omitted required sourcing fields without marking them unknown.")
+            raise AIPermanentError(
+                "AI omitted required sourcing fields without marking them unknown.",
+                diagnostic_code="AI_SOURCING_REQUIRED_OMITTED",
+            )
         raise ValueError(
             "Please specify or confirm: " + ", ".join(missing) + "."
         )
@@ -579,7 +596,10 @@ def interpret_sourcing_requirements(
             for item in error.errors()
         ):
             raise ValueError(f"Please correct the sourcing requirements: {details}") from error
-        raise AIPermanentError("AI returned invalid sourcing requirements.") from error
+        raise AIPermanentError(
+            "AI returned invalid sourcing requirements.",
+            diagnostic_code="AI_SOURCING_MODEL_VALIDATION",
+        ) from error
     for path in _FIELDS:
         if _get_path(overrides, path) is not None and path not in parsed_fields:
             parsed_fields.append(path)

@@ -9,6 +9,7 @@ Exposes REST APIs for:
 
 from __future__ import annotations
 
+import logging
 from decimal import InvalidOperation
 from typing import Any
 from uuid import UUID
@@ -42,8 +43,10 @@ from syncally.infrastructure.ai.sourcing import (
 )
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import Organization, User
+from syncally.operations import Operation, log_operation
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
@@ -195,6 +198,12 @@ def _interpret_natural(
             detail="The configured sourcing AI key is not authorized. Check its NVIDIA Public API Endpoints and model access.",
         ) from exc
     except AIPermanentError as exc:
+        log_operation(
+            logger,
+            Operation.AI_PROVIDER_FAILURE,
+            failure_kind="PERMANENT",
+            error_code=exc.diagnostic_code or "AI_SOURCING_OUTPUT_REJECTED",
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The configured sourcing AI returned invalid output. Please retry or use structured controls.",

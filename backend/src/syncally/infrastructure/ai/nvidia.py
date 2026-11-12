@@ -98,7 +98,16 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
         except (TimeoutError, httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
             raise AITransientError("AI provider is temporarily unavailable") from None
         except (ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError, httpx.HTTPError):
-            raise AIPermanentError("AI provider returned invalid output") from None
+            log_operation(
+                logger,
+                Operation.AI_PROVIDER_FAILURE,
+                failure_kind="PERMANENT",
+                error_code="NVIDIA_INVALID_RESPONSE",
+            )
+            raise AIPermanentError(
+                "AI provider returned invalid output",
+                diagnostic_code="NVIDIA_INVALID_RESPONSE",
+            ) from None
 
     async def _http(self, raw: bytes, timeout: float) -> Any:
         async with httpx.AsyncClient(
@@ -148,8 +157,16 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
                         f"NVIDIA API authentication/authorization failed (HTTP {response.status_code})"
                     )
                 if response.status_code != 200:
+                    log_operation(
+                        logger,
+                        Operation.AI_PROVIDER_FAILURE,
+                        failure_kind="PERMANENT",
+                        error_code="NVIDIA_HTTP_REJECTED",
+                        http_status=response.status_code,
+                    )
                     raise AIPermanentError(
-                        f"NVIDIA API rejected the request (HTTP {response.status_code})"
+                        f"NVIDIA API rejected the request (HTTP {response.status_code})",
+                        diagnostic_code="NVIDIA_HTTP_REJECTED",
                     )
 
                 envelope = _json(body)

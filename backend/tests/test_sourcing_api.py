@@ -859,7 +859,7 @@ class SourcingAIInterpretationTests(unittest.TestCase):
                    if item["field"] == "category" else {}),
                 **({"value": "250", "quote": "250 stainless steel water bottles"}
                    if item["field"] == "quantity.target_quantity" else {}),
-                **({"value": "water bottles", "quote": "250 stainless steel water bottles"}
+                **({"value": "water bottles", "quote": "water bottles"}
                    if item["field"] == "quantity.unit" else {}),
             }
             for item in extraction["extractions"]
@@ -903,6 +903,30 @@ class SourcingAIInterpretationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(AIPermanentError, "conflicting values"):
             interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+    def test_unknown_count_unit_is_not_matched_to_a_different_quantity(self) -> None:
+        prompt = (
+            "Need 250 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate; also include 5 bottles for display samples."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            {
+                **item,
+                **({"value": "250", "quote": "250 boxes"}
+                   if item["field"] == "quantity.target_quantity" else {}),
+                **({"value": "bottles", "quote": "bottles"}
+                   if item["field"] == "quantity.unit" else {}),
+            }
+            for item in extraction["extractions"]
+        ]
+        extraction["unknown_fields"] = ["quantity.unit"]
+
+        with self.assertRaises(AIPermanentError) as raised:
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_CONFLICTING_UNKNOWN")
+        self.assertEqual(raised.exception.diagnostic_field, "quantity.unit")
 
     def test_conflicting_scalar_values_remain_rejected(self) -> None:
         prompt = (

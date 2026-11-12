@@ -76,7 +76,11 @@ malformed/duplicate-key/nonfinite JSON, invalid schema/version/domain contract,
 oversize output, bad citations, and insufficient proposal context do not trigger
 transient retries or offline fallback. Gemini may repair a parsed but invalid
 fact/proposal response once within the original elapsed deadline, applying the
-same validators again. Explicit insufficient context never triggers repair.
+same validators again. NVIDIA may re-evaluate a proposal once within its original
+deadline after invalid output or an insufficient-context response; the repair
+prompt distinguishes required terms from an optional delivery date, and the same
+validators run on the result. A second insufficient-context response remains a
+terminal failure. Explicit insufficient context does not trigger Gemini repair.
 Clients/responses close on success, failure, and elapsed cancellation.
 No request, response, prompt, credential, or transport exception text is logged.
 

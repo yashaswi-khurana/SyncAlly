@@ -331,7 +331,10 @@ class AISuggestionProviderTests(unittest.TestCase):
             ({**payload, "insufficient_context": None}, payload, 2, ValidationStatus.VALID),
             ({**payload, "citations": wrong_unit}, {**payload, "citations": []}, 2, ValidationStatus.INVALID),
             ({**payload, "insufficient_context": True, "proposal": None, "citations": []},
-             payload, 1, ValidationStatus.INVALID),
+             payload, 2, ValidationStatus.VALID),
+            ({**payload, "insufficient_context": True, "proposal": None, "citations": []},
+             {**payload, "insufficient_context": True, "proposal": None, "citations": []},
+             2, ValidationStatus.INVALID),
         ):
             with self.subTest(first=first, expected_status=expected_status):
                 calls.clear()
@@ -347,7 +350,85 @@ class AISuggestionProviderTests(unittest.TestCase):
                 self.assertIs(repaired.result.status, expected_status)
                 self.assertEqual(len(calls), expected_calls)
                 if expected_calls == 2:
-                    self.assertIn("previous draft failed validation", calls[1]["messages"][0]["content"])
+                    repair_prompt = calls[1]["messages"][0]["content"]
+                    self.assertIn("missing delivery date is allowed", repair_prompt)
+                    if expected_status is ValidationStatus.VALID:
+                        self.assertEqual(repaired.proposal.unit, "balls")
+
+    def test_nvidia_rechecks_abstention_for_this_deal_without_a_delivery_date(self) -> None:
+        context = self._demo_context(
+            "I'm interested in your Stainless bolts listing (Fasteners). Listed availability: "
+            "120 box. Listed price: 25 INR / box. Listing details: Demo listing; delivery to "
+            "Toronto, Canada. Please confirm current availability and share delivery options "
+            "and payment terms."
+        )
+        message = replace(context.messages[0], visibility=Visibility.SHAREABLE)
+        context = replace(context, messages=(message,))
+        message_id = str(message.id)
+
+        def citation(field: str, value: str, quote: str, currency_or_unit: str | None = None):
+            return {
+                "schema_version": 1,
+                "field": field,
+                "value": value,
+                "currency_or_unit": currency_or_unit,
+                "source": {
+                    "schema_version": 1,
+                    "message_id": message_id,
+                    "quote": quote,
+                    "unknown_reason": None,
+                },
+            }
+
+        proposal = {
+            "schema_version": 1,
+            "description": "Stainless bolts",
+            "quantity": "120",
+            "unit": "box",
+            "unit_price": "25",
+            "currency": "INR",
+            "delivery_destination": "Toronto, Canada",
+            "delivery_date": None,
+        }
+        valid = {
+            "schema_version": 1,
+            "insufficient_context": False,
+            "proposal": proposal,
+            "citations": [
+                citation("item_description", "Stainless bolts", "Stainless bolts"),
+                citation("quantity", "120", "120 box", "box"),
+                citation("unit", "box", "120 box"),
+                citation("unit_price", "25", "25 INR / box", "INR"),
+                citation("delivery_destination", "Toronto, Canada", "Toronto, Canada"),
+            ],
+        }
+        insufficient = {
+            "schema_version": 1,
+            "insufficient_context": True,
+            "proposal": None,
+            "citations": [],
+        }
+        calls = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            calls.append(json.loads(request.content))
+            return self._completion(insufficient if len(calls) == 1 else valid)
+
+        provider = ConfiguredAIProvider(self._remote_config(
+            ai_provider="nvidia", nvidia_model="test-model", nvidia_api_key="test-key",
+        ), transport=httpx.MockTransport(respond))
+        result = draft_proposal_from_context(context, provider)
+
+        self.assertIs(result.result.status, ValidationStatus.VALID)
+        self.assertEqual(result.proposal.description, "Stainless bolts")
+        self.assertEqual(result.proposal.quantity, 120)
+        self.assertEqual(result.proposal.unit, "box")
+        self.assertEqual(result.proposal.unit_price, 25)
+        self.assertEqual(result.proposal.currency, "INR")
+        self.assertEqual(result.proposal.delivery_destination, "Toronto, Canada")
+        self.assertIsNone(result.proposal.delivery_date)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("missing delivery date is allowed", calls[1]["messages"][0]["content"])
 
     def test_gemini_does_not_retry_an_explicit_insufficient_context_result(self) -> None:
         context = self._demo_context(

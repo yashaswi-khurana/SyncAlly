@@ -52,7 +52,10 @@ class NvidiaProviderTests(unittest.TestCase):
         async def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.url, "https://integrate.api.nvidia.com/v1/chat/completions")
             self.assertEqual(request.headers["authorization"], "Bearer test-nvidia-key")
-            self.assertFalse(json.loads(request.content)["stream"])
+            request_payload = json.loads(request.content)
+            self.assertFalse(request_payload["stream"])
+            self.assertEqual(request_payload["max_tokens"], 8192)
+            self.assertNotIn("max_completion_tokens", request_payload)
             response_body = {
                 "id": "chatcmpl-123",
                 "object": "chat.completion",

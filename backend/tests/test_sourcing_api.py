@@ -844,6 +844,25 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.delivery.destination_country_code, "DE")
         self.assertEqual(parsed_fields.count("delivery.destination_country_code"), 1)
 
+    def test_mumbai_quote_grounds_india_destination_country(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Mumbai, India, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            {
+                **item,
+                **({"value": "IN", "quote": "Mumbai"}
+                   if item["field"] == "delivery.destination_country_code" else {}),
+            }
+            for item in extraction["extractions"]
+        ]
+
+        requirements, _ = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.delivery.destination_country_code, "IN")
+
     def test_product_descriptors_do_not_conflict_with_the_count_unit(self) -> None:
         prompt = (
             "Need 250 stainless steel water bottles delivered to Berlin, Germany, USD currency, "

@@ -263,6 +263,7 @@ _KNOWN_PORTS_CITIES: list[tuple[str, str]] = [
     ("New York", "US"),
     ("Tokyo", "JP"),
     ("Yokohama", "JP"),
+    ("Mumbai", "IN"),
     ("London", "GB"),
     ("Southampton", "GB"),
     ("Gdansk", "PL"),

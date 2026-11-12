@@ -37,9 +37,11 @@ from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
 from syncally.infrastructure.ai.sourcing import (
+    _explicit_destination_city,
     _explicit_destination_country_code,
     _explicit_inspection_requirement,
     _explicit_max_lead_time_days,
+    _explicit_product_fields,
     _explicit_target_quantity,
     _grounded,
     interpret_sourcing_requirements,
@@ -983,19 +985,72 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.technical_specs.materials, [])
         self.assertNotIn("technical_specs.materials", parsed_fields)
 
-    def test_malformed_required_evidence_identifies_the_field(self) -> None:
+    def test_malformed_required_title_evidence_recovers_from_explicit_prompt(self) -> None:
         extraction = self._extraction()
         title = next(item for item in extraction["extractions"] if item["field"] == "title")
         title["quote"] = "not present in the prompt"
 
-        with self.assertRaises(AIPermanentError) as raised:
-            interpret_sourcing_requirements(
-                self.Adapter(extraction),
-                "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
-                "12 month warranty and factory mill certificate.",
-            )
+        requirements, _ = interpret_sourcing_requirements(
+            self.Adapter(extraction),
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate.",
+        )
 
-        self.assertEqual(raised.exception.diagnostic_field, "title")
+        self.assertEqual(requirements.title, "M8 fasteners")
+
+    def test_explicit_product_prompt_recovers_all_required_fields(self) -> None:
+        prompt = (
+            "Synthetic production smoke test only: Source 250 stainless steel water bottles, "
+            "750 mL, food-grade 304 steel, with leak-proof lids. Deliver to Mumbai, India "
+            "within 30 days. Target price is USD 8 each, minimum warranty 12 months, "
+            "and third-party pre-shipment inspection is required."
+        )
+        self.assertEqual(
+            _explicit_product_fields(prompt),
+            ("stainless steel water bottles", "stainless steel water bottles"),
+        )
+        self.assertIsNone(_explicit_product_fields("Do not source 250 water bottles."))
+        self.assertIsNone(_explicit_product_fields("Source 250 bottles or 500 jars."))
+        self.assertEqual(
+            _explicit_destination_city("Suppliers are in Berlin; deliver to Mumbai, India."),
+            "Mumbai",
+        )
+        extraction = {
+            "extractions": [],
+            "unknown_fields": [
+                "title", "category", "pricing.currency", "quantity.target_quantity",
+                "quantity.unit", "delivery.destination_country_code",
+                "commercial_terms.min_warranty_months",
+                "commercial_terms.inspection_requirement",
+            ],
+        }
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(requirements.title, "stainless steel water bottles")
+        self.assertEqual(requirements.category, "stainless steel water bottles")
+        self.assertEqual(requirements.quantity.target_quantity, Decimal("250"))
+        self.assertEqual(requirements.quantity.unit, "bottles")
+        self.assertEqual(requirements.pricing.target_unit_price, Decimal("8"))
+        self.assertEqual(requirements.pricing.currency, "USD")
+        self.assertEqual(requirements.delivery.destination_country_code, "IN")
+        self.assertEqual(requirements.delivery.destination_port_or_city, "Mumbai")
+        self.assertEqual(requirements.delivery.max_lead_time_days, 30)
+        self.assertEqual(requirements.commercial_terms.min_warranty_months, 12)
+        self.assertEqual(
+            requirements.commercial_terms.inspection_requirement,
+            "PRE_SHIPMENT_THIRD_PARTY",
+        )
+        self.assertEqual(requirements.description, prompt)
+        for field in (
+            "title", "category", "pricing.currency", "quantity.target_quantity",
+            "quantity.unit", "delivery.destination_country_code",
+            "commercial_terms.min_warranty_months",
+            "commercial_terms.inspection_requirement",
+        ):
+            self.assertIn(field, parsed_fields)
 
     def test_mumbai_quote_grounds_india_destination_country(self) -> None:
         prompt = (
@@ -1412,7 +1467,7 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_REQUIRED_OMITTED")
         self.assertEqual(raised.exception.diagnostic_field, "pricing.currency")
 
-    def test_extracted_and_unknown_collision_has_safe_field_diagnostic(self) -> None:
+    def test_explicit_title_resolves_extracted_and_unknown_collision(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
             "12 month warranty and factory mill certificate."
@@ -1420,11 +1475,12 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         extraction = self._extraction()
         extraction["unknown_fields"] = ["title"]
 
-        with self.assertRaisesRegex(AIPermanentError, "marked an extracted field as unknown") as raised:
-            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
 
-        self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_CONFLICTING_UNKNOWN")
-        self.assertEqual(raised.exception.diagnostic_field, "title")
+        self.assertEqual(requirements.title, "M8 fasteners")
+        self.assertIn("title", parsed_fields)
 
     def test_unknown_optional_field_does_not_discard_grounded_extraction(self) -> None:
         prompt = (

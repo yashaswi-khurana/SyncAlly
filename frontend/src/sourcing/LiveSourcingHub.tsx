@@ -169,26 +169,67 @@ export default function LiveSourcingHub({ organizations = [], initialListingId, 
       </form>
 
       {requirements && (
-        <section className="card sourcing-requirement-card" aria-label="Review interpreted requirements">
-          <h2>Review interpreted requirements</h2>
-          <p>Source: {interpretation.ai_provider || "configured provider"}{interpretation.ai_model ? ` · ${interpretation.ai_model}` : ""}</p>
-          <p>{requirements.title} · {requirements.category}</p>
-          {requirements.description && <p>{requirements.description}</p>}
-          <p>{requirements.quantity.target_quantity} {requirements.quantity.unit} to {requirements.delivery.destination_country_code}</p>
-          {requirements.delivery.destination_port_or_city && <p>Destination: {requirements.delivery.destination_port_or_city}</p>}
-          {requirements.delivery.required_delivery_date && <p>Required by: {requirements.delivery.required_delivery_date}</p>}
-          {requirements.delivery.max_lead_time_days != null && <p>Maximum lead time: {requirements.delivery.max_lead_time_days} days</p>}
-          <p>Currency: {requirements.pricing.currency}; target price: {requirements.pricing.target_unit_price ?? "not specified"};
-            maximum price: {requirements.pricing.max_unit_price ?? "not specified"}; total budget: {requirements.pricing.max_total_budget ?? "not specified"}</p>
-          <p>Warranty: {requirements.commercial_terms.min_warranty_months} months; inspection: {requirements.commercial_terms.inspection_requirement}</p>
-          <p>Materials: {requirements.technical_specs.materials.join(", ") || "not specified"}; certifications: {requirements.technical_specs.certifications.join(", ") || "not specified"}; standards: {requirements.technical_specs.standards.join(", ") || "not specified"}</p>
-          {requirements.technical_specs.quality_grade && <p>Quality grade: {requirements.technical_specs.quality_grade}</p>}
-          {requirements.technical_specs.tolerances && <p>Tolerances: {requirements.technical_specs.tolerances}</p>}
-          {requirements.technical_specs.notes && <p>Technical notes: {requirements.technical_specs.notes}</p>}
-          {requirements.quantity.min_acceptable_quantity != null && <p>Minimum quantity: {requirements.quantity.min_acceptable_quantity} {requirements.quantity.unit}</p>}
-          {requirements.quantity.packaging_preference && <p>Packaging: {requirements.quantity.packaging_preference}</p>}
-          <p>Preferred Incoterm: {requirements.commercial_terms.preferred_incoterm || "not specified"}; acceptable Incoterms: {requirements.commercial_terms.acceptable_incoterms.join(", ") || "not specified"}; payment: {requirements.commercial_terms.preferred_payment_term || "not specified"}</p>
-          <p>Review and edit the search keyword below; it does not automatically filter on every requirement.</p>
+        <section className="card sourcing-review-card" aria-label="Review interpreted requirements">
+          <header className="sourcing-review-header">
+            <div>
+              <span className="eyebrow">AI interpretation</span>
+              <h2>Review your requirements</h2>
+              <p>Check the details before searching current offers.</p>
+            </div>
+            <span className="sourcing-review-source">
+              {interpretation.ai_provider || "Configured provider"}{interpretation.ai_model ? " · " + interpretation.ai_model : ""}
+            </span>
+          </header>
+          <div className="sourcing-review-product">
+            <span className="sourcing-review-label">Product</span>
+            <strong>{requirements.title}</strong>
+            <span>{requirements.category}</span>
+          </div>
+          {requirements.description && <blockquote className="sourcing-review-prompt">{requirements.description}</blockquote>}
+          <div className="sourcing-review-grid">
+            <article className="sourcing-review-group">
+              <h3>Order</h3>
+              <dl>
+                <div><dt>Quantity</dt><dd>{requirements.quantity.target_quantity} {requirements.quantity.unit}</dd></div>
+                {requirements.quantity.min_acceptable_quantity != null && <div><dt>Minimum quantity</dt><dd>{requirements.quantity.min_acceptable_quantity} {requirements.quantity.unit}</dd></div>}
+                {requirements.quantity.packaging_preference && <div><dt>Packaging</dt><dd>{requirements.quantity.packaging_preference}</dd></div>}
+              </dl>
+            </article>
+            <article className="sourcing-review-group">
+              <h3>Delivery</h3>
+              <dl>
+                <div><dt>Destination</dt><dd>{[requirements.delivery.destination_port_or_city, requirements.delivery.destination_country_code].filter(Boolean).join(", ")}</dd></div>
+                {requirements.delivery.required_delivery_date && <div><dt>Required by</dt><dd>{requirements.delivery.required_delivery_date}</dd></div>}
+                {requirements.delivery.max_lead_time_days != null && <div><dt>Maximum lead time</dt><dd>{requirements.delivery.max_lead_time_days} days</dd></div>}
+              </dl>
+            </article>
+            <article className="sourcing-review-group">
+              <h3>Pricing</h3>
+              <dl>
+                <div><dt>Currency</dt><dd>{requirements.pricing.currency}</dd></div>
+                <div><dt>Target price</dt><dd>{requirements.pricing.target_unit_price ?? "Not specified"}</dd></div>
+                <div><dt>Maximum price</dt><dd>{requirements.pricing.max_unit_price ?? "Not specified"}</dd></div>
+                <div><dt>Total budget</dt><dd>{requirements.pricing.max_total_budget ?? "Not specified"}</dd></div>
+              </dl>
+            </article>
+            <article className="sourcing-review-group">
+              <h3>Quality & terms</h3>
+              <dl>
+                <div><dt>Warranty</dt><dd>{requirements.commercial_terms.min_warranty_months} months</dd></div>
+                <div><dt>Inspection</dt><dd>{requirements.commercial_terms.inspection_requirement.replaceAll("_", " ").toLowerCase()}</dd></div>
+                <div><dt>Materials</dt><dd>{requirements.technical_specs.materials.join(", ") || "Not specified"}</dd></div>
+                <div><dt>Certifications</dt><dd>{requirements.technical_specs.certifications.join(", ") || "Not specified"}</dd></div>
+                <div><dt>Standards</dt><dd>{requirements.technical_specs.standards.join(", ") || "Not specified"}</dd></div>
+                {requirements.technical_specs.quality_grade && <div><dt>Quality grade</dt><dd>{requirements.technical_specs.quality_grade}</dd></div>}
+                {requirements.technical_specs.tolerances && <div><dt>Tolerances</dt><dd>{requirements.technical_specs.tolerances}</dd></div>}
+                {requirements.technical_specs.notes && <div><dt>Technical notes</dt><dd>{requirements.technical_specs.notes}</dd></div>}
+                <div><dt>Preferred Incoterm</dt><dd>{requirements.commercial_terms.preferred_incoterm || "Not specified"}</dd></div>
+                <div><dt>Acceptable Incoterms</dt><dd>{requirements.commercial_terms.acceptable_incoterms.join(", ") || "Not specified"}</dd></div>
+                <div><dt>Payment</dt><dd>{requirements.commercial_terms.preferred_payment_term || "Not specified"}</dd></div>
+              </dl>
+            </article>
+          </div>
+          <p className="sourcing-review-hint">Review and edit the search keyword below. It does not automatically filter on every requirement.</p>
         </section>
       )}
 

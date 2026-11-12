@@ -4,6 +4,7 @@ import {
   API_REQUEST_TIMEOUT_MS,
   ApiError,
   createDealMessage,
+  interpretSourcingRequirements,
   importDealThread,
   previewDealThreadImport,
   getDealMessageExistence,
@@ -174,6 +175,38 @@ describe("AI invocation contract", () => {
   it("does not fabricate provenance for legacy responses", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ status: "VALID", facts: [] }));
     expect(await suggestDealFacts(DEAL_ID, "buyer")).not.toHaveProperty("provenance");
+  });
+});
+
+describe("sourcing interpretation client", () => {
+  beforeEach(() => { vi.stubGlobal("fetch", fetchMock); setAccessToken("access-token"); });
+  afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); clearAccessToken(); vi.useRealTimers(); });
+
+  it("allows the request to wait for the remote AI deadline", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        }),
+    );
+
+    const pending = interpretSourcingRequirements({ prompt: "test sourcing prompt" }).catch(
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS);
+    expect(lastRequest().url).toBe("/sourcing/interpret");
+    expect(lastRequest().init.signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(75_000 - API_REQUEST_TIMEOUT_MS);
+    const caught = await pending;
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught).toMatchObject({
+      status: 0,
+      message: "The SyncAlly API took too long to respond. Please try again.",
+    });
   });
 });
 

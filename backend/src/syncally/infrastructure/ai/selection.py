@@ -174,7 +174,7 @@ class ConfiguredAIProvider:
         prompt: str,
         structured_overrides: dict | None = None,
         *,
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = 60.0,
     ):
         if self._remote is None:
             raise AIConfigurationError("A remote AI provider is required for sourcing interpretation")

@@ -421,7 +421,7 @@ def interpret_sourcing_requirements(
     prompt: str,
     structured_overrides: dict[str, Any] | None = None,
     *,
-    timeout_seconds: float = 20.0,
+    timeout_seconds: float = 60.0,
 ) -> tuple[BuyerRequirements, list[str]]:
     """Extract, ground, merge, and validate a natural-language buyer request."""
     prompt = prompt.strip()

@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 import httpx
@@ -161,6 +162,23 @@ class NvidiaProviderTests(unittest.TestCase):
         self.assertEqual(provider.provenance.provider, "nvidia")
         self.assertEqual(provider.provenance.mode, "nvidia")
         self.assertEqual(provider.provenance.model, "nvidia/nemotron-3.5-super-vl-120b-a12b")
+
+    def test_sourcing_interpretation_uses_extended_provider_deadline(self) -> None:
+        config = Settings(
+            app_env="development",
+            ai_provider="nvidia",
+            ai_remote_egress_enabled=True,
+            nvidia_api_key=SecretStr("test-key"),
+            nvidia_model="nvidia/nemotron-3.5-super-vl-120b-a12b",
+        )
+        provider = ConfiguredAIProvider(config)
+        with patch(
+            "syncally.infrastructure.ai.selection.interpret_sourcing_requirements",
+            return_value=(object(), []),
+        ) as interpret:
+            provider.interpret_sourcing_requirements("test sourcing prompt")
+
+        self.assertEqual(interpret.call_args.kwargs["timeout_seconds"], 60.0)
 
     def test_configured_ai_provider_missing_credentials_fallback(self) -> None:
         config = Settings(

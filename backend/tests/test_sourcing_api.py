@@ -936,6 +936,22 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "minimum warranty.*inspection requirement"):
             interpret_sourcing_requirements(self.Adapter(extraction), prompt)
 
+    def test_unmarked_required_omission_has_safe_field_diagnostic(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != "quantity.unit"
+        ]
+
+        with self.assertRaisesRegex(AIPermanentError, "omitted required sourcing fields") as raised:
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_REQUIRED_OMITTED")
+        self.assertEqual(raised.exception.diagnostic_field, "quantity.unit")
+
     def test_ungrounded_price_quantity_currency_and_destination_are_rejected(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "

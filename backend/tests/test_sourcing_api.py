@@ -923,6 +923,39 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.quantity.unit, "bottles")
         self.assertEqual(parsed_fields.count("quantity.unit"), 1)
 
+    def test_explicit_count_unit_recovers_from_ungrounded_ai_value(self) -> None:
+        prompt = (
+            "Need 250 stainless steel water bottles delivered to Berlin, Germany, "
+            "target price USD 8 each, 12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        replacements = {
+            "title": ("water bottles", "water bottles"),
+            "category": ("Water Bottles", "water bottles"),
+            "pricing.currency": ("USD", "USD 8"),
+            "quantity.target_quantity": ("250", "250 stainless steel water bottles"),
+            "quantity.unit": ("cartons", "250 stainless steel water bottles"),
+            "delivery.destination_country_code": ("DE", "Germany"),
+            "commercial_terms.min_warranty_months": ("12", "12 month warranty"),
+            "commercial_terms.inspection_requirement": (
+                "FACTORY_MILL_CERTIFICATE",
+                "factory mill certificate",
+            ),
+        }
+        extraction["extractions"] = [
+            {**item, "value": replacements[item["field"]][0], "quote": replacements[item["field"]][1]}
+            if item["field"] in replacements else item
+            for item in extraction["extractions"]
+        ]
+        extraction["unknown_fields"] = ["quantity.unit"]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(requirements.quantity.unit, "bottles")
+        self.assertEqual(parsed_fields.count("quantity.unit"), 1)
+
     def test_distinct_count_units_remain_rejected(self) -> None:
         prompt = (
             "Need 250 bottles delivered to Berlin, Germany, USD currency, 12 month warranty, "
@@ -1011,12 +1044,15 @@ class SourcingAIInterpretationTests(unittest.TestCase):
 
     def test_unmarked_required_omission_has_safe_field_diagnostic(self) -> None:
         prompt = (
-            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "
+            "Need 1000 kg of M8 fasteners delivered to Berlin, Germany, USD currency, "
             "12 month warranty and factory mill certificate."
         )
         extraction = self._extraction()
         extraction["extractions"] = [
-            item for item in extraction["extractions"] if item["field"] != "quantity.unit"
+            {**item, "quote": "1000 kg"}
+            if item["field"] == "quantity.target_quantity" else item
+            for item in extraction["extractions"]
+            if item["field"] != "quantity.unit"
         ]
 
         with self.assertRaisesRegex(AIPermanentError, "omitted required sourcing fields") as raised:

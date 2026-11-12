@@ -12,6 +12,7 @@ interface ProductListingsPageProps {
 }
 
 const LISTING_PAGE_SIZE = 20;
+const LISTING_FETCH_LIMIT = 100;
 
 function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "The marketplace is unavailable right now.";
@@ -27,7 +28,9 @@ export default function ProductListingsPage({ organizations }: ProductListingsPa
   const [filters, setFilters] = useState<{ product?: string; country_code?: string; category?: string; dealer?: string; min_price?: string; max_price?: string }>({});
   const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [visibleListingCount, setVisibleListingCount] = useState(LISTING_PAGE_SIZE);
+  const [hasMoreOnServer, setHasMoreOnServer] = useState(false);
   const [loadingListings, setLoadingListings] = useState(true);
+  const [loadingMoreListings, setLoadingMoreListings] = useState(false);
   const [listingError, setListingError] = useState("");
   const [listingRefresh, setListingRefresh] = useState(0);
   const [deactivatingId, setDeactivatingId] = useState("");
@@ -43,10 +46,11 @@ export default function ProductListingsPage({ organizations }: ProductListingsPa
       dealer: filters.dealer,
       min_price: filters.min_price,
       max_price: filters.max_price,
-    }, { signal: controller.signal }).then(
+    }, { signal: controller.signal, limit: LISTING_FETCH_LIMIT, offset: 0 }).then(
       (result) => {
         setListings(result);
         setVisibleListingCount(LISTING_PAGE_SIZE);
+        setHasMoreOnServer(result.length === LISTING_FETCH_LIMIT);
         setListingError("");
       },
       (caught: unknown) => {
@@ -57,6 +61,32 @@ export default function ProductListingsPage({ organizations }: ProductListingsPa
     });
     return () => controller.abort();
   }, [filters, listingRefresh]);
+
+  async function loadMoreListings() {
+    if (visibleListingCount < listings.length) {
+      setVisibleListingCount((count) => Math.min(count + LISTING_PAGE_SIZE, listings.length));
+      return;
+    }
+    if (!hasMoreOnServer || loadingMoreListings) return;
+    setLoadingMoreListings(true);
+    try {
+      const nextPage = await searchMarketplaceListings({
+        q: filters.product,
+        country_code: filters.country_code,
+        category: filters.category,
+        dealer: filters.dealer,
+        min_price: filters.min_price,
+        max_price: filters.max_price,
+      }, { limit: LISTING_FETCH_LIMIT, offset: listings.length });
+      setListings((previous) => [...previous, ...nextPage]);
+      setVisibleListingCount((count) => count + LISTING_PAGE_SIZE);
+      setHasMoreOnServer(nextPage.length === LISTING_FETCH_LIMIT);
+    } catch (caught: unknown) {
+      setListingError(errorMessage(caught));
+    } finally {
+      setLoadingMoreListings(false);
+    }
+  }
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -143,9 +173,9 @@ export default function ProductListingsPage({ organizations }: ProductListingsPa
             ) : null}
           </article>
         ))}
-        {listings.length > visibleListingCount ? (
-          <button className="button ghost listings-page__load-more" type="button" onClick={() => setVisibleListingCount((count) => count + LISTING_PAGE_SIZE)}>
-            Load more listings
+        {listings.length > visibleListingCount || hasMoreOnServer ? (
+          <button className="button ghost listings-page__load-more" type="button" disabled={loadingMoreListings} onClick={() => void loadMoreListings()}>
+            {loadingMoreListings ? "Loading…" : "Load more listings"}
           </button>
         ) : null}
       </section>

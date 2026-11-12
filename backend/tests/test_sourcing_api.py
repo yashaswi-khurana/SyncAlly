@@ -36,7 +36,11 @@ from syncally.domain.sourcing.contracts import BuyerRequirements
 from syncally.infrastructure.ai.gemini import GeminiGenerateContent
 from syncally.infrastructure.ai.openai import OpenAIChatCompletions
 from syncally.infrastructure.ai.selection import ConfiguredAIProvider
-from syncally.infrastructure.ai.sourcing import _grounded, interpret_sourcing_requirements
+from syncally.infrastructure.ai.sourcing import (
+    _explicit_inspection_requirement,
+    _grounded,
+    interpret_sourcing_requirements,
+)
 from syncally.infrastructure.database import get_db
 from syncally.infrastructure.models import (
     Base,
@@ -1053,6 +1057,35 @@ class SourcingAIInterpretationTests(unittest.TestCase):
 
         self.assertEqual(requirements.commercial_terms.min_warranty_months, 12)
         self.assertIn(field, parsed_fields)
+
+    def test_explicit_inspection_is_recovered_when_ai_omits_it(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany in USD currency, "
+            "with a 12 month warranty and third-party pre-shipment inspection is required."
+        )
+        extraction = self._extraction()
+        field = "commercial_terms.inspection_requirement"
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != field
+        ]
+        extraction["unknown_fields"] = [field]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(
+            requirements.commercial_terms.inspection_requirement,
+            "PRE_SHIPMENT_THIRD_PARTY",
+        )
+        self.assertIn(field, parsed_fields)
+
+    def test_ambiguous_inspection_requirements_are_not_defaulted(self) -> None:
+        prompt = (
+            "Third-party pre-shipment inspection or factory mill certificate is required."
+        )
+
+        self.assertIsNone(_explicit_inspection_requirement(prompt))
 
     def test_conflicting_explicit_warranties_are_not_recovered(self) -> None:
         prompt = (

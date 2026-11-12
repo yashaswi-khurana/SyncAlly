@@ -841,9 +841,13 @@ def interpret_sourcing_requirements(
             or not item["quote"].strip()
             or item["quote"] not in prompt
         ):
+            field = item.get("field") if isinstance(item, dict) else None
+            if isinstance(field, str) and field in _FIELDS and field not in _REQUIRED_FIELDS:
+                continue
             raise AIPermanentError(
                 "AI returned sourcing fields without exact prompt evidence.",
                 diagnostic_code="AI_SOURCING_EVIDENCE_SHAPE",
+                diagnostic_field=field if isinstance(field, str) and field in _REQUIRED_FIELDS else None,
             )
         field = item["field"]
         if _get_path(overrides, field) is not None:

@@ -826,6 +826,38 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
             interpret_sourcing_requirements(self.Adapter(fabricated), prompt)
 
+    def test_identical_scalar_values_from_multiple_quotes_are_deduplicated(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Hamburg, Germany, USD currency, "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].append({
+            "field": "delivery.destination_country_code",
+            "value": "DE",
+            "quote": "Hamburg",
+        })
+
+        requirements, parsed_fields = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.delivery.destination_country_code, "DE")
+        self.assertEqual(parsed_fields.count("delivery.destination_country_code"), 1)
+
+    def test_conflicting_scalar_values_remain_rejected(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany or Paris, France, "
+            "USD currency, 12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].append({
+            "field": "delivery.destination_country_code",
+            "value": "FR",
+            "quote": "France",
+        })
+
+        with self.assertRaisesRegex(AIPermanentError, "conflicting values"):
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
     def test_unknown_required_commercial_fields_are_not_defaulted(self) -> None:
         prompt = "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency."
         extraction = self._extraction()

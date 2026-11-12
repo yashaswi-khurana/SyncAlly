@@ -500,7 +500,7 @@ def interpret_sourcing_requirements(
         "raw_prompt": prompt,
     }
     parsed_fields: list[str] = []
-    seen_scalar_fields: set[str] = set()
+    seen_scalar_fields: dict[str, str] = {}
     for item in raw["extractions"]:
         if (
             not isinstance(item, dict)
@@ -543,11 +543,13 @@ def interpret_sourcing_requirements(
             _set_path(requirements, field, current)
         else:
             if field in seen_scalar_fields:
+                if seen_scalar_fields[field] == value:
+                    continue
                 raise AIPermanentError(
                     f"AI returned conflicting values for {field}. Please clarify the requirement.",
                     diagnostic_code="AI_SOURCING_CONFLICTING_VALUE",
                 )
-            seen_scalar_fields.add(field)
+            seen_scalar_fields[field] = value
             _set_path(requirements, field, value)
         parsed_fields.append(field)
 

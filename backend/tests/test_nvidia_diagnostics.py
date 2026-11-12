@@ -1,13 +1,15 @@
 """Ensure NVIDIA failures are diagnosable without logging prompts or responses."""
 
+import asyncio
 import json
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 import httpx
 from pydantic import SecretStr
 
-from syncally.application.ai import AIPermanentError, FactExtractionRequest
+from syncally.application.ai import AITransientError, AIPermanentError, FactExtractionRequest
 from syncally.application.conversations import AiContext
 from syncally.domain.conversations import Message, MessageSourceType, Visibility
 from syncally.infrastructure.ai.nvidia import NvidiaChatCompletions
@@ -72,6 +74,23 @@ class NvidiaDiagnosticsTests(unittest.TestCase):
             provider.extract_facts(self.request, timeout_seconds=1)
 
         self.assertEqual(raised.exception.diagnostic_code, "NVIDIA_HTTP_REJECTED")
+
+    def test_provider_timeout_is_logged_as_transient(self) -> None:
+        provider = self._provider(httpx.Response(200, json={}))
+
+        async def hang(*_args, **_kwargs):
+            await asyncio.sleep(1)
+
+        with self.assertLogs("syncally.infrastructure.ai.nvidia", level="INFO") as captured:
+            with patch.object(provider, "_http", side_effect=hang):
+                with self.assertRaises(AITransientError):
+                    provider.extract_facts(self.request, timeout_seconds=0.01)
+
+        event = json.loads(SafeOperationalFormatter().format(captured.records[0]))
+        self.assertEqual(event["event"], "ai.provider_failure")
+        self.assertEqual(event["error_code"], "NVIDIA_TIMEOUT")
+        self.assertEqual(event["failure_kind"], "TRANSIENT")
+        self.assertNotIn("private", json.dumps(event))
 
 
 if __name__ == "__main__":

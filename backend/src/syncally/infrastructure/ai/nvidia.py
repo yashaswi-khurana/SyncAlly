@@ -95,7 +95,21 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
         try:
             import asyncio
             return asyncio.run(asyncio.wait_for(self._http(raw, timeout), timeout=timeout))
-        except (TimeoutError, httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
+        except (TimeoutError, httpx.TimeoutException):
+            log_operation(
+                logger,
+                Operation.AI_PROVIDER_FAILURE,
+                failure_kind="TRANSIENT",
+                error_code="NVIDIA_TIMEOUT",
+            )
+            raise AITransientError("AI provider is temporarily unavailable") from None
+        except (httpx.NetworkError, httpx.RemoteProtocolError):
+            log_operation(
+                logger,
+                Operation.AI_PROVIDER_FAILURE,
+                failure_kind="TRANSIENT",
+                error_code="NVIDIA_NETWORK",
+            )
             raise AITransientError("AI provider is temporarily unavailable") from None
         except (ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError, httpx.HTTPError):
             log_operation(

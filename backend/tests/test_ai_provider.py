@@ -430,6 +430,15 @@ class AISuggestionProviderTests(unittest.TestCase):
             self.assertNotIn("seller secret", request_text)
             self.assertEqual(result.provenance.context_scope, "authorized_private" if expected else "shareable_only")
 
+    def test_remote_context_keeps_authorized_saved_description_under_canonical_field(self) -> None:
+        provider = ConfiguredAIProvider(self._remote_config())
+        context = self._remote_context()
+        description = replace(context.constraints[0], field="description", visibility=Visibility.SHAREABLE)
+        prepared = provider.prepare_context(replace(context, constraints=(description,)))
+
+        self.assertEqual(prepared.constraints, (replace(description, field="item_description"),))
+        self.assertEqual(description.field, "description")
+
     def test_remote_request_contract_and_grounding_use_exact_transmitted_context(self) -> None:
         requests: list[httpx.Request] = []
         def respond(request: httpx.Request) -> httpx.Response:

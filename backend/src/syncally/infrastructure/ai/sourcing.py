@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -126,6 +127,9 @@ _INSTRUCTION = (
     "Do not infer prices, currency from symbols, delivery countries from assumptions, warranty, "
     "inspection, Incoterms, payment terms, lead times, quantities, units, or acceptable terms. "
     "Country codes may be returned only when the country name/code or a known destination city is quoted. "
+    "Extract delivery.required_delivery_date only from an explicit absolute calendar date quoted verbatim "
+    "as YYYY-MM-DD. Relative windows such as 'within 30 days' belong to max_lead_time_days; never "
+    "convert them into calendar dates. "
     "For quantity.unit, return only the count unit itself, without product or material modifiers "
     "(for example, '250 stainless steel water bottles' has unit 'bottles'); quote the target count "
     "and unit together. Do not add default or "
@@ -363,6 +367,17 @@ def _country_matches(value: str, quote: str) -> bool:
     )
 
 
+def _is_relative_delivery_window(quote: str) -> bool:
+    return bool(
+        not re.search(r"\b\d{4}-\d{2}-\d{2}\b", quote)
+        and re.search(
+            r"\b(?:within|in|no later than)\s+\d+\s+(?:calendar\s+|business\s+)?days?\b",
+            quote,
+            re.I,
+        )
+    )
+
+
 def _grounded(field: str, value: str, quote: str) -> bool:
     if field == "delivery.destination_country_code":
         return _country_matches(value, quote)
@@ -390,7 +405,13 @@ def _grounded(field: str, value: str, quote: str) -> bool:
             return _numeric_role_match(field, value, quote)
         return _numeric_match(value, quote)
     if field == "delivery.required_delivery_date":
-        return value in quote
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) or value not in quote:
+            return False
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            return False
+        return True
     if field == "category":
         if _normalise(value) in _normalise(quote):
             return True
@@ -608,6 +629,17 @@ def interpret_sourcing_requirements(
             "AI returned an invalid sourcing interpretation. Please retry or use structured controls.",
             diagnostic_code="AI_SOURCING_OUTPUT_SHAPE",
         )
+    raw["extractions"] = [
+        item
+        for item in raw["extractions"]
+        if not (
+            isinstance(item, dict)
+            and item.get("field") == "delivery.required_delivery_date"
+            and isinstance(item.get("quote"), str)
+            and item["quote"] in prompt
+            and _is_relative_delivery_window(item["quote"])
+        )
+    ]
     extracted_names = {
         item["field"]
         for item in raw["extractions"]

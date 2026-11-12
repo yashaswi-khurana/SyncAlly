@@ -1109,6 +1109,39 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_CONFLICTING_UNKNOWN")
         self.assertEqual(raised.exception.diagnostic_field, "title")
 
+    def test_relative_delivery_window_is_not_a_calendar_date(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany within 30 days, "
+            "USD currency, 12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        date_field = "delivery.required_delivery_date"
+        extraction["extractions"].extend([
+            {"field": date_field, "value": "2026-12-12", "quote": "within 30 days"},
+            {"field": "delivery.max_lead_time_days", "value": "30", "quote": "within 30 days"},
+        ])
+        extraction["unknown_fields"] = [date_field]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertIsNone(requirements.delivery.required_delivery_date)
+        self.assertEqual(requirements.delivery.max_lead_time_days, 30)
+        self.assertNotIn(date_field, parsed_fields)
+
+    def test_required_delivery_date_requires_a_valid_quoted_calendar_date(self) -> None:
+        cases = (
+            ("2026-12-12", "delivery by 2026-12-12", True),
+            ("within 30 days", "within 30 days", False),
+            ("2026-02-30", "delivery by 2026-02-30", False),
+        )
+        for value, quote, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(
+                    _grounded("delivery.required_delivery_date", value, quote), expected
+                )
+
     def test_ungrounded_price_quantity_currency_and_destination_are_rejected(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "

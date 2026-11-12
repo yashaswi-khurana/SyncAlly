@@ -686,6 +686,7 @@ def interpret_sourcing_requirements(
             raise AIPermanentError(
                 f"AI returned an ungrounded value for {field}. Please clarify it in the prompt or controls.",
                 diagnostic_code="AI_SOURCING_UNGROUNDED_VALUE",
+                diagnostic_field=field,
             )
         if field in _ENUMS:
             enum_value = value if field == "commercial_terms.preferred_payment_term" else value.upper()

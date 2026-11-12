@@ -869,6 +869,7 @@ class SourcingAIInterpretationTests(unittest.TestCase):
             "value": "bottles",
             "quote": "250 stainless steel water bottles",
         })
+        extraction["unknown_fields"] = ["quantity.unit"]
 
         requirements, parsed_fields = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
 
@@ -898,6 +899,7 @@ class SourcingAIInterpretationTests(unittest.TestCase):
             "value": "boxes",
             "quote": "5 boxes",
         })
+        extraction["unknown_fields"] = ["quantity.unit"]
 
         with self.assertRaisesRegex(AIPermanentError, "conflicting values"):
             interpret_sourcing_requirements(self.Adapter(extraction), prompt)
@@ -958,13 +960,13 @@ class SourcingAIInterpretationTests(unittest.TestCase):
             "12 month warranty and factory mill certificate."
         )
         extraction = self._extraction()
-        extraction["unknown_fields"] = ["quantity.unit"]
+        extraction["unknown_fields"] = ["title"]
 
         with self.assertRaisesRegex(AIPermanentError, "marked an extracted field as unknown") as raised:
             interpret_sourcing_requirements(self.Adapter(extraction), prompt)
 
         self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_CONFLICTING_UNKNOWN")
-        self.assertEqual(raised.exception.diagnostic_field, "quantity.unit")
+        self.assertEqual(raised.exception.diagnostic_field, "title")
 
     def test_ungrounded_price_quantity_currency_and_destination_are_rejected(self) -> None:
         prompt = (

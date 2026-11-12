@@ -844,6 +844,29 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.delivery.destination_country_code, "DE")
         self.assertEqual(parsed_fields.count("delivery.destination_country_code"), 1)
 
+    def test_distinct_grounded_technical_notes_are_combined(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners with a 12 month warranty and factory mill certificate, "
+            "delivered to Berlin, Germany in USD currency; include 750 mL and leak-proof lids."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].extend([
+            {"field": "technical_specs.notes", "value": "750 mL", "quote": "750 mL"},
+            {
+                "field": "technical_specs.notes",
+                "value": "leak-proof lids",
+                "quote": "leak-proof lids",
+            },
+            {"field": "technical_specs.notes", "value": "750 ml", "quote": "750 mL"},
+        ])
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(requirements.technical_specs.notes, "750 mL; leak-proof lids")
+        self.assertEqual(parsed_fields.count("technical_specs.notes"), 1)
+
     def test_mumbai_quote_grounds_india_destination_country(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Mumbai, India, USD currency, "

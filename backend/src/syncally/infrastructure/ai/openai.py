@@ -232,7 +232,10 @@ class OpenAIChatCompletions:
             stage = "AI_PROPOSAL_CONTRACT"
             if wrapper["insufficient_context"] is True:
                 stage = "AI_PROPOSAL_INSUFFICIENT_CONTEXT"
-                raise AIPermanentError("AI provider does not have enough grounded context for a proposal")
+                raise AIPermanentError(
+                    "AI provider does not have enough grounded context for a proposal",
+                    diagnostic_code=stage,
+                )
             if wrapper["insufficient_context"] is not False:
                 raise ValueError("Invalid insufficient_context flag")
             proposal = parse_proposed_terms(wrapper["proposal"])

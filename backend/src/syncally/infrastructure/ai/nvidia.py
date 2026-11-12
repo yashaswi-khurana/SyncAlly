@@ -64,6 +64,7 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
             remaining = deadline - monotonic()
             if remaining <= 0 or error.diagnostic_code not in {
                 "AI_PROPOSAL_SHAPE", "AI_PROPOSAL_CONTRACT", "AI_PROPOSAL_GROUNDING",
+                "AI_PROPOSAL_INSUFFICIENT_CONTEXT",
             }:
                 raise
             try:
@@ -121,8 +122,13 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
         )
         if repair:
             instruction += (
-                " The previous draft failed validation. Rebuild it from the supplied evidence. "
-                "Check the citation count, exact values and quantity unit before returning it."
+                " The previous draft failed validation or reported insufficient context. Re-evaluate "
+                "the supplied evidence. A missing delivery date is allowed and must not by itself "
+                "make required context insufficient. Return insufficient_context true only if one of "
+                "item description, quantity, unit, unit price with currency, or delivery destination "
+                "is genuinely missing or ambiguous. Otherwise return the complete grounded proposal "
+                "with a null delivery date when none is explicit. Check the citation count, exact "
+                "values and quantity unit before returning it."
             )
         raw = json.dumps({
             "model": self.model,

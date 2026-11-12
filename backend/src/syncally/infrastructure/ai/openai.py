@@ -182,8 +182,9 @@ def _shape(payload: Any, keys: set[str]) -> Mapping[str, Any]:
 def transmitted_context(context: AiContext) -> AiContext:
     permitted = {field.value for field in FactField}
     return replace(context, constraints=tuple(
-        term for term in context.constraints
-        if term.field in permitted and term.status not in {
+        replace(term, field=FactField.ITEM_DESCRIPTION.value) if term.field == "description" else term
+        for term in context.constraints
+        if (term.field in permitted or term.field == "description") and term.status not in {
             ConstraintStatus.REJECTED, ConstraintStatus.SUPERSEDED,
             ConstraintStatus.NEEDS_CLARIFICATION,
         }

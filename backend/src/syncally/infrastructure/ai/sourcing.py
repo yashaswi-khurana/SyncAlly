@@ -128,6 +128,8 @@ _INSTRUCTION = (
     "extracted field provide an exact, contiguous quote copied from the prompt that supports it. "
     "Do not infer prices, currency from symbols, delivery countries from assumptions, warranty, "
     "inspection, Incoterms, payment terms, lead times, quantities, units, or acceptable terms. "
+    "For inspection_requirement use only PRE_SHIPMENT_THIRD_PARTY, FACTORY_MILL_CERTIFICATE, "
+    "BUYER_RECEIVING_INSPECTION, or NONE. "
     "Country codes may be returned only when the country name/code or a known destination city is quoted. "
     "Extract delivery.required_delivery_date only from an explicit absolute calendar date quoted verbatim "
     "as YYYY-MM-DD. Relative windows such as 'within 30 days' belong to max_lead_time_days; never "
@@ -450,6 +452,18 @@ def _context_supports(field: str, value: str, clause: str, span: tuple[int, int]
             re.I,
         )
     return True
+
+
+def _explicit_inspection_requirement(prompt: str) -> str | None:
+    field = "commercial_terms.inspection_requirement"
+    candidates: set[str] = set()
+    for clause in re.split(r"[;!?\n]|\.(?!\d)", prompt):
+        for value in _ENUMS[field]:
+            if _inspection_role_match(value, clause) and _context_supports(
+                field, value, clause, (0, len(clause))
+            ):
+                candidates.add(value)
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 
 def _has_grounded_count_unit(extractions: list[Any], prompt: str) -> bool:
@@ -806,6 +820,18 @@ def interpret_sourcing_requirements(
             parsed_fields.append(warranty_path)
             if warranty_path in unknown_fields:
                 unknown_fields.remove(warranty_path)
+
+    inspection_path = "commercial_terms.inspection_requirement"
+    if (
+        _get_path(requirements, inspection_path) is None
+        and _get_path(overrides, inspection_path) is None
+    ):
+        inspection = _explicit_inspection_requirement(prompt)
+        if inspection is not None:
+            _set_path(requirements, inspection_path, inspection)
+            parsed_fields.append(inspection_path)
+            if inspection_path in unknown_fields:
+                unknown_fields.remove(inspection_path)
 
     _deep_merge(requirements, overrides)
     pricing = requirements.get("pricing")

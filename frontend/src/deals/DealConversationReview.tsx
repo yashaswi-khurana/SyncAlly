@@ -449,6 +449,17 @@ export default function DealConversationReview({
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [factFilter, setFactFilter] = useState<FactFilter>("all");
   const [fullConversationContext, setFullConversationContext] = useState<string | null>(null);
+  const [activeDealId, setActiveDealId] = useState(deal.id);
+  if (activeDealId !== deal.id) {
+    setActiveDealId(deal.id);
+    setConversationState(null);
+    setPendingFactId(null);
+    setPendingVisibilityFactId(null);
+    setActionError(null);
+    setHighlightedMessageId(null);
+    setFactFilter("all");
+    setFullConversationContext(null);
+  }
   const wasModalOpenRef = useRef(false);
   const fullConversationCloseRef = useRef<HTMLButtonElement | null>(null);
   const viewAllButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -513,7 +524,8 @@ export default function DealConversationReview({
     currentConversation
       ? currentConversation.facts.filter(
           (fact) =>
-            fact.visibility === "SHAREABLE" || fact.owner_organization_id === activeOrganizationId,
+            fact.deal_id === deal.id &&
+            (fact.visibility === "SHAREABLE" || fact.owner_organization_id === activeOrganizationId),
         )
       : [];
   const visibleMessages = currentConversation?.messages ?? [];
@@ -629,7 +641,7 @@ export default function DealConversationReview({
             organizationId: activeOrganizationId,
             dealId: deal.id,
             messages,
-            facts,
+            facts: facts.filter((fact) => fact.deal_id === deal.id),
           });
         }
       })
@@ -696,23 +708,24 @@ export default function DealConversationReview({
             if (current?.status !== "ready" || current.organizationId !== activeOrganizationId || current.dealId !== deal.id) {
               return current;
             }
-            const freshIds = new Set(freshFacts.map((fact) => fact.id));
+            const scopedFreshFacts = freshFacts.filter((fact) => fact.deal_id === deal.id);
+            const freshIds = new Set(scopedFreshFacts.map((fact) => fact.id));
             for (const fact of current.facts) {
               if (baselineFactIds.has(fact.id) && !freshIds.has(fact.id)) {
                 removedFactIdsRef.current.add(fact.id);
               }
             }
-            for (const fact of freshFacts) {
+            for (const fact of scopedFreshFacts) {
               removedFactIdsRef.current.delete(fact.id);
             }
 
             // Facts added locally after the poll was dispatched were not part of the baseline snapshot; preserve them.
             const preservedUnseen = current.facts.filter(
-              (fact) => !baselineFactIds.has(fact.id) && !freshIds.has(fact.id),
+              (fact) => fact.deal_id === deal.id && !baselineFactIds.has(fact.id) && !freshIds.has(fact.id),
             );
 
             // An authorized snapshot also removes facts whose visibility was revoked.
-            const reconciledFresh = freshFacts.map((fact) => {
+            const reconciledFresh = scopedFreshFacts.map((fact) => {
               const existing = current.facts.find((item) => item.id === fact.id);
               return existing && existing.version > fact.version ? existing : fact;
             });
@@ -824,6 +837,7 @@ export default function DealConversationReview({
   }
 
   function addSuggestedFact(fact: DealFact) {
+    if (fact.deal_id !== deal.id) return;
     removedFactIdsRef.current.delete(fact.id);
     const generation = contextGenerationRef.current;
     setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
@@ -852,6 +866,7 @@ export default function DealConversationReview({
   }
 
   function updateSuggestedFact(fact: DealFact) {
+    if (fact.deal_id !== deal.id) return;
     removedFactIdsRef.current.delete(fact.id);
     setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id
       ? { ...current, facts: mergeFact(current.facts, fact, removedFactIdsRef.current) }
@@ -859,6 +874,7 @@ export default function DealConversationReview({
   }
 
   function replaceSuggestedFact(replaced: DealFact, corrected: DealFact) {
+    if (replaced.deal_id !== deal.id || corrected.deal_id !== deal.id) return;
     removedFactIdsRef.current.delete(replaced.id);
     removedFactIdsRef.current.delete(corrected.id);
     setConversationState((current) => current?.status === "ready" && current.organizationId === activeOrganizationId && current.dealId === deal.id

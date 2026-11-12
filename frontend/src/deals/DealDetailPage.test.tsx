@@ -191,6 +191,85 @@ describe("DealDetailPage", () => {
     expect(screen.getByText(DEAL.seller_organization_id)).toBeInTheDocument();
   });
 
+  it("hides the previous deal chat, agreement, and proposal as soon as the deal id changes", async () => {
+    mockedListDealMessages.mockResolvedValue([{
+      id: "message-deal-1",
+      conversation_id: "conversation-1",
+      author_user_id: "user-1",
+      author_agent_id: null,
+      body: "Deal one copper shipment terms",
+      visibility: "SHAREABLE",
+      source_type: "USER",
+      source_reference: null,
+      created_at: "2026-10-18T09:00:00Z",
+    }]);
+    const agreement = {
+      id: "version-1",
+      deal_id: DEAL.id,
+      version_number: 1,
+      status: "PENDING_APPROVAL",
+      is_current: true,
+      terms_hash: "a".repeat(64),
+      created_at: "2026-10-31T10:00:00Z",
+      committed_at: null,
+      approvals: [],
+      terms: {
+        schema_version: 2,
+        buyer_id: DEAL.buyer_organization_id,
+        seller_id: DEAL.seller_organization_id,
+        line_items: [{
+          id: "item-1",
+          description: "Deal one copper cathodes",
+          quantity: "100",
+          unit: "mt",
+          unit_price: { amount: "8500", currency: "USD" },
+        }],
+        shipments: [],
+        payment_terms: [],
+        delivery_location: "Mumbai",
+        incoterm: "CIF",
+        cancellation_terms: "None",
+      },
+    } as unknown as AgreementVersion;
+    mockedGetCurrentAgreement.mockImplementation(async (dealId) => {
+      if (dealId !== DEAL.id) throw new ApiError(404, "No current agreement");
+      return agreement;
+    });
+    vi.mocked(getAgreementVersion).mockImplementation(async (dealId) => {
+      if (dealId !== DEAL.id) throw new ApiError(404, "No version");
+      return agreement;
+    });
+
+    const { rerender } = render(
+      <DealDetailPage dealId={DEAL.id} onBackToDeals={vi.fn()} freshnessIntervalMs={0} />,
+    );
+    expect(await screen.findByText("Deal one copper shipment terms")).toBeInTheDocument();
+    expect(await screen.findByText("Deal one copper cathodes")).toBeInTheDocument();
+
+    let resolveDealTwo: (deal: Deal) => void = () => {};
+    mockedGetDeal.mockImplementation((id: string) => {
+      if (id === DEAL.id) return Promise.resolve(DEAL);
+      return new Promise((resolve) => {
+        resolveDealTwo = resolve;
+      });
+    });
+    mockedListDealMessages.mockResolvedValue([]);
+
+    rerender(<DealDetailPage dealId="deal-2" onBackToDeals={vi.fn()} freshnessIntervalMs={0} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(/loading deal/i);
+    expect(screen.queryByText("Deal one copper shipment terms")).not.toBeInTheDocument();
+    expect(screen.queryByText("Deal one copper cathodes")).not.toBeInTheDocument();
+    expect(screen.queryByText("deal-1")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveDealTwo({ ...DEAL, id: "deal-2" });
+    });
+    expect(await screen.findByText("deal-2")).toBeInTheDocument();
+    expect(screen.queryByText("Deal one copper shipment terms")).not.toBeInTheDocument();
+    expect(screen.queryByText("Deal one copper cathodes")).not.toBeInTheDocument();
+  });
+
   it("shares the selected party with committed downloads and never fetches the legacy latest draft", async () => {
     const agreement = { id: "version-1", deal_id: DEAL.id, version_number: 1, status: "COMMITTED",
       is_current: true, terms_hash: "a".repeat(64), created_at: "2026-10-31T10:00:00Z",

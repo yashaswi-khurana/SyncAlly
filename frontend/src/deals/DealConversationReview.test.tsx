@@ -1049,6 +1049,16 @@ describe("message composer", () => {
     expect(observe).not.toHaveBeenCalled();
   });
 
+  it("does not display facts belonging to another deal", async () => {
+    mockedListDealFacts.mockResolvedValue([
+      fact({ id: "other", deal_id: "deal-other", typed_value: "Other deal quantity" }),
+      fact({ id: "mine", typed_value: "This deal quantity" }),
+    ]);
+    render(<DealConversationReview deal={DEAL} revalidateIntervalMs={0} />);
+    expect(await screen.findByText("This deal quantity")).toBeInTheDocument();
+    expect(screen.queryByText("Other deal quantity")).not.toBeInTheDocument();
+  });
+
   it("does not reveal old messages while a same-party new deal loads, or late errors after unmount", async () => {
     mockedListDealMessages.mockResolvedValueOnce([message({ body: "Old deal secret" })]);
     let reject!: (reason: Error) => void;

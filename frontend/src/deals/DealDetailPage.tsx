@@ -107,6 +107,32 @@ export default function DealDetailPage({
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [inviteGrants, setInviteGrants] = useState<MemberGrants>({ role_bundles: [], permissions: [], deal_ids: [] });
   const updateInviteGrants = useCallback((grants: MemberGrants) => setInviteGrants(grants), []);
+  const [activeDealId, setActiveDealId] = useState(dealId);
+  if (activeDealId !== dealId) {
+    // Drop the previous deal immediately. Otherwise chat, agreement, and proposal
+    // stay bound to the old deal until getDeal resolves.
+    setActiveDealId(dealId);
+    setState({ status: "loading" });
+    setAgreementReloadToken(0);
+    setFreshness("unknown");
+    setFreshnessError(null);
+    setFreshnessChecked(false);
+    setSelectedOrganizationId(
+      openingMessageDraft?.dealId === dealId ? openingMessageDraft.organizationId : "",
+    );
+    setCounterpartyName("Counterparty");
+    setPartyNames({ buyer: "", seller: "" });
+    setDeskTab("trade");
+    setNegotiation(null);
+    setOverview(null);
+    setShowInviteModal(false);
+    setInviteError(null);
+    setGeneratedInvite(null);
+    setCopiedInvite(false);
+    setTeamRecipientEmail("");
+    setSelectedInviteOrgId("");
+    setInviteGrants({ role_bundles: [], permissions: [], deal_ids: [] });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -907,6 +933,7 @@ export default function DealDetailPage({
           <div className="deal-desk__panel deal-desk__panel--trade" role="tabpanel" id="deal-desk-panel-trade" aria-labelledby="deal-desk-tab-trade">
             <div className="deal-desk__stream">
         <DealConversationReview
+          key={`conversation:${deal.id}`}
           negotiation={negotiation?.organization_id === selectedOrganizationId && negotiation.deal_id === deal.id ? negotiation : null}
           deal={deal}
           openingMessageDraft={openingMessageDraft?.dealId === deal.id ? openingMessageDraft : undefined}
@@ -923,6 +950,7 @@ export default function DealDetailPage({
           }}
         />
         {selectedOrganizationId ? <NegotiationReview
+          key={`negotiation:${deal.id}:${selectedOrganizationId}`}
           deal={deal} organizationId={selectedOrganizationId} reloadToken={agreementReloadToken}
           onLoaded={setNegotiation} onChanged={commercialChanged}
         /> : null}

@@ -321,8 +321,11 @@ class AISuggestionProviderTests(unittest.TestCase):
 
         citations = payload["citations"]
         wrong_unit = [*citations]
-        wrong_unit[1] = citation("quantity", "120", "120", "table tennis balls")
+        wrong_unit[1] = citation("quantity", "120", "120", "boxes")
+        item_as_unit = [*citations]
+        item_as_unit[1] = citation("quantity", "120", "120 table tennis balls", "table tennis balls")
         for first, second, expected_calls, expected_status in (
+            ({**payload, "citations": item_as_unit}, payload, 1, ValidationStatus.VALID),
             ({**payload, "citations": wrong_unit}, payload, 2, ValidationStatus.VALID),
             ({**payload, "citations": citations[:-1]}, payload, 2, ValidationStatus.VALID),
             ({**payload, "insufficient_context": None}, payload, 2, ValidationStatus.VALID),

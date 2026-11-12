@@ -330,7 +330,20 @@ class OpenAIChatCompletions:
                     failure_kind="PERMANENT", error_code="AI_PROPOSAL_CITATION_VALUE",
                 )
                 raise ValueError("Citation does not support proposal")
-            if citation.field is FactField.QUANTITY and citation.currency_or_unit not in {None, proposal.unit}:
+            # Older quantity facts can carry the full item phrase as their unit.
+            # The separate unit citation still has to support the proposal's count unit.
+            item_phrase = proposal.description.casefold()
+            unit = proposal.unit.casefold()
+            redundant_item_unit = (
+                citation.currency_or_unit is not None
+                and citation.currency_or_unit.casefold() == item_phrase
+                and item_phrase.endswith(" " + unit)
+            )
+            if (
+                citation.field is FactField.QUANTITY
+                and citation.currency_or_unit not in {None, proposal.unit}
+                and not redundant_item_unit
+            ):
                 log_operation(
                     logger, Operation.AI_PROVIDER_FAILURE,
                     failure_kind="PERMANENT", error_code="AI_PROPOSAL_QUANTITY_UNIT",

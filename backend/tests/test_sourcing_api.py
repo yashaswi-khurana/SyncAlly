@@ -874,6 +874,54 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.technical_specs.notes, "750 mL; leak-proof lids")
         self.assertEqual(parsed_fields.count("technical_specs.notes"), 1)
 
+    def test_combined_technical_notes_require_ordered_quote_support(self) -> None:
+        quote = "750 mL, food-grade 304 steel, with leak-proof lids"
+
+        self.assertTrue(
+            _grounded(
+                "technical_specs.notes",
+                "750 mL; food-grade 304 steel and leak-proof lids",
+                quote,
+            )
+        )
+        self.assertFalse(
+            _grounded(
+                "technical_specs.notes",
+                "750 mL; food-grade 304 steel and rust-proof lids",
+                quote,
+            )
+        )
+        self.assertFalse(
+            _grounded(
+                "technical_specs.notes",
+                "leak-proof lids; 750 mL",
+                quote,
+            )
+        )
+
+    def test_combined_technical_notes_from_prompt_are_retained(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany in USD currency, "
+            "12 month warranty and factory mill certificate; include "
+            "750 mL, food-grade 304 steel, with leak-proof lids."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].append({
+            "field": "technical_specs.notes",
+            "value": "750 mL; food-grade 304 steel and leak-proof lids",
+            "quote": "750 mL, food-grade 304 steel, with leak-proof lids",
+        })
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(
+            requirements.technical_specs.notes,
+            "750 mL; food-grade 304 steel and leak-proof lids",
+        )
+        self.assertEqual(parsed_fields.count("technical_specs.notes"), 1)
+
     def test_mumbai_quote_grounds_india_destination_country(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Mumbai, India, USD currency, "

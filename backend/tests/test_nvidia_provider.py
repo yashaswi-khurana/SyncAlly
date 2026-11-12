@@ -56,8 +56,8 @@ class NvidiaProviderTests(unittest.TestCase):
             request_payload = json.loads(request.content)
             self.assertFalse(request_payload["stream"])
             self.assertEqual(request_payload["max_tokens"], 8192)
-            self.assertEqual(request_payload["reasoning_effort"], "none")
-            self.assertNotIn("chat_template_kwargs", request_payload)
+            self.assertEqual(request_payload["chat_template_kwargs"], {"enable_thinking": False})
+            self.assertNotIn("reasoning_effort", request_payload)
             self.assertNotIn("max_completion_tokens", request_payload)
             response_body = {
                 "id": "chatcmpl-123",

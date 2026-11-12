@@ -954,6 +954,68 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_REQUIRED_OMITTED")
         self.assertEqual(raised.exception.diagnostic_field, "quantity.unit")
 
+    def test_explicit_price_currency_is_recovered_when_ai_omits_it(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany; target price is USD 8 each; "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != "pricing.currency"
+        ]
+
+        requirements, parsed_fields = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.pricing.currency, "USD")
+        self.assertIn("pricing.currency", parsed_fields)
+
+    def test_currency_is_not_inferred_from_symbol_when_ai_omits_it(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany; target price is $8 each; "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != "pricing.currency"
+        ]
+
+        with self.assertRaises(AIPermanentError) as raised:
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_REQUIRED_OMITTED")
+        self.assertEqual(raised.exception.diagnostic_field, "pricing.currency")
+
+    def test_explicit_price_currency_resolves_ai_unknown_marker(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany; target price is USD 8 each; "
+            "12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != "pricing.currency"
+        ]
+        extraction["unknown_fields"] = ["pricing.currency"]
+
+        requirements, _ = interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(requirements.pricing.currency, "USD")
+
+    def test_conflicting_explicit_price_currencies_are_not_guessed(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany; target price is USD 8 each, "
+            "maximum price EUR 9 each; 12 month warranty and factory mill certificate."
+        )
+        extraction = self._extraction()
+        extraction["extractions"] = [
+            item for item in extraction["extractions"] if item["field"] != "pricing.currency"
+        ]
+
+        with self.assertRaises(AIPermanentError) as raised:
+            interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+
+        self.assertEqual(raised.exception.diagnostic_code, "AI_SOURCING_REQUIRED_OMITTED")
+        self.assertEqual(raised.exception.diagnostic_field, "pricing.currency")
+
     def test_extracted_and_unknown_collision_has_safe_field_diagnostic(self) -> None:
         prompt = (
             "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany, USD currency, "

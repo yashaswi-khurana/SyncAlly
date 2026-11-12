@@ -127,6 +127,7 @@ _INSTRUCTION = (
     "controls and take precedence; do not emit overridden fields in extractions. Every required "
     "field must appear as one grounded extraction or in unknown_fields; never omit it from both. "
     "Never list a field in both extractions and unknown_fields. "
+    "When an explicit three-letter currency code is paired with a price, extract it as pricing.currency. "
     "For title and category, use the exact item phrase from the prompt when no separate category "
     "is stated. Return only the requested JSON."
 )
@@ -272,6 +273,26 @@ def _numeric_role_match(
         else:
             return True
     return False
+
+
+def _explicit_pricing_currency(prompt: str) -> str | None:
+    currencies: set[str] = set()
+    currency_amount = re.compile(
+        r"(?<![A-Za-z])(?P<prefix>[A-Z]{3})\s*\$?\s*(?P<prefix_amount>\d[\d,]*(?:\.\d+)?)"
+        r"(?![\w.,])|(?<![\w.,+-])(?P<suffix_amount>\d[\d,]*(?:\.\d+)?)\s*"
+        r"(?P<suffix>[A-Z]{3})(?![A-Za-z])"
+    )
+    price_fields = (
+        "pricing.target_unit_price",
+        "pricing.max_unit_price",
+        "pricing.max_total_budget",
+    )
+    for match in currency_amount.finditer(prompt):
+        amount = match.group("prefix_amount") or match.group("suffix_amount")
+        span = match.span("prefix_amount") if match.group("prefix_amount") else match.span("suffix_amount")
+        if any(_numeric_role_match(field, amount, prompt, span) for field in price_fields):
+            currencies.add(match.group("prefix") or match.group("suffix"))
+    return next(iter(currencies)) if len(currencies) == 1 else None
 
 
 def _inspection_role_match(value: str, quote: str) -> bool:
@@ -651,6 +672,17 @@ def interpret_sourcing_requirements(
             seen_scalar_fields[field] = (value, item["quote"])
             _set_path(requirements, field, value)
         parsed_fields.append(field)
+
+    if (
+        requirements["pricing"]["currency"] is None
+        and _get_path(overrides, "pricing.currency") is None
+    ):
+        currency = _explicit_pricing_currency(prompt)
+        if currency is not None:
+            requirements["pricing"]["currency"] = currency
+            parsed_fields.append("pricing.currency")
+            if "pricing.currency" in unknown_fields:
+                unknown_fields.remove("pricing.currency")
 
     _deep_merge(requirements, overrides)
     pricing = requirements.get("pricing")

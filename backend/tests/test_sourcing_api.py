@@ -874,7 +874,7 @@ class SourcingAIInterpretationTests(unittest.TestCase):
         self.assertEqual(requirements.technical_specs.notes, "750 mL; leak-proof lids")
         self.assertEqual(parsed_fields.count("technical_specs.notes"), 1)
 
-    def test_combined_technical_notes_require_ordered_quote_support(self) -> None:
+    def test_combined_technical_notes_require_quote_support_for_every_detail(self) -> None:
         quote = "750 mL, food-grade 304 steel, with leak-proof lids"
 
         self.assertTrue(
@@ -891,7 +891,7 @@ class SourcingAIInterpretationTests(unittest.TestCase):
                 quote,
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             _grounded(
                 "technical_specs.notes",
                 "leak-proof lids; 750 mL",
@@ -921,6 +921,27 @@ class SourcingAIInterpretationTests(unittest.TestCase):
             "750 mL; food-grade 304 steel and leak-proof lids",
         )
         self.assertEqual(parsed_fields.count("technical_specs.notes"), 1)
+
+    def test_ungrounded_optional_note_does_not_discard_required_fields(self) -> None:
+        prompt = (
+            "Need 1000 boxes of M8 fasteners delivered to Berlin, Germany in USD currency, "
+            "12 month warranty and factory mill certificate; include food-grade 304 steel."
+        )
+        extraction = self._extraction()
+        extraction["extractions"].append({
+            "field": "technical_specs.notes",
+            "value": "food-grade 304 steel with titanium lids",
+            "quote": "food-grade 304 steel",
+        })
+
+        requirements, parsed_fields = interpret_sourcing_requirements(
+            self.Adapter(extraction), prompt
+        )
+
+        self.assertEqual(requirements.quantity.target_quantity, Decimal("1000"))
+        self.assertIsNone(requirements.technical_specs.notes)
+        self.assertIn("food-grade 304 steel", requirements.description)
+        self.assertNotIn("technical_specs.notes", parsed_fields)
 
     def test_mumbai_quote_grounds_india_destination_country(self) -> None:
         prompt = (

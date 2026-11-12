@@ -389,6 +389,29 @@ def _context_supports(field: str, value: str, clause: str, span: tuple[int, int]
     return True
 
 
+def _has_grounded_count_unit(extractions: list[Any], prompt: str) -> bool:
+    target_quantities = [
+        item
+        for item in extractions
+        if isinstance(item, dict)
+        and item.get("field") == "quantity.target_quantity"
+        and isinstance(item.get("value"), str)
+    ]
+    return any(
+        isinstance(item, dict)
+        and item.get("field") == "quantity.unit"
+        and isinstance(item.get("value"), str)
+        and isinstance(item.get("quote"), str)
+        and item["quote"] in prompt
+        and _grounded("quantity.unit", item["value"], item["quote"])
+        and any(
+            _numeric_role_match("quantity.target_quantity", target["value"], item["quote"])
+            for target in target_quantities
+        )
+        for item in extractions
+    )
+
+
 def _get_path(data: dict[str, Any], path: str) -> Any:
     value: Any = data
     for part in path.split("."):
@@ -501,10 +524,17 @@ def interpret_sourcing_requirements(
         for item in raw["extractions"]
         if isinstance(item, dict) and isinstance(item.get("field"), str)
     }
-    conflicting_unknowns = set(raw["unknown_fields"]) & extracted_names
+    unknown_fields = list(raw["unknown_fields"])
+    if (
+        "quantity.unit" in unknown_fields
+        and "quantity.unit" in extracted_names
+        and _has_grounded_count_unit(raw["extractions"], prompt)
+    ):
+        unknown_fields.remove("quantity.unit")
+    conflicting_unknowns = set(unknown_fields) & extracted_names
     if conflicting_unknowns:
         diagnostic_field = next(
-            field for field in raw["unknown_fields"] if field in conflicting_unknowns
+            field for field in unknown_fields if field in conflicting_unknowns
         )
         raise AIPermanentError(
             "AI marked an extracted field as unknown. Please retry or clarify the requirement.",
@@ -646,7 +676,7 @@ def interpret_sourcing_requirements(
             for path in _REQUIRED_FIELDS
             if _get_path(requirements, path) in (None, "")
             and not _has_path(overrides, path)
-            and path not in raw["unknown_fields"]
+            and path not in unknown_fields
         ]
         if unmarked_missing:
             diagnostic_field = unmarked_missing[0]

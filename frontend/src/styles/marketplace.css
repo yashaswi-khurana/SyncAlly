@@ -1,6 +1,7 @@
 /* ==========================================================================
-   Marketplace: the sourcing-agent banner, search, publishing tools and the
-   two boards (buyer requests, product listings).
+   Marketplace: the sourcing-agent banner, buyer-request search/board, and
+   seller/buyer publishing tools. Product listings live on their own page
+   (ProductListingsPage) further down this file.
    ========================================================================== */
 
 .marketplace-page > * {
@@ -17,10 +18,8 @@
     grid-column: 1 / -1;
   }
 
-  /* tools and boards sit two abreast: seller beside buyer, demand beside supply */
-  .marketplace-page > .marketplace-page__publish,
-  .marketplace-page > .marketplace-page__requests,
-  .marketplace-page > .marketplace-page__listings {
+  /* seller and buyer tools sit two abreast */
+  .marketplace-page > .marketplace-page__publish {
     grid-column: auto;
   }
 }
@@ -209,27 +208,20 @@
 
 /* ---------- boards ---------- */
 
-.marketplace-page__requests,
-.marketplace-page__listings {
+.marketplace-page__requests {
   display: grid;
   gap: 12px;
   align-content: start;
 }
 
-.marketplace-page__requests > .section-heading,
-.marketplace-page__listings > .section-heading {
+.marketplace-page__requests > .section-heading {
   padding-bottom: 14px;
   border-bottom: 1px solid var(--line-strong);
 }
 
-.marketplace-page__requests > .section-heading h2,
-.marketplace-page__listings > .section-heading h2 {
+.marketplace-page__requests > .section-heading h2 {
   font-size: var(--text-2xl);
   letter-spacing: -0.04em;
-}
-
-.marketplace-page__listings > .button.ghost {
-  justify-self: center;
 }
 
 .marketplace-page__listing {
@@ -301,4 +293,64 @@
   .sourcing-hub-banner .button {
     width: 100%;
   }
+}
+
+/* ---------- link out to the dedicated listings page ---------- */
+
+.listings-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 32px;
+}
+
+.listings-banner > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.listings-banner > div > * {
+  margin-top: 0;
+}
+
+.listings-banner .button {
+  flex: none;
+}
+
+/* ==========================================================================
+   Product listings page: a filter bar pinned above a scrollable list,
+   built for catalogs with hundreds or thousands of listings.
+   ========================================================================== */
+
+.listings-page__filters {
+  position: sticky;
+  top: calc(var(--nav-h) + 16px);
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(90px, 120px) minmax(90px, 120px) minmax(90px, 120px) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.listings-page__filters > * {
+  margin-top: 0;
+}
+
+@media (max-width: 900px) {
+  .listings-page__filters {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.listings-page__results {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.listings-page__load-more {
+  justify-self: center;
 }

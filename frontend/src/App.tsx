@@ -13,6 +13,7 @@ import OrganizationSignupPage from "./organizations/OrganizationSignupPage";
 import OrganizationsSettingsPage from "./organizations/OrganizationsSettingsPage";
 import PlatformOrganizationsPage from "./platform/PlatformOrganizationsPage";
 import MarketplacePage from "./marketplace/MarketplacePage";
+import ProductListingsPage from "./marketplace/ProductListingsPage";
 import SourcingHubPage from "./sourcing/SourcingHubPage";
 import {
   navigateToCreateDeal,
@@ -20,6 +21,7 @@ import {
   navigateToDeals,
   navigateToOrganizations,
   navigateToMarketplace,
+  navigateToListings,
   navigateToSourcing,
   navigateToPlatform,
   parseRoute,
@@ -290,13 +292,14 @@ export default function App() {
   // const isCreate = route.name === "create";
   const isOrganizations = route.name === "organizations";
   const isMarketplace = route.name === "marketplace";
+  const isListings = route.name === "listings";
   const isSourcing = route.name === "sourcing";
   const isPlatform = route.name === "platform";
   const isWorkspace = route.name === "deals" || route.name === "deal";
   const hasPendingInvitation =
     route.name === "organizations" && Boolean(route.inviteToken);
   const needsOrganizationInvitation = organizations !== null && organizations.length === 0 &&
-    !hasPendingInvitation && !isPlatform && route.name !== "organizations" && !isMarketplace && !isSourcing;
+    !hasPendingInvitation && !isPlatform && route.name !== "organizations" && !isMarketplace && !isListings && !isSourcing;
 
   // presentation only: restarts the page-change flash and re-places the nav pill
   const viewKey = route.name === "deal" ? `deal:${route.dealId}` : route.name;
@@ -337,6 +340,13 @@ export default function App() {
             onClick={navigateToMarketplace}
           >
             Marketplace
+          </button>
+          <button
+            type="button"
+            className={`nav-link${isListings ? " is-active" : ""}`}
+            onClick={navigateToListings}
+          >
+            Product Listings
           </button>
           <button
             type="button"
@@ -427,6 +437,8 @@ export default function App() {
           />
         ) : route.name === "marketplace" ? (
           <MarketplacePage organizations={organizations ?? []} />
+        ) : route.name === "listings" ? (
+          <ProductListingsPage organizations={organizations ?? []} />
         ) : route.name === "sourcing" ? (
           <SourcingHubPage
             organizations={organizations ?? []}

@@ -1073,8 +1073,9 @@ class SourcingAIInterpretationTests(unittest.TestCase):
                     "value": value,
                     "quote": quote,
                 })
-                with self.assertRaisesRegex(AIPermanentError, "ungrounded value"):
+                with self.assertRaisesRegex(AIPermanentError, "ungrounded value") as raised:
                     interpret_sourcing_requirements(self.Adapter(extraction), prompt)
+                self.assertEqual(raised.exception.diagnostic_field, field)
 
     def test_numeric_and_inspection_values_cannot_borrow_wrong_claim_roles(self) -> None:
         prompt = (

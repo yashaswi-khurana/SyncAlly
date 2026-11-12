@@ -110,9 +110,16 @@ class AITransientError(AIProviderError):
 class AIPermanentError(AIProviderError):
     """A non-retryable provider failure, such as malformed provider output."""
 
-    def __init__(self, message: str, *, diagnostic_code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_code: str | None = None,
+        diagnostic_field: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.diagnostic_code = diagnostic_code
+        self.diagnostic_field = diagnostic_field
 
 
 class AIProviderAccessError(AIPermanentError):

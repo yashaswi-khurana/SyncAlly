@@ -203,6 +203,7 @@ def _interpret_natural(
             Operation.AI_PROVIDER_FAILURE,
             failure_kind="PERMANENT",
             error_code=exc.diagnostic_code or "AI_SOURCING_OUTPUT_REJECTED",
+            sourcing_field=exc.diagnostic_field,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

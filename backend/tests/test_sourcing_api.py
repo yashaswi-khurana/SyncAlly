@@ -283,6 +283,11 @@ class SourcingApiIntegrationTests(unittest.TestCase):
                 gemini_model="gemini-configured-model",
                 google_api_key="test-gemini-key",
             )
+        elif provider_name.startswith("nvidia"):
+            settings_values.update(
+                nvidia_model="nvidia/nemotron-3.5-super-vl-120b-a12b",
+                nvidia_api_key="test-nvidia-key",
+            )
         else:
             settings_values.update(
                 openai_model="openai-configured-model",
@@ -495,6 +500,29 @@ class SourcingApiIntegrationTests(unittest.TestCase):
                 self.assertIn("temporarily unavailable", response.json()["detail"])
                 self.assertNotIn("private provider diagnostics", response.text)
                 self.assertEqual(len(requests), 1)
+
+    def test_interpret_nvidia_access_rejection_is_actionable(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                403,
+                text="private provider diagnostics",
+                headers={"content-encoding": "identity"},
+            )
+
+        response = self._request_with_remote_ai(
+            "nvidia",
+            "Need 1000 boxes of M8 fasteners.",
+            respond,
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("not authorized", response.json()["detail"])
+        self.assertIn("Public API Endpoints", response.json()["detail"])
+        self.assertNotIn("private provider diagnostics", response.text)
+        self.assertEqual(len(requests), 1)
 
     def test_interpret_rejects_unsupported_remote_commercial_value(self) -> None:
         prompt = (

@@ -8,7 +8,7 @@ import httpx
 from pydantic import SecretStr
 
 from syncally.application.ai import (
-    AIPermanentError,
+    AIProviderAccessError,
     AITransientError,
     FactExtractionRequest,
 )
@@ -127,19 +127,24 @@ class NvidiaProviderTests(unittest.TestCase):
         with self.assertRaises(AITransientError):
             adapter.extract_facts(req, timeout_seconds=5.0)
 
-    def test_permanent_error_on_401(self) -> None:
-        async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(401, content=b'{"error": "Unauthorized"}', headers={"content-encoding": "identity"})
+    def test_access_error_on_401_or_403(self) -> None:
+        for status_code in (401, 403):
+            with self.subTest(status_code=status_code):
+                async def handler(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(
+                        status_code,
+                        content=b'{"error": "Unauthorized"}',
+                        headers={"content-encoding": "identity"},
+                    )
 
-        transport = httpx.MockTransport(handler)
-        adapter = NvidiaChatCompletions(
-            api_key=SecretStr("invalid-key"),
-            model="nvidia/nemotron-3.5-super-vl-120b-a12b",
-            transport=transport,
-        )
-        req = FactExtractionRequest(context=self.context)
-        with self.assertRaises(AIPermanentError):
-            adapter.extract_facts(req, timeout_seconds=5.0)
+                adapter = NvidiaChatCompletions(
+                    api_key=SecretStr("invalid-key"),
+                    model="nvidia/nemotron-3.5-super-vl-120b-a12b",
+                    transport=httpx.MockTransport(handler),
+                )
+                req = FactExtractionRequest(context=self.context)
+                with self.assertRaises(AIProviderAccessError):
+                    adapter.extract_facts(req, timeout_seconds=5.0)
 
     def test_configured_ai_provider_wiring(self) -> None:
         config = Settings(

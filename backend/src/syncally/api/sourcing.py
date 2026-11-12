@@ -22,6 +22,7 @@ from syncally.api.auth import get_current_actor
 from syncally.application.ai import (
     AIConfigurationError,
     AIPermanentError,
+    AIProviderAccessError,
     AITransientError,
 )
 from syncally.application.identity import ActorContext
@@ -187,6 +188,11 @@ def _interpret_natural(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The configured sourcing AI is temporarily unavailable. Please retry.",
+        ) from exc
+    except AIProviderAccessError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The configured sourcing AI key is not authorized. Check its NVIDIA Public API Endpoints and model access.",
         ) from exc
     except AIPermanentError as exc:
         raise HTTPException(

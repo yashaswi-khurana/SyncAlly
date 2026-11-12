@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any
@@ -12,8 +11,10 @@ from pydantic import SecretStr
 
 from syncally.application.ai import (
     AIPermanentError,
+    AIProviderAccessError,
     AITransientError,
 )
+from syncally.application.conversations import AiContext
 from syncally.infrastructure.ai.openai import (
     MAX_BYTES,
     OpenAIChatCompletions,
@@ -143,7 +144,7 @@ class NvidiaChatCompletions(OpenAIChatCompletions):
                         failure_kind="PERMANENT",
                         http_status=response.status_code,
                     )
-                    raise AIPermanentError(
+                    raise AIProviderAccessError(
                         f"NVIDIA API authentication/authorization failed (HTTP {response.status_code})"
                     )
                 if response.status_code != 200:
